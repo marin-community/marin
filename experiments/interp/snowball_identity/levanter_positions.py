@@ -17,6 +17,10 @@ length; a short last step is filled with copies of its first sequence. Each row 
 a multiple of ``pad_multiple`` (a multiple of the context axis), and the padded positions are discarded; under the
 causal mask they cannot change a real position. There is no packing: rows never share attention.
 
+The forward is ``model.activations_with_stats`` with a token-validity grid built from the stored lengths: a real
+row's tokens are valid, its padding and every filler row are not, so neither takes MoE dispatch capacity. The same
+forward counts the valid assignments each layer dropped for capacity (sender and receiver), summed over all steps.
+
 Entry ``i`` of each record is the distribution over token ``i`` given tokens ``0..i-1`` (vLLM's layout):
 ``{"tokens", "actual" [T] (nan at 0), "top_ids" [T, 50] (-1 at 0), "top_lp" [T, 50] (nan at 0)}``.
 
@@ -58,21 +62,20 @@ PAD_ID = 128001
 """Snowball v0.1's native EOS/PAD token; right padding only, and padded positions are discarded."""
 
 
-def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False, reference=None) -> tuple:
+def _scores(
+    model, tokens: jax.Array, valid: jax.Array, targets: jax.Array, routes: bool = False, reference=None
+) -> tuple:
     """For every position of a [batch, S] token grid: the log-prob of ``targets`` (the next token) [B, S] and the
     top-k [B, S, k]; with ``routes``, also every layer's selected experts [L, B, S, K]; with ``reference`` ([B, S, R]
-    token ids, -1 for none), the log-prob at those ids [B, S, R]. Position ``S - 1`` has no next token and is dropped
-    by the caller.
+    token ids, -1 for none), the log-prob at those ids [B, S, R]; and every layer's sender and receiver drops of
+    ``valid`` tokens' assignments [L]. Position ``S - 1`` has no next token and is dropped by the caller.
 
     The whole batch is scored at once: batch and position stay sharded as the model left them (on a multi-host mesh
     they span hosts), and only the vocab axis is reduced. No single row or shifted slice of a sharded axis is taken,
     and the full logits are never replicated; only the small reduced outputs are."""
     Batch, Pos = Axis("batch", tokens.shape[0]), model.Pos.resize(tokens.shape[1])
-    selected = None
-    if routes:
-        hidden, selected = model.activations_with_routes(hax.named(tokens, (Batch, Pos)))
-    else:
-        hidden = model.activations(hax.named(tokens, (Batch, Pos)))
+    hidden, stats = model.activations_with_stats(hax.named(tokens, (Batch, Pos)), hax.named(valid, (Batch, Pos)))
+    selected = stats.routes if routes else None
     logits = jnp.einsum("bsd,dv->bsv", hidden.array, model.get_lm_head().array, preferred_element_type=jnp.float32)
     # The head shards vocab over the model axis; log-softmax and top-k need vocab whole, batch and position may stay.
     batch_spec, position_spec = jax.typeof(logits).sharding.spec[:2]
@@ -86,7 +89,8 @@ def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False, 
         measured = jnp.take_along_axis(logprobs, jnp.maximum(reference, 0), axis=-1)
         measured = jnp.where(reference >= 0, measured, jnp.nan)
     # Replicated, so every process can read the outputs of a multi-host mesh.
-    return tuple(None if x is None else reshard(x, P()) for x in (actual, top_id, top_lp, selected, measured))
+    outputs = (actual, top_id, top_lp, selected, measured, stats.sender_dropped, stats.receiver_dropped)
+    return tuple(None if x is None else reshard(x, P()) for x in outputs)
 
 
 def positions_records(
@@ -97,17 +101,21 @@ def positions_records(
     pad_id: int = PAD_ID,
     routes: bool = False,
     reference_ids: dict[str, np.ndarray] | None = None,
-) -> dict[str, dict]:
-    """``model`` is the compute view (already cast). One record per sequence, in the #298 schema, in input order.
+) -> tuple[dict[str, dict], dict]:
+    """``model`` is the compute view (already cast). One record per sequence, in the #298 schema, in input order,
+    and the dispatch counts: per layer, the valid assignments dropped by senders and by receivers, and their sum,
+    over every step (all zero when the MoE is dropless), plus the number of valid tokens.
 
     With ``routes``, each record also holds ``routes`` [T, L, K] (int16): the experts the forward selected for
     token ``i`` at each layer, from the model's own route observer (not recomputed).
 
     ``reference_ids`` maps each sequence id to [T, R] token ids in the record layout (row ``i`` holds ids for token
     ``i``; -1 for none); each record then holds ``reference_ids`` and the gathered ``reference_lp``."""
-    scores = jax.jit(_scores, static_argnums=3)
+    scores = jax.jit(_scores, static_argnames="routes")
     order = sorted(range(len(sequences)), key=lambda i: len(sequences[i].tokens))
     records: dict[int, dict] = {}
+    sender = receiver = 0
+    valid_tokens = 0
     started = time.time()
     for step in range(0, len(order), batch):
         indices = order[step : step + batch]
@@ -117,6 +125,11 @@ def positions_records(
         grid = np.full((batch, length), pad_id, dtype=np.int32)
         for row, row_tokens in enumerate(rows):
             grid[row, : len(row_tokens)] = row_tokens
+        # Filler rows (copies past the real ones) and padding are not valid: they take no dispatch capacity.
+        valid = np.zeros((batch, length), dtype=bool)
+        for row, index in enumerate(indices):
+            valid[row, : len(sequences[index].tokens)] = True
+        valid_tokens += int(valid.sum())
         # The next token of each position, shifted on the host; the last position's target is padding (dropped).
         targets = np.full_like(grid, pad_id)
         targets[:, :-1] = grid[:, 1:]
@@ -129,8 +142,14 @@ def positions_records(
                 ids = reference_ids[sequences[index].id]
                 reference[row, : len(ids) - 1] = ids[1:]
             reference = jnp.asarray(reference)
-        outputs = scores(model, jnp.asarray(grid), jnp.asarray(targets), routes, reference)
-        actual, top_ids, top_lp, selected, measured = (None if x is None else gather_global(x) for x in outputs)
+        outputs = scores(
+            model, jnp.asarray(grid), jnp.asarray(valid), jnp.asarray(targets), routes=routes, reference=reference
+        )
+        actual, top_ids, top_lp, selected, measured, sent, received = (
+            None if x is None else gather_global(x) for x in outputs
+        )
+        sender = sender + sent.astype(np.int64)
+        receiver = receiver + received.astype(np.int64)
         for row, index in enumerate(indices):
             n = len(sequences[index].tokens)
             records[index] = {
@@ -156,7 +175,13 @@ def positions_records(
         logger.info(
             "levanter positions %d/%d (length %d, %.0fs)", len(records), len(sequences), length, time.time() - started
         )
-    return {sequences[i].id: records[i] for i in range(len(sequences))}
+    dispatch = {
+        "sender_dropped": [int(n) for n in sender],
+        "receiver_dropped": [int(n) for n in receiver],
+        "dropped": [int(n) for n in sender + receiver],
+        "valid_tokens": valid_tokens,
+    }
+    return {sequences[i].id: records[i] for i in range(len(sequences))}, dispatch
 
 
 def _dot_generals(jaxpr, found: list) -> list:
@@ -207,9 +232,9 @@ def write_positions(
     routes: bool = False,
     compute_dtype_overrides=None,
     reference_ids: dict[str, np.ndarray] | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], dict]:
     """Score the trainer's compute view of ``model`` and save ``positions.pt`` at ``path`` (s3:// or local); return
-    the view's ``router_dot_dtypes``.
+    the view's ``router_dot_dtypes`` and the dispatch counts of ``positions_records``.
 
     ``model`` is the trainer-loaded model (e.g. ``state.model`` after ``Trainer.initial_state``), ``mp`` the
     trainer's policy (``trainer.mp``), ``axis_mapping`` its compute mapping (``trainer.compute_axis_mapping``) and
@@ -219,11 +244,11 @@ def write_positions(
     forward is a collective); only process 0 writes the file."""
     with hax.axis_mapping(axis_mapping or {}):
         view = cast_model_for_compute(model, mp, compute_dtype_overrides)
-        records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes, reference_ids)
+        records, dispatch = positions_records(view, sequences, batch, pad_multiple, pad_id, routes, reference_ids)
         dot_dtypes = router_dot_dtypes(view, mp.compute_dtype)
     if jax.process_index() == 0:
         save_positions(records, path)
-    return dot_dtypes
+    return dot_dtypes, dispatch
 
 
 def save_positions(records: dict[str, dict], path: str) -> None:

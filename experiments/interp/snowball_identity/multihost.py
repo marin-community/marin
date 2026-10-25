@@ -5,7 +5,7 @@
 
 Under the trainer's mesh, every ``jnp`` value (even a scalar) is a global array that no single process fully
 addresses. ``jax.device_get`` and an untiled ``process_allgather`` refuse those. So host values cross processes
-as numpy, and global arrays are read with a tiled gather. All three helpers are collective when there is more
+as numpy, and global arrays are read with a tiled gather. All four helpers are collective when there is more
 than one process: every process must call them in the same order.
 """
 
@@ -23,6 +23,12 @@ def _host_value(value) -> np.ndarray:
 def gather_host_scalar(value) -> np.ndarray:
     """Every process's ``value``, in process order: shape [process_count]."""
     return np.asarray(multihost_utils.process_allgather(_host_value(value).reshape(1), tiled=True))
+
+
+def gather_host_rows(value) -> np.ndarray:
+    """Every process's ``value`` (same shape on every process), stacked in process order: [process_count, ...]."""
+    value = _host_value(value)
+    return np.asarray(multihost_utils.process_allgather(value[None], tiled=True))
 
 
 def broadcast_host_scalar(value) -> np.ndarray:

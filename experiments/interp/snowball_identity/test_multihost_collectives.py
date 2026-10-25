@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from jax.sharding import Mesh, NamedSharding, PartitionSpec, reshard
-from experiments.interp.snowball_identity.multihost import gather_global
+from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
 from experiments.interp.snowball_identity.precision_gate import any_rank_failed, rank_zero_count
 from experiments.post_training.identity_context_distill.precision_probe import adam_gradient_witness
 
@@ -42,6 +42,7 @@ with jax.set_mesh(mesh):
         "witness": adam_gradient_witness(state),
         "scores": gather_global(replicated).tolist(),
         "sharded": gather_global(mu).tolist(),
+        "rows": gather_host_rows(np.array([[rank, 10 + rank]])).tolist(),
     }))
 """
 
@@ -72,4 +73,4 @@ def test_gate_and_witness_collectives_under_a_two_process_global_mesh():
     results = sorted((json.loads(out.decode().strip().splitlines()[-1]) for out, _ in outputs), key=lambda r: r["rank"])
     for rank, result in enumerate(results):
         expected = {"rank": rank, "one_failed": True, "none_failed": False, "count": 3, "witness": 7.0}
-        assert result == {**expected, "scores": SCORES, "sharded": SHARDED}
+        assert result == {**expected, "scores": SCORES, "sharded": SHARDED, "rows": [[[0, 10]], [[1, 11]]]}

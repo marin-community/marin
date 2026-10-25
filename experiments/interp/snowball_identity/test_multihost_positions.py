@@ -42,7 +42,7 @@ assert dict(mesh.shape)["replica_dcn"] == 2 and dict(mesh.shape)["context"] == 2
 assert jax.local_device_count() == 1
 with jax.set_mesh(mesh):
     model = SnowballLMHeadModel.init(Axis("vocab", CONFIG.vocab_size), CONFIG, key=jax.random.key(3))
-    records = positions_records(model, SEQUENCES, batch=2, pad_multiple=4, pad_id=63, routes=True)
+    records, _ = positions_records(model, SEQUENCES, batch=2, pad_multiple=4, pad_id=63, routes=True)
 print(json.dumps(summary(records)))
 """
 
@@ -124,7 +124,7 @@ def test_positions_records_when_batch_and_position_span_processes():
 
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", CONFIG.vocab_size), CONFIG, key=jax.random.key(3))
-        expected = summary(positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63, routes=True))
+        expected = summary(positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63, routes=True)[0])
     assert gathered[0].keys() == expected.keys()
     for key, record in expected.items():
         actual = gathered[0][key]

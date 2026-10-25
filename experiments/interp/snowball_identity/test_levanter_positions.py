@@ -20,6 +20,7 @@ from haliax import Axis
 from jax.sharding import AbstractMesh, AxisType
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 from experiments.interp.snowball_identity import levanter_positions, precision_gate
 from experiments.interp.snowball_identity.levanter_positions import TOP_K, positions_records, write_positions
@@ -62,7 +63,7 @@ def test_records_match_the_model_forward(mesh_and_model):
     mesh, model = mesh_and_model
     batch = jax.device_count()
     with jax.set_mesh(mesh):
-        records = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
+        records, _ = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
         for sequence in SEQUENCES:
             tokens = jnp.broadcast_to(jnp.asarray(sequence.tokens, dtype=jnp.int32), (batch, len(sequence.tokens)))
             ids = hax.named(tokens, (Axis("batch", batch), model.Pos.resize(len(sequence.tokens))))
@@ -95,7 +96,7 @@ def test_reference_gather_measures_ids_outside_the_top_50(mesh_and_model):
             ids[1:, 0] = ranked[:-1, -1]  # the least likely token: outside the top 50 of 64
             ids[1:, 1] = ranked[:-1, 0]
             reference[sequence.id] = ids
-        records = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, reference_ids=reference)
+        records, _ = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, reference_ids=reference)
     for sequence in SEQUENCES:
         record = records[sequence.id]
         assert record["reference_ids"].shape == record["reference_lp"].shape == (len(sequence.tokens), 3)
@@ -146,7 +147,7 @@ def test_write_positions_uses_the_compute_view(mesh_and_model, tmp_path):
             pad_multiple=4,
             pad_id=63,
         )
-        exact = positions_records(model, SEQUENCES, pad_multiple=4, pad_id=63)
+        exact, _ = positions_records(model, SEQUENCES, pad_multiple=4, pad_id=63)
     stored = torch.load(tmp_path / "positions.pt")
     assert [s.tokens for s in stored_sequences(str(tmp_path / "positions.pt"))] == [s.tokens for s in SEQUENCES]
     # The BF16 compute view scores close to, but not exactly like, the FP32 model.
@@ -157,9 +158,9 @@ def test_write_positions_uses_the_compute_view(mesh_and_model, tmp_path):
 def test_batching_and_right_padding_keep_real_positions(mesh_and_model):
     mesh, model = mesh_and_model
     with jax.set_mesh(mesh):
-        single = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
+        single, _ = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
         # Two rows per step (the last step gets a filler copy) and padding to a multiple of 8.
-        batched = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63)
+        batched, _ = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63)
     assert list(batched) == [s.id for s in SEQUENCES]
     for sequence in SEQUENCES:
         a, b = single[sequence.id], batched[sequence.id]
@@ -172,8 +173,8 @@ def test_batching_and_right_padding_keep_real_positions(mesh_and_model):
 def test_routes_sidecar_matches_the_observer(mesh_and_model):
     mesh, model = mesh_and_model
     with jax.set_mesh(mesh):
-        single = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63, routes=True)
-        batched = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, routes=True)
+        single, _ = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63, routes=True)
+        batched, _ = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, routes=True)
         sequence = SEQUENCES[0]
         ids = hax.named(
             jnp.asarray([sequence.tokens], dtype=jnp.int32), (Axis("batch", 1), model.Pos.resize(len(sequence.tokens)))
@@ -282,6 +283,20 @@ def test_pre_update_gate_raises_on_failures_and_passes_when_clean(mesh_and_model
     assert report["failures"] and all(f.startswith("parity: ") for f in report["failures"])
     assert report["routes"]["totals"]["set_agree"] == report["routes"]["totals"]["positions"] > 0
     assert "jax_default_matmul_precision" in report
+    zeros = [0] * CONFIG.num_layers
+    assert report["moe"] == {
+        "capacity_factor": 1.0,
+        "expert_axis": 1,
+        "router_combine_fp32": False,
+        "dispatch": {
+            "sender_dropped": zeros,
+            "receiver_dropped": zeros,
+            "dropped": zeros,
+            "valid_tokens": sum(len(s.tokens) for s in GATE_SEQUENCES),
+        },
+    }
+    assert len(report["device_memory"]) == jax.device_count()
+    assert set(report["device_memory"][0]) == {"process", "local_device", *precision_gate.MEMORY_FIELDS}
     # The gate gathers at the stored vLLM ids: every reference token is measured.
     stored = torch.load(tmp_path / "gate" / "positions.pt")
     assert all("reference_lp" in r and not torch.isnan(r["reference_lp"][1:]).all() for r in stored.values())
@@ -394,3 +409,62 @@ def test_deadline_fires_unless_cancelled(mesh_and_model, tmp_path, monkeypatch):
     with pytest.raises(precision_gate.PrecisionGateFailed):
         precision_gate.make_pre_update_gate(inputs, deadline=deadline)(trainer, state)
     assert timers and timers[0]._done.is_set()
+
+
+def test_dispatch_failures_name_each_layer_with_drops():
+    dispatch = {"sender_dropped": [0, 2, 0], "receiver_dropped": [0, 1, 4], "dropped": [0, 3, 4], "valid_tokens": 9}
+    assert precision_gate.dispatch_failures(dispatch) == [
+        "layer 1: 3 valid assignments dropped (2 sender, 1 receiver)",
+        "layer 2: 4 valid assignments dropped (0 sender, 4 receiver)",
+    ]
+    assert (
+        precision_gate.dispatch_failures(
+            {**dispatch, "sender_dropped": [0] * 3, "receiver_dropped": [0] * 3, "dropped": [0] * 3}
+        )
+        == []
+    )
+
+
+def test_dispatch_counts_valid_tokens_only_on_an_ep4_mesh():
+    """On 8 CPU devices (data 2 x expert 4): filler rows and padding take no dispatch, a dropless capacity drops
+    nothing, and a small one drops valid assignments; the real rows score the same either way when dropless."""
+    run_on_cpu_devices(
+        """
+        import dataclasses
+
+        import jax
+        import numpy as np
+        from haliax import Axis
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.models.snowball import SnowballLMHeadModel
+
+        from experiments.interp.snowball_identity.levanter_positions import positions_records
+        from experiments.interp.snowball_identity.test_levanter_positions import CONFIG, SEQUENCES
+
+        mesh = compact_grug_mesh(expert_axis_size=4)
+        lengths = sum(len(s.tokens) for s in SEQUENCES)
+        results = {}
+        for capacity in (4.0, 0.25):
+            config = dataclasses.replace(CONFIG, moe_capacity_factor=capacity)
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(3))
+                # Eight rows per step: three real sequences, five filler rows, padded to 16 positions.
+                results[capacity] = positions_records(model, SEQUENCES, batch=8, pad_multiple=16, pad_id=63)
+        records, dispatch = results[4.0]
+        assert dispatch == {
+            "sender_dropped": [0] * CONFIG.num_layers,
+            "receiver_dropped": [0] * CONFIG.num_layers,
+            "dropped": [0] * CONFIG.num_layers,
+            "valid_tokens": lengths,
+        }, dispatch
+        _, capped = results[0.25]
+        assert capped["valid_tokens"] == lengths
+        assert len(capped["dropped"]) == CONFIG.num_layers and sum(capped["dropped"]) > 0, capped
+        assert capped["dropped"] == [s + r for s, r in zip(capped["sender_dropped"], capped["receiver_dropped"])]
+        # Every layer has K assignments per valid token; it cannot drop more.
+        assert max(capped["dropped"]) <= lengths * CONFIG.num_experts_per_token
+        assert all(np.isfinite(records[s.id]["actual"][1:].numpy()).all() for s in SEQUENCES)
+        print("OK")
+        """,
+        device_count=8,
+    )

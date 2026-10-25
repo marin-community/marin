@@ -10,11 +10,16 @@ the others waiting:
 
 1. ``inputs``: each rank reads the stored token ids of the pinned #298 ``positions.pt`` (no collective), then an
    all-gather of every rank's status; any failure stops every rank.
-2. ``scored``: every rank runs the compute-view forward and the router-dot witness (collective).
+2. ``scored``: every rank runs the compute-view forward and the router-dot witness (collective), then an
+   all-gather of every rank's per-device memory.
 3. ``gated``: process 0 alone saves ``positions.pt``, compares it with the stored vLLM reference and the torch
-   reference job's routes, applies ``logit_check.parity_gate`` and ``routing.route_gate`` and writes
-   ``gate.json``, all inside one ``try``; then the failure count is broadcast and every rank raises
+   reference job's routes, applies ``logit_check.parity_gate``, ``routing.route_gate`` and the dropless check, and
+   writes ``gate.json``, all inside one ``try``; then the failure count is broadcast and every rank raises
    ``PrecisionGateFailed`` unless it is zero. A process-0 exception, including a failed write, is a failure.
+
+``gate.json`` also records the MoE settings the forward ran with (capacity factor, expert axis, FP32 combine), the
+per-layer dispatch drops of valid assignments (sender, receiver, total; the gate fails on any), and each device's
+memory after the forward (bytes in use, peak, limit).
 
 Each rank writes ``ranks/<process>.json`` after every stage (best effort). A crash inside a collective cannot be
 caught, so a watchdog ends the process with status 4 after ``deadline_seconds``.
@@ -50,7 +55,7 @@ from experiments.interp.snowball_identity.logit_check import (
     reference_ids,
     stored_sequences,
 )
-from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_scalar
+from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_rows, gather_host_scalar
 from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
 
 logger = logging.getLogger(__name__)
@@ -89,18 +94,62 @@ def write_json(path: str, value: dict) -> None:
     fs.pipe_file(local, json.dumps(value, indent=1, default=str).encode())
 
 
-def evaluate(inputs: PrecisionGateInputs, overrides: dict | None, positions_path: str, dot_dtypes: list[dict]) -> dict:
-    """The gate report for a written ``positions.pt``; ``failures`` is empty only on a pass."""
+MEMORY_FIELDS = ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")
+
+
+def local_device_memory() -> np.ndarray:
+    """This process's devices: [local_devices, 3] of ``MEMORY_FIELDS``, -1 where the backend reports none."""
+    rows = []
+    for device in jax.local_devices():
+        stats = device.memory_stats() or {}
+        rows.append([stats.get(field, -1) for field in MEMORY_FIELDS])
+    return np.asarray(rows, dtype=np.int64)
+
+
+def device_memory_report(gathered: np.ndarray) -> list[dict]:
+    """``gathered``: ``gather_host_rows(local_device_memory())``, [processes, local_devices, 3]."""
+    return [
+        {"process": process, "local_device": device, **dict(zip(MEMORY_FIELDS, map(int, values), strict=True))}
+        for process, devices in enumerate(gathered)
+        for device, values in enumerate(devices)
+    ]
+
+
+def dispatch_failures(dispatch: dict) -> list[str]:
+    """The gate forward must be dropless, as vLLM is: any dropped valid assignment is a failure."""
+    return [
+        f"layer {layer}: {count} valid assignments dropped ({sender} sender, {receiver} receiver)"
+        for layer, (count, sender, receiver) in enumerate(
+            zip(dispatch["dropped"], dispatch["sender_dropped"], dispatch["receiver_dropped"], strict=True)
+        )
+        if count
+    ]
+
+
+def evaluate(
+    inputs: PrecisionGateInputs,
+    overrides: dict | None,
+    positions_path: str,
+    dot_dtypes: list[dict],
+    moe: dict,
+    memory: list[dict],
+) -> dict:
+    """The gate report for a written ``positions.pt``; ``failures`` is empty only on a pass. ``moe`` holds the
+    forward's MoE settings and its ``dispatch`` counts (``positions_records``)."""
     parity = compare(positions_path, inputs.vllm, None, candidate_spans(inputs.identity, inputs.tokenizer_source))
     rounding = json.loads(read(prefix_join(inputs.torch_routing, "routing.json")))
     cross = compare_routes_cross_stack(positions_path, prefix_join(inputs.torch_routing, "routes.pt"))
-    failures = [f"parity: {f}" for f in parity_gate(parity)] + [
-        f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))
-    ]
+    failures = (
+        [f"parity: {f}" for f in parity_gate(parity)]
+        + [f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))]
+        + [f"dispatch: {f}" for f in dispatch_failures(moe["dispatch"])]
+    )
     return {
         "inputs": vars(inputs),
         "compute_dtype_overrides": overrides,
         "router_dot_dtypes": dot_dtypes,
+        "moe": moe,
+        "device_memory": memory,
         "env": {name: os.environ.get(name) for name in MATMUL_ENV},
         "jax": jax.__version__,
         "jax_default_matmul_precision": jax.config.jax_default_matmul_precision,
@@ -167,11 +216,18 @@ def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float]
             overrides = trainer.config.compute_dtype_overrides
             with hax.partitioning.set_mesh(trainer.device_mesh), hax.axis_mapping(trainer.compute_axis_mapping):
                 view = cast_model_for_compute(state.model, trainer.mp, overrides)
-                records = positions_records(
+                records, dispatch = positions_records(
                     view, sequences, inputs.batch, inputs.pad_multiple, PAD_ID, routes=True, reference_ids=reference
                 )
                 dot_dtypes = router_dot_dtypes(view, trainer.mp.compute_dtype)
-            receipt("scored", router_dot_dtypes=dot_dtypes)
+            memory = device_memory_report(gather_host_rows(local_device_memory()))
+            moe = {
+                "capacity_factor": view.config.moe_capacity_factor,
+                "expert_axis": trainer.device_mesh.shape["expert"],
+                "router_combine_fp32": view.config.router_combine_fp32,
+                "dispatch": dispatch,
+            }
+            receipt("scored", router_dot_dtypes=dot_dtypes, moe=moe)
 
             failures = 0
             if rank == 0:
@@ -179,7 +235,7 @@ def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float]
                 try:
                     positions_path = prefix_join(inputs.output, "positions.pt")
                     save_positions(records, positions_path)
-                    report = evaluate(inputs, overrides, positions_path, dot_dtypes)
+                    report = evaluate(inputs, overrides, positions_path, dot_dtypes, moe, memory)
                 except Exception as exc:
                     error = exc
                     report["failures"].append(f"gate did not complete: {exc!r}")
