@@ -4,6 +4,7 @@
 """Run a bounded, explicitly pinned historical Marin Evalchemy client after the numerical gate."""
 
 import argparse
+import functools
 import hashlib
 import json
 import os
@@ -16,7 +17,7 @@ from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.types import Entrypoint, EnvironmentSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
 from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, _run_config_json
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -25,7 +26,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.weight_merging.rsi.levanter_267 import checkpoint_entrypoint
-from experiments.weight_merging.rsi.levanter_267.eval_watchdog import run_watched
+from experiments.weight_merging.rsi.levanter_267.eval_watchdog import gang_healthy, run_watched
 from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
 
 STEP12_REPO = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
@@ -106,7 +107,10 @@ def run_eval(
         tokenizer_note="Historical client uses an unrevisioned repository string; backend is recorded per route.",
         endpoint=endpoint_name,
         endpoint_watchdog=dict(
-            interval_seconds=60, continuous_failure_seconds=300, failure_timer_starts="first failed check"
+            interval_seconds=60,
+            continuous_failure_seconds=300,
+            failure_timer_starts="first failed check",
+            gang_check="one controller task snapshot per poll; any terminal task stops client",
         ),
         model_revision=model_revision,
         command=command,
@@ -140,6 +144,9 @@ def run_eval(
                 env,
                 config["base_url"] + "/models",
                 timeout=runtime_minutes * 60 - 60,
+                check_gang=functools.partial(
+                    gang_healthy, iris_ctx().client, JobName.from_wire(provenance["serve_job"])
+                ),
             )
         except Exception as error:
             # Exception messages can contain resolved endpoint credentials.

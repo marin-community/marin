@@ -5,8 +5,10 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from iris.resources.state import TaskState
 
 from experiments.weight_merging.rsi.levanter_267 import eval_watchdog
 
@@ -78,3 +80,24 @@ def test_dead_endpoint_kills_term_ignoring_descendant(monkeypatch, tmp_path):
             return
         time.sleep(0.01)
     pytest.fail("TERM-ignoring descendant survived process-group cleanup")
+
+
+def test_terminal_gang_stops_client_despite_healthy_http(monkeypatch):
+    monkeypatch.setattr(eval_watchdog, "models_healthy", lambda _: True)
+    client = SimpleNamespace(list_tasks=lambda _: [SimpleNamespace(state=TaskState.WORKER_FAILED)])
+    with pytest.raises(RuntimeError, match="terminal task"):
+        eval_watchdog.run_watched(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            os.environ.copy(),
+            "unused",
+            timeout=5,
+            interval=0.01,
+            check_gang=lambda: eval_watchdog.gang_healthy(client, "serving-job"),
+        )
+
+
+def test_gang_query_outage_is_unhealthy_without_leaking_error():
+    def unavailable(_):
+        raise OSError("private-controller-url")
+
+    assert not eval_watchdog.gang_healthy(SimpleNamespace(list_tasks=unavailable), "serving-job")

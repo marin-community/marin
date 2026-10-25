@@ -10,6 +10,8 @@ import subprocess
 import time
 import urllib.request
 
+from iris.resources.state import TERMINAL_TASK_STATES
+
 
 def models_healthy(url):
     """Check the serving route without persisting its private address."""
@@ -20,7 +22,18 @@ def models_healthy(url):
         return False
 
 
-def run_watched(command, env, models_url, timeout, *, interval=60, failure_seconds=300):
+def gang_healthy(client, job):
+    """Read one serving-gang snapshot; terminal peers invalidate HTTP liveness."""
+    try:
+        tasks = client.list_tasks(job)
+    except Exception:
+        return False
+    if any(task.state in TERMINAL_TASK_STATES for task in tasks):
+        raise RuntimeError("Serving gang has a terminal task; stopping evaluator")
+    return bool(tasks)
+
+
+def run_watched(command, env, models_url, timeout, *, interval=60, failure_seconds=300, check_gang=None):
     """Stop the client process group after continuous endpoint failure or its runtime bound."""
     started = time.monotonic()
     failed_since = None
@@ -35,11 +48,12 @@ def run_watched(command, env, models_url, timeout, *, interval=60, failure_secon
                 except subprocess.TimeoutExpired:
                     pass
                 now = time.monotonic()
-                if models_healthy(models_url):
+                gang_ok = check_gang() if check_gang is not None else True
+                if gang_ok and models_healthy(models_url):
                     failed_since = None
                 else:
                     failed_since = now if failed_since is None else failed_since
-                    print("Evaluator endpoint health check failed", flush=True)
+                    print("Evaluator serving health check failed", flush=True)
                     if now - failed_since >= failure_seconds:
                         raise RuntimeError("Serving endpoint unavailable for five minutes; stopping evaluator")
         finally:
