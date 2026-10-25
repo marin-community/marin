@@ -6,13 +6,18 @@ import pytest
 
 from experiments.post_training.mismatch_probe.score_probe_sets import (
     compact_rows,
+    exact_summary,
     forward_groups,
     load_reference_shard,
     padded_rows,
     save_reference_shard,
+    shard_path,
+    summarize_kl,
     unique_rows,
+    write_rows_shard,
 )
 from experiments.post_training.mismatch_probe.scoring_pass import ProbeSequence
+from experiments.post_training.mismatch_probe.sequence_kl import KLForm, ProbeBucket, SequenceKLRow
 
 
 def real_rows(groups):
@@ -61,3 +66,38 @@ def test_a_reference_shard_round_trips_in_compact_form(tmp_path):
     assert np.array_equal(padded_rows(expected, widths, padded_len)[1, :3], np.zeros((3,), dtype=np.float32))
     with pytest.raises(ValueError, match="different group"):
         load_reference_shard(path, sequences[::-1])
+
+
+def _row(sequence_id, position, kl, bucket):
+    return SequenceKLRow(
+        sequence_id=sequence_id,
+        position=position,
+        token_id=1,
+        kl=kl,
+        reference_logprob=-1.0,
+        candidate_logprob=-1.5,
+        candidate_step=0,
+        reference_id="E",
+        probe_hash="h",
+        top_k=256,
+        reference_tail_mass=-5.0,
+        candidate_tail_mass=-5.0,
+        form=KLForm.FORWARD,
+        token_type_tag=bucket,
+        position_tag=0,
+    )
+
+
+def test_set_summaries_read_every_shard_and_pair_exact_rows_by_position(tmp_path):
+    out = str(tmp_path / "scores")
+    write_rows_shard(shard_path(out, "P_X", "kl-B", 0, "parquet"), [_row("a", 1, 0.2, ProbeBucket.REASONING)])
+    write_rows_shard(
+        shard_path(out, "P_X", "kl-B", 1, "parquet"),
+        [_row("b", 1, 0.4, ProbeBucket.REASONING), _row("b", 2, 0.6, ProbeBucket.FINAL_MESSAGE)],
+    )
+    summary = summarize_kl(out, "P_X", "kl-B")
+    assert (summary["positions"], summary["sequences"]) == (3, 2)
+    assert summary["token_mean_kl"] == pytest.approx(0.4) and summary["sequence_mean_kl"] == pytest.approx(0.35)
+    assert summary["buckets"]["reasoning"] == {"positions": 2, "token_mean_kl": pytest.approx(0.3)}
+    exact = exact_summary([(_row("a", 1, 0.2, ProbeBucket.REASONING), 0.25)])
+    assert exact["all"]["relative_error_of_mean"] == pytest.approx(-0.2) and set(exact["buckets"]) == {"reasoning"}

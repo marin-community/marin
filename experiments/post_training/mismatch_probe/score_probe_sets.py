@@ -327,7 +327,7 @@ def candidate_pass(
                     candidate_id=model_path,
                     candidate_step=step,
                 )
-                _write_parquet(path, rows)
+                write_rows_shard(path, rows)
             write_json(f"{out.rstrip('/')}/{set_name}/kl-{label}.json", summarize_kl(out, set_name, f"kl-{label}"))
 
 
@@ -350,7 +350,7 @@ def noise_pass(model_path: str, sets: dict[str, str], reference_out: str, out: s
                     candidate_step=0,
                     reverse=True,
                 )
-                _write_parquet(path, rows)
+                write_rows_shard(path, rows)
             write_json(f"{out.rstrip('/')}/{set_name}/kl-noise.json", summarize_kl(out, set_name, "kl-noise"))
 
 
@@ -417,7 +417,7 @@ def exact_summary(paired: list[tuple[Any, float]]) -> dict[str, Any]:
 # --- summaries ---
 
 
-def _write_parquet(path: str, rows) -> None:
+def write_rows_shard(path: str, rows) -> None:
     local = Path(tempfile.mkdtemp()) / Path(path).name
     write_rows_parquet(rows, local)
     with fsspec.open(path, "wb") as handle:
