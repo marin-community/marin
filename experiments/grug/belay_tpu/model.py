@@ -78,6 +78,7 @@ from experiments.grug.belay_tpu.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
+from experiments.grug.belay_tpu.routing_tpu import unrolled_router_logits
 from experiments.grug.belay_tpu.sparse_attention import (
     mla_sparse_attention,
 )
@@ -2660,7 +2661,8 @@ class MoEMLP(eqx.Module):
                 out_specs=P(_BATCH_AXES, None),
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = _selected_router_logits(router_logits, selected_experts)
+        selected_logits = unrolled_router_logits if self.cfg.moe_local_gathered_experts else _selected_router_logits
+        unbiased_topk = selected_logits(router_logits, selected_experts)
         renorm_sum = self.cfg.routing_renorm_sum * (self.cfg.moe_null_renorm_scale if null_layer else 1.0)
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
@@ -2709,7 +2711,7 @@ class MoEMLP(eqx.Module):
                 combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
             active_k = jnp.mean(jnp.sum(keep.astype(jnp.float32), axis=-1))
         if router_soft_select.SOFT_SELECT is not None:
-            biased_sel = _selected_router_logits(router_logits + self.router_bias, selected_experts)
+            biased_sel = selected_logits(router_logits + self.router_bias, selected_experts)
             combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
