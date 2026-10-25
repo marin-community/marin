@@ -241,7 +241,7 @@ def layer_census(cofire, cnt, w_eff, lat_sum, lat_m2):
     return out
 
 
-CENSUS_CHUNK = 64  # experts per census call (the [E, I, I] intermediates of a whole d1280 layer exceed one GPU)
+CENSUS_CHUNK = 16  # experts per census call (its histogram intermediates are ~200 bytes per pair: 12 GB at 64)
 
 
 def layer_census_chunked(cofire, cnt, w_eff, lat_sum, lat_m2) -> dict[str, np.ndarray]:
