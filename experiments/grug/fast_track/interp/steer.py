@@ -49,12 +49,12 @@ WINDOWS_PER_SEQ = common.SEQ_LEN // WIN
 BATCH = 16
 N_TOP, N_RAND = 24, 16
 MIN_FIRES = 100
-REL_WINDOWS, IRR_WINDOWS, FORCE_WINDOWS = 6, 6, 3
+REL_WINDOWS, IRR_WINDOWS, FORCE_WINDOWS = 12, 8, 4
 NEXT = 8
 H_SIZE = 5
 TOP_FIRINGS = 64
 MULTS = (2.0, 5.0, 10.0)
-GEN_PROMPT, GEN_NEW, GEN_UNITS = 48, 16, 3
+GEN_PROMPT, GEN_NEW, GEN_UNITS = 112, 16, 3  # prompt + new = 128 (the Inkling bias block)
 CONTEXTS = 12
 CLASSES = ("digit", "punctuation", "whitespace", "function_word", "word_start", "alpha_cont")
 
