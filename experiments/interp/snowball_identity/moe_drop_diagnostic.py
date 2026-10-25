@@ -226,13 +226,18 @@ def compare_dumps(levanter: dict, torch_dumps: dict, bias: dict[int, np.ndarray]
 # ---- torch reference (subprocess) --------------------------------------------------------------------------------
 
 
-def torch_dumps(weights: str, sequences: list[Sequence]) -> dict:
-    """Layers 0-2 of the torch reference on one GPU, one unpadded sequence at a time; float32 numpy per op."""
+def first_layers_config(source: dict) -> dict:
+    """``source`` cut to the first ``DUMP_LAYERS`` layers; every layer-count alias is set, or GrugMoeConfig refuses."""
+    aliases = [key for key in ("num_hidden_layers", "num_layers") if key in source]
+    if not aliases or any(source[key] != LAYERS for key in aliases):
+        raise ValueError(f"expected {LAYERS} layers, got {[source.get(key) for key in aliases]}")
+    return source | {key: DUMP_LAYERS for key in aliases}
+
+
+def torch_dumps(weights: str, sequences: list[Sequence], device: torch.device) -> dict:
+    """Layers 0-2 of the torch reference on one device, one unpadded sequence at a time; float32 numpy per op."""
     grug = import_grug()
-    source = json.loads(read(prefix_join(weights, "config.json")))
-    if source["num_hidden_layers"] != LAYERS:
-        raise ValueError(f"expected {LAYERS} layers, got {source['num_hidden_layers']}")
-    config = grug.GrugMoeConfig(**{**source, "num_hidden_layers": DUMP_LAYERS})
+    config = grug.GrugMoeConfig(**first_layers_config(json.loads(read(prefix_join(weights, "config.json")))))
     config._attn_implementation = "eager"
     with torch.device("meta"):
         model = grug.GrugMoeForCausalLM(config).eval().requires_grad_(False)
@@ -241,7 +246,6 @@ def torch_dumps(weights: str, sequences: list[Sequence]) -> dict:
     missing = set(expected) - set(reader.weight_map)
     if missing:
         raise ValueError(f"checkpoint lacks {sorted(missing)[:5]}")
-    device = torch.device("cuda:0")
     model.load_state_dict({name: reader.tensor(name).to(device) for name in expected}, strict=True, assign=True)
     # The 26-layer schedule, not a 3-layer one (whose last layer would be long).
     long_layers = grug.grug_long_layer_flags(LAYERS)
@@ -289,7 +293,7 @@ def torch_dumps(weights: str, sequences: list[Sequence]) -> dict:
 
 def run_torch_phase(root: str, positions: str) -> None:
     sequences = [s for s in stored_sequences(positions) if s.group == "check"]
-    dumps = torch_dumps(BASE_MODEL, sequences)
+    dumps = torch_dumps(BASE_MODEL, sequences, torch.device("cuda:0"))
     buffer = io.BytesIO()
     torch.save(dumps, buffer)
     StoragePath(prefix_join(root, "torch-dumps.pt")).write_bytes(buffer.getvalue())
