@@ -17,6 +17,7 @@ Per arm, under ``<root>/<arm>/``:
 
 - ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records`` and
   judged by ``precision_gate.evaluate``, the gate's own code and thresholds (batch 8, pad multiple 64).
+- per-device memory after the arm (inference only; it does not measure training at 8 x 8192).
 - the drop count per layer, recomputed on the host from that arm's observed routes with the ring path's capacity
   rule (``ring_drops``), over the same batches including their padding.
 - sublayer dumps of layers 0-2 for the 11 ``check`` sequences (one batch of 16, padded to 64): embed, attn-norm,
@@ -481,8 +482,18 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
         "drops_per_layer_dump_batch": dump_drops,
         "dump_batch_grid": dump_batch["grid"],
         "sublayers_vs_torch": compare_dumps(dumps, torch_ref, bias),
+        "device_memory_after_arm": device_memory(),
         "seconds": round(time.time() - started, 1),
     }
+
+
+def device_memory() -> list[dict]:
+    """Per local device: bytes in use now and the process's peak so far (a running maximum over all arms)."""
+    found = []
+    for device in jax.local_devices():
+        stats = device.memory_stats() or {}
+        found.append({k: stats.get(k) for k in ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")})
+    return found
 
 
 def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
