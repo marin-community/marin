@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-import subprocess
 import tempfile
 import time
 import urllib.request
@@ -26,6 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.weight_merging.rsi.levanter_267 import checkpoint_entrypoint
+from experiments.weight_merging.rsi.levanter_267.eval_watchdog import run_watched
 from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
 
 STEP12_REPO = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
@@ -105,6 +105,7 @@ def run_eval(
         client_tokenizer_backend=tokenizer_backend,
         tokenizer_note="Historical client uses an unrevisioned repository string; backend is recorded per route.",
         endpoint=endpoint_name,
+        endpoint_watchdog=dict(interval_seconds=60, continuous_failure_seconds=300),
         model_revision=model_revision,
         command=command,
         started_epoch=time.time(),
@@ -131,15 +132,18 @@ def run_eval(
         entrypoint = Path(directory) / "checkpoint_entrypoint.py"
         entrypoint.write_text(checkpoint_source)
         env.update(LEVANTER267_EVAL_ENTRYPOINT=str(entrypoint), LEVANTER267_EVALCHEMY_COMMIT=commit)
-        result = subprocess.run(
-            [*command, "python", str(client_path)], env=env, timeout=runtime_minutes * 60 - 60, check=False
+        returncode = run_watched(
+            [*command, "python", str(client_path)],
+            env,
+            config["base_url"] + "/models",
+            timeout=runtime_minutes * 60 - 60,
         )
     scored = {task["name"]: completed_result(output, task["dir"]) for task in config["tasks"]}
-    metadata.update(elapsed_seconds=time.time() - metadata["started_epoch"], returncode=result.returncode, scored=scored)
+    metadata.update(elapsed_seconds=time.time() - metadata["started_epoch"], returncode=returncode, scored=scored)
     (root / "client-summary.json").write_text(json.dumps(metadata, indent=2))
     print(json.dumps(metadata), flush=True)
-    if result.returncode or not all(scored.values()):
-        raise RuntimeError(f"Pinned evaluator exited {result.returncode}, scored={scored}; inspect {output}")
+    if returncode or not all(scored.values()):
+        raise RuntimeError(f"Pinned evaluator exited {returncode}, scored={scored}; inspect {output}")
 
 
 def main():
