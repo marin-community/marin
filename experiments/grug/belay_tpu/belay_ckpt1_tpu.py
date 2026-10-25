@@ -28,10 +28,17 @@ DATA_ROOT = "gs://marin-us-central2"
 TRAIN_CACHE = DATA_ROOT + "/datakit/hero_tok/v16384_shuf/train"
 FULL_STEPS = belay_ckpt1.LADDER_RUNGS["d512"][1]
 TOKENIZER_ROOT = DATA_ROOT + "/tokenizers/hero-bpe-v16384/hf-hub-1.21.0"
+TPU_ROUNDING_FLAG = "--xla_allow_excess_precision=false"
 TOKENIZER_HASHES = {
     "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
     "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e",
 }
+
+
+def require_tpu_rounding() -> None:
+    """Preserve declared BF16 rounding across forward and backward fusions."""
+    if TPU_ROUNDING_FLAG not in os.environ.get("XLA_FLAGS", "").split():
+        raise RuntimeError(f"Ckpt 1 TPU execution requires XLA_FLAGS={TPU_ROUNDING_FLAG}")
 
 
 def verified_tokenizer(source: str = TOKENIZER_ROOT) -> str:
@@ -224,6 +231,7 @@ def main() -> None:
         return
     if os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Training requires JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
+    require_tpu_rounding()
     log_dir = Path(os.environ["IRIS_OUTPUT_DIR"]) / args.run_id / os.environ.get("HOSTNAME", "host")
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_dir / "native-metrics.jsonl")

@@ -26,6 +26,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     SOURCE_COMMIT,
     TOKENIZER_HASHES,
     build_config,
+    require_tpu_rounding,
     validate_recipe,
     verified_tokenizer,
 )
@@ -182,6 +183,7 @@ def check_ragged(mesh, *, chunks, concentrated=False):
 
 
 def main():
+    require_tpu_rounding()
     if os.environ.get("JAX_PLATFORMS") != "tpu":
         raise RuntimeError("This preflight requires real TPU execution")
     fs = gcsfs.GCSFileSystem(project="hai-gcp-models")

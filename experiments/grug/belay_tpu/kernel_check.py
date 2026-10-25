@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import levanter.tracker as tracker
 import numpy as np
 
-from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, verified_tokenizer
+from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 from experiments.grug.belay_tpu.kda_tpu import chunk_kda_tpu
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
 
@@ -51,6 +51,7 @@ def errors(actual, expected, tolerance):
 
 
 def main():
+    require_tpu_rounding()
     run_id = os.environ["BELAY_RUN_ID"]
     config = build_config(
         run_id,

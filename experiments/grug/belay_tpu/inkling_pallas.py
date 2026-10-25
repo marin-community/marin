@@ -44,9 +44,8 @@ def _cost(body, inputs, outputs, local_inputs, grid):
 
 def _scores_math(q, k, bias, qids, kids):
     scaled = (q * (1.0 / math.sqrt(q.shape[-1]))).astype(q.dtype)
-    # The source TPU fusion adds the bias to the FP32 accumulator and rounds
-    # once. Rounding QK before adding the bias changes saturated BF16 logits.
-    score = (_dot(scaled, k.T) + bias.astype(jnp.float32)).astype(q.dtype)
+    # With excess precision disabled, the source rounds QK before adding bias.
+    score = _dot(scaled, k.T).astype(q.dtype) + bias.astype(q.dtype)
     return jnp.where(qids[:, None] == kids[None, :], score, jnp.asarray(-1e9, score.dtype))
 
 

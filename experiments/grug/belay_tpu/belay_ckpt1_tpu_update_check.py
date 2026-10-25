@@ -26,7 +26,13 @@ from levanter.trainer import _initialize_global_tracker
 from levanter.utils.jax_utils import parameter_count
 
 from experiments.grug.belay_tpu import train
-from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, validate_recipe, verified_tokenizer
+from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
+    DATA_ROOT,
+    build_config,
+    require_tpu_rounding,
+    validate_recipe,
+    verified_tokenizer,
+)
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
@@ -114,6 +120,7 @@ def main():
         print(json.dumps({"logging_only_pass": True, "optimizer_updates": 0}), flush=True)
         return
 
+    require_tpu_rounding()
     trainer.initialize()
     tracker.log_configuration(config)
     tracker.log_summary({"diagnostic_only": True, "diagnostic/original_schedule_steps": 8821})

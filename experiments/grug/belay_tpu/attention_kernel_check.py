@@ -19,7 +19,7 @@ import numpy as np
 from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention._inkling_relpos import dense_rel_bias
 
-from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, verified_tokenizer
+from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local, score_tiles
 from experiments.grug.belay_tpu.inkling_tpu import saved_attention_local
 from experiments.grug.belay_tpu.kernel_check import measure_errors
@@ -58,6 +58,7 @@ def source_scores(q, k, band, ids):
 
 
 def main():
+    require_tpu_rounding()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark-source", action="store_true", help="Remeasure the unchanged dense source baseline")
     args = parser.parse_args()
