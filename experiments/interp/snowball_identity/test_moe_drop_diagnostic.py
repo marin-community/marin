@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import json
-import os
-import subprocess
-import sys
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,79 +21,9 @@ from experiments.interp.snowball_identity.levanter_positions import PAD_ID
 from experiments.interp.snowball_identity.sequences import Sequence
 from experiments.interp.snowball_identity.test_levanter_positions import CONFIG, SEQUENCES
 
-# One process, eight CPU devices: data 2 x expert 4, Snowball's batch axes. The backend reports its own drops.
-RING_CHILD = """
-import json, sys
-import jax, jax.numpy as jnp, numpy as np
-from jax.sharding import PartitionSpec as P, reshard
-from levanter.grug.grug_moe import MoEExpertMlp, MoEExpertMlpPspecs
-from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import _BATCH_AXES, _FSDP_AXES
-
-E, K, D, B, S = 16, 4, 8, 8, 6
-implementation, factor = sys.argv[3], float(sys.argv[4])
-mesh = compact_grug_mesh(expert_axis_size=4)
-assert jax.device_count() == 8 and dict(mesh.shape)["expert"] == 4
-rng = np.random.default_rng(0)
-# Skewed routes: expert 0 (shard 0) is picked far more than average, as identical pad tokens do.
-routes = np.stack([rng.choice(E, K, replace=False, p=np.r_[0.4, np.full(E - 1, 0.6 / (E - 1))]) for _ in range(B * S)])
-with jax.set_mesh(mesh):
-    mlp = MoEExpertMlp.init(num_experts=E, hidden_dim=D, intermediate_dim=4, initializer_std=0.1,
-        key=jax.random.key(0), implementation=implementation, capacity_factor=factor,
-        pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES))
-    x = reshard(jnp.ones((B * S, D), jnp.float32), P(_BATCH_AXES))
-    ids = reshard(jnp.asarray(routes, jnp.int32), P(_BATCH_AXES))
-    w = reshard(jnp.full((B * S, K), 0.25, jnp.float32), P(_BATCH_AXES))
-    _, counts = mlp(x, ids, w, mesh=jax.sharding.get_abstract_mesh(), report_capacity_overflow=True)
-print(json.dumps({"dropped": int(counts.dropped), "routes": routes.reshape(B, S, K).tolist()}))
-"""
-
-
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize("implementation", ["ring", "ring_gather_combine"])
-@pytest.mark.parametrize("factor", [1.0, 4.0])
-def test_ring_drops_matches_the_backend_count(implementation, factor):
-    env = {
-        **os.environ,
-        "JAX_PLATFORMS": "cpu",
-        "XLA_FLAGS": "--xla_force_host_platform_device_count=8",
-        "PYTHONPATH": os.pathsep.join(sys.path),
-    }
-    done = subprocess.run(
-        [sys.executable, "-c", RING_CHILD, "", "", implementation, str(factor)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    assert done.returncode == 0, done.stderr[-3000:]
-    result = json.loads(done.stdout.strip().splitlines()[-1])
-    expected = diag.ring_drops(np.asarray(result["routes"]), 16, 4, factor)
-    assert result["dropped"] == expected
-    assert (expected > 0) if factor == 1.0 else (expected == 0)
-
-
-def test_ring_drops_is_zero_without_an_expert_axis():
-    routes = np.zeros((8, 4, 4), dtype=np.int64)
-    assert diag.ring_drops(routes, 16, 1, 1.0) == 0
-    assert diag.ring_drops(routes, 16, 4, 1.0) > 0
-
-
-def test_with_capacity_changes_only_the_capacity_field():
-    config = dataclasses.replace(CONFIG, num_layers=2)
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(3))
-    changed, change = diag.with_capacity(model, 4.0)
-    assert {b.mlp.expert_mlp.capacity_factor for b in changed.transformer.blocks} == {4.0}
-    assert change["old"] == [1.0] and change["new"] == 4.0
-    assert jax.tree.structure(changed) != jax.tree.structure(model)  # static fields are part of the treedef
-    for ours, theirs in zip(jax.tree.leaves(changed), jax.tree.leaves(model), strict=True):
-        assert ours is theirs
-    json.dumps(change)
-
 
 def test_gate_batches_follow_positions_records():
-    """The drop pass must see the grids ``positions_records`` scores: sorted by length, short steps filled with
+    """The item-5 capture must see the grids ``positions_records`` scores: sorted by length, short steps filled with
     copies of their first sequence, right-padded with PAD_ID to the multiple."""
     grids = list(diag.gate_batches(SEQUENCES, 2, 4))
     assert [g.shape for g in grids] == [(2, 12), (2, 20)]
@@ -183,7 +112,11 @@ def test_levanter_dumps_agree_with_the_model_forward():
         model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(3))
         dumps, batch = diag.levanter_dumps(model, check)
         rows = [s.tokens for s in check] + [check[0].tokens] * (diag.DUMP_ROWS - len(check))
-        routes = np.asarray(jax.jit(diag._routes)(model, jnp.asarray(diag.padded(rows, diag.PAD_MULTIPLE))))
+        grid = diag.padded(rows, diag.PAD_MULTIPLE)
+        _, routes = model.activations_with_routes(
+            hax.named(jnp.asarray(grid), (Axis("batch", 16), model.Pos.resize(64)))
+        )
+        routes = np.asarray(routes)
     assert batch["grid"] == [16, 64]
     for row, sequence in enumerate(check):
         n = len(sequence.tokens)
@@ -191,3 +124,55 @@ def test_levanter_dumps_agree_with_the_model_forward():
         for layer in range(3):
             np.testing.assert_array_equal(dumps[sequence.id][f"routes/{layer}"], routes[layer, row, :n])
             np.testing.assert_array_equal(batch["routes"][layer][row, :n], routes[layer, row, :n])
+
+
+def test_gate_batch_of_finds_the_row_and_its_validity():
+    grid, valid, row = diag.gate_batch_of(SEQUENCES, "check|a", 2, 4)
+    assert grid.shape == (2, 12) and row == 1
+    assert grid[row].tolist()[:10] == list(SEQUENCES[0].tokens)
+    assert valid[0].sum() == len(SEQUENCES[2].tokens) and valid[1].sum() == len(SEQUENCES[0].tokens)
+    # The last step's filler row (a copy of its first sequence) is not valid.
+    grid, valid, row = diag.gate_batch_of(SEQUENCES, "long|x", 2, 4)
+    assert row == 0 and valid[0].all() and not valid[1].any()
+    with pytest.raises(KeyError):
+        diag.gate_batch_of(SEQUENCES, "missing", 2, 4)
+
+
+def test_item5_margins_compare_sets_and_both_margins():
+    ids = np.tile(np.arange(6, dtype=np.int16), (3, 2, 1))
+    biased = np.tile(np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0], dtype=np.float32), (3, 2, 1))
+    ours_ids, ours = ids.copy(), biased.copy()
+    ours_ids[1, 1, 3], ours_ids[1, 1, 4] = 4, 3  # Levanter swaps the 4th and 5th at position 1, layer 1
+    ours[1, 1, 3], ours[1, 1, 4] = 2.05, 2.0
+    found = diag.item5_margins({"ids": ours_ids, "biased": ours}, {"ids": ids, "biased": biased}, position=1)
+    assert found["set_disagreements"] == 1 and found["set_disagreements_by_layer"] == [0, 1]
+    assert found["levanter_margin_at_disagreements"]["max"] == pytest.approx(0.05, abs=1e-6)
+    assert found["torch_margin_at_disagreements"]["p50"] == pytest.approx(1.0)
+    assert found["position_1"]["set_agree_by_layer"] == [True, False]
+    assert diag.margin_stats(np.array([])) == {"count": 0}
+
+
+def test_router_top6_matches_the_scored_forward_routes():
+    """The capture's routes equal the validity-masked forward's own, and its top-4 ids are those routes."""
+    config = dataclasses.replace(CONFIG, num_layers=4)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(3))
+        grid, valid, _ = diag.gate_batch_of(SEQUENCES, "check|a", 2, 4)
+        ids, values, routes = (
+            np.asarray(x) for x in jax.jit(diag._router_top6)(model, jnp.asarray(grid), jnp.asarray(valid))
+        )
+        Batch, Pos = Axis("batch", 2), model.Pos.resize(grid.shape[1])
+        _, stats = model.activations_with_stats(
+            hax.named(jnp.asarray(grid), (Batch, Pos)), hax.named(jnp.asarray(valid), (Batch, Pos))
+        )
+    assert ids.shape == values.shape == (4, 2, 12, diag.TOP)
+    np.testing.assert_array_equal(routes, np.asarray(stats.routes))
+    np.testing.assert_array_equal(ids[..., : config.num_experts_per_token], routes)
+    assert (np.diff(values, axis=-1) <= 0).all()
+
+
+def test_pinned_receipt_checks_the_sha():
+    data = json.dumps({"schema_version": 4}).encode()
+    assert diag.pinned_receipt(data, hashlib.sha256(data).hexdigest()) == {"schema_version": 4}
+    with pytest.raises(ValueError, match="pinned"):
+        diag.pinned_receipt(data, "0" * 64)

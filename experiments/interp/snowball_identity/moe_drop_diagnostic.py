@@ -1,46 +1,48 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 diagnostic after the lr0-r5 gate failure: where the Levanter Snowball forward departs from the torch reference.
+"""#310 two-arm rerun on the integrated pin: the dropless Levanter Snowball forward with and without the FP32 combine.
 
-One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. Three arms of the same compute view
-(the gate's: BF16 compute, FP32 router bias, FP32 router dot), each differing from (a) in exactly one thing:
+One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. Both arms are the gate's compute
+view (BF16 compute, FP32 router bias, FP32 router dot) on data 2 x expert 4 with ``moe_capacity_factor`` 4 (the
+expert-axis size: dropless), set through the recipe, not by editing the model. They differ only in
+``router_combine_fp32``:
 
-(a) ``ep4-cap1``: data 2 x expert 4, every block's ``capacity_factor`` 1.0, as loaded. The r5 gate's MoE path
-    (ring, expert parallel 4, silent drops), without the cross-host context axis.
-(b) ``ep4-dropless``: the same mesh and model with every block's ``mlp.expert_mlp.capacity_factor`` set to the
-    expert-parallel size (4.0), so the ring path's per-shard capacity covers every assignment. Dropless by
-    construction.
-(c) ``ep1``: data 8 x expert 1. Grug's MoE falls back to the local scatter path. Dropless by construction.
+- ``dropless``: ``router_combine_fp32`` False.
+- ``dropless-fp32-combine``: ``router_combine_fp32`` True.
+
+Each arm's runtime recipe is derived in the job (``configure_precision_runtime``) and must equal that arm's reviewed
+runtime receipt, pinned by sha256 in ``ARMS``; the model is then loaded the LR0 probe's way, so the two fields reach
+it through the HF reload.
 
 Per arm, under ``<root>/<arm>/``:
 
-- ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records`` and
-  judged by ``precision_gate.evaluate``, the gate's own code and thresholds (batch 8, pad multiple 64).
-- per-device memory after the arm (inference only; it does not measure training at 8 x 8192).
-- the drop count per layer, recomputed on the host from that arm's observed routes with the ring path's capacity
-  rule (``ring_drops``), over the same batches including their padding.
-- sublayer dumps of layers 0-2 for the 11 ``check`` sequences (one batch of 16, padded to 64): embed, attn-norm,
-  attn-out, mlp-norm, router logits, moe-out, shared-out, resid; compared with the torch reference at every real
-  position.
+- ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records``
+  (validity-masked, with the backend's per-layer dispatch drops) and judged by ``precision_gate.evaluate``, the
+  gate's own code and thresholds (batch 8, pad multiple 64); ``gate.json`` holds the MoE settings, the drops and
+  per-device memory.
+- ``g1.json``: the G1 routes check (``route_proxy_check.check``) against the torch floor's pinned batch-1 top-6 and
+  receipt.
+- ``item5.pt``: for the item-5 rows, the top-6 biased router logits at every position and layer from the same
+  validity-masked forward on the gate's own batch, with the routes; the receipt summarises the 4th/5th margins at
+  the position-layers where Levanter and torch batch-1 choose different expert sets, from both stacks.
+- sublayer dumps of layers 0-2 for the 11 ``check`` sequences, compared with the torch reference (as in r2).
 
 The torch reference is the gate's: the vendored torch GrugMoE (``harness.import_grug``) with eager attention and
-eager experts, on the same checkpoint. A subprocess loads only the embedding and layers 0-2 on one GPU, before JAX
-starts, and writes ``<root>/torch-dumps.pt``; its routes must equal the gate's torch ``routes.pt`` for those layers.
-For each check sequence the receipt also holds the layer-0 router logits at position 4 from both stacks, with the
-top-5 biased logits and the 4th/5th margin.
+eager experts. A subprocess loads only the embedding and layers 0-2 on one GPU, before JAX starts, and writes
+``<root>/torch-dumps.pt``; its routes must equal the gate's torch ``routes.pt`` for those layers.
 
-Everything lands in ``<root>/receipt.json``. Production code is imported, never changed; the arm (b) change is made
-on the loaded model object.
+Everything lands in ``<root>/receipt.json``, including each device's memory before and after each arm (the peak is
+a running maximum over the process).
 """
 
 import argparse
-import dataclasses
 import gc
+import hashlib
+import importlib
 import io
 import json
 import logging
-import math
 import os
 import subprocess
 import sys
@@ -57,7 +59,6 @@ import numpy as np
 import torch
 from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ResourceConfig
-from haliax import Axis
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec
@@ -65,8 +66,16 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from levanter.compute_dtype import cast_model_for_compute
 from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import unshard
 from levanter.main.train_lm import preserve_hf_runtime_settings
-from levanter.models.snowball import _BATCH_AXES, GrugMoeHfConfig, _activation_spec, _context_axis, _token_spec
+from levanter.models.snowball import (
+    _BATCH_AXES,
+    GrugMoeHfConfig,
+    _activation_spec,
+    _context_axis,
+    _token_spec,
+    long_attention_layer_mask,
+)
 from levanter.utils.mesh import MeshConfig
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -81,12 +90,16 @@ from experiments.interp.snowball_identity.levanter_positions import (
     save_positions,
 )
 from experiments.interp.snowball_identity.logit_check import read, stored_sequences
-from experiments.interp.snowball_identity.multihost import gather_global
-from experiments.interp.snowball_identity.precision_gate import evaluate, write_json
+from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
+from experiments.interp.snowball_identity.precision_gate import (
+    device_memory_report,
+    evaluate,
+    local_device_memory,
+    write_json,
+)
 from experiments.interp.snowball_identity.sequences import Sequence
 from experiments.post_training.identity_context_distill.lr0_probe import (
     PRIORITY_BANDS,
-    approved_receipt,
     base_config,
     check_pod_storage,
     gate_inputs,
@@ -102,48 +115,27 @@ LAYERS = 26
 BATCH = 8
 PAD_MULTIPLE = 64
 DUMP_ROWS = 16
+EXPERT_AXIS = 4
+CAPACITY_FACTOR = 4.0
+TOP = 6
+K = 4
 MARGIN_POSITION = 4
 OPS = ("attn_norm", "attn_out", "mlp_norm", "router_logits", "moe_out", "shared_out", "resid")
 ARMS = {
-    "ep4-cap1": {"expert": 4, "capacity_factor": None, "dropless": "no: capacity_factor 1.0 as loaded"},
-    "ep4-dropless": {"expert": 4, "capacity_factor": 4.0, "dropless": "by construction: capacity = all assignments"},
-    "ep1": {"expert": 1, "capacity_factor": None, "dropless": "by construction: local scatter path, no expert axis"},
+    "dropless": {"router_combine_fp32": False, "receipt_sha256": "PENDING_MARGAY_RECEIPT_COMBINE_OFF"},
+    "dropless-fp32-combine": {"router_combine_fp32": True, "receipt_sha256": "PENDING_MARGAY_RECEIPT_COMBINE_ON"},
 }
-"""Each arm differs from ep4-cap1 in exactly one thing: the capacity factor (ep4-dropless) or the mesh (ep1)."""
+"""The arms differ only in ``router_combine_fp32``; each is bound to its reviewed runtime receipt by sha256."""
+ITEM5_ROWS = ("contrastive|id296-imp-031|no_system|4", "contrastive|id296-imp-031|no_system|7")
+"""Item 5: the rows of the ep4-dropless contrastive maximum (4.28) in r2."""
+FLOOR = f"{T310}/diag-torch-floor-r1"
 POLICY = "p=f32,c=bfloat16,o=f32"
 MODULE = "experiments.interp.snowball_identity.moe_drop_diagnostic"
 INPUTS = gate_inputs("unused", f"{T310}/torch-ref-queue-r1/results/t310-router-rounding-r1/routing.json")
 """The r5 gate's inputs; each arm writes under its own ``output``."""
 
 
-# ---- host-side capacity rule -------------------------------------------------------------------------------------
-
-
-def ring_drops(routes: np.ndarray, num_experts: int, expert_axis: int, capacity_factor: float) -> int:
-    """Assignments the ring path drops for one layer's routes [B, S, K] of a batch laid out on Snowball's batch axes.
-
-    Mirrors ``ep_ring._ring_ep`` for a mesh of ``(replica_dcn, data, expert)`` batch axes with no context axis:
-    rows are split over the devices in order, the expert axis is minor, and each expert shard gathers the tokens of
-    its ``expert_axis`` group. A shard accepts at most ``clip(ceil(cf * A / ep), local_experts, physical)`` of the
-    ``A`` gathered assignments, with ``physical = min(A, max(local_experts, ceil(cf * A / ep)))``; every token is
-    valid (Snowball passes no ``token_valid``). An expert axis of 1 runs the local path, which never drops."""
-    if expert_axis == 1:
-        return 0
-    batch = routes.shape[0]
-    if batch % BATCH:
-        raise ValueError(f"batch {batch} does not split over {BATCH} devices")
-    per_device = batch // BATCH
-    local_experts = num_experts // expert_axis
-    dropped = 0
-    for group in range(BATCH // expert_axis):
-        rows = slice(group * expert_axis * per_device, (group + 1) * expert_axis * per_device)
-        experts = routes[rows].reshape(-1)
-        assignments = experts.size
-        physical = min(assignments, max(local_experts, math.ceil(capacity_factor * assignments / expert_axis)))
-        logical = min(max(math.ceil(assignments * capacity_factor / expert_axis), local_experts), physical)
-        counts = np.bincount(experts // local_experts, minlength=expert_axis)
-        dropped += int(np.maximum(counts - logical, 0).sum())
-    return dropped
+# ---- gate grids ----------------------------------------------------------------------------------------------------
 
 
 def gate_batches(sequences: list[Sequence], batch: int, pad_multiple: int) -> Iterator[np.ndarray]:
@@ -162,6 +154,21 @@ def padded(rows: list[tuple[int, ...]], pad_multiple: int) -> np.ndarray:
     for row, tokens in enumerate(rows):
         grid[row, : len(tokens)] = tokens
     return grid
+
+
+def gate_batch_of(sequences: list[Sequence], sequence_id: str, batch: int, pad_multiple: int) -> tuple:
+    """The gate grid holding ``sequence_id`` (``gate_batches`` order), its validity grid as ``positions_records``
+    builds it (real rows' tokens only) and the sequence's row."""
+    order = sorted(range(len(sequences)), key=lambda i: len(sequences[i].tokens))
+    for step, grid in enumerate(gate_batches(sequences, batch, pad_multiple)):
+        indices = order[step * batch : (step + 1) * batch]
+        valid = np.zeros(grid.shape, dtype=bool)
+        for row, index in enumerate(indices):
+            valid[row, : len(sequences[index].tokens)] = True
+        for row, index in enumerate(indices):
+            if sequences[index].id == sequence_id:
+                return grid, valid, row
+    raise KeyError(sequence_id)
 
 
 # ---- comparison --------------------------------------------------------------------------------------------------
@@ -221,6 +228,45 @@ def compare_dumps(levanter: dict, torch_dumps: dict, bias: dict[int, np.ndarray]
             "unbiased_max_abs_diff": float(np.abs(ours.astype(np.float64) - ref.astype(np.float64)).max()),
         }
     return {"ops": table, "routes": routes, "layer0_position4": margins}
+
+
+def margin_stats(values: np.ndarray) -> dict:
+    if not len(values):
+        return {"count": 0}
+    return {
+        "count": len(values),
+        "p50": float(np.percentile(values, 50)),
+        "p90": float(np.percentile(values, 90)),
+        "max": float(values.max()),
+        "below_0.1": float(np.mean(values < 0.1)),
+    }
+
+
+def item5_margins(levanter: dict, torch_top6: dict, position: int | None = None) -> dict:
+    """One row: Levanter's top-6 ``ids``/``biased`` [T, L, 6] vs torch batch-1's (``top6.pt`` layout). At the
+    position-layers where the top-4 expert sets differ: the count per layer and both stacks' 4th/5th biased-logit
+    margins; at ``position`` (if given), every layer's margins and whether the sets agree."""
+    ours_ids, ours = np.asarray(levanter["ids"]), np.asarray(levanter["biased"], dtype=np.float64)
+    theirs_ids, theirs = np.asarray(torch_top6["ids"]), np.asarray(torch_top6["biased"], dtype=np.float64)
+    if ours_ids.shape != theirs_ids.shape:
+        raise ValueError(f"shapes differ: {ours_ids.shape} vs {theirs_ids.shape}")
+    differ = (np.sort(ours_ids[..., :K], -1) != np.sort(theirs_ids[..., :K], -1)).any(-1)  # [T, L]
+    ours_margin = ours[..., K - 1] - ours[..., K]
+    theirs_margin = theirs[..., K - 1] - theirs[..., K]
+    found = {
+        "positions": int(differ.shape[0]),
+        "set_disagreements": int(differ.sum()),
+        "set_disagreements_by_layer": differ.sum(0).tolist(),
+        "levanter_margin_at_disagreements": margin_stats(ours_margin[differ]),
+        "torch_margin_at_disagreements": margin_stats(theirs_margin[differ]),
+    }
+    if position is not None:
+        found[f"position_{position}"] = {
+            "set_agree_by_layer": (~differ[position]).tolist(),
+            "levanter_margin_by_layer": ours_margin[position].tolist(),
+            "torch_margin_by_layer": theirs_margin[position].tolist(),
+        }
+    return found
 
 
 # ---- torch reference (subprocess) --------------------------------------------------------------------------------
@@ -302,38 +348,15 @@ def run_torch_phase(root: str, positions: str) -> None:
 # ---- Levanter side -----------------------------------------------------------------------------------------------
 
 
-def mesh_config(expert: int) -> MeshConfig:
-    """The production mesh on one host: data x expert = 8, no context axis, same mappings."""
+def mesh_config() -> MeshConfig:
+    """The production mesh on one host: data 2 x expert 4, no context axis, same mappings."""
     return MeshConfig(
         # context 1 keeps the parameter mapping's axis names valid; the model treats it as absent.
-        axes={"data": BATCH // expert, "expert": expert, "context": 1, "replica": 1, "model": 1},
+        axes={"data": BATCH // EXPERT_AXIS, "expert": EXPERT_AXIS, "context": 1, "replica": 1, "model": 1},
         dcn_axes={"replica_dcn": 1},
         compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
         param_mapping={"embed": ["data", "context"]},
     )
-
-
-def with_capacity(view, factor: float):
-    """``view`` with every block's ``mlp.expert_mlp.capacity_factor`` replaced (a static field, so by
-    ``dataclasses.replace``); returns the new view and the recorded change."""
-    old = sorted({block.mlp.expert_mlp.capacity_factor for block in view.transformer.blocks})
-    blocks = tuple(
-        dataclasses.replace(
-            block,
-            mlp=dataclasses.replace(
-                block.mlp, expert_mlp=dataclasses.replace(block.mlp.expert_mlp, capacity_factor=factor)
-            ),
-        )
-        for block in view.transformer.blocks
-    )
-    new_view = dataclasses.replace(view, transformer=dataclasses.replace(view.transformer, blocks=blocks))
-    change = {
-        "field": "transformer.blocks[0..25].mlp.expert_mlp.capacity_factor",
-        "old": old,
-        "new": factor,
-        "method": "dataclasses.replace on the loaded compute view (static field; eqx.tree_at reaches leaves only)",
-    }
-    return new_view, change
 
 
 def _sublayers(view, tokens: jax.Array) -> dict:
@@ -376,10 +399,61 @@ def _sublayers(view, tokens: jax.Array) -> dict:
     return {name: reshard(value, P()) for name, value in out.items()}
 
 
-def _routes(view, tokens: jax.Array) -> jax.Array:
-    Batch, Pos = Axis("batch", tokens.shape[0]), view.Pos.resize(tokens.shape[1])
-    _, routes = view.activations_with_routes(hax.named(tokens, (Batch, Pos)))
-    return reshard(routes, P())
+def _router_top6(view, tokens: jax.Array, valid: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """``SnowballTransformer._forward`` with ``token_valid``, layer by layer in the same scan, also returning every
+    layer's top-6 biased router logits: ids and values [L, B, S, 6], and the routes [L, B, S, K] the MoE used."""
+    t = view.transformer
+    cfg = t.config
+    short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
+    long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=None)
+    tokens = reshard(tokens, P(_BATCH_AXES, _context_axis()))
+    valid = reshard(valid, P(_BATCH_AXES, _context_axis()))
+    hidden = t.embed_gated_norm(t.embed_norm(t.token_embed.at[tokens].get(out_sharding=_activation_spec())))
+    stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *t.blocks)
+
+    def layer_step(carry, layer_and_flag):
+        block, use_long = layer_and_flag
+        attn_in = block.attn_gated_norm(block.rms_attn(carry))
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long, dtype=jnp.bool_),
+            lambda _: block.attn(attn_in, long_mask, disable_rope=True),
+            lambda _: block.attn(attn_in, short_mask, disable_rope=False),
+            operand=None,
+        )
+        x = carry + attn_out
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
+        # SnowballMoEMLP._forward's router dot and bias, repeated to expose the biased logits.
+        b, s, _ = mlp_in.shape
+        router_input = jnp.reshape(mlp_in, (b * s, mlp_in.shape[-1]), out_sharding=_token_spec())
+        router_weight = reshard(block.mlp.router, P(None, None))
+        if cfg.router_dot_fp32:
+            router_input, router_weight = router_input.astype(jnp.float32), router_weight.astype(jnp.float32)
+        biased = jnp.einsum("td,de->te", router_input, router_weight).astype(jnp.float32)
+        biased = biased + unshard(block.mlp.router_bias)
+        values, ids = jax.lax.top_k(biased, TOP)
+        routed, routes, _ = block.mlp._forward(mlp_in, True, valid)
+        top6 = (reshard(jnp.reshape(ids, (b, s, TOP)), P()), reshard(jnp.reshape(values, (b, s, TOP)), P()))
+        return x + (routed + block.shared(mlp_in)), (*top6, routes)
+
+    _, (ids, values, routes) = jax.lax.scan(layer_step, hidden, (stacked, long_attention_layer_mask(len(t.blocks))))
+    return ids, values, routes
+
+
+def item5_dumps(view, sequences: list[Sequence]) -> dict:
+    """Per item-5 row, from a validity-masked forward of the gate batch that holds it: top-6 ``ids`` and ``biased``
+    [T, L, 6] and ``routes`` [T, L, K] at the row's real positions."""
+    capture = jax.jit(_router_top6)
+    found = {}
+    for sequence_id in ITEM5_ROWS:
+        grid, valid, row = gate_batch_of(sequences, sequence_id, BATCH, PAD_MULTIPLE)
+        ids, values, routes = (gather_global(x) for x in capture(view, jnp.asarray(grid), jnp.asarray(valid)))
+        n = int(valid[row].sum())
+        found[sequence_id] = {
+            "ids": torch.from_numpy(ids[:, row, :n].transpose(1, 0, 2).astype(np.int16)),
+            "biased": torch.from_numpy(values[:, row, :n].transpose(1, 0, 2).astype(np.float32)),
+            "routes": torch.from_numpy(routes[:, row, :n].transpose(1, 0, 2).astype(np.int16)),
+        }
+    return found
 
 
 def levanter_dumps(view, check: list[Sequence]) -> tuple[dict, dict]:
@@ -397,9 +471,9 @@ def levanter_dumps(view, check: list[Sequence]) -> tuple[dict, dict]:
     return dumps, {"grid": list(grid.shape), "routes": {layer: out[f"routes/{layer}"] for layer in range(DUMP_LAYERS)}}
 
 
-def load_view(config, receipt: dict, source: dict, expert: int):
+def load_view(config, receipt: dict, source: dict):
     """The trainer's compute view of the pinned source under the one-host mesh: the LR0 probe's loader steps."""
-    trainer_config = replace(config.trainer, mesh=mesh_config(expert))
+    trainer_config = replace(config.trainer, mesh=mesh_config())
     mesh = trainer_config.device_mesh
     with hax.partitioning.set_mesh(mesh), hax.axis_mapping(trainer_config.parameter_axis_mapping):
         tokenizer = config.data.the_tokenizer
@@ -415,52 +489,72 @@ def load_view(config, receipt: dict, source: dict, expert: int):
     return view, mesh, trainer_config
 
 
-def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref) -> dict:
-    arm = ARMS[name]
+def device_memory() -> list[dict]:
+    """Every device's bytes in use, peak so far (a running maximum over the process) and limit."""
+    return device_memory_report(gather_host_rows(local_device_memory()))
+
+
+def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref, floor) -> dict:
+    """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins."""
+    # A local import: route_proxy_check imports torch_route_floor, which imports this module's constants.
+    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
+
     started = time.time()
-    change = None
+    memory_before = device_memory()
+    out = prefix_join(root, name)
     with hax.partitioning.set_mesh(mesh), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        if arm["capacity_factor"] is not None:
-            view, change = with_capacity(view, arm["capacity_factor"])
-        factor = view.transformer.blocks[0].mlp.expert_mlp.capacity_factor
-        implementation = view.transformer.blocks[0].mlp.expert_mlp.implementation
-        out = prefix_join(root, name)
-        records = positions_records(view, sequences, BATCH, PAD_MULTIPLE, PAD_ID, routes=True)
+        mlp = view.transformer.blocks[0].mlp.expert_mlp
+        settings = {
+            "capacity_factor": view.config.moe_capacity_factor,
+            "expert_mlp_capacity_factor": mlp.capacity_factor,
+            "expert_axis": dict(mesh.shape)["expert"],
+            "router_combine_fp32": view.config.router_combine_fp32,
+            "expert_mlp_combine_in_fp32": mlp.combine_in_fp32,
+            "moe_implementation": mlp.implementation,
+        }
+        records, dispatch = positions_records(view, sequences, BATCH, PAD_MULTIPLE, PAD_ID, routes=True)
         dot_dtypes = router_dot_dtypes(view, jnp.bfloat16)
+        g1 = route_proxy_check.check(records, floor["top6"], floor["receipt"])
         positions_path = prefix_join(out, "positions.pt")
         save_positions(records, positions_path)
-        del records
-        report = evaluate(replace(INPUTS, output=out), overrides, positions_path, dot_dtypes)
+        moe = {key: settings[key] for key in ("capacity_factor", "expert_axis", "router_combine_fp32")}
+        memory = device_memory()
+        report = evaluate(
+            replace(INPUTS, output=out), overrides, positions_path, dot_dtypes, moe | {"dispatch": dispatch}, memory
+        )
         write_json(prefix_join(out, "gate.json"), report)
+        g1["inputs"] = {
+            "positions": positions_path,
+            "torch_top6_sha256": route_proxy_check.TORCH_TOP6_SHA256,
+            "floor_receipt_sha256": route_proxy_check.FLOOR_RECEIPT_SHA256,
+        }
+        write_json(prefix_join(out, "g1.json"), g1)
 
-        routes_fn = jax.jit(_routes)
-        drops = np.zeros(LAYERS, dtype=np.int64)
-        assignments = 0
-        for grid in gate_batches(sequences, BATCH, PAD_MULTIPLE):
-            routes = gather_global(routes_fn(view, jnp.asarray(grid)))
-            assignments += routes[0].size
-            for layer in range(LAYERS):
-                drops[layer] += ring_drops(routes[layer], view.config.num_experts, arm["expert"], factor)
-
+        item5 = item5_dumps(view, sequences)
         dumps, dump_batch = levanter_dumps(view, check)
+    item5_summary = {}
+    for sequence_id, found in item5.items():
+        item5_summary[sequence_id] = {
+            "routes_equal_positions_pt": bool(torch.equal(found["routes"], records[sequence_id]["routes"])),
+            "top4_prefix_equal_routes": bool(torch.equal(found["ids"][..., :K], found["routes"])),
+            **item5_margins(found, floor["top6"][sequence_id], position=27),
+        }
+    del records
+    buffer = io.BytesIO()
+    torch.save(item5, buffer)
+    StoragePath(prefix_join(out, "item5.pt")).write_bytes(buffer.getvalue())
     bias = {layer: np.asarray(torch_ref["_bias"][layer]) for layer in range(DUMP_LAYERS)}
-    dump_drops = [
-        ring_drops(dump_batch["routes"][layer], view.config.num_experts, arm["expert"], factor)
-        for layer in range(DUMP_LAYERS)
-    ]
     buffer = io.BytesIO()
     torch.save(dumps, buffer)
     StoragePath(prefix_join(out, "levanter-dumps.pt")).write_bytes(buffer.getvalue())
     parity = report["parity"]["positions"]
     return {
         "arm": name,
-        "dropless": arm["dropless"],
         "mesh": {"axes": dict(mesh.shape)},
-        "change_from_ep4-cap1": change or ({"mesh": "data 8 x expert 1"} if arm["expert"] == 1 else None),
-        "moe_implementation": implementation,
-        "capacity_factor": factor,
+        "settings": settings,
         "router_dot_dtypes": dot_dtypes,
         "gate_failures": report["failures"],
+        "dispatch": dispatch,
         "parity": {
             group: {
                 "positions": s["positions"],
@@ -481,23 +575,19 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
                 for layer in report["routes"]["layers"]
             ],
         },
-        "drops_per_layer_gate_batches": drops.tolist(),
-        "assignments_per_layer_gate_batches": assignments,
-        "drops_per_layer_dump_batch": dump_drops,
+        "g1": {
+            "layers_passing": g1["layers_passing"],
+            "rate_ok_layers": [r["layer"] for r in g1["layers"] if r["rate_ok"]],
+            "failures": g1["failures"],
+            "totals": g1["totals"],
+        },
+        "item5": item5_summary,
         "dump_batch_grid": dump_batch["grid"],
         "sublayers_vs_torch": compare_dumps(dumps, torch_ref, bias),
+        "device_memory_before_arm": memory_before,
         "device_memory_after_arm": device_memory(),
         "seconds": round(time.time() - started, 1),
     }
-
-
-def device_memory() -> list[dict]:
-    """Per local device: bytes in use now and the process's peak so far (a running maximum over all arms)."""
-    found = []
-    for device in jax.local_devices():
-        stats = device.memory_stats() or {}
-        found.append({k: stats.get(k) for k in ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")})
-    return found
 
 
 def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
@@ -513,7 +603,42 @@ def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
     return result
 
 
-def diagnostic_worker(root: str, receipt_bytes: bytes) -> None:
+def pinned_receipt(receipt_bytes: bytes, sha256: str) -> dict:
+    if hashlib.sha256(receipt_bytes).hexdigest() != sha256:
+        raise ValueError(f"runtime receipt sha256 {hashlib.sha256(receipt_bytes).hexdigest()}, pinned {sha256}")
+    return json.loads(receipt_bytes)
+
+
+def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generation_bytes: bytes):
+    """The arm's runtime recipe, derived as the LR0 probe derives it, which must equal the arm's reviewed receipt."""
+    base = base_config(root, f"diag-{name}", config_bytes, generation_bytes)
+    base = replace(base, model=replace(base.model, router_combine_fp32=ARMS[name]["router_combine_fp32"]))
+    reference = receipt["routing_reference"]
+    config, observed = configure_precision_runtime(
+        base,
+        config_bytes=config_bytes,
+        generation_bytes=generation_bytes,
+        rounding_bytes=StoragePath(reference["path"]).read_bytes(),
+        rounding_path=reference["path"],
+        rounding_sha256=reference["sha256"],
+    )
+    if observed != receipt:
+        raise ValueError(f"{name}: derived runtime recipe differs from the reviewed receipt")
+    model = config.model
+    if (model.moe_capacity_factor, model.router_combine_fp32) != (CAPACITY_FACTOR, ARMS[name]["router_combine_fp32"]):
+        raise ValueError(f"{name}: capacity {model.moe_capacity_factor}, combine {model.router_combine_fp32}")
+    return config
+
+
+def load_floor() -> dict:
+    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
+
+    top6 = route_proxy_check.load_pinned(f"{FLOOR}/batch1/top6.pt", route_proxy_check.TORCH_TOP6_SHA256)
+    receipt = route_proxy_check.load_pinned(f"{FLOOR}/receipt.json", route_proxy_check.FLOOR_RECEIPT_SHA256)
+    return {"top6": torch.load(io.BytesIO(top6), map_location="cpu"), "receipt": json.loads(receipt)}
+
+
+def diagnostic_worker(root: str, receipts: dict[str, bytes]) -> None:
     check_pod_storage()
     started = time.time()
     torch_started = time.time()
@@ -524,40 +649,38 @@ def diagnostic_worker(root: str, receipt_bytes: bytes) -> None:
     )
     torch_seconds = time.time() - torch_started
     torch_ref = torch.load(io.BytesIO(read(prefix_join(root, "torch-dumps.pt"))), map_location="cpu", weights_only=False)
-
-    receipt = approved_receipt(receipt_bytes)
-    reference = receipt["routing_reference"]
+    floor = load_floor()
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    config, observed = configure_precision_runtime(
-        base_config(root, "moe-drop-diagnostic", config_bytes, generation_bytes),
-        config_bytes=config_bytes,
-        generation_bytes=generation_bytes,
-        rounding_bytes=StoragePath(reference["path"]).read_bytes(),
-        rounding_path=reference["path"],
-        rounding_sha256=reference["sha256"],
-    )
-    if observed != receipt:
-        raise ValueError("Derived runtime recipe differs from the reviewed receipt")
-    overrides = config.trainer.compute_dtype_overrides
     source = json.loads(config_bytes)
     sequences = stored_sequences(INPUTS.positions)
     check = [s for s in sequences if s.group == "check"]
     result: dict = {
         "torch_seconds": round(torch_seconds, 1),
         "torch_routes_equal_gate_routes_layers_0_2": torch_routes_match_gate_reference(torch_ref),
+        "receipts": {name: arm["receipt_sha256"] for name, arm in ARMS.items()},
         "arms": {},
     }
     write_json(prefix_join(root, "receipt.json"), result)
-    for expert, names in ((4, ("ep4-cap1", "ep4-dropless")), (1, ("ep1",))):
+    for name, arm in ARMS.items():
+        receipt = pinned_receipt(receipts[name], arm["receipt_sha256"])
+        config = arm_config(name, receipt, root, config_bytes, generation_bytes)
         load_started = time.time()
-        view, mesh, trainer_config = load_view(config, receipt, source, expert)
-        result[f"load_seconds_expert{expert}"] = round(time.time() - load_started, 1)
-        for name in names:
-            result["arms"][name] = run_arm(
-                name, view, mesh, trainer_config, overrides, root, sequences, check, torch_ref
-            )
-            write_json(prefix_join(root, "receipt.json"), result)
+        view, mesh, trainer_config = load_view(config, receipt, source)
+        result[f"load_seconds_{name}"] = round(time.time() - load_started, 1)
+        result["arms"][name] = run_arm(
+            name,
+            view,
+            mesh,
+            trainer_config,
+            config.trainer.compute_dtype_overrides,
+            root,
+            sequences,
+            check,
+            torch_ref,
+            floor,
+        )
+        write_json(prefix_join(root, "receipt.json"), result)
         del view
         gc.collect()
         jax.clear_caches()
@@ -576,8 +699,9 @@ def main() -> None:
     launch = sub.add_parser("launch", help="print the plan; with --run, submit one H100x8 job")
     launch.add_argument("--job-name", required=True)
     launch.add_argument("--root", required=True, help=f"fresh prefix under {T310}/")
-    launch.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
-    launch.add_argument("--timeout-seconds", type=int, default=5400)
+    for name in ARMS:
+        launch.add_argument(f"--receipt-{name}", required=True, help=f"local runtime receipt for the {name} arm")
+    launch.add_argument("--timeout-seconds", type=int, default=2700)
     launch.add_argument("--priority", choices=("interactive", "production"), default="production")
     launch.add_argument("--expect-commit")
     launch.add_argument("--run", action="store_true")
@@ -589,10 +713,13 @@ def main() -> None:
 
 
 def launch_job(args) -> None:
+    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
+
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
-    receipt_bytes = Path(args.runtime_receipt).read_bytes()
-    approved_receipt(receipt_bytes)
+    receipts = {name: Path(getattr(args, f"receipt_{name.replace('-', '_')}")).read_bytes() for name in ARMS}
+    for name, arm in ARMS.items():
+        pinned_receipt(receipts[name], arm["receipt_sha256"])
     if not args.root.startswith(f"{T310}/diag-"):
         raise ValueError(f"root must be a fresh {T310}/diag-* prefix")
     resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768GB", disk="1TB", target_cluster="cw-rno2a")
@@ -602,6 +729,15 @@ def launch_job(args) -> None:
         "clean": not dirty,
         "root": args.root,
         "arms": ARMS,
+        "capacity_factor": CAPACITY_FACTOR,
+        "expert_axis": EXPERT_AXIS,
+        "item5_rows": ITEM5_ROWS,
+        "g1": {
+            "floor": FLOOR,
+            "torch_top6_sha256": route_proxy_check.TORCH_TOP6_SHA256,
+            "floor_receipt_sha256": route_proxy_check.FLOOR_RECEIPT_SHA256,
+            "rule": {"k": route_proxy_check.K_RATE, "margin_factor": route_proxy_check.MARGIN_FACTOR},
+        },
         "gate_inputs": vars(INPUTS),
         "resources": "1 x H100x8 cw-rno2a, 64 cpu, 768GB, 1TB",
         "priority": args.priority,
@@ -620,7 +756,7 @@ def launch_job(args) -> None:
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
-    entrypoint = Entrypoint.from_callable(diagnostic_worker, args.root, receipt_bytes)
+    entrypoint = Entrypoint.from_callable(importlib.import_module(MODULE).diagnostic_worker, args.root, receipts)
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
