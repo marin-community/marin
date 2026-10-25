@@ -29,13 +29,17 @@ from levanter.models.lm_model import LmExample
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.fast_track import belay_ckpt1, launch
-from experiments.grug.fast_track.model import GrugModelConfig, Transformer
+from experiments.grug.fast_track.model import GrugModelConfig, Transformer, ValueEmbeds
 from experiments.grug.fast_track.train import restore_template_from
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 
 logger = logging.getLogger(__name__)
 
 SIZE = "d512"
+# The tag whose model dimensions the instrumented forward is built for (this branch studies the d1280 rung) and its
+# partner run (the same recipe without value embeddings or the logit soft cap).
+STUDY_TAG = "lc1-l171-d1280"
+PARTNER_TAG = "lc1-s171-d1280"
 ONSET_ARMS = ("ctl", "last-half", "first-half", "stagger", "rstagger", "last-half-wu")
 # The plain-residual (attn_res_plain_sum) onset arms.
 PLAIN_SUM_ARMS = ("ctl-ps", "last-half-ps", "stagger-ps")
@@ -52,10 +56,13 @@ CHECKPOINTS = {
     "lc1-l171-d768": "s3://marin-us-east-02a/marin/grug/lc1-l171-d768/2026.09.25/checkpoints/step-24995",
     "lc1-l171-d1024": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1024/2026.09.25/checkpoints/step-32323",
     "lc1-l171-d1280": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1280/2026.09.25/checkpoints/step-57578",
+    "lc1-s171-d1280": "s3://marin-us-east-02a/marin/grug/lc1-s171-d1280/2026.09.25/checkpoints/step-57578",
 }
 # Study tags of other ladder sizes (every other tag is d512).
-TAG_SIZES = {"lc1-l171-d768": "d768", "lc1-l171-d1024": "d1024", "lc1-l171-d1280": "d1280"}
-OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
+TAG_SIZES = {"lc1-l171-d768": "d768", "lc1-l171-d1024": "d1024", "lc1-l171-d1280": "d1280", "lc1-s171-d1280": "d1280"}
+# Tags trained without value embeddings and the logit soft cap.
+NO_VE_TAGS = frozenset({"lc1-s171-d1280"})
+OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d1280"
 SEQ_LEN = launch.SEQ_LEN
 TRAIN_CACHE = launch.V16384_CACHE_DIR
 TOKENIZER = launch.V16384_TOKENIZER
@@ -78,9 +85,9 @@ PALOMA_SETS = (
     "twitterAAE_HELM_fixed",
     "wikitext_103",
 )
-# Sequences the run trained on: 8821 steps x 128. Analysis train samples come from beyond them (unseen tokens of the
+# Sequences the d1280 run trained on. Analysis train samples come from beyond them (unseen tokens of the
 # same document-shuffled cache).
-TRAINED_SEQUENCES = 8821 * 128  # the longer run's; the 2760-step run saw a prefix of it
+TRAINED_SEQUENCES = 57578 * 256  # the d1280 rung's 57578 steps x 256 sequences
 MP = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 
 
@@ -102,6 +109,8 @@ def model_config(tag: str) -> GrugModelConfig:
     model = dataclasses.replace(launch._h100_ladder_model(rung), vocab_size=launch.V16384_VOCAB)
     model = launch._kma_model(model)
     model = launch._apply_settings(model, settings)
+    if tag in NO_VE_TAGS:
+        model = dataclasses.replace(model, value_embeds=ValueEmbeds.NONE, logit_soft_cap=None)
     return dataclasses.replace(model, attn_res_plain_sum=tag in PLAIN_SUM_TAGS)
 
 
@@ -198,6 +207,14 @@ def _pad_batch(batch: TokenBatch, batch_size: int) -> TokenBatch:
         return np.concatenate([x, np.full((pad, x.shape[1]), fill, x.dtype)], axis=0)
 
     return TokenBatch(batch.source, rep(batch.tokens, 0), rep(batch.segment_ids, 0), rep(batch.loss_weight, 0.0))
+
+
+def train_cache_sequences() -> int:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        sets = pool.submit(
+            lambda: data_config().train_sets(Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))
+        ).result()
+        return pool.submit(lambda: len(sets["train"].as_sync_dataset())).result()
 
 
 @off_mesh

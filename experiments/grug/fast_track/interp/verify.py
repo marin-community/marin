@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify the d512 checkpoint and the instrumented forward.
+"""Verify the study checkpoint and the instrumented forward.
 
 1. Chunk completeness: every array in the checkpoint's OCDBT store has every chunk its grid needs (the TensorStore
    0.1.84 bug fixed in 0dbf62af35 silently dropped whole chunks).
@@ -149,6 +149,8 @@ def main() -> None:
         report["paloma_macro"] = float(np.mean(list(per_set.values())))
         report["logged_paloma_macro"] = args.logged_paloma_macro
         report["trace_vs_model"] = trace_cmp
+    report["train_cache_sequences"] = common.train_cache_sequences()
+    logger.info("train cache %d sequences (trained %d)", report["train_cache_sequences"], common.TRAINED_SEQUENCES)
     report["seconds"] = time.time() - t0
     logger.info("paloma macro %.6f (logged %.6f)", report["paloma_macro"], args.logged_paloma_macro)
     common.save_json(args.tag, "verify", report)

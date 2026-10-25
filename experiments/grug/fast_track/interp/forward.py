@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Instrumented forward of the Ckpt 1 d512 model (KDA + MLA/Inkling layers, one Block AttnRes block per layer, latent
-ReLU^2 MoE with one shared expert), exposing every intermediate the study reads and taking traced ablation inputs.
+"""Instrumented forward of the Ckpt 1 study model (KDA + MLA/Inkling layers, Block AttnRes with one block per layer
+up to the block cap and a running partial after it, latent ReLU^2 MoE with one shared expert), exposing every
+intermediate the study reads and taking traced ablation inputs.
 
 It re-implements ``Transformer.__call__`` for exactly this config (``check_config`` refuses any other) from the model's
 own parameters and kernels: the AttnRes gates over ``[embed, L0, ..., L(i-1)]`` (attention) and ``[..., attn_i]``
-(MLP), KDA through the fused kernel, MLA through the FA4 kernel, and the MoE as a dropless sorted (``ragged_dot``)
-dispatch whose hidden units (the "neurons") are materialized. ``verify.py`` checks it against
+(MLP), the sources from layer ``BLOCK_CAP - 1`` on summed into one partial, KDA through the fused kernel, MLA
+through the FA4 kernel, and the MoE as a dropless sorted (``ragged_dot``) dispatch whose hidden units (the "neurons")
+are materialized. ``verify.py`` checks it against
 ``Transformer.next_token_loss``.
 
 Ablations are traced inputs (one compile serves all of them): every head, sublayer and neuron has a keep multiplier
@@ -27,6 +29,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from levanter.grug.attention import AttentionMask, attention, fa4_cute_segment_bounds
 
+from experiments.grug.fast_track.interp import common
 from experiments.grug.fast_track.key_offset import partial_key_offset
 from experiments.grug.fast_track.model import (
     KDA_MIN_LOG_DECAY,
@@ -47,18 +50,23 @@ from experiments.grug.fast_track.model import (
 )
 from experiments.grug.moe.kda_prep_pallas import GateFn, GateKind, gate_log_decay
 
-NUM_LAYERS = 6
-NUM_HEADS = 4
-HEAD_DIM = 128
-NUM_EXPERTS = 384
-TOP_K = 10
-EXPERT_WIDTH = 384
-SHARED_WIDTH = 384
-LATENT = 256
-HIDDEN = 512
-VOCAB = 16384
-KDA_LAYERS = (0, 1, 2, 4)
-MLA_LAYERS = (3, 5)
+# The study model's dimensions (``common.STUDY_TAG``; every tag the study loads shares them).
+_STUDY = common.model_config(common.STUDY_TAG)
+NUM_LAYERS = _STUDY.num_layers
+NUM_HEADS = _STUDY.num_heads
+HEAD_DIM = _STUDY.head_dim
+NUM_EXPERTS = _STUDY.num_experts
+TOP_K = _STUDY.num_experts_per_token
+EXPERT_WIDTH = _STUDY.intermediate_dim
+SHARED_WIDTH = _STUDY.shared_expert_intermediate_dim
+LATENT = _STUDY.latent_dim
+HIDDEN = _STUDY.hidden_dim
+VOCAB = _STUDY.vocab_size
+KDA_LAYERS = tuple(i for i in range(NUM_LAYERS) if not _is_long_layer(i, NUM_LAYERS, _STUDY.global_every))
+MLA_LAYERS = tuple(i for i in range(NUM_LAYERS) if i not in KDA_LAYERS)
+# Block AttnRes keeps at most this many history sources (embedding + one block per layer); later layers' outputs
+# accumulate in one running partial source.
+BLOCK_CAP = _STUDY.attn_res_num_blocks
 # Sublayer ablation slots: attention (whole branch), shared expert, routed experts, MLA value embeddings.
 SUB_ATTN, SUB_SHARED, SUB_ROUTED, SUB_VE = range(4)
 NUM_SUB = 4
@@ -90,7 +98,6 @@ def check_config(cfg: GrugModelConfig) -> None:
         moe_ungated_relu2=True,
         shared_ungated_relu2=True,
         router_combine=RouterCombine.SQRT_SOFTPLUS_RENORM,
-        value_embeds=ValueEmbeds.GATED,
         mla=True,
         inkling_relpos=True,
         mla_key_offset=True,
@@ -110,9 +117,14 @@ def check_config(cfg: GrugModelConfig) -> None:
         kda_erase_gate=False,
         num_null_experts=0,
         second_embed=False,
-        logit_soft_cap=10,
     )
     wrong = {k: (getattr(cfg, k), v) for k, v in expected.items() if getattr(cfg, k) != v}
+    if cfg.value_embeds not in (ValueEmbeds.GATED, ValueEmbeds.NONE):
+        wrong["value_embeds"] = (cfg.value_embeds, "gated or none")
+    if cfg.logit_soft_cap not in (10, None):
+        wrong["logit_soft_cap"] = (cfg.logit_soft_cap, "10 or None")
+    if max(1, NUM_LAYERS // cfg.attn_res_num_blocks) != 1:
+        wrong["attn_res_num_blocks"] = (cfg.attn_res_num_blocks, f">= {NUM_LAYERS // 2} (one block per layer)")
     if wrong:
         raise ValueError(f"interp forward does not reproduce this config: {wrong}")
     layers = tuple(i for i in range(NUM_LAYERS) if not _is_long_layer(i, NUM_LAYERS, cfg.global_every))
@@ -281,6 +293,24 @@ def _gate(sources: list[jax.Array], query: jax.Array, eps: float, *, plain_sum: 
     return weights, mixed.astype(sources[0].dtype)
 
 
+def _history_gate(
+    history: list[jax.Array], query: jax.Array, eps: float, *, plain_sum: bool
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """An AttnRes gate over the per-layer ``history`` ``[embed, L0, ..., (attn_i)]``: the first ``BLOCK_CAP`` entries
+    are blocks and the rest are summed into the running partial (as the model's block schedule with one layer per
+    block). Returns the per-history-entry weights (an entry inside the partial carries the partial's weight, so
+    ``mixed = sum_j w[j] * history[j]``), the per-source weights and the mix."""
+    if len(history) <= BLOCK_CAP:
+        weights, mixed = _gate(history, query, eps, plain_sum=plain_sum)
+        return weights, weights, mixed
+    partial = history[BLOCK_CAP]
+    for src in history[BLOCK_CAP + 1 :]:
+        partial = partial + src
+    weights, mixed = _gate([*history[:BLOCK_CAP], partial], query, eps, plain_sum=plain_sum)
+    tail = jnp.broadcast_to(weights[BLOCK_CAP], (len(history) - BLOCK_CAP, *weights.shape[1:]))
+    return jnp.concatenate([weights[:BLOCK_CAP], tail], axis=0), weights, mixed
+
+
 def _sconv(conv, x: jax.Array, seg: jax.Array) -> jax.Array:
     return conv(x, seg)
 
@@ -384,11 +414,14 @@ def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean, x_q=
     q = rearrange(jnp.einsum("bsd,de->bse", x_q, attn.w_q), "... (n d) -> ... n d", d=HEAD_DIM)
     k = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uk), "... (n d) -> ... n d", d=HEAD_DIM)
     v_proj = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uv), "... (n d) -> ... n d", d=HEAD_DIM)
-    table = _embedding_gather(attn.value_embed.astype(x.dtype), token_ids)
-    ve = rearrange(table, "... (n d) -> ... n d", d=HEAD_DIM)
-    ve_w = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.ve_gate.astype(x.dtype)))[..., None]
-    lam = attn.ve_lambda.astype(x.dtype)
-    v_proj = lam[0] * v_proj
+    if attn.value_embed is None:  # value_embeds=none: a zero value-embedding term
+        ve = jnp.zeros_like(v_proj)
+        ve_w = jnp.zeros((*v_proj.shape[:3], 1), x.dtype)
+    else:
+        table = _embedding_gather(attn.value_embed.astype(x.dtype), token_ids)
+        ve = rearrange(table, "... (n d) -> ... n d", d=HEAD_DIM)
+        ve_w = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.ve_gate.astype(x.dtype)))[..., None]
+        v_proj = attn.ve_lambda.astype(x.dtype)[0] * v_proj
     m = ve_mult.astype(jnp.float32)[None, None, :, None]
     ve = (m * (ve_w * ve).astype(jnp.float32) + (1.0 - m) * ve_mean[None, None]).astype(x.dtype)
     k = partial_key_offset(k, seg, P(_BATCH, None, None, None), ())
@@ -604,6 +637,7 @@ def trace_forward(
     keep (``RoutedGate``)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
+    plain = cfg.attn_res_plain_sum
     b, s = tokens.shape
     if routing is None:
         routing = no_override(b * s)
@@ -633,15 +667,15 @@ def trace_forward(
     for i, layer in enumerate(model.layers()):
         out: dict = {}
         if patch is None:
-            w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
+            w_attn, w_attn_src, h = _history_gate(blocks, layer.attn_res_query_attn, eps, plain_sum=plain)
             attn_in, attn_in_q = layer._attn_input(h), None
         else:
             nb = len(blocks)
-            w_attn, h = _gate(
-                patched(2 * i, SIDE_Q, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum
+            w_attn, w_attn_src, h = _history_gate(
+                patched(2 * i, SIDE_Q, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=plain
             )
-            _, h_kv = _gate(
-                patched(2 * i, SIDE_KV, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum
+            _, _, h_kv = _history_gate(
+                patched(2 * i, SIDE_KV, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=plain
             )
             attn_in, attn_in_q = layer._attn_input(h_kv), layer._attn_input(h)
         if i in KDA_LAYERS:
@@ -684,16 +718,16 @@ def trace_forward(
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
         mlp_sources = [*blocks, attn_out]
         if patch is None:
-            w_mlp, h2 = _gate(mlp_sources, layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
+            w_mlp, w_mlp_src, h2 = _history_gate(mlp_sources, layer.attn_res_query_mlp, eps, plain_sum=plain)
             mlp_in, mlp_in_router = layer._mlp_input(h2), None
         else:
             nb = len(blocks)
             g = 2 * i + 1
-            w_mlp, h2r = _gate(
-                patched(g, SIDE_Q, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum
+            w_mlp, w_mlp_src, h2r = _history_gate(
+                patched(g, SIDE_Q, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=plain
             )
-            _, h2 = _gate(
-                patched(g, SIDE_KV, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum
+            _, _, h2 = _history_gate(
+                patched(g, SIDE_KV, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=plain
             )
             mlp_in, mlp_in_router = layer._mlp_input(h2), layer._mlp_input(h2r)
         routed, shared_out = _moe_branch(
@@ -707,6 +741,8 @@ def trace_forward(
         out.update(
             w_attn=w_attn,
             w_mlp=w_mlp,
+            w_attn_src=w_attn_src,
+            w_mlp_src=w_mlp_src,
             attn_gate_in=h,
             attn_in=attn_in,
             head_out=contrib,
@@ -723,11 +759,13 @@ def trace_forward(
         layers_out.append(out)
         blocks.append(block_out)
     final_sources = blocks if patch is None else patched(2 * NUM_LAYERS, SIDE_Q, blocks, len(blocks))
-    w_final, mixed = _gate(final_sources, model.attn_res_query_final, eps, plain_sum=cfg.attn_res_plain_sum)
+    w_final, w_final_src, mixed = _history_gate(final_sources, model.attn_res_query_final, eps, plain_sum=plain)
     mixed_f = mixed.astype(jnp.float32)
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(mixed_f), axis=-1, keepdims=True) + eps)
     hidden = model.final_norm(mixed)
-    logits = soft_cap(_final_logits(model, hidden))
+    logits = _final_logits(model, hidden)
+    if cfg.logit_soft_cap is not None:
+        logits = soft_cap(logits, cfg.logit_soft_cap)
     labels = jnp.pad(tokens[:, 1:], ((0, 0), (0, 1)))
     logp = jax.nn.log_softmax(logits, axis=-1)
     loss = -jnp.take_along_axis(logp, labels[..., None], axis=-1)[..., 0]
@@ -737,6 +775,7 @@ def trace_forward(
         embed=embed,
         blocks=blocks,
         w_final=w_final,
+        w_final_src=w_final_src,
         mixed=mixed,
         inv_rms=inv_rms[..., 0],
         hidden=hidden,
