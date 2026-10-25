@@ -128,7 +128,7 @@ def setup_custom_parser():
     Create a custom argument parser that extends lm-eval-harness parser.
     """
     parser = setup_parser()
-    parser.add_argument("--primary-metric", help="Canonical metric to report for each requested task")
+    parser.add_argument("--primary-metric", type=str, help="Canonical metric to report for each requested task")
     parser.add_argument(
         "--dataset_cache",
         type=str,
