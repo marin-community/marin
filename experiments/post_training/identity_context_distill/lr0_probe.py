@@ -297,10 +297,12 @@ def submit(
     xla_precision: str,
 ) -> str:
     entrypoint = Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256, route_policy)
-    return submit_entrypoint(job_name, entrypoint, timeout_seconds, priority)
+    return submit_entrypoint(job_name, entrypoint, timeout_seconds, priority, xla_precision)
 
 
-def submit_entrypoint(job_name: str, entrypoint: Entrypoint, timeout_seconds: int, priority: str) -> str:
+def submit_entrypoint(
+    job_name: str, entrypoint: Entrypoint, timeout_seconds: int, priority: str, xla_precision: str
+) -> str:
     """One finite 4 x H100x8 RNO2a job with no retries; shared by the LR0 and SFT launchers."""
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.

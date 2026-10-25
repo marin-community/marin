@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from functools import partial
 
 import equinox as eqx
 import haliax as hax
@@ -116,7 +117,8 @@ def frozen(monkeypatch, data_bytes: bytes) -> bytes:
 def run_worker(monkeypatch, receipt_bytes, data_bytes):
     calls: dict = {"writer": 0}
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
-    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256", receipt_sha)
+    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {receipt_sha})
+    monkeypatch.setattr(sft_launch, "require_xla_precision", lambda setting: calls.setdefault("xla", setting))
 
     def writer(action):
         calls["writer"] += 1
@@ -154,8 +156,18 @@ class _Remote:
         return _FILES[self.path.rsplit("/", 1)[-1]]
 
 
-def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch):
-    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True, fp32_activations=True)
+@pytest.mark.parametrize(
+    "attention,precision",
+    [("torch_order", "default"), ("torch_order", "no_excess_precision"), (None, "no_excess_precision")],
+)
+def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch, attention, precision):
+    receipt_bytes = fixture(
+        monkeypatch,
+        router_combine_fp32=True,
+        fp32_activations=True,
+        attention_implementation=attention,
+        xla_precision=precision,
+    )
     _, args = inputs()
     _FILES.update(
         {
@@ -183,6 +195,9 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
     assert config.model.router_dot_fp32 is True
     assert config.model.moe_capacity_factor == 4.0
     assert config.model.router_combine_fp32 is True and config.model.fp32_activations is True
+    assert config.model.attention_implementation == attention
+    assert calls["xla"] == precision
+    assert kwargs["receipt_sha256"] == hashlib.sha256(receipt_bytes).hexdigest()
     assert config.trainer.compute_dtype_overrides == {"router_bias": "float32"}
     assert config.adapter.frozen_field_names == ("router_bias",)
     assert isinstance(config.trainer.tracker, NoopConfig)
@@ -405,6 +420,8 @@ def test_source_bind_matches_the_model_objects_and_the_lr0_receipt(monkeypatch):
 
 def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
     calls = []
+    monkeypatch.setattr(sft_launch, "sft_runtime_receipt", lambda *args: {"xla_precision": "default"})
+    monkeypatch.setattr(sft_launch, "require_xla_precision", lambda expected: None)
     monkeypatch.setattr(sft_launch, "check_pod_storage", lambda: calls.append("storage"))
     monkeypatch.setattr(
         sft_launch, "load_dataset_audit_inputs", lambda root, inventory: calls.append(("frozen", root, inventory)) or "F"
@@ -452,11 +469,23 @@ def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
 
 
 def test_plan_records_the_recipe_and_a_bounded_ceiling(monkeypatch):
-    fixture(monkeypatch)
+    receipt_bytes = fixture(
+        monkeypatch,
+        router_combine_fp32=True,
+        fp32_activations=True,
+        attention_implementation="torch_order",
+        xla_precision="no_excess_precision",
+    )
+    runtime = json.loads(receipt_bytes)
+    receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     _, args = inputs()
     data_bytes = frozen(monkeypatch, data_config())
-    config = sft_launch.sft_config(RUN_ROOT, "job", args["config_bytes"], args["generation_bytes"], data_bytes)
-    job_plan = sft_launch.plan("job", RUN_ROOT, 7200, "interactive", config)
+    config = sft_launch.sft_config(RUN_ROOT, "job", args["config_bytes"], args["generation_bytes"], data_bytes, runtime)
+    job_plan = sft_launch.plan("job", RUN_ROOT, 7200, "interactive", config, receipt_sha, runtime["xla_precision"])
+    assert job_plan["runtime_receipt_sha256"] == receipt_sha
+    assert job_plan["xla_precision"] == "no_excess_precision"
+    assert job_plan["env_vars"] == {"XLA_FLAGS": "--xla_allow_excess_precision=false"}
+    assert job_plan["forward"]["attention_implementation"] == "torch_order"
     assert job_plan["stop_after_updates"] == 16
     assert job_plan["optimizer"] == {"learning_rate": 2e-6, "warmup": 2, "weight_decay": 0.0, "max_grad_norm": 0.5}
     assert job_plan["batch"] == {"train_batch_size": 8, "per_device_parallelism": 1, "seq_len": 8192}
@@ -464,3 +493,49 @@ def test_plan_records_the_recipe_and_a_bounded_ceiling(monkeypatch):
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
     assert job_plan["retries_failure"] == job_plan["retries_preemption"] == 0
     assert job_plan["h100_hour_ceiling"] == 64
+
+
+@pytest.mark.parametrize("entrypoint", ["sft_worker", "bound_sft_worker"])
+def test_worker_rejects_precision_mismatch_before_storage_or_dataset_reads(monkeypatch, entrypoint):
+    receipt_bytes = fixture(
+        monkeypatch,
+        router_combine_fp32=True,
+        fp32_activations=True,
+        attention_implementation="torch_order",
+        xla_precision="no_excess_precision",
+    )
+    digest = hashlib.sha256(receipt_bytes).hexdigest()
+    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.setattr(
+        "experiments.post_training.identity_context_distill.runtime_recipe.xla_bridge.backends_are_initialized",
+        lambda: False,
+    )
+    reads = []
+    monkeypatch.setattr(sft_launch, "check_pod_storage", lambda: reads.append("storage"))
+    monkeypatch.setattr(sft_launch, "load_dataset_audit_inputs", lambda *args: reads.append("dataset"))
+    arguments = [RUN_ROOT, "job", receipt_bytes, digest, b"data", LR0_SOURCE, SOURCE_OBJECTS]
+    if entrypoint == "sft_worker":
+        arguments.append(None)
+    with pytest.raises(ValueError, match="XLA precision"):
+        getattr(sft_launch, entrypoint)(*arguments)
+    assert reads == []
+
+
+def test_sft_refuses_unreviewed_or_changed_runtime_receipts(monkeypatch):
+    receipt_bytes = fixture(
+        monkeypatch, router_combine_fp32=True, fp32_activations=True, attention_implementation="torch_order"
+    )
+    digest = hashlib.sha256(receipt_bytes).hexdigest()
+    with pytest.raises(ValueError, match="reviewed schema-6"):
+        sft_launch.sft_runtime_receipt(receipt_bytes, digest)
+    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
+    with pytest.raises(ValueError, match="differs from"):
+        sft_launch.sft_runtime_receipt(receipt_bytes + b" ", digest)
+    assert sft_launch.sft_runtime_receipt(receipt_bytes, digest)["schema_version"] == 6
+
+
+def test_submit_requires_the_precision_setting_before_any_job_access():
+    missing_precision = partial(sft_launch.submit_entrypoint, "job", object(), 7200, "production")
+    with pytest.raises(TypeError, match="xla_precision"):
+        missing_precision()
