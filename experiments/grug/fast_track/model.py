@@ -2401,7 +2401,7 @@ class Transformer(eqx.Module):
         corr = jnp.sum(weight * dc * dl, axis=(1, 2)) / jnp.sqrt(
             jnp.sum(weight * dc * dc, axis=(1, 2)) * jnp.sum(weight * dl * dl) + 1e-12
         )
-        metrics = {f"train/thresh/count_loss_corr_L{i}": corr[i] for i in range(layers)}
+        metrics = {f"train/aux/thresh/count_loss_corr_L{i}": corr[i] for i in range(layers)}
         if cfg.thresh_aux == ThreshAux.NONE:
             return jnp.zeros((), jnp.float32), metrics
         assert aux_term is not None
@@ -2412,8 +2412,8 @@ class Transformer(eqx.Module):
             w = weight
         soft = aux_term.reshape(layers, *per_token.shape)
         aux = cfg.thresh_aux_weight * jnp.sum(jnp.sum(w[None] * soft, axis=(1, 2)) / count)
-        metrics["train/thresh/aux_loss"] = jax.lax.stop_gradient(aux)
-        metrics["train/thresh/aux_w_max"] = jnp.max(w)
+        metrics["train/aux/thresh/aux_loss"] = jax.lax.stop_gradient(aux)
+        metrics["train/aux/thresh/aux_w_max"] = jnp.max(w)
         return aux, metrics
 
     def next_token_loss(
