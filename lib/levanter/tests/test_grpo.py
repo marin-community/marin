@@ -14,7 +14,7 @@ from haliax.partitioning import ResourceAxis
 
 from levanter.grad_accum import microbatched
 from levanter.grpo import grpo_advantages, grpo_objective_weights
-from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
 
@@ -28,10 +28,9 @@ class Rollout:
     mask: np.ndarray
     groups: np.ndarray
     rewards: np.ndarray
-    partitions: np.ndarray
 
 
-CONFIG = ClippedPolicyConfig(eps_clip_low=0.2, eps_clip_high=0.2, kl_loss_coef=0.001, kl_gradient=KlGradient.DETACHED)
+CONFIG = ClippedPolicyConfig(eps_clip_low=0.2, eps_clip_high=0.2, kl_loss_coef=0.001)
 
 
 @pytest.fixture
@@ -47,8 +46,7 @@ def rollout():
     groups = np.resize([0, 1, 0, 1, 2, 2, 3, 4], Batch.size).astype(np.int32)
     rewards = np.zeros_like(old)
     rewards[:, -1] = np.resize([1, -2, 3, 4, 1, 1, 2, 0], Batch.size)
-    partitions = np.arange(Batch.size, dtype=np.int32) // 2
-    return Rollout(Batch, Position, old, current, reference, mask, groups, rewards, partitions)
+    return Rollout(Batch, Position, old, current, reference, mask, groups, rewards)
 
 
 def torch_advantages(rewards, mask, groups, normalize):
@@ -65,28 +63,24 @@ def torch_advantages(rewards, mask, groups, normalize):
     return result[:, None] * torch.tensor(mask)
 
 
-def torch_objective(current, old, reference, advantages, mask, partitions, config):
-    """Independent Torch reduction over the reference's actual objective partitions.
+def torch_objective(current, old, reference, advantages, mask, config):
+    """Whole-step Torch oracle for MSRL 82396a73 regular/token_mean and k3 KL.
 
-    Equations follow MarinSkyRL 8e33e017 policy_losses.py and policy_math.py; unlike the
-    JAX implementation this executes one locally normalized loss per partition.
+    Reduce the complete batch directly, independently of JAX's precomputed
+    token weights and execution microbatch accumulation.
     """
     import torch  # noqa: PLC0415  # optional dependency
 
-    objectives = []
-    for partition in np.unique(partitions):
-        rows = partitions == partition
-        lp, prev, ref, adv, m = (x[rows] for x in (current, old, reference, advantages, mask))
-        ratio = (lp - prev).float().clamp(-20, 20).exp().to(lp.dtype)
-        policy = -torch.minimum(ratio * adv, ratio.clamp(0.8, 1.2) * adv)
-        policy = (policy * m).sum() / m.sum().clamp(min=1)
-        delta = (ref - lp).clamp(-20, 20)
-        kl = (delta.exp() - delta - 1).clamp(-10, 10)
-        if config.kl_gradient == KlGradient.DETACHED:
-            kl = kl.detach()
-        kl = ((kl * m).sum(-1) / m.sum(-1).clamp(min=1)).mean()
-        objectives.append(policy + config.kl_loss_coef * kl)
-    return torch.stack(objectives).mean()
+    ratio = (current - old).float().clamp(-20, 20).exp().to(current.dtype)
+    policy = -torch.minimum(
+        ratio * advantages, ratio.clamp(1 - config.eps_clip_low, 1 + config.eps_clip_high) * advantages
+    )
+    policy = (policy * mask).sum() / mask.sum().clamp(min=1)
+    delta = (reference - current).clamp(-20, 20)
+    kl = (delta.exp() - delta - 1).clamp(-10, 10)
+    nonempty = mask.sum(-1) > 0
+    kl = ((kl * mask).sum(-1) / mask.sum(-1).clamp(min=1)).sum() / nonempty.sum().clamp(min=1)
+    return policy + config.kl_loss_coef * kl
 
 
 @skip_if_no_torch
@@ -111,12 +105,9 @@ def test_grpo_advantages_matches_torch_groups(rollout, normalize):
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize(
-    "kl_gradient, kl_coef",
-    [(KlGradient.DETACHED, 0.0), (KlGradient.DETACHED, 0.001), (KlGradient.DIFFERENTIABLE, 0.001)],
-)
+@pytest.mark.parametrize("kl_coef", [0.0, 0.001, 0.1])
 @pytest.mark.parametrize("microbatch_size", [1, 2, 4])
-def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient, kl_coef, microbatch_size):
+def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_coef, microbatch_size):
     import torch  # noqa: PLC0415  # optional dependency
 
     B = rollout.Batch
@@ -127,21 +118,16 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
     mask = rollout.mask
     groups = rollout.groups
     rewards = rollout.rewards
-    partitions = rollout.partitions
     microbatch_size *= len(jax.devices())
-    config = dataclasses.replace(CONFIG, kl_gradient=kl_gradient, kl_loss_coef=kl_coef)
+    config = dataclasses.replace(CONFIG, kl_loss_coef=kl_coef)
     adv = torch_advantages(rewards, mask, groups, True)
     lp = torch.tensor(current, requires_grad=True)
-    expected = torch_objective(
-        lp, torch.tensor(old), torch.tensor(reference), adv, torch.tensor(mask), partitions, config
-    )
+    expected = torch_objective(lp, torch.tensor(old), torch.tensor(reference), adv, torch.tensor(mask), config)
     expected.backward()
     policy_weights, kl_weights = grpo_objective_weights(
         hax.named(mask, (B, P)),
-        hax.named(partitions, B),
         Batch=B,
         Position=P,
-        num_partitions=int(partitions.max()) + 1,
     )
     inputs = tuple(hax.named(x, (B, P)) for x in (old, reference, adv.numpy()))
 
@@ -175,8 +161,8 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
     np.testing.assert_allclose(grad, lp.grad.numpy().sum(), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(metrics["loss"].value(), value, atol=1e-5, rtol=1e-5)
 
-    # Compare the observable diagnostics against independently normalized Torch
-    # partitions, including partitions with unequal numbers of response tokens.
+    # Diagnostics use the same whole-step token denominator, even when
+    # execution microbatches have unequal numbers of response tokens.
     ratio = (lp.detach() - torch.tensor(old)).clamp(-20, 20).exp()
     selected = ratio.clamp(0.8, 1.2) * adv < ratio * adv
     for name, condition in (
@@ -187,16 +173,14 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
         ("ppo_clip_pressure_high", ratio > 1.2),
         ("ppo_ratio_exact_unit_fraction", ratio == 1),
     ):
-        fractions = []
-        for partition in np.unique(partitions):
-            rows = partitions == partition
-            m = torch.tensor(mask[rows])
-            fractions.append((condition[rows] * m).sum() / m.sum().clamp(min=1))
-        expected_metric = torch.stack(fractions).mean().numpy()
+        m = torch.tensor(mask)
+        expected_metric = ((condition * m).sum() / m.sum().clamp(min=1)).numpy()
         np.testing.assert_allclose(metrics[name].value(), expected_metric, atol=1e-5, rtol=1e-5)
     delta = (torch.tensor(reference) - lp.detach()).clamp(-20, 20)
     token_kl = (delta.exp() - delta - 1).clamp(-10, 10)
-    expected_kl = ((token_kl * torch.tensor(mask)).sum(-1) / torch.tensor(mask).sum(-1).clamp(min=1)).mean()
+    expected_kl = ((token_kl * torch.tensor(mask)).sum(-1) / torch.tensor(mask).sum(-1).clamp(min=1)).sum() / (
+        torch.tensor(mask).sum(-1) > 0
+    ).sum().clamp(min=1)
     np.testing.assert_allclose(
         metrics["policy_kl"].value(), expected_kl.numpy() if kl_coef else 0, atol=1e-5, rtol=1e-5
     )
@@ -225,7 +209,6 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
     mask = rollout.mask
     groups = rollout.groups
     rewards = rollout.rewards
-    partitions = rollout.partitions
     rng = np.random.default_rng(5)
     features = rng.normal(size=(B.size, P.size, 3)).astype(np.float32) * 1000
     initial = rng.normal(size=(3, 7)).astype(np.float32) * 1e-4
@@ -241,7 +224,7 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
     # Keep ratios around one so the update exercises unclipped token gradients.
     old = log_probs.detach().numpy() + 0.05
     loss = torch_objective(
-        log_probs, torch.tensor(old), torch.tensor(reference), advantages, torch.tensor(mask), partitions, CONFIG
+        log_probs, torch.tensor(old), torch.tensor(reference), advantages, torch.tensor(mask), CONFIG
     )
     loss.backward()
     torch_grad_norm = torch.nn.utils.clip_grad_norm_([param], max_norm=1.0)
@@ -250,10 +233,8 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
 
     pw, kw = grpo_objective_weights(
         hax.named(mask, (B, P)),
-        hax.named(partitions, B),
         Batch=B,
         Position=P,
-        num_partitions=int(partitions.max()) + 1,
     )
     inputs = tuple(hax.named(x, (B, P)) for x in (old, reference, advantages.numpy()))
 
@@ -279,26 +260,21 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
     np.testing.assert_allclose(state[0].nu, torch_optimizer.state[param]["exp_avg_sq"].numpy(), atol=1e-10, rtol=1e-5)
 
 
-def test_grpo_zero_advantages_detached_kl_has_zero_surrogate_gradient(rollout):
+@pytest.mark.parametrize("kl_coef", [0.0, 0.1, 1.0])
+@pytest.mark.parametrize("empty", [False, True])
+def test_grpo_reference_kl_gradient_matches_analytic_derivative(rollout, kl_coef, empty):
     B = rollout.Batch
     P = rollout.Position
-    old = rollout.old
     current = rollout.current
     reference = rollout.reference
-    mask = rollout.mask
-    partitions = rollout.partitions
-    pw, kw = grpo_objective_weights(
-        hax.named(mask, (B, P)),
-        hax.named(partitions, B),
-        Batch=B,
-        Position=P,
-        num_partitions=int(partitions.max()) + 1,
-    )
+    mask = np.zeros_like(rollout.mask) if empty else rollout.mask
+    pw, kw = grpo_objective_weights(hax.named(mask, (B, P)), Batch=B, Position=P)
+    config = dataclasses.replace(CONFIG, kl_loss_coef=kl_coef)
 
-    def loss(values, config):
+    def loss(values):
         return clipped_policy_loss(
             hax.named(values, (B, P)),
-            hax.named(old, (B, P)),
+            hax.named(rollout.old, (B, P)),
             hax.named(reference, (B, P)),
             hax.zeros((B, P)),
             pw,
@@ -307,17 +283,25 @@ def test_grpo_zero_advantages_detached_kl_has_zero_surrogate_gradient(rollout):
             accumulation_steps=1,
         )[0]
 
-    detached = jax.grad(lambda x: loss(x, CONFIG))(jnp.asarray(current))
-    differentiable = jax.grad(lambda x: loss(x, dataclasses.replace(CONFIG, kl_gradient=KlGradient.DIFFERENTIABLE)))(
-        jnp.asarray(current)
-    )
-    np.testing.assert_array_equal(detached, np.zeros_like(current))
-    assert np.max(np.abs(differentiable)) > 0
+    # These deltas are inside the clamps. Differentiate k3 directly, with
+    # nonempty-response counts from the full optimizer step, not a microbatch.
+    lengths = mask.sum(-1)
+    weights = mask / (np.maximum(lengths, 1)[:, None] * max((lengths > 0).sum(), 1))
+    delta = reference - current
+    expected = kl_coef * (1 - np.exp(delta)) * weights
+    value, gradient = jax.jit(jax.value_and_grad(loss))(jnp.asarray(current))
+    expected_value = kl_coef * ((np.exp(delta) - delta - 1) * weights).sum()
+    np.testing.assert_allclose(value, expected_value, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(gradient, expected, atol=1e-5, rtol=1e-5)
+    if kl_coef and not empty:
+        assert np.max(np.abs(gradient)) > 1e-4
+    else:
+        np.testing.assert_array_equal(gradient, np.zeros_like(current))
 
 
 def test_grpo_clamp_boundaries_preserve_pinned_torch_gradient():
     B, P = hax.Axis("batch", 2), hax.Axis("position", 4)
-    # Torch 2.11.0 (MarinSkyRL 8e33e017's lock) passes the full clamp
+    # Torch 2.11.0 (MarinSkyRL 82396a73's CPU lock) passes the full clamp
     # derivative at endpoints. Torch 2.14 changed it to zero. These recorded
     # 2.11 gradients protect the migration contract independently of installed
     # Torch. Zero-width PPO bounds force an exact surrogate tie at ratio=1.
@@ -330,7 +314,7 @@ def test_grpo_clamp_boundaries_preserve_pinned_torch_gradient():
         ],
         dtype=np.float32,
     )
-    config = ClippedPolicyConfig(0.0, 0.0, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.0, 0.0, 0.0)
 
     def jax_loss(values):
         return clipped_policy_loss(
