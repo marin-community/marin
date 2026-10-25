@@ -84,7 +84,9 @@ def _backward(residual, dout):
         qt = jax.lax.dynamic_slice_in_dim(q, start, BLOCK, axis=1)
         dy = jax.lax.dynamic_slice_in_dim(dout, start, BLOCK, axis=1)
         prob = probabilities[index]
-        dp = jnp.einsum("gqd,gkd->gqk", dy, v).astype(jnp.float32)
+        # Keep the source's BF16 dP boundary. Without the barrier, XLA can
+        # eliminate this round-trip cast and retain the unrounded FP32 dot.
+        dp = jax.lax.optimization_barrier(jnp.einsum("gqd,gkd->gqk", dy, v)).astype(jnp.float32)
         weighted = prob * dp
         # Preserve the source softmax custom-JVP transpose's operation order.
         # Factoring out prob changes cancellation in saturated BF16 attention.

@@ -46,3 +46,19 @@ def test_saved_attention_outputs_and_gradients(length, width, dtype, tolerance):
         np.testing.assert_allclose(
             np.asarray(got, np.float32), np.asarray(want, np.float32), atol=tolerance, rtol=tolerance
         )
+
+
+def test_saved_attention_preserves_bf16_gradient_rounding():
+    rng = np.random.RandomState(71)
+    shape = (2, 256, 128)
+    q, k = (jnp.asarray(4 * rng.randn(*shape), jnp.bfloat16) for _ in range(2))
+    v = jnp.asarray(rng.randn(*shape), jnp.bfloat16)
+    band = jnp.asarray(0.2 * rng.randn(2, 256, 1152), jnp.bfloat16)
+    ids = jnp.asarray(np.broadcast_to(np.arange(256) // 37, (2, 256)), jnp.int32)
+    cotangent = jnp.asarray(rng.randn(*shape), jnp.bfloat16)
+    inputs = (q, k, v, band, ids, ids)
+    with jax.softmax_custom_jvp(True), jax.default_matmul_precision("highest"):
+        expected = jax.jit(functools.partial(attention_values_grads, attention_reference))(inputs, cotangent)
+        actual = jax.jit(functools.partial(attention_values_grads, saved_attention_local))(inputs, cotangent)
+    for got, want in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(np.asarray(got, np.float32), np.asarray(want, np.float32), atol=2e-2, rtol=2e-2)
