@@ -93,7 +93,10 @@ source and candidate in two BF16 cases (`repeated` and `ckpt1_packed`, beta
 gradients); that run remains failed. Source equivalence does not establish that
 the BF16 source meets the oracle bound. `distributed-v1` passed on all eight
 v4-64 processes with the actual EP16/model2 mesh.
-Full updates, checkpoint continuation, the complete training run and
-over 20% useful-model MFU remain unvalidated.
+After preserving the model's full batch-axis declaration, `distributed-v2` passed
+all 48 checks. `full-update-v6` then completed two unique full-shape updates and
+an exact checkpoint/next-step replay on all eight processes. Compiler temporary
+buffers were 15.72 GiB per chip. The complete training run and over 20%
+useful-model MFU remain unvalidated.
 Evidence and the MFU definition are tracked in
 [research issue 253](https://github.com/WhenWen/astra-d8-research/issues/253).
