@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import time
 from pathlib import PurePosixPath
 
 import jax.numpy as jnp
@@ -22,7 +23,7 @@ SOURCE_FILES = (
 )
 ROUTER_KEYS = frozenset(f"model.layers.{layer}.mlp.router.bias" for layer in range(26))
 DTYPES = {"F32": np.dtype("float32"), "BF16": np.dtype(jnp.bfloat16)}
-CHUNK_BYTES = 4 * 1024**2
+CHUNK_BYTES = 64 * 1024**2
 MAX_HEADER_BYTES = 16 * 1024**2
 
 
@@ -108,9 +109,13 @@ def check_source_metadata(root: str, expected_hashes: dict[str, str]) -> None:
 
 def audit_precision_source(root: str, expected_hashes: dict[str, str], receipt_path: str) -> None:
     """Stream all source values before load, recording native and lossless FP32 hashes."""
+    started = time.monotonic()
     check_source_metadata(root, expected_hashes)
+    records = checkpoint_records(root)
+    payload_started = time.monotonic()
+    payload_bytes = 0
     tensors = {}
-    for name, record in sorted(checkpoint_records(root).items()):
+    for name, record in sorted(records.items()):
         native, master = hashlib.sha256(), hashlib.sha256()
         remaining = record.byte_end - record.byte_start
         with StoragePath(record.file_path).open("rb", cache_type="none") as stream:
@@ -125,10 +130,25 @@ def audit_precision_source(root: str, expected_hashes: dict[str, str], receipt_p
                     raise ValueError(f"Nonfinite source tensor: {name}")
                 native.update(chunk)
                 master.update(values.astype(np.float32).tobytes())
+                payload_bytes += count
                 remaining -= count
         tensors[name] = {
             "native_sha256": native.hexdigest(),
             "master_sha256": master.hexdigest(),
             "shape": list(record.shape),
         }
-    write_export_json(StoragePath(receipt_path), {"source_metadata_sha256": expected_hashes, "tensors": tensors})
+    payload_seconds = time.monotonic() - payload_started
+    write_export_json(
+        StoragePath(receipt_path),
+        {
+            "source_metadata_sha256": expected_hashes,
+            "tensors": tensors,
+            "audit_io": {
+                "chunk_bytes": CHUNK_BYTES,
+                "payload_bytes_read": payload_bytes,
+                "payload_read_and_hash_seconds": payload_seconds,
+                "payload_bytes_per_second": payload_bytes / payload_seconds if payload_seconds > 0 else None,
+                "total_seconds_before_receipt": time.monotonic() - started,
+            },
+        },
+    )
