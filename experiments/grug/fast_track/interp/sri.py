@@ -566,14 +566,14 @@ def focus_table(cat: np.ndarray, focus_by_case: np.ndarray) -> np.ndarray:
 
 
 def truncated_batches(
-    rows_q: list[tuple[np.ndarray, int, int, int]], bos: int
+    rows_q: list[tuple[np.ndarray, int, int, int]], bos: int, lengths: tuple[int, ...] = TRUNC_LENGTHS
 ) -> list[tuple[common.TokenBatch, np.ndarray]]:
     """Windows (each the last ``k`` tokens of a document ending at a query, after a BOS unless the window reaches the
     document start), packed as separate documents. ``rows_q``: (row tokens, row segment start, position, query id).
     Returns batches and their query tables ``[Q, 3]``: flat position, query id, window length index."""
     windows = []
     for tokens, doc_start, t, qid in rows_q:
-        for ki, k in enumerate(TRUNC_LENGTHS):
+        for ki, k in enumerate(lengths):
             s0 = max(doc_start, t - k + 1)
             w = tokens[s0 : t + 1]
             if s0 > doc_start or tokens[doc_start] != bos:
