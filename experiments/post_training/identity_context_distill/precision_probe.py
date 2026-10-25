@@ -8,7 +8,7 @@ import json
 import math
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import haliax as hax
 import jax
@@ -18,14 +18,16 @@ from jax.experimental import multihost_utils
 from levanter.compat.hf_export import run_on_export_writer, write_export_json
 from levanter.data.text.examples import GrugLmExample
 from levanter.data.text.formats import ChatLmDatasetFormat
-from levanter.main.train_lm import TrainLmConfig
+from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmExample
+from levanter.models.snowball import GrugMoeHfConfig
 from levanter.optim.config import AdamConfig
 from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import Trainer, initialize
 from levanter.trainer_state import TrainerState
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.identity_context_distill.runtime_recipe import check_precision_runtime_receipt
 from experiments.post_training.identity_context_distill.sft import (
     BASE_MODEL,
     GLOBAL_BATCH_SIZE,
@@ -138,6 +140,7 @@ def run_precision_probe(
     config: TrainLmConfig,
     *,
     expected_source_receipt: dict,
+    expected_runtime_receipt: dict,
     source_audit: Callable[[str], None],
     master_audit: Callable[[TrainerState, int], None],
     pre_update_gate: Callable[[Trainer, TrainerState], None],
@@ -171,6 +174,18 @@ def run_precision_probe(
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
     check_source_metadata_receipt(expected_source_receipt, config_bytes, generation_bytes)
+    if expected_source_receipt != expected_runtime_receipt["source_metadata"]:
+        raise ValueError("Source and runtime receipts bind different native metadata")
+    rounding_path = expected_runtime_receipt["routing_reference"]["path"]
+    if not rounding_path.startswith("s3://marin-rno2a/"):
+        raise ValueError("Router reference must be the approved regional artifact")
+    check_precision_runtime_receipt(
+        config,
+        expected_runtime_receipt,
+        config_bytes=config_bytes,
+        generation_bytes=generation_bytes,
+        rounding_bytes=StoragePath(rounding_path).read_bytes(),
+    )
     source = json.loads(config_bytes)
     generation = json.loads(generation_bytes)
     probe_config = replace(
@@ -196,11 +211,27 @@ def run_precision_probe(
         converter = probe_config.model.hf_checkpoint_converter().replaced(
             reference_checkpoint=BASE_MODEL, tokenizer=tokenizer
         )
+        # The HF metadata is architecture-authoritative; runtime precision is restored AFTER reload.
+        reloaded = converter.config_from_hf_config(GrugMoeHfConfig(**source))
+        reloaded = preserve_hf_runtime_settings(
+            reloaded, probe_config.model, probe_config.trainer.compute_dtype_overrides
+        )
+        probe_config = replace(probe_config, model=reloaded)
+        check_runtime_recipe(probe_config, source_config=source, source_generation_config=generation)
         model = converter.load_pretrained(
             probe_config.model.model_type,
-            config=probe_config.model,
+            config=reloaded,
             axis_mapping=trainer.parameter_axis_mapping,
             dtype=None,
+        )
+        loaded_model_config = asdict(model.config)
+        if loaded_model_config != expected_runtime_receipt["runtime_model_config"]:
+            raise ValueError("HF loader discarded or changed the approved runtime model config")
+        run_on_export_writer(
+            lambda: write_export_json(
+                StoragePath(probe_config.hf_save_path) / "runtime-recipe-receipt.json",
+                {"approved": expected_runtime_receipt, "loaded_model_config": loaded_model_config},
+            )
         )
         source_biases = _router_values(model)
         state = trainer.initial_state(
@@ -262,4 +293,5 @@ def run_precision_probe(
             "save_seconds": save_seconds,
             "worker_seconds": time.monotonic() - started,
             "compute_dtype_overrides": probe_config.trainer.compute_dtype_overrides,
+            "runtime_recipe_receipt": expected_runtime_receipt,
         }

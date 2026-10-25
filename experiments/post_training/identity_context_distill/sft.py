@@ -117,6 +117,7 @@ def source_metadata_receipt(config_bytes: bytes, generation_bytes: bytes) -> dic
     model = source_model_config(source)
     eos = source_generation_eos(source, generation)
     return {
+        "schema_version": 2,
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "generation_config_sha256": hashlib.sha256(generation_bytes).hexdigest(),
         "model_config": asdict(model),
