@@ -105,7 +105,9 @@ def run_eval(
         client_tokenizer_backend=tokenizer_backend,
         tokenizer_note="Historical client uses an unrevisioned repository string; backend is recorded per route.",
         endpoint=endpoint_name,
-        endpoint_watchdog=dict(interval_seconds=60, continuous_failure_seconds=300),
+        endpoint_watchdog=dict(
+            interval_seconds=60, continuous_failure_seconds=300, failure_timer_starts="first failed check"
+        ),
         model_revision=model_revision,
         command=command,
         started_epoch=time.time(),
@@ -132,12 +134,23 @@ def run_eval(
         entrypoint = Path(directory) / "checkpoint_entrypoint.py"
         entrypoint.write_text(checkpoint_source)
         env.update(LEVANTER267_EVAL_ENTRYPOINT=str(entrypoint), LEVANTER267_EVALCHEMY_COMMIT=commit)
-        returncode = run_watched(
-            [*command, "python", str(client_path)],
-            env,
-            config["base_url"] + "/models",
-            timeout=runtime_minutes * 60 - 60,
-        )
+        try:
+            returncode = run_watched(
+                [*command, "python", str(client_path)],
+                env,
+                config["base_url"] + "/models",
+                timeout=runtime_minutes * 60 - 60,
+            )
+        except Exception as error:
+            # Exception messages can contain resolved endpoint credentials.
+            metadata.update(
+                elapsed_seconds=time.time() - metadata["started_epoch"],
+                failure_category=type(error).__name__,
+                failure_reason="Evaluator interrupted before scoring verification; inspect job logs",
+                partial_result_status="unverified; resume archive must be validated before scoring",
+            )
+            (root / "client-summary.json").write_text(json.dumps(metadata, indent=2))
+            raise
     scored = {task["name"]: completed_result(output, task["dir"]) for task in config["tasks"]}
     metadata.update(elapsed_seconds=time.time() - metadata["started_epoch"], returncode=returncode, scored=scored)
     (root / "client-summary.json").write_text(json.dumps(metadata, indent=2))

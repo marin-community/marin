@@ -3,6 +3,8 @@
 
 import os
 import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -48,3 +50,31 @@ def test_runtime_bound_stops_client(monkeypatch):
             timeout=0.05,
             interval=0.01,
         )
+
+
+def test_dead_endpoint_kills_term_ignoring_descendant(monkeypatch, tmp_path):
+    pid_file = tmp_path / "descendant.pid"
+    child = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    parent = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        f"p=subprocess.Popen([sys.executable,'-c',{child!r}]); "
+        f"Path({str(pid_file)!r}).write_text(str(p.pid)); time.sleep(30)"
+    )
+    monkeypatch.setattr(eval_watchdog, "models_healthy", lambda _: not pid_file.exists())
+    with pytest.raises(RuntimeError, match="endpoint unavailable"):
+        eval_watchdog.run_watched(
+            [sys.executable, "-c", parent],
+            os.environ.copy(),
+            "unused",
+            timeout=5,
+            interval=0.02,
+            failure_seconds=0.1,
+        )
+    pid = int(pid_file.read_text())
+    # An orphaned zombie may await init's reap; it must not remain executable.
+    status = Path(f"/proc/{pid}/stat")
+    for _ in range(100):
+        if not status.exists() or status.read_text().split()[2] == "Z":
+            return
+        time.sleep(0.01)
+    pytest.fail("TERM-ignoring descendant survived process-group cleanup")

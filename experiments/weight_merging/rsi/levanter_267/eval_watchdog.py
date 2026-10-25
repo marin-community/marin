@@ -43,10 +43,17 @@ def run_watched(command, env, models_url, timeout, *, interval=60, failure_secon
                     if now - failed_since >= failure_seconds:
                         raise RuntimeError("Serving endpoint unavailable for five minutes; stopping evaluator")
         finally:
-            if process.poll() is None:
+            try:
                 os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            # The session leader can exit while a descendant ignores TERM.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
