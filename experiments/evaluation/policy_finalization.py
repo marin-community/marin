@@ -131,7 +131,6 @@ def policy_executor(
     source: EvalExecutor,
     reference: EvalRef,
     config: PolicyFinalization,
-    model: str,
     judge_accelerator: AcceleratorChoice | None,
     priority: int,
 ) -> tuple[EvalExecutor, EvalRef]:

@@ -357,9 +357,23 @@ def length_controlled_scores(
     return LengthControlFit(results, adjusted_episodes, selected, losses)
 
 
+@dataclass(frozen=True)
+class SotopiaCorrection:
+    cohort: dict
+    baseline_sources: list[SotopiaCell]
+    cohort_sha256: str
+    source_episodes: list[EpisodeScore]
+    source_episodes_sha256: str
+    scores: list[ModelScore]
+    adjusted_episodes: list[AdjustedEpisodeScore]
+    selected_regularization: float
+    cross_validation_losses: dict[float, float]
+    canonical_metrics: dict[str, float]
+
+
 def correct_sotopia(
     trials: list[TrialResult], *, model: str, cohort: dict | None = None
-) -> dict:
+) -> SotopiaCorrection:
     """Return corrected scores and the full inputs needed to reproduce the fit."""
     cohort = cohort if cohort is not None else json.loads(DEFAULT_COHORT.read_text())
     sources = [SotopiaCell(**row) for row in cohort["models"] if row["model"] != model]
@@ -411,23 +425,21 @@ def correct_sotopia(
     episodes.extend(candidate)
     fit = length_controlled_scores(episodes)
     selected = next(score for score in fit.scores if score.model == model)
-    return {
-        "cohort": cohort,
-        "baseline_sources": [asdict(source) for source in sources],
-        "cohort_sha256": (
-            hashlib.sha256(json.dumps(cohort, sort_keys=True).encode()).hexdigest()
-        ),
-        "source_episodes": [asdict(row) for row in episodes],
-        "source_episodes_sha256": (
-            hashlib.sha256(
-                json.dumps([asdict(row) for row in episodes], sort_keys=True).encode()
-            ).hexdigest()
-        ),
-        "scores": [asdict(row) for row in fit.scores],
-        "adjusted_episodes": [asdict(row) for row in fit.episodes],
-        "selected_regularization": fit.selected_regularization,
-        "cross_validation_losses": fit.cross_validation_losses,
-        "canonical_metrics": {
+    return SotopiaCorrection(
+        cohort=cohort,
+        baseline_sources=sources,
+        cohort_sha256=hashlib.sha256(
+            json.dumps(cohort, sort_keys=True).encode()
+        ).hexdigest(),
+        source_episodes=episodes,
+        source_episodes_sha256=hashlib.sha256(
+            json.dumps([asdict(row) for row in episodes], sort_keys=True).encode()
+        ).hexdigest(),
+        scores=fit.scores,
+        adjusted_episodes=fit.episodes,
+        selected_regularization=fit.selected_regularization,
+        cross_validation_losses=fit.cross_validation_losses,
+        canonical_metrics={
             "length_controlled_overall": selected.length_controlled_overall
         },
-    }
+    )
