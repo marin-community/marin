@@ -16,10 +16,12 @@ from click.testing import CliRunner
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationBatch, _record
+from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
+from marin.inference.iris import RemoteInferenceStartupError
 
 import experiments.evaluation.launch as launch_module
+import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
@@ -314,3 +316,32 @@ def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_pa
         "policy-finalization-config",
         "judge_model_config",
     }
+
+
+def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path, submitted_batches, monkeypatch):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    command = _command(tmp_path)
+    command[command.index("--evals") + 1] = "financebench"
+    command.extend(["--policy-finalization-config", str(campaign / "finalization.yaml")])
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code == 0, result.output
+    executor = submitted_batches[-1].evaluations[0].executor
+
+    class FailedJob:
+        job_id = "/test/policy-judge"
+
+        def logs(self, *, max_lines):
+            return ("endpoint registration failed",)
+
+    @contextmanager
+    def failed_inference(_config):
+        raise RemoteInferenceStartupError("endpoint registration failed", (FailedJob(),))
+        yield
+
+    monkeypatch.setattr(policy_module, "precache_inference_model", lambda _config: None)
+    monkeypatch.setattr(policy_module, "remote_inference", failed_inference)
+    with pytest.raises(EvaluationError) as caught:
+        executor(None, str(tmp_path / "output"), {}, backend_state=lambda: None)
+    assert caught.value.status is RunStatus.INFRA_FAILED
+    assert caught.value.jobs == {"policy-judge": "/test/policy-judge"}
+    assert caught.value.log_tails == {"policy-judge": ("endpoint registration failed",)}
