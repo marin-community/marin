@@ -37,7 +37,7 @@ import numpy as np
 from haliax import Axis
 from haliax.partitioning import set_mesh
 
-from experiments.grug.fast_track.interp import common, docs_analyse, docs_index, forward, sri
+from experiments.grug.fast_track.interp import common, docs_analyse, docs_index, forward, lens_fit, sri
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +401,9 @@ def main() -> None:
     parser.add_argument("--scan-train", type=int, default=24576, help="unseen train sequences scanned")
     parser.add_argument("--scan-chunk", type=int, default=512)
     parser.add_argument("--out", default="critics", help="output name (<out>.npz, <out>_rows.npz)")
+    parser.add_argument(
+        "--fit-sequences", type=int, default=0, help="fit attrib's means and tuned lens in-job (else attrib.npz)"
+    )
     args = parser.parse_args()
     t0 = time.time()
     cfg = common.model_config(args.tag)
@@ -439,10 +442,14 @@ def main() -> None:
     logger.info("scan saved (%.0fs): %d rows, %d queries", time.time() - t0, len(rows_tokens), keep_q.sum())
 
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/attrib.npz", "rb") as f:
-        attrib = np.load(io.BytesIO(f.read()))
-        tuned = jnp.asarray(attrib["tuned"], jnp.float32)
-        head_mean, sub_mean = jnp.asarray(attrib["head_mean"]), jnp.asarray(attrib["sub_mean"])
+    if args.fit_sequences:
+        with set_mesh(mesh):
+            head_mean, sub_mean, tuned = lens_fit.fit(common.compute_model(params), mesh, args.fit_sequences)
+    else:
+        with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/attrib.npz", "rb") as f:
+            attrib = np.load(io.BytesIO(f.read()))
+            tuned = jnp.asarray(attrib["tuned"], jnp.float32)
+            head_mean, sub_mean = jnp.asarray(attrib["head_mean"]), jnp.asarray(attrib["sub_mean"])
     with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/stats.npz", "rb") as f:
         stats = np.load(io.BytesIO(f.read()))
         stats_mean = stats["act_sum"] / np.maximum(stats["expert_tokens"][..., None], 1.0)
