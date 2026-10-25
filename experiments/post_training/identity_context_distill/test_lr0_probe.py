@@ -164,3 +164,103 @@ def test_worker_checks_pod_storage_before_any_read(monkeypatch):
     monkeypatch.setattr(lr0_probe, "StoragePath", lambda path: pytest.fail("read before the storage check"))
     with pytest.raises(RuntimeError, match="Pod storage"):
         run_worker(monkeypatch, receipt_bytes)
+
+
+def test_io_smoke_runs_every_step_and_cleans_only_its_own_objects(monkeypatch, tmp_path):
+    scratch = str(tmp_path / "scratch")
+    config_bytes = b'{"config": true}'
+    store = {
+        f"{lr0_probe.BASE_MODEL}config.json": config_bytes,
+        f"{lr0_probe.BASE_MODEL}model.safetensors.index.json": (
+            json.dumps({"weight_map": {"a": "model-00002.safetensors", "b": "model-00001.safetensors"}}).encode()
+        ),
+    }
+    opened = []
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, count):
+            return b"x" * count
+
+    def open_stream(url):
+        opened.append(url)
+        return Stream()
+
+    routing = {"path": "s3://marin-rno2a/x/routing.json", "sha256": hashlib.sha256(b"routing").hexdigest()}
+    monkeypatch.setitem(lr0_probe.SOURCE_FILE_HASHES, "config.json", hashlib.sha256(config_bytes).hexdigest())
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: None)
+    monkeypatch.setattr(lr0_probe, "StoragePath", lambda path: _Local(str(path), store))
+    monkeypatch.setattr(lr0_probe.precision_source_audit, "open_audit_stream", open_stream, raising=False)
+    monkeypatch.setattr(
+        lr0_probe, "write_export_json", lambda path, value: store.__setitem__(path.path, json.dumps(value).encode())
+    )
+    monkeypatch.setattr(lr0_probe, "write_json", lambda path, value: store.__setitem__(path, json.dumps(value).encode()))
+    monkeypatch.setattr(lr0_probe, "save_positions", lambda records, path: store.__setitem__(path, b"pt"))
+    monkeypatch.setattr(lr0_probe, "read", lambda path: store[path] if path in store else b"routing")
+    monkeypatch.setattr(lr0_probe, "stored_sequences", lambda path: [1] * 465)
+    monkeypatch.setattr(lr0_probe, "load_tokenizer", lambda root: object())
+
+    class FS:
+        def exists(self, path):
+            return path in store
+
+        def rm_file(self, path):
+            del store[path]
+
+    monkeypatch.setattr(lr0_probe, "filesystem_for", lambda path: (FS(), path))
+    store["s3://marin-rno2a/keep"] = b"not ours"
+
+    result = lr0_probe.io_smoke(scratch, routing)
+    assert result["ok"], result
+    assert list(result["steps"]) == [
+        "pod_storage",
+        "source_config",
+        "source_shard_first_mb",
+        "receipt_writer",
+        "gate_writers",
+        "gate_readers",
+        "cleanup",
+    ]
+    assert opened == [f"{lr0_probe.BASE_MODEL}model-00001.safetensors"]
+    assert result["steps"]["source_shard_first_mb"]["bytes"] == lr0_probe.SMOKE_BYTES
+    assert result["steps"]["gate_readers"]["stored_sequences"] == 465
+    assert not [path for path in store if path.startswith(scratch)]
+    assert store["s3://marin-rno2a/keep"] == b"not ours"
+
+
+def test_io_smoke_reports_a_failed_step_and_still_runs_the_rest(monkeypatch, tmp_path):
+    def missing():
+        raise RuntimeError("Pod storage settings missing")
+
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", missing)
+
+    def unreachable(path):
+        raise OSError(f"unreachable: {path}")
+
+    monkeypatch.setattr(lr0_probe, "StoragePath", unreachable)
+    monkeypatch.setattr(lr0_probe, "read", unreachable)
+    monkeypatch.setattr(lr0_probe, "filesystem_for", unreachable)
+    monkeypatch.setattr(lr0_probe, "write_json", lambda path, value: unreachable(path))
+    result = lr0_probe.io_smoke(str(tmp_path), {"path": "p", "sha256": "s"})
+    assert not result["ok"]
+    assert result["steps"]["pod_storage"] == {"ok": False, "error": "RuntimeError('Pod storage settings missing')"}
+    assert len(result["steps"]) == 7 and not any(step["ok"] for step in result["steps"].values())
+
+
+class _Local:
+    def __init__(self, path, store):
+        self.path, self._store = path, store
+
+    def __truediv__(self, name):
+        return _Local(f"{self.path.rstrip('/')}/{name}", self._store)
+
+    def __str__(self):
+        return self.path
+
+    def read_bytes(self):
+        return self._store[self.path]
