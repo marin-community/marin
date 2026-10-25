@@ -226,6 +226,8 @@ class SnowballConfig(HFCompatConfig):
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
+    router_dot_fp32: bool = False
+    """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -584,7 +586,12 @@ class SnowballMoEMLP(eqx.Module):
     def _forward(self, x: Float[Array, "B S D"], return_routes: bool) -> tuple[Float[Array, "B S D"], Array | None]:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        router_input = x_flat
+        router_weight = reshard(self.router, P(None, None))
+        if self.cfg.router_dot_fp32:
+            router_input = router_input.astype(jnp.float32)
+            router_weight = router_weight.astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", router_input, router_weight).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
