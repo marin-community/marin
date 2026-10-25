@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import hashlib
 import io
 import json
@@ -27,6 +28,7 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
     ROUTER_KEYS,
     SOURCE_FILES,
     audit_precision_source,
+    check_export_auxiliary_metadata,
     checkpoint_records,
     open_audit_stream,
 )
@@ -91,18 +93,71 @@ def tiny_checkpoint(path):
     return {name: hashlib.sha256((path / name).read_bytes()).hexdigest() for name in SOURCE_FILES}
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [None, "embedded_template", "other_key", "extra_key", "missing_key", "null_template", "template_file"],
+)
+def test_r7_export_embeds_only_the_identical_source_template(tmp_path, damage):
+    source, exported = tmp_path / "source", tmp_path / "export"
+    tiny_checkpoint(source)
+    shutil.copytree(source, exported)
+    fixture = json.loads((Path(__file__).parent / "testdata" / "tokenizer-export-r7.json").read_bytes())
+    for root, prefix in ((source, "source"), (exported, "export")):
+        (root / "tokenizer_config.json").write_bytes(base64.b64decode(fixture[f"{prefix}-tokenizer_config.json"]))
+        (root / "chat_template.jinja").write_bytes(base64.b64decode(fixture["source-chat_template.jinja"]))
+    saved = json.loads((exported / "tokenizer_config.json").read_bytes())
+    if damage == "embedded_template":
+        saved["chat_template"] += " "
+    elif damage == "other_key":
+        saved["bos_token"] = "changed"
+    elif damage == "extra_key":
+        saved["unexpected"] = True
+    elif damage == "missing_key":
+        del saved["bos_token"]
+    elif damage == "null_template":
+        saved["chat_template"] = None
+    elif damage == "template_file":
+        (exported / "chat_template.jinja").write_text("changed")
+    (exported / "tokenizer_config.json").write_text(json.dumps(saved))
+    hashes = {name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in SOURCE_FILES}
+    if damage is None:
+        audit_precision_export(str(source), str(exported), hashes, receipt_path=str(exported / "precision-audit.json"))
+        receipt = json.loads((exported / "precision-audit.json").read_bytes())
+        assert receipt["tensor_count"] == len(receipt["tensors"]) == 502
+        assert receipt["accepted_metadata_additions"] == ["tokenizer_config.json.chat_template"]
+    else:
+        with pytest.raises(ValueError, match="Export"):
+            audit_precision_export(
+                str(source), str(exported), hashes, receipt_path=str(exported / "precision-audit.json")
+            )
+        assert not (exported / "precision-audit.json").exists()
+
+
+def test_existing_embedded_template_is_never_normalized(tmp_path):
+    source, exported = tmp_path / "source", tmp_path / "export"
+    tiny_checkpoint(source)
+    shutil.copytree(source, exported)
+    original = {"chat_template": "source embedded value"}
+    (source / "tokenizer_config.json").write_text(json.dumps(original))
+    (exported / "tokenizer_config.json").write_text(json.dumps(original))
+    check_export_auxiliary_metadata(str(source), str(exported))
+    (exported / "tokenizer_config.json").write_text(json.dumps({"chat_template": "synthetic fixture"}))
+    with pytest.raises(ValueError, match=r"tokenizer_config\.json"):
+        check_export_auxiliary_metadata(str(source), str(exported))
+
+
 def test_full_tiny_checkpoint_byte_audit_and_metadata_failure(tmp_path):
     source, exported = tmp_path / "source", tmp_path / "export"
     hashes = tiny_checkpoint(source)
     shutil.copytree(source, exported)
     audit_precision_source(str(source), hashes, str(tmp_path / "source-receipt.json"))
-    audit_precision_export(str(source), str(exported), hashes)
+    audit_precision_export(str(source), str(exported), hashes, receipt_path=str(exported / "precision-audit.json"))
     receipt = json.loads((exported / "precision-audit.json").read_text())
     assert receipt["tensor_count"] == len(receipt["tensors"]) == 502
     assert receipt["audit_io"]["payload_bytes_read"] == 2 * sum(row["bytes"] for row in receipt["tensors"].values())
     (exported / "chat_template.jinja").write_text("changed")
     with pytest.raises(ValueError, match="chat template"):
-        audit_precision_export(str(source), str(exported), hashes)
+        audit_precision_export(str(source), str(exported), hashes, receipt_path=str(exported / "precision-audit.json"))
 
 
 def test_tensor_byte_change_fails_without_success_receipt(tmp_path):
@@ -114,7 +169,19 @@ def test_tensor_byte_change_fails_without_success_receipt(tmp_path):
         stream.seek(record.byte_start)
         stream.write(b"\x00\x00")
     with pytest.raises(ValueError, match="tensor bytes changed"):
-        audit_precision_export(str(source), str(exported), hashes)
+        audit_precision_export(str(source), str(exported), hashes, receipt_path=str(exported / "precision-audit.json"))
+    assert not (exported / "precision-audit.json").exists()
+
+
+def test_offline_export_audit_writes_only_its_explicit_receipt(tmp_path):
+    source, exported = tmp_path / "source", tmp_path / "export"
+    hashes = tiny_checkpoint(source)
+    shutil.copytree(source, exported)
+    receipt_path = tmp_path / "offline" / "audit.json"
+    audit_precision_export(str(source), str(exported), hashes, receipt_path=str(receipt_path))
+    receipt = json.loads(receipt_path.read_bytes())
+    assert receipt["tensor_count"] == len(receipt["tensors"]) == 502
+    assert receipt["accepted_metadata_additions"] == []
     assert not (exported / "precision-audit.json").exists()
 
 

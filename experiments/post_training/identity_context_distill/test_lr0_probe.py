@@ -74,6 +74,9 @@ def fixture(
         def __init__(self, path):
             self.path = str(path)
 
+        def __str__(self):
+            return self.path
+
         def __truediv__(self, name):
             return Path(f"{self.path.rstrip('/')}/{name}")
 
@@ -132,7 +135,9 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     audits = []
     monkeypatch.setattr(lr0_probe, "audit_precision_source", lambda *args: audits.append(("source", *args)))
     monkeypatch.setattr(lr0_probe, "audit_initialized_masters", lambda *args: audits.append(("master", *args)))
-    monkeypatch.setattr(lr0_probe, "audit_precision_export", lambda *args: audits.append(("export", *args)))
+    monkeypatch.setattr(
+        lr0_probe, "audit_precision_export", lambda *args, receipt_path: audits.append(("export", *args, receipt_path))
+    )
 
     class State:
         class model:
@@ -149,7 +154,7 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
         ("source", "SRC", lr0_probe.SOURCE_FILE_HASHES, source_receipt),
         ("master", {"w": 1}, source_receipt, f"{RUN_ROOT}/audits/master-step-0.json"),
         ("master", {"w": 1}, source_receipt, f"{RUN_ROOT}/audits/master-step-1.json"),
-        ("export", "SRC", "EXP", lr0_probe.SOURCE_FILE_HASHES),
+        ("export", "SRC", "EXP", lr0_probe.SOURCE_FILE_HASHES, "EXP/precision-audit.json"),
     ]
     with pytest.raises(ValueError, match="master audit step"):
         kwargs["master_audit"](State, 2)

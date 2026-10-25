@@ -19,6 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.identity_context_distill.precision_source_audit import (
     CHUNK_BYTES,
+    check_export_auxiliary_metadata,
     check_precision_layout,
     check_source_metadata,
     checkpoint_records,
@@ -93,7 +94,9 @@ def compare_tensor_bytes(source: TensorRecord, exported: TensorRecord) -> str:
     return digest.hexdigest()
 
 
-def audit_precision_export(source_root: str, export_root: str, expected_hashes: dict[str, str]) -> None:
+def audit_precision_export(
+    source_root: str, export_root: str, expected_hashes: dict[str, str], *, receipt_path: str
+) -> None:
     """Verify all 502 LR0 tensors and metadata, writing a receipt only after full success."""
     started = time.monotonic()
     check_source_metadata(source_root, expected_hashes)
@@ -106,11 +109,7 @@ def audit_precision_export(source_root: str, export_root: str, expected_hashes: 
     source_config = json.loads((source_base / "config.json").read_bytes())
     exported_config = json.loads((export_base / "config.json").read_bytes())
     check_export_metadata(source_config, exported_config)
-    for filename in ("generation_config.json", "tokenizer.json", "tokenizer_config.json"):
-        if json.loads((source_base / filename).read_bytes()) != json.loads((export_base / filename).read_bytes()):
-            raise ValueError(f"Export metadata changed: {filename}")
-    if (source_base / "chat_template.jinja").read_bytes() != (export_base / "chat_template.jinja").read_bytes():
-        raise ValueError("Export chat template bytes changed")
+    metadata_additions = check_export_auxiliary_metadata(source_root, export_root)
     tensors = {}
     payload_started = time.monotonic()
     for name in sorted(source):
@@ -123,9 +122,10 @@ def audit_precision_export(source_root: str, export_root: str, expected_hashes: 
     payload_seconds = time.monotonic() - payload_started
     payload_bytes = 2 * sum(record.byte_end - record.byte_start for record in source.values())
     write_export_json(
-        export_base / "precision-audit.json",
+        StoragePath(receipt_path),
         {
             "source_metadata_sha256": expected_hashes,
+            "accepted_metadata_additions": metadata_additions,
             "tensor_count": 502,
             "tensors": tensors,
             "audit_io": {

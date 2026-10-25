@@ -38,6 +38,32 @@ def open_audit_stream(url: str) -> BinaryIO:
     return filesystem.open(path, "rb", cache_type="none", block_size=CHUNK_BYTES)
 
 
+def check_export_auxiliary_metadata(source_root: str, export_root: str) -> list[str]:
+    """Check tokenizer/generation metadata, allowing an exact embedded template copy.
+
+    Tokenizer saving may add chat_template to tokenizer_config.json when the
+    source stores it only in chat_template.jinja. Every other key and the
+    separate template file must remain equal to the source. Returns the accepted
+    added fields for the audit receipt.
+    """
+    source, exported = StoragePath(source_root), StoragePath(export_root)
+    template = (source / "chat_template.jinja").read_bytes()
+    if template != (exported / "chat_template.jinja").read_bytes():
+        raise ValueError("Export chat template bytes changed")
+    additions = []
+    for filename in ("generation_config.json", "tokenizer.json", "tokenizer_config.json"):
+        original = json.loads((source / filename).read_bytes())
+        saved = json.loads((exported / filename).read_bytes())
+        if filename == "tokenizer_config.json" and "chat_template" not in original and "chat_template" in saved:
+            embedded = saved.pop("chat_template")
+            if not isinstance(embedded, str) or embedded.encode("utf-8") != template:
+                raise ValueError("Export embedded chat template differs from source bytes")
+            additions.append("tokenizer_config.json.chat_template")
+        if original != saved:
+            raise ValueError(f"Export metadata changed: {filename}")
+    return additions
+
+
 def checkpoint_records(root: str) -> dict[str, TensorRecord]:
     """Read headers and validate index coverage, tensor sizes and nonoverlapping bounds."""
     base = StoragePath(root)

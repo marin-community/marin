@@ -239,7 +239,9 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256:
         master_audit=master_audit,
         pre_update_gate=make_pre_update_gate(gate),
         post_update_receipt=post_update_receipt,
-        export_audit=lambda source, export: audit_precision_export(source, export, SOURCE_FILE_HASHES),
+        export_audit=lambda source, export: audit_precision_export(
+            source, export, SOURCE_FILE_HASHES, receipt_path=str(StoragePath(export) / "precision-audit.json")
+        ),
     )
     # Collective: every rank calls it; process 0 writes.
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "lr0-result.json", result))
