@@ -27,6 +27,28 @@ The full replication entrypoint is
 the original full schedule; `--profile-start-step 100 --profile-steps 10` enables
 trace capture and compiled HLO output.
 
+Set `BELAY_PACKED_KDA_CHECK=1` to compare chunked KDA with its sequential recurrence
+before training, at head width 128 and with document boundaries inside and between
+chunks. It checks outputs, final states and gradients of q, k, v, decay and beta.
+Absolute and relative tolerances are both `1e-4` for FP32 and `2e-2` for BF16.
+
+Set `BELAY_MEASURE_MFU=1` to measure zero-based update windows 200–499, 500–799
+and 800–1099. This requires pipeline depth zero and the frozen Ckpt 1 model
+configuration; a hash mismatch raises an error.
+Each window waits for all model/optimizer state and synchronizes all processes at
+both endpoints. The reported duration is the maximum across processes. It includes
+optimizer work, communication, host callbacks and the counting instrumentation.
+Native step timing ends when the loss is ready and does not explicitly drain
+optimizer state. The numerator counts selected dense matrices, expert products
+retained after observed routing drops, and causal-attention products at valid
+queries. Only the numerator excludes padding, recomputation and the omitted
+operations listed in `useful_mfu.py`. Dividing by the measured time and the BF16
+peak of all allocated v4 chips gives a conservative useful-MFU lower bound.
+Per-update counts, per-process window times and available current/peak memory
+usage and memory limits are saved as `useful-mfu-rankN.jsonl` under `IRIS_OUTPUT_DIR`.
+Window metrics also go to W&B. The launcher uses one process per TPU host.
+These measurement and packed-document checks have not yet run on TPU.
+
 TPU operator parity, full updates, checkpoint continuation, the complete training
 run and the target of over 20% useful-model MFU against physical BF16 peak are
 unvalidated for this variant. Evidence and the MFU definition are tracked in

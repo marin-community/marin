@@ -74,6 +74,8 @@ from experiments.grug.belay_tpu.model import (
     Transformer,
     forward_flops_per_token,
 )
+from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
+from experiments.grug.belay_tpu.useful_mfu import UsefulMfuWindows
 from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
@@ -1169,6 +1171,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
+    if os.environ.get("BELAY_PACKED_KDA_CHECK") == "1":
+        check_packed_kda()
 
     run_id = trainer.id
     if run_id is None:
@@ -1412,6 +1416,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
         last_ready_time: float | None = None
+        useful_mfu = UsefulMfuWindows.create(config)
 
         def finish_step(rec: "_PendingStep", step_state: GrugTrainState | None) -> None:
             """Wait for ``rec``'s step and do its host work. With ``step_state`` (the state after the step, not yet
@@ -1502,6 +1507,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 gc.freeze()
             host_gap_start = time.perf_counter()
             stall_sampler.disarm(step)
+            if useful_mfu is not None:
+                useful_mfu.observe(step, step_state, rec.batch, metrics)
             if host_gap_start - ready_time > HOST_GAP_WARN:
                 logger.warning(
                     "post-step host work %.3f s after step %d on process %d",
@@ -1528,6 +1535,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         finish_step(pending, state)
                         pending = None
                     current_step = host_step
+                    if useful_mfu is not None:
+                        useful_mfu.begin_if_due(current_step, state)
                     watch_due = (
                         watch_config.is_enabled
                         and watch_config.interval > 0
