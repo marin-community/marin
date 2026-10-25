@@ -64,15 +64,23 @@ accelerator validation; no compatibility aliases remain.
 
 ### Opt-in fixed-schedule projections
 
-Snowball’s `projection_implementation="fixed_schedule"` selects the same
-fixed BM=BK=BN=128 TPU contraction from `SnowballAttention._project_qkv` in
-training and paged decode. It is deliberately opt-in: the native `einsum`
-path remains the default. The implementation supports a fully addressable
-single-device TPU v4 path and a same-process explicit `NamedSharding` TPU v4
-path with one row-only data-parallel mesh axis. Activations may be row-sharded
-or fully replicated in the latter path, while weights are fully replicated;
-contraction and output features cannot be sharded. FP32 or BF16 input and
-weight storage and projection widths that are multiples of 128 remain required.
+Snowball’s `projection_implementation="fixed_schedule"` selects the fixed
+BM=BK=BN=128 TPU contraction for Q/K/V projections, the shared DenseMLP’s
+gate/up/down projections, and the LM head in full forward, prefill and cached
+decode. Standard next-token training loss uses the same LM-head contraction,
+with its existing weighting, reduction, dtype, soft-cap and auxiliary-loss
+semantics. This training-loss path materializes full-vocabulary logits, so its
+activation memory grows with token count and vocabulary size. The native
+projection path remains the default.
+
+The implementation supports a fully addressable single-device TPUv4 path and
+a same-process explicit `NamedSharding` TPUv4 path with one row-only
+data-parallel mesh axis. The Snowball helper retains flattened row sharding
+and replicates weights before the contraction. Genuine contraction/output
+feature sharding is outside the supported contract. For FP32 or BF16 input
+and weight storage, the helper zero-pads contraction and output widths to
+multiples of 128 and trims the output to its public width. Parameter shapes
+and checkpoint keys stay the same.
 The contraction casts activations to the weight storage dtype and restores outputs
 to the activation dtype, which covers the Snowball caller’s FP32-parameter/
 BF16-activation pairing. Unsupported backends, device kinds, layouts, device
@@ -100,11 +108,12 @@ specs and tracing or executing Explicit-mesh projections. The legacy
 
 The forward uses DEFAULT products and FP32 accumulation with a K schedule
 determined by the weight width. Its custom VJP uses separate HIGHEST-precision
-FP32 reference GEMMs. The measured prototype established token-row raw-bit
-invariance for the tested TPUv4 shapes; the new multi-device row-mesh path
-still requires parent-owned accelerator validation. Throughput is unmeasured,
-and this change does not establish full-model parity or distribution-level
-equality. The opt-in therefore does not change attention, RoPE, KV-cache casts,
+FP32 reference GEMMs. A bounded four-device TPUv4 forward run established
+raw-bit equality for a repeated shared-MLP token at 4, 512 and 1024 rows and
+reduced cached-decode error. Training, prefill and cached decode still differed
+in that fixture. Native custom-VJP qualification and throughput measurements
+remain outstanding; the forward result does not establish full-model parity
+or distribution-level equality. The opt-in does not change attention, RoPE, KV-cache casts,
 MoE routing, or Splash selection. The scoped tests cover physical training
 projection `[4, 128, 256]` and a true jitted attention decode with four active
 sequences, logical sequence length one, physical token destinations

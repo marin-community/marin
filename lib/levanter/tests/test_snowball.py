@@ -11,6 +11,7 @@ levanter -> experiments dependency direction.
 """
 
 import dataclasses
+import inspect
 import json
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import pytest
 import haliax as hax
 from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from safetensors.numpy import load_file
 
 from levanter.grug.grug_moe import PreparedMoERouteCapture
@@ -34,6 +35,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm_reference
 from levanter.models import snowball as snowball_module
 from levanter.models.lm_model import LmConfig, LmExample
+from levanter.models.loss import maybe_fused_next_token_loss, next_token_loss
 from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.layers.kv_cache import KvPageCache
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
@@ -94,6 +96,16 @@ def _device_batched_ids(vocab_size: int, pos_len: int) -> hax.NamedArray:
     Pos = Axis("position", pos_len)
     row = jnp.arange(pos_len, dtype=jnp.int32) % vocab_size
     return hax.named(jnp.broadcast_to(row, (Batch.size, Pos.size)), (Batch, Pos))
+
+
+def _single_device_grug_mesh() -> Mesh:
+    """Build the explicit Grug mesh used by CPU reference tests, independent of visibility."""
+    axes = ("replica_dcn", "data", "context", "expert", "model")
+    return Mesh(
+        np.asarray(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1, 1)),
+        axes,
+        axis_types=(AxisType.Explicit,) * len(axes),
+    )
 
 
 def test_snowball_registered_and_no_arg_constructible():
@@ -177,10 +189,13 @@ def test_snowball_attention_gated_norm_fixed_schedule_matches_input_layout_on_fo
         import jax
         import jax.numpy as jnp
         import numpy as np
+        from pathlib import Path
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
         from levanter.models import snowball as snowball_module
         from levanter.models.snowball import GatedNorm
+
+        assert "lib/levanter/src" in str(Path(snowball_module.__file__).resolve())
 
         # Reference wiring only: this substitutes the contraction arithmetic so CPU can exercise
         # the product layout and autodiff path. It is not evidence for the TPU custom VJP/kernel.
@@ -224,6 +239,28 @@ def test_snowball_attention_gated_norm_fixed_schedule_matches_input_layout_on_fo
             _, norm_grad = eqx.filter_value_and_grad(lambda model: jnp.mean(model(x)))(norm)
             assert bool(jnp.isfinite(norm_grad.w_down).all())
             assert bool(jnp.isfinite(norm_grad.w_up).all())
+
+            cfg = snowball_module.SnowballConfig(
+                vocab_size=32,
+                hidden_dim=128,
+                intermediate_dim=128,
+                shared_expert_intermediate_dim=128,
+                num_experts=1,
+                num_experts_per_token=1,
+                num_layers=1,
+                num_heads=2,
+                num_kv_heads=1,
+                head_dim=64,
+                projection_implementation="fixed_schedule",
+                attention_implementation="reference",
+            )
+            attention = snowball_module.SnowballAttention.init(cfg, key=jax.random.key(19))
+            assert attention.w_q.sharding.spec == P(("data", "context"), "model")
+            q, k, v = eqx.filter_jit(lambda value: attention._project_qkv(value, disable_rope=True))(x[:, :1, :])
+            assert q.shape == (4, 1, 2, 64)
+            assert k.shape == v.shape == (4, 1, 1, 64)
+            assert tuple(q.sharding.spec)[0] == input_sharding.spec[0]
+            assert all(entry is None for entry in tuple(q.sharding.spec)[1:])
         """,
         device_count=4,
     )
@@ -241,6 +278,214 @@ def test_snowball_attention_gated_norm_selector_preserves_state_dict():
     assert native_state.keys() == fixed_state.keys()
     for name in native_state:
         np.testing.assert_array_equal(native_state[name], fixed_state[name], err_msg=name)
+
+
+def test_snowball_fixed_schedule_shared_dense_and_lmhead_cover_public_train_prefill_decode(monkeypatch):
+    """The opt-in contractions preserve the public paths and parameter identities on CPU."""
+
+    def reference_linear(x, weight):
+        return jax.lax.dot_general(
+            x,
+            weight,
+            (((1,), (0,)), ((), ())),
+            precision=jax.lax.Precision.DEFAULT,
+            preferred_element_type=jnp.float32,
+        )
+
+    monkeypatch.setattr(snowball_module, "fixed_schedule_linear", reference_linear)
+    native_cfg = _tiny_config(
+        hidden_dim=32,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=48,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=16,
+        moe_implementation="scatter",
+    )
+    fixed_cfg = dataclasses.replace(native_cfg, projection_implementation="fixed_schedule")
+    ids = hax.named(
+        jnp.asarray([[2, 7, 0, 9], [2, 7, 0, 9], [2, 7, 0, 9], [2, 7, 0, 9]], dtype=jnp.int32),
+        ("batch", "position"),
+    )
+    with jax.set_mesh(_single_device_grug_mesh()):
+        native = SnowballLMHeadModel.init(Axis("vocab", native_cfg.vocab_size), native_cfg, key=jax.random.key(43))
+        fixed = SnowballLMHeadModel.init(Axis("vocab", fixed_cfg.vocab_size), fixed_cfg, key=jax.random.key(43))
+        native_logits = native(ids)
+        fixed_logits = fixed(ids)
+        np.testing.assert_allclose(
+            np.asarray(fixed_logits.array), np.asarray(native_logits.array), rtol=1e-5, atol=1e-5
+        )
+
+        loss_weight = hax.named(jnp.asarray([[1.0, 0.5, 2.0, 0.0]] * 4, dtype=jnp.float32), ids.axes)
+        example = LmExample(tokens=ids, loss_weight=loss_weight, attn_mask=LmAttentionMask.causal())
+        native_loss = next_token_loss(
+            native.Pos,
+            native.Vocab,
+            native_logits,
+            ids,
+            loss_weight=loss_weight,
+        )
+        fixed_loss = fixed.compute_next_token_loss(example)
+        np.testing.assert_allclose(np.asarray(fixed_loss.array), np.asarray(native_loss.array), rtol=1e-5, atol=1e-5)
+
+        def native_model_loss(model):
+            return next_token_loss(model.Pos, model.Vocab, model(ids), ids, loss_weight=loss_weight).array
+
+        def fixed_model_loss(model):
+            return model.compute_next_token_loss(example).array
+
+        native_grad = eqx.filter_grad(native_model_loss)(native)
+        fixed_grad = eqx.filter_grad(fixed_model_loss)(fixed)
+        for native_value, fixed_value in (
+            (native_grad.transformer.token_embed, fixed_grad.transformer.token_embed),
+            (native_grad.transformer.output_proj, fixed_grad.transformer.output_proj),
+            (native_grad.transformer.blocks[0].shared.w_gate, fixed_grad.transformer.blocks[0].shared.w_gate),
+            (native_grad.transformer.blocks[0].shared.w_up, fixed_grad.transformer.blocks[0].shared.w_up),
+            (native_grad.transformer.blocks[0].shared.w_down, fixed_grad.transformer.blocks[0].shared.w_down),
+        ):
+            np.testing.assert_allclose(np.asarray(fixed_value), np.asarray(native_value), rtol=1e-4, atol=1e-5)
+            assert bool(jnp.isfinite(fixed_value).all())
+
+        fixed_grad = eqx.filter_grad(lambda model: jnp.sum(model(ids).array))(fixed)
+        assert bool(jnp.isfinite(fixed_grad.transformer.output_proj).all())
+
+        cache = fixed.initial_cache(PageTableSpec(num_pages=4, page_size=2, max_seqs=1), dtype=jnp.float32)
+        prefill_ids = hax.named(ids.array[0], "position")
+        positions = hax.named(jnp.arange(4, dtype=jnp.int32), "position")
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.asarray([0], dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray([[0, 1, 2]], dtype=jnp.int32), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([4], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 4], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.arange(4, dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        prefill_logits, prefill_cache = fixed.decode(prefill_ids, cache, info, positions)
+
+        next_id = hax.named(jnp.asarray([5], dtype=jnp.int32), "position")
+        decode_info = PageBatchInfo(
+            slot_ids=info.slot_ids,
+            page_indices=info.page_indices,
+            seq_lens=hax.named(jnp.asarray([5], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.asarray([0, 1], dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(1, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([4], dtype=jnp.int32), "position"),
+            page_size=2,
+        )
+        decode_logits, _ = fixed.decode(next_id, prefill_cache, decode_info, hax.named(jnp.asarray([4]), "position"))
+        full_ids = hax.named(
+            jnp.concatenate((ids.array[:1], jnp.asarray([[5]], dtype=jnp.int32)), axis=1),
+            (ids.axes[0].resize(1), ids.axes[1].resize(5)),
+        )
+        full_logits = fixed(full_ids)
+
+    np.testing.assert_allclose(
+        np.asarray(prefill_logits.array), np.asarray(fixed_logits.array[0]), rtol=1e-5, atol=1e-5
+    )
+    np.testing.assert_allclose(
+        np.asarray(decode_logits.array), np.asarray(full_logits.array[:, -1]), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_snowball_fixed_schedule_loss_casts_before_soft_cap_and_preserves_loss_dtype(monkeypatch):
+    """Weighted lower-precision training loss matches an independent cast-then-cap oracle."""
+
+    def reference_linear(x, weight):
+        return jax.lax.dot_general(
+            x,
+            weight,
+            (((1,), (0,)), ((), ())),
+            precision=jax.lax.Precision.DEFAULT,
+            preferred_element_type=jnp.float32,
+        )
+
+    def reference_loss(logits, token_ids, weights, dtype, soft_cap):
+        logits = logits.astype(dtype) if dtype is not None else logits
+        if soft_cap is not None:
+            logits = jnp.tanh(logits / soft_cap) * soft_cap
+        targets = jnp.roll(token_ids, -1, axis=-1)
+        token_loss = -jnp.take_along_axis(jax.nn.log_softmax(logits, axis=-1), targets[..., None], axis=-1)[..., 0]
+        effective_weight = weights * jnp.concatenate(
+            [
+                jnp.ones(weights.shape[:-1] + (weights.shape[-1] - 1,), dtype=weights.dtype),
+                jnp.zeros(weights.shape[:-1] + (1,), dtype=weights.dtype),
+            ],
+            axis=-1,
+        )
+        return jnp.sum(token_loss * effective_weight) / jnp.sum(effective_weight)
+
+    monkeypatch.setattr(snowball_module, "fixed_schedule_linear", reference_linear)
+    cfg = dataclasses.replace(
+        _tiny_config(vocab_size=7, hidden_dim=32, intermediate_dim=32, shared_expert_intermediate_dim=32),
+        projection_implementation="fixed_schedule",
+    )
+    ids = hax.named(
+        jnp.asarray([[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], dtype=jnp.int32),
+        ("batch", "position"),
+    )
+    weights = hax.named(jnp.asarray([[1.0, 0.25, 2.0, 0.0]] * 4, dtype=jnp.bfloat16), ids.axes)
+    example = LmExample(tokens=ids, loss_weight=weights, attn_mask=LmAttentionMask.causal())
+    soft_cap = 1.7
+
+    with jax.set_mesh(_single_device_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(57))
+        logits = model(ids)
+        expected = reference_loss(logits.array, ids.array, weights.array, jnp.bfloat16, soft_cap)
+        actual = model.compute_next_token_loss(example, loss_dtype=jnp.float32, logit_soft_cap=soft_cap)
+        np.testing.assert_allclose(np.asarray(actual.array), np.asarray(expected), rtol=1e-2, atol=1e-2)
+
+        def actual_model_loss(current):
+            return current.compute_next_token_loss(example, loss_dtype=jnp.float32, logit_soft_cap=soft_cap).array
+
+        def reference_model_loss(current):
+            return reference_loss(current(ids).array, ids.array, weights.array, jnp.bfloat16, soft_cap)
+
+        actual_grad = eqx.filter_grad(actual_model_loss)(model)
+        reference_grad = eqx.filter_grad(reference_model_loss)(model)
+        np.testing.assert_allclose(
+            np.asarray(actual_grad.transformer.output_proj),
+            np.asarray(reference_grad.transformer.output_proj),
+            rtol=1e-2,
+            atol=1e-2,
+        )
+        assert float(jnp.max(jnp.abs(actual_grad.transformer.output_proj))) > 0.0
+
+        direct_logits = hax.named(logits.array.astype(jnp.bfloat16), logits.axes)
+        direct_default = next_token_loss(model.Pos, model.Vocab, direct_logits, ids)
+        direct_reference = reference_loss(
+            logits.array.astype(jnp.bfloat16), ids.array, jnp.ones_like(logits.array[..., 0]), None, None
+        )
+        np.testing.assert_allclose(
+            np.asarray(direct_default.array), np.asarray(direct_reference), rtol=1e-2, atol=1e-2
+        )
+
+
+def test_loss_helpers_keep_distinct_mixed_precision_defaults():
+    """Protect the public helper defaults used by fused model and direct loss callers."""
+    assert inspect.signature(maybe_fused_next_token_loss).parameters["dtype"].default is jnp.float32
+    assert inspect.signature(next_token_loss).parameters["dtype"].default is None
+
+    Pos = Axis("position", 17)
+    Embed = Axis("embed", 7)
+    Vocab = Axis("vocab", 31)
+    embeddings = hax.named(jax.random.normal(jax.random.key(9), (17, 7), dtype=jnp.bfloat16) * 11, (Pos, Embed))
+    lm_head = hax.named(jax.random.normal(jax.random.key(10), (7, 31), dtype=jnp.bfloat16) * 11, (Embed, Vocab))
+    ids = hax.named(jnp.arange(17, dtype=jnp.int32) % 31, Pos)
+
+    fused_default = maybe_fused_next_token_loss(Pos, Embed, Vocab, embeddings, lm_head, ids)
+    fused_explicit = maybe_fused_next_token_loss(Pos, Embed, Vocab, embeddings, lm_head, ids, dtype=jnp.float32)
+    assert fused_default.dtype == jnp.float32
+    np.testing.assert_array_equal(np.asarray(fused_default.array), np.asarray(fused_explicit.array))
+
+    logits = hax.named(jax.random.normal(jax.random.key(11), (17, 31), dtype=jnp.bfloat16) * 11, (Pos, Vocab))
+    direct_default = next_token_loss(Pos, Vocab, logits, ids)
+    direct_explicit = next_token_loss(Pos, Vocab, logits, ids, dtype=None)
+    assert direct_default.dtype == jnp.bfloat16
+    np.testing.assert_array_equal(np.asarray(direct_default.array), np.asarray(direct_explicit.array))
 
 
 def test_snowball_shared_rms_norm_reference_jit_and_vjp_match_fixed_schedule_reference():

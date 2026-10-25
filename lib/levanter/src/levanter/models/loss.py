@@ -119,6 +119,8 @@ def next_token_loss(
     reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
+    logit_soft_cap: Optional[float] = None,
+    dtype: Optional[jnp.dtype] = None,
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -137,6 +139,10 @@ def next_token_loss(
         NamedArray: computed loss
     """
     Pos = logits.resolve_axis(hax.axis_name(Pos))
+    if dtype is not None:
+        logits = logits.astype(dtype)
+    if logit_soft_cap is not None:
+        logits = hax.named(jnp.tanh(logits.array / logit_soft_cap) * logit_soft_cap, logits.axes)
 
     target_y = hax.roll(true_ids, -1, Pos)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
