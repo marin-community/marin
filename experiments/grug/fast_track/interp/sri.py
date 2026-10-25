@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 # Rows per batch: the trace keeps every layer's expert pre-activations, activations and slot outputs (47 GB at 8
 # d1280 rows).
-BATCH = 4
+BATCH = 2
 Q = 64  # query slots per batch
 F = 4  # focus neurons per query
 NUM_DECOMP = 2  # focus neurons whose router logit and pre-activation are decomposed
@@ -294,6 +294,18 @@ def neuron_directions(model, targets: jax.Array) -> tuple[jax.Array, jax.Array]:
     return jnp.stack(rs, axis=1), jnp.stack(rss, axis=1)
 
 
+def _unit_weights(model, li, e, i, name: str) -> jax.Array:
+    """Routed unit ``(li, e, i)``'s ``w_up`` column (``name="w_up"``) or ``w_down`` row (``"w_down"``) ``[..., R]``
+    (float32) for index arrays of any shape, one layer at a time (a stacked ``[L, E, R, I]`` copy is 6.6 GB at
+    d1280)."""
+    out = 0.0
+    for layer, lay in enumerate(model.layers()):
+        w = getattr(lay.mlp.expert_mlp, name)
+        vec = w[e, :, i] if name == "w_up" else w[e, i, :]
+        out = out + jnp.where((li == layer)[..., None], vec.astype(jnp.float32), 0.0)
+    return out
+
+
 def _stacked(model) -> dict:
     layers = model.layers()
     f32 = lambda x: x.astype(jnp.float32)  # noqa: E731
@@ -303,8 +315,6 @@ def _stacked(model) -> dict:
         w_ld=jnp.stack([f32(lay.mlp.w_latent_down) for lay in layers]),  # [L, D, R]
         w_lu=jnp.stack([f32(lay.mlp.w_latent_up) for lay in layers]),  # [L, R, D]
         lat_gain=jnp.stack([f32(lay.mlp.latent_norm.gain()) for lay in layers]),
-        w_up=jnp.stack([lay.mlp.expert_mlp.w_up for lay in layers]),  # [L, E, R, I]
-        w_down=jnp.stack([lay.mlp.expert_mlp.w_down for lay in layers]),  # [L, E, I, R]
         mlp_gain=jnp.stack([f32(lay.rms_mlp.gain()) for lay in layers]),
         gn_down=jnp.stack([f32(lay.mlp_gated_norm.w_down) for lay in layers]),
         gn_up=jnp.stack([f32(lay.mlp_gated_norm.w_up) for lay in layers]),
@@ -456,16 +466,12 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     out["f_weight"] = jnp.sum(jnp.where(hit, comb_all[fl, qf], 0.0), axis=-1)
     out["f_weight_rank"] = jnp.where(out["f_selected"], jnp.sum(jnp.where(hit, wrank_all[fl, qf], 0), axis=-1), -1)
     out["f_bias_driven"] = out["f_selected"] & (out["f_rank"] >= K)
-    w_up_col = jnp.take_along_axis(st["w_up"][fl, fe].astype(jnp.float32), fi[..., None, None], axis=-1)[
-        ..., 0
-    ]  # [Q, F, R]
+    w_up_col = _unit_weights(m, fl, fe, fi, "w_up")  # [Q, F, R]
     pre = jnp.einsum("qfr,qfr->qf", rin_all[fl, qf], w_up_col)
     out["f_pre"] = pre
     act_f = jnp.square(jax.nn.relu(pre))
     out["f_act"] = act_f
-    w_down_row = jnp.take_along_axis(st["w_down"][fl, fe].astype(jnp.float32), fi[..., None, None], axis=-2)[
-        ..., 0, :
-    ]  # [Q, F, R]
+    w_down_row = _unit_weights(m, fl, fe, fi, "w_down")  # [Q, F, R]
     lu = jnp.einsum("qfr,qfrd->qfd", w_down_row, st["w_lu"][fl]) * st["tap"][fl, 0]
     out["f_dla"] = (
         out["f_weight"] * act_f * jnp.einsum("qfd,qd->qf", lu, u_q) * jnp.take_along_axis(scale.T, fl + 1, axis=1)
@@ -497,7 +503,7 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
         dir_router = st["router"][dl, :, de]  # [Q, D]
         lat_raw = jnp.einsum("qd,qdr->qr", mi, st["w_ld"][dl])
         inv_lat = jax.lax.rsqrt(jnp.mean(jnp.square(lat_raw), axis=-1, keepdims=True) + lat_eps)
-        col = jnp.take_along_axis(st["w_up"][dl, de].astype(jnp.float32), di[:, None, None], axis=-1)[..., 0]
+        col = _unit_weights(m, dl, de, di, "w_up")
         dir_pre = jnp.einsum("qdr,qr->qd", st["w_ld"][dl], st["lat_gain"][dl] * col) * inv_lat
         dec["router_actual"].append(logits_all[dl, qflat, de])
         dec["pre_actual"].append(jnp.einsum("qr,qr->q", rin_all[dl, qflat], col))
