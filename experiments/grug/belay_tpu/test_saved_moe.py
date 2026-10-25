@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 from levanter.grug._moe.ep_ragged_all_to_all import _RaggedDotExpertMlp, _SavedRaggedDotExpertMlp
 
+from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot
 from experiments.grug.belay_tpu.expert_gradient_tpu import expert_weight_gradient
 from experiments.grug.belay_tpu.saved_relu2_adapter import SavedRelu2ExpertMlp
 
@@ -83,3 +84,27 @@ def test_partitioned_expert_weight_gradients_match_independent_products(dtype, s
     tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
     assert np.isfinite(actual).all()
     np.testing.assert_allclose(actual, expected, rtol=tolerance, atol=tolerance)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("sizes", [(1, 0, 31, 96), (0, 0, 0, 128)])
+def test_partitioned_grouped_dot_vjp_matches_ragged_dot(dtype, sizes):
+    rng = np.random.default_rng(418)
+    x = jnp.asarray(rng.normal(scale=0.1, size=(128, 128)), dtype)
+    weights = jnp.asarray(rng.normal(scale=0.1, size=(4, 128, 128)), dtype)
+    cotangent = jnp.asarray(rng.normal(scale=0.1, size=(128, 128)), dtype)
+    groups = jnp.asarray(sizes, jnp.int32)
+
+    def evaluate(function):
+        output, pullback = jax.vjp(function, x, weights)
+        return output, pullback(cotangent)
+
+    with jax.default_matmul_precision("highest"):
+        expected = evaluate(lambda a, b: jax.lax.ragged_dot(a, b, groups, preferred_element_type=dtype))
+        actual = evaluate(lambda a, b: partitioned_grouped_dot(a, b, groups, interpret=True))
+    tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
+    for got, want in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        assert np.isfinite(got).all()
+        np.testing.assert_allclose(
+            np.asarray(got, np.float32), np.asarray(want, np.float32), rtol=tolerance, atol=tolerance
+        )
