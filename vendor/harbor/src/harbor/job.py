@@ -1229,16 +1229,10 @@ class Job:
                 evidence = correct_sotopia(
                     combined_trial_results,
                     model=model,
-                    cohort=(
-                        self.config.sotopia_cohort.model_dump()
-                        if self.config.sotopia_cohort
-                        else None
-                    ),
+                    cohort=self.config.sotopia_cohort,
                 )
                 dataset = self.benchmark_metadata[0].task
-                self._job_result.canonical_metrics[dataset] = evidence[
-                    "canonical_metrics"
-                ]
+                self._job_result.canonical_metrics[dataset] = evidence.canonical_metrics
                 self._job_result.metric_evidence[dataset] = asdict(evidence)
                 for stats in self._job_result.stats.evals.values():
                     stats.metrics.append(evidence.canonical_metrics)
