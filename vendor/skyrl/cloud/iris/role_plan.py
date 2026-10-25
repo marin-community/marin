@@ -244,7 +244,6 @@ def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[
     ref_num_nodes = int(placement.get("ref_num_nodes") or values.policy_num_nodes)
     ref_num_gpus_per_node = int(placement.get("ref_num_gpus_per_node") or values.policy_num_gpus_per_node)
 
-    shared_group = ALL_ROLES_COLOCATION_GROUP
     policy = _policy_claim(config, values)
     policy_group = policy.colocation_group
     claims = [policy]
