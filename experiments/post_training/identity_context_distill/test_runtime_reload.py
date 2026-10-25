@@ -18,14 +18,13 @@ def test_runtime_flag_survives_hf_reload_and_loader_on_32_cpu_mesh():
         from levanter.main.train_lm import preserve_hf_runtime_settings, _load_lm_model_from_configured_source
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel, GrugMoeHfConfig
         from experiments.interp.snowball_identity.levanter_positions import router_dot_dtypes, router_dot_is_fp32
-        from experiments.post_training.identity_context_distill.sft import identity_sft_config, check_runtime_recipe
+        from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        base = identity_sft_config(dataset_uri='synthetic', cache_uri='cache', output_uri='output',
+        base = identity_sft_config(hosts=1, dataset_uri='synthetic', cache_uri='cache', output_uri='output',
                                    run_id='reload', seed=310, **source_arguments())
         enabled = replace(base, model=replace(base.model, router_dot_fp32=True),
                           trainer=replace(base.trainer, compute_dtype_overrides={'router_bias': 'float32'}))
-        check_runtime_recipe(enabled, **source_arguments())
         tc = replace(enabled.trainer, tracker=(), require_accelerator=False)
         tiny = SnowballConfig(vocab_size=64, hidden_dim=16, num_heads=2, num_kv_heads=1, head_dim=8,
                              intermediate_dim=16, shared_expert_intermediate_dim=16,

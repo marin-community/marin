@@ -15,7 +15,7 @@ from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
 from levanter.testing.cpu_devices import run_on_cpu_devices
-from levanter.trainer import Trainer
+from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
 
@@ -24,6 +24,7 @@ from experiments.post_training.identity_context_distill.sft import (
     check_export_metadata,
     check_restored_progress,
     check_runtime_model,
+    check_runtime_recipe,
     check_source_metadata_receipt,
     identity_sft_config,
     source_export_overrides,
@@ -92,7 +93,7 @@ def test_standard_adaptor_callback_uses_source_overrides(monkeypatch, tmp_path):
     source = source_arguments()
     source["source_config"].update(global_every=4, router_z_loss_coef=0.0)
     config = identity_sft_config(
-        dataset_uri="data", cache_uri="cache", output_uri=str(tmp_path), run_id="export", seed=42, **source
+        hosts=1, dataset_uri="data", cache_uri="cache", output_uri=str(tmp_path), run_id="export", seed=42, **source
     )
     converter = HFCheckpointConverter(SnowballConfig, HfConfigClass=GrugMoeHfConfig)
     saved = []
@@ -140,6 +141,7 @@ def tiny_loss(model):
 
 def test_factory_optimizer_native_resume_preserves_progress(tmp_path):
     config = identity_sft_config(
+        hosts=1,
         dataset_uri="data",
         cache_uri="cache",
         output_uri=str(tmp_path),
@@ -166,6 +168,7 @@ def test_factory_optimizer_native_resume_preserves_progress(tmp_path):
     expected_optimizer = [np.asarray(leaf).copy() for leaf in jax.tree.leaves(state.opt_state)]
     assert (tmp_path / "checkpoints/step-15/metadata.json").exists()
     continuation = identity_sft_config(
+        hosts=1,
         dataset_uri="data",
         cache_uri="cache",
         output_uri=str(tmp_path),
@@ -193,6 +196,7 @@ def test_factory_optimizer_native_resume_preserves_progress(tmp_path):
 
 def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
     arguments = dict(
+        hosts=1,
         dataset_uri="data.jsonl",
         cache_uri="cache",
         output_uri=str(tmp_path),
@@ -228,27 +232,19 @@ def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
 def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
     run_on_cpu_devices(
         """
-        from dataclasses import replace
         import equinox as eqx
         import haliax as hax
         import jax
         import jax.numpy as jnp
         import numpy as np
-        import pytest
         from levanter.grad_accum import microbatched
         from levanter.models.loss import maybe_fused_next_token_loss
-        from experiments.post_training.identity_context_distill.sft import identity_sft_config, check_runtime_recipe
+        from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        config = identity_sft_config(dataset_uri="data", cache_uri="cache", output_uri="out", run_id="test", seed=42,
-                                     **source_arguments())
+        config = identity_sft_config(hosts=1, dataset_uri="data", cache_uri="cache", output_uri="out",
+                                     run_id="test", seed=42, **source_arguments())
         trainer = config.trainer
-        check_runtime_recipe(config, **source_arguments())
-        enabled = replace(config, model=replace(config.model, router_dot_fp32=True))
-        with pytest.raises(AssertionError):
-            check_runtime_recipe(enabled, **source_arguments())
-        enabled = replace(enabled, trainer=replace(trainer, compute_dtype_overrides={"router_bias": "float32"}))
-        check_runtime_recipe(enabled, **source_arguments())
         assert trainer.microbatch_size == trainer.train_batch_size == 8
         mesh = trainer.device_mesh
         mapping = trainer.compute_axis_mapping
@@ -310,9 +306,50 @@ def test_runtime_router_dot_exception_preserves_source_architecture(router_dot_f
     assert source_model_config(source).router_dot_fp32 is False
 
 
+def test_four_host_recipe_requires_the_real_slice_layout(monkeypatch):
+    sources = source_arguments()
+    arguments = dict(dataset_uri="data", cache_uri="cache", output_uri="out", run_id="mesh", seed=42, **sources)
+    production = identity_sft_config(hosts=4, **arguments)
+    cpu = identity_sft_config(hosts=1, **arguments)
+    ici, dcn = production.trainer.mesh.axis_shapes(32, 4)
+    assert ici == {"data": 2, "expert": 4, "replica": 1, "model": 1}
+    assert dcn == {"replica_dcn": 1, "context": 4}
+    assert production.trainer.parameter_axis_mapping["embed"] == ("data", "context")
+    assert production.trainer.compute_axis_mapping["batch"] == ("replica_dcn", "data", "expert")
+    cpu.trainer.mesh.axis_shapes(32, 1)
+    with pytest.raises(ValueError, match="DCN product"):
+        cpu.trainer.mesh.axis_shapes(32, 4)
+    with pytest.raises(ValueError, match="DCN product"):
+        production.trainer.mesh.axis_shapes(32, 1)
+    with pytest.raises(ValueError, match="hosts"):
+        identity_sft_config(hosts=2, **arguments)
+    monkeypatch.setattr(jax, "device_count", lambda: 32)
+    assert cpu.trainer.num_slices == 1
+    assert set(cpu.trainer.mesh_axis_specs) == {"data", "expert", "replica", "model", "context", "replica_dcn"}
+    with pytest.raises(ValueError, match="DCN product 4 must equal num_slices 1"):
+        _ = production.trainer.mesh_axis_specs
+    monkeypatch.setattr(TrainerConfig, "num_slices", property(lambda self: 4))
+    assert set(production.trainer.mesh_axis_specs) == {"data", "expert", "replica", "model", "context", "replica_dcn"}
+    check_runtime_recipe(production, **sources)
+    with pytest.raises(AssertionError):
+        check_runtime_recipe(cpu, **sources)
+    assert isinstance(production.model, SnowballConfig)
+    enabled = dataclasses.replace(production, model=dataclasses.replace(production.model, router_dot_fp32=True))
+    with pytest.raises(AssertionError):
+        check_runtime_recipe(enabled, **sources)
+    enabled = dataclasses.replace(
+        enabled, trainer=dataclasses.replace(enabled.trainer, compute_dtype_overrides={"router_bias": "float32"})
+    )
+    check_runtime_recipe(enabled, **sources)
+    monkeypatch.setattr(TrainerConfig, "num_slices", property(lambda self: 1))
+    with pytest.raises(AssertionError):
+        check_runtime_recipe(production, **sources)
+
+
 def test_source_derived_context_scaling_and_export_round_trip():
     sources = source_arguments()
     config = identity_sft_config(
+        hosts=1,
         dataset_uri="data",
         cache_uri="cache",
         output_uri="out",
@@ -371,6 +408,7 @@ def test_ambiguous_or_changed_source_metadata_requires_review(change):
         sources["source_config"]["global_every"] = 8
     with pytest.raises(ValueError):
         identity_sft_config(
+            hosts=1,
             dataset_uri="data",
             cache_uri="cache",
             output_uri="out",

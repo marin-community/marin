@@ -153,8 +153,10 @@ def check_runtime_recipe(config: TrainLmConfig, *, source_config: dict, source_g
     """Check the recipe after distributed JAX initialization, before loading weights."""
     trainer = config.trainer
     assert jax.device_count() == 32
+    assert trainer.num_slices == 4
+    assert trainer.mesh.dcn_axes == {"replica_dcn": 1, "context": 4}
     assert trainer.train_batch_size == trainer.microbatch_size == GLOBAL_BATCH_SIZE
-    assert trainer.compute_axis_mapping["batch"] == ("data", "expert")
+    assert trainer.compute_axis_mapping["batch"] == ("replica_dcn", "data", "expert")
     assert trainer.compute_axis_mapping["position"] == "context"
     assert isinstance(config.model, SnowballConfig)
     assert config.train_seq_len == SEQUENCE_LENGTH
@@ -210,6 +212,7 @@ def identity_sft_config(
     output_uri: str,
     run_id: str,
     seed: int,
+    hosts: int,
     source_config: dict,
     source_generation_config: dict,
     stop_after_updates: int = 16,
@@ -223,6 +226,7 @@ def identity_sft_config(
         output_uri: Fresh run root, or the same root for an interrupted run.
         run_id: Stable tracking identity.
         seed: Fixed model/data seed, unchanged across continuation.
+        hosts: Physical host count: four H100 hosts, or one slice for CPU tests.
         source_config: Parsed config.json from the pinned native source, not Snowball defaults.
         source_generation_config: Parsed source generation_config.json with the approved EOS list.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
@@ -232,9 +236,11 @@ def identity_sft_config(
         Standard TrainLmConfig. Continuation restores full state with load_checkpoint_path,
         leaving the pinned HF source available to reconstruct omitted frozen parameters.
         The literal trainer.initialize_from option cannot coexist with initialize_from_hf.
-        On GPUs the logical context axis uses MeshConfig.axes, not TPU-only dcn_axes.
+        Four GPU hosts place context across DCN slices, with data and expert within each host.
         Physical cross-node placement and the BF16-forward gate still require validation.
     """
+    if type(hosts) is not int or hosts not in (1, 4):
+        raise ValueError("The precision recipe requires hosts=4, or hosts=1 for CPU tests")
     if stop_after_updates not in (16, 64):
         raise ValueError("The gated recipe supports absolute horizons of 16 or 64 updates")
     if stop_after_updates == 64 and resume_checkpoint is None:
@@ -244,9 +250,10 @@ def identity_sft_config(
 
     output_uri = output_uri.rstrip("/")
     mesh = MeshConfig(
-        axes={"data": 2, "expert": 4, "context": 4, "replica": 1, "model": 1},
-        dcn_axes={"replica_dcn": 1},
-        compute_mapping={"batch": ["data", "expert"], "position": "context", "vocab": "model"},
+        axes={"data": 2, "expert": 4, "replica": 1, "model": 1} | ({"context": 4} if hosts == 1 else {}),
+        dcn_axes={"replica_dcn": 1} | ({"context": 4} if hosts == 4 else {}),
+        compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
+        param_mapping={"embed": ["data", "context"]},
     )
     return TrainLmConfig(
         data=LmDataConfig(

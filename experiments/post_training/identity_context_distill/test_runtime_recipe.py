@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 import pytest
+from levanter.models.snowball import SnowballConfig
 
 from experiments.post_training.identity_context_distill.runtime_recipe import (
     POSITIONS_SHA256,
@@ -28,6 +29,7 @@ def inputs():
         output_uri="s3://marin-rno2a/fixture",
         run_id="test",
         seed=310,
+        hosts=1,
         **source,
     )
     # Synthetic evidence metadata only; no model outputs or real training targets.
@@ -90,6 +92,7 @@ def test_runtime_flag_does_not_waive_scaling_or_master_precision_policy():
     runtime, _ = configure_precision_runtime(config, **args)
     source = json.loads(args["config_bytes"])
     with pytest.raises(ValueError, match="architecture differs"):
+        assert isinstance(runtime.model, SnowballConfig)
         check_runtime_config(replace(runtime, model=replace(runtime.model, qk_mult=1.5)), source)
     with pytest.raises(ValueError, match="requires native FP32"):
         check_runtime_config(replace(runtime, trainer=replace(runtime.trainer, compute_dtype_overrides=None)), source)
