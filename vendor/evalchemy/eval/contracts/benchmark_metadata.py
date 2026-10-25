@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
@@ -363,3 +363,19 @@ def canonicalize_results(
                 normalized[f"{metric.name}_stderr"] = float(task_results[stderr_key])
         canonical[description.task] = normalized
     return canonical
+
+
+def select_primary_metric(descriptions: Iterable[BenchmarkMetadata], name: str | None) -> tuple[BenchmarkMetadata, ...]:
+    """Select an existing canonical metric without redefining its statistical kind."""
+    descriptions = tuple(descriptions)
+    if name is None:
+        return descriptions
+    if not descriptions:
+        raise ValueError("primary metric selection requires declared benchmark metadata")
+    selected = []
+    for description in descriptions:
+        metric = next((metric for metric in description.metrics if metric.name == name), None)
+        if metric is None:
+            raise ValueError(f"{description.task}: primary metric {name!r} is not declared")
+        selected.append(replace(description, primary_metric=metric.name, metric_kind=metric.kind))
+    return tuple(selected)

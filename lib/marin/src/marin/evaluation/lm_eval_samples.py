@@ -51,7 +51,13 @@ from marin.evaluation.metric_selection import (
     declared_sample_metric,
     primary_filter,
 )
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    EvalTaskRef,
+    MetricKind,
+    TaskCoverage,
+)
 
 
 class TaskDeclaration(Protocol):
@@ -63,6 +69,7 @@ class TaskDeclaration(Protocol):
     generation: bool
     unsafe_code: bool
     completion_only: bool
+    primary_metric: str | None
 
 
 logger = logging.getLogger(__name__)
@@ -404,6 +411,7 @@ class _TaskCoverageAccumulator:
     n_benchmark: int | None = None
     n_attempted: int | None = None
     score_from_aggregate: bool = False
+    metric_kind: MetricKind | None = None
     graded: dict[tuple[str, str], list[_GradedSampleSummary]] = field(default_factory=dict)
     first: dict[tuple[str, str], _GradedSampleSummary] = field(default_factory=dict)
     seen: set[tuple[str, str]] = field(default_factory=set)
@@ -447,7 +455,11 @@ class _TaskCoverageAccumulator:
         # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
         # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
         # task.
-        binary = not aggregate_scored and all(summary.score in (0.0, 1.0) for summary in scored)
+        binary = (
+            self.metric_kind is not MetricKind.CONTINUOUS
+            and not aggregate_scored
+            and all(summary.score in (0.0, 1.0) for summary in scored)
+        )
         errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
         if infrastructure_errors:
             errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
@@ -472,6 +484,7 @@ def task_coverage(
     n_benchmark: int | None = None,
     n_attempted: int | None = None,
     score_from_aggregate: bool = False,
+    metric_kind: MetricKind | None = None,
 ) -> TaskCoverage:
     """Compute coverage from (sample, trial ID) pairs without merging independent repetitions.
 
@@ -483,7 +496,10 @@ def task_coverage(
     as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
     """
     accumulator = _TaskCoverageAccumulator(
-        n_benchmark=n_benchmark, n_attempted=n_attempted, score_from_aggregate=score_from_aggregate
+        n_benchmark=n_benchmark,
+        n_attempted=n_attempted,
+        score_from_aggregate=score_from_aggregate,
+        metric_kind=metric_kind,
     )
     for sample, trial_id in samples:
         accumulator.add(sample, trial_id)
@@ -556,6 +572,7 @@ def _recorded_tasks(
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    primary_metric=task.primary_metric,
                 )
             )
             continue
@@ -568,6 +585,7 @@ def _recorded_tasks(
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    primary_metric=task.primary_metric,
                     benchmark=benchmark,
                 )
             )
@@ -733,6 +751,7 @@ def _write_sample_archive(
             accumulator = _TaskCoverageAccumulator(
                 n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
                 n_attempted=benchmark.n_attempted if benchmark is not None else None,
+                metric_kind=benchmark.metric_kind if benchmark is not None else None,
                 score_from_aggregate=score_from_aggregate,
             )
             written = _add_lm_eval_rows(
@@ -953,6 +972,7 @@ def summarize_native_eval_samples(
             samples,
             n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
             n_attempted=benchmark.n_attempted if benchmark is not None else None,
+            metric_kind=benchmark.metric_kind if benchmark is not None else None,
         )
         coverage[task_key] = task_coverage_result
 

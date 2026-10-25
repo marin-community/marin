@@ -9,6 +9,7 @@ from eval.contracts.benchmark_metadata import (
     describe_benchmarks,
     infer_benchmark_metadata,
     resolve_metric_metadata,
+    select_primary_metric,
 )
 from eval.contracts.task_outcome import TaskRoute
 from eval.task import BaseBenchmark
@@ -243,3 +244,14 @@ def test_metadata_discovery_does_not_gate_undeclared_benchmarks():
         limit=None,
     )
     assert descriptions == ()
+
+
+def test_primary_selection_preserves_scores_and_changes_reported_metric():
+    raw = {"piqa": {"acc,none": 0.25, "acc_norm,none": 0.75}}
+    description = infer_benchmark_metadata("piqa", {"acc": 0.25, "acc_norm": 0.75}, n_attempted=4)
+    selected = select_primary_metric((description,), "normalized_accuracy")
+    scores = canonicalize_results(raw, selected)
+    assert selected[0].primary_metric == "normalized_accuracy"
+    assert selected[0].metric_kind is MetricKind.BINARY
+    assert scores["piqa"][selected[0].primary_metric] == 0.75
+    assert scores["piqa"]["accuracy"] == 0.25

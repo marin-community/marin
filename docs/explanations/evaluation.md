@@ -233,6 +233,20 @@ inference session.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.
 - Setup, examples, and environment requirements are documented in [Harbor Framework Integration](../harbor-integration.md).
 
+## Select the primary metric
+
+Set `primary_metric` under an Evalchemy task's `task_options` to choose a canonical
+metric, such as `normalized_accuracy` for PIQA. The launcher passes this name to
+Evalchemy. Evalchemy validates the name against the benchmark definition and saves
+the selected metric, whether it is binary or continuous, and matching sample grades.
+Raw metrics remain available. An unknown metric name fails validation. A selected
+metric absent from the evaluator results fails completion.
+
+The policy campaign selects normalized accuracy for PIQA, strict prompt accuracy
+for IFBench, and accuracy for TruthfulQA MC2. Evalchemy defines TruthfulQA MC2 as a
+continuous score, so it has no count of correct answers. The metric selection is
+part of the resume settings and the saved task configuration.
+
 ## Where to go next
 
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md)

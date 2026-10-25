@@ -273,6 +273,7 @@ class EvalTaskRef(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    primary_metric: str | None = Field(default=None, exclude_if=lambda value: value is None)
     benchmark: BenchmarkMetadataRef | None = None
     """The evaluator-owned benchmark protocol, when the harness emitted one."""
 

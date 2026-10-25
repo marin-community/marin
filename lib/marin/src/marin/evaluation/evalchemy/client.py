@@ -229,6 +229,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
         "--verbosity",
         "INFO",
     ]
+    if task.get("primary_metric") is not None:
+        cmd += ["--primary-metric", task["primary_metric"]]
     # Pass every explicit shot count, including 0. A file-backed task may leave the value unset to use
     # the evaluator task's own default; explicit 0 must still override defaults such as gsm8k's 5-shot.
     if task["num_fewshot"] is not None:

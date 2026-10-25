@@ -20,6 +20,7 @@ class EvalTaskConfig:
     num_fewshot: int | None
     task_alias: str | None = None
     task_kwargs: dict | None = None
+    primary_metric: str | None = None
     generation: bool = False
     """Whether the task scores generated text rather than prompt loglikelihoods."""
     unsafe_code: bool = False

@@ -1,5 +1,6 @@
 tasks: [piqa]
 task_options:
   piqa:
+    primary_metric: normalized_accuracy
     num_fewshot: 0
     task_alias: piqa_0shot
