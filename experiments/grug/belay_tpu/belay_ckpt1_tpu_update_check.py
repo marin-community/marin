@@ -4,6 +4,7 @@
 """Check full Ckpt 1 updates and checkpoint continuation on TPU."""
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import math
@@ -89,6 +90,9 @@ def batch_digest(batch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
+    parser.add_argument(
+        "--compile-only", action="store_true", help="Compile the original saved-residual step; no updates"
+    )
     args = parser.parse_args()
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
@@ -98,6 +102,8 @@ def main():
     output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
     tpu = os.environ.get("BELAY_TPU", "v4-64")
     config = build_config(run_id, output_root, verified_tokenizer(), tpu, 0)
+    if args.compile_only:
+        config = dataclasses.replace(config, model=dataclasses.replace(config.model, attn_res_remat_attention=False))
     validate_recipe(config)
     trainer = config.trainer.trainer
     if args.logging_only:
@@ -172,6 +178,10 @@ def main():
         compiled = lowered.compile()
         emit("full_update_memory_analysis", rank=jax.process_index(), analysis=str(compiled.memory_analysis()))
         emit("full_update_compiled", rank=jax.process_index(), seconds=time.perf_counter() - started)
+        if args.compile_only:
+            tracker.log_summary({"diagnostic/compile_only_pass": True, "diagnostic/optimizer_updates": 0})
+            tracker.current_tracker().finish()
+            return
 
         def advance(current, batch, index, restored=False):
             started = time.perf_counter()
