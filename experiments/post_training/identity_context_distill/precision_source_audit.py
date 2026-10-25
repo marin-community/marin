@@ -8,11 +8,13 @@ import json
 import math
 import time
 from pathlib import PurePosixPath
+from typing import BinaryIO
 
 import jax.numpy as jnp
 import numpy as np
 from levanter.compat.fsspec_safetensor import TensorRecord
 from levanter.compat.hf_export import write_export_json
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
 INDEX = "model.safetensors.index.json"
@@ -30,6 +32,12 @@ CHUNK_BYTES = 64 * 1024**2
 MAX_HEADER_BYTES = 16 * 1024**2
 
 
+def open_audit_stream(url: str) -> BinaryIO:
+    """Open a bounded, uncached read without passing file options to the S3 session."""
+    filesystem, path = url_to_fs(url)
+    return filesystem.open(path, "rb", cache_type="none", block_size=CHUNK_BYTES)
+
+
 def checkpoint_records(root: str) -> dict[str, TensorRecord]:
     """Read headers and validate index coverage, tensor sizes and nonoverlapping bounds."""
     base = StoragePath(root)
@@ -44,7 +52,7 @@ def checkpoint_records(root: str) -> dict[str, TensorRecord]:
             raise ValueError("Index shard must be a plain safetensors filename")
         path = base / shard
         size = path.size()
-        with path.open("rb") as stream:
+        with open_audit_stream(str(path)) as stream:
             prefix = stream.read(8)
             if len(prefix) != 8:
                 raise ValueError(f"Truncated safetensors prefix: {shard}")
@@ -121,7 +129,7 @@ def audit_precision_source(root: str, expected_hashes: dict[str, str], receipt_p
     for name, record in sorted(records.items()):
         native, master = hashlib.sha256(), hashlib.sha256()
         remaining = record.byte_end - record.byte_start
-        with StoragePath(record.file_path).open("rb", cache_type="none") as stream:
+        with open_audit_stream(record.file_path) as stream:
             stream.seek(record.byte_start)
             while remaining:
                 count = min(CHUNK_BYTES, remaining)

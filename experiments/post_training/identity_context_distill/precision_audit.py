@@ -22,6 +22,7 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
     check_precision_layout,
     check_source_metadata,
     checkpoint_records,
+    open_audit_stream,
 )
 from experiments.post_training.identity_context_distill.sft import check_export_metadata
 
@@ -72,8 +73,8 @@ def compare_tensor_bytes(source: TensorRecord, exported: TensorRecord) -> str:
     digest = hashlib.sha256()
     remaining = source.byte_end - source.byte_start
     with (
-        StoragePath(source.file_path).open("rb", cache_type="none") as original,
-        StoragePath(exported.file_path).open("rb", cache_type="none") as written,
+        open_audit_stream(source.file_path) as original,
+        open_audit_stream(exported.file_path) as written,
     ):
         original.seek(source.byte_start)
         written.seek(exported.byte_start)

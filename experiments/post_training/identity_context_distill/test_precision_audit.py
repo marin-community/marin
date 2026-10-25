@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import s3fs
 from levanter.models.snowball import SnowballConfig
 from safetensors.numpy import load_file, save_file
 
@@ -26,7 +28,27 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
     SOURCE_FILES,
     audit_precision_source,
     checkpoint_records,
+    open_audit_stream,
 )
+
+
+def test_s3_audit_stream_options_reach_file_not_session(monkeypatch):
+    opened = []
+
+    def open_file(filesystem, path, mode="rb", **kwargs):
+        assert "cache_type" not in filesystem.storage_options
+        assert "block_size" not in filesystem.storage_options
+        assert kwargs["cache_type"] == "none"
+        assert kwargs["block_size"] == precision_source_audit.CHUNK_BYTES
+        opened.append((path, mode))
+        return io.BytesIO(b"bounded payload")
+
+    monkeypatch.setattr(s3fs.S3FileSystem, "_open", open_file)
+    with open_audit_stream("s3://synthetic-audit-fixture/weights.safetensors") as stream:
+        assert stream.read(7) == b"bounded"
+        stream.seek(8)
+        assert stream.read() == b"payload"
+    assert opened == [("synthetic-audit-fixture/weights.safetensors", "rb")]
 
 
 def test_source_audit_imports_without_sft_factory(tmp_path):
