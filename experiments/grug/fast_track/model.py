@@ -85,9 +85,11 @@ _ENTROPY_PRED = "entropy_pred"
 _ENTROPY_CHUNK = 1024
 # Per-layer branch-output stats, stacked over layers like the router stats.
 OUTSTAT_PREFIX = "outstat/"
-# Per-layer per-token total combine weight of the selected real experts ``[T]`` (``num_null_experts`` with a
-# ``null_aux`` pressure): differentiable, from the forward to the loss.
+# Per-layer per-token total combine weight of the selected real experts ``[T]`` (``num_null_experts``; stop-gradient).
 NULL_REAL_WEIGHT = "null_real_weight"
+# Per-layer per-token quantity the null aux weights (``NullAuxSite``) ``[T]``: differentiable, from the forward to the
+# loss.
+NULL_AUX_TERM = "null_aux_term"
 # Per-layer per-token count of selected real experts ``[T]`` (``num_null_experts``; stop-gradient, for token dumps).
 NULL_REAL_SLOTS = "null_real_slots"
 
@@ -172,6 +174,18 @@ class NullAux(StrEnum):
     """``(mean_loss / max(loss_t, null_aux_eps)) ** null_aux_gamma``: low-loss tokens are pushed hardest to nulls."""
     PTARGET = "ptarget"
     """``exp(-loss_t)``, the model's probability of the target."""
+
+
+class NullAuxSite(StrEnum):
+    """What the null aux's per-token ``R_t`` is."""
+
+    WEIGHT = "weight"
+    """The token's total combine weight on its selected real experts (the aux can also shrink it by raising the
+    selected nulls' share of the renormalized weight)."""
+    SELECTION = "selection"
+    """A soft count of the token's real slots, ``sum_i sigmoid(m_i / null_aux_temperature)`` over its ``k`` real-vs-null
+    selection margins (``null_qb_bias``) at the applied null bias: it acts on which experts are selected, not on
+    the combine weights."""
 
 
 class NullController(StrEnum):
@@ -486,6 +500,9 @@ class GrugModelConfig:
     null_bias_rate: float = 0.05
     """``NullController.INTEGRAL``: each step ``b_null += null_bias_rate * (mean real slots - target)`` per layer."""
     null_aux: NullAux = NullAux.NONE
+    null_aux_site: NullAuxSite = NullAuxSite.WEIGHT
+    null_aux_temperature: float = 1.0
+    """Logit temperature of ``NullAuxSite.SELECTION``'s soft real-slot count."""
     null_aux_weight: float = 0.0
     """``lambda`` of the ``null_aux`` term (per MoE layer)."""
     null_aux_eps: float = 0.02
@@ -512,8 +529,13 @@ class GrugModelConfig:
             raise ValueError(f"num_null_experts must be >= 0, got {self.num_null_experts}")
         if self.num_null_experts and not 0 < self.null_target_real_experts <= self.num_experts_per_token:
             raise ValueError("null_target_real_experts must be in (0, num_experts_per_token]")
-        if self.null_controller == NullController.QB and self.num_null_experts < self.num_experts_per_token:
-            raise ValueError("null_controller=qb needs num_null_experts >= num_experts_per_token")
+        needs_null_topk = self.null_controller == NullController.QB or (
+            self.null_aux != NullAux.NONE and self.null_aux_site == NullAuxSite.SELECTION
+        )
+        if needs_null_topk and self.num_null_experts < self.num_experts_per_token:
+            raise ValueError(
+                "null_controller=qb and null_aux_site=selection need num_null_experts >= num_experts_per_token"
+            )
         if (self.null_aux != NullAux.NONE) != (self.null_aux_weight > 0):
             raise ValueError("null_aux and a positive null_aux_weight go together")
         if self.null_aux != NullAux.NONE and not self.num_null_experts:
@@ -1267,13 +1289,22 @@ class MoEMLP(eqx.Module):
             # never dispatched, never counted against capacity, combine weight zero.
             is_null = selected_experts >= num_experts
             combine_weights_f = jnp.where(is_null, 0.0, combine_weights_f)
+            real_weight = jax.lax.stop_gradient(jnp.sum(combine_weights_f, axis=-1))
+            aux_term = None
             if self.cfg.null_aux != NullAux.NONE:
-                # The aux term's view of the same weights, whose gradient reaches only the router matrix.
+                # The aux term's per-token quantity, on logits whose gradient reaches only the router matrix.
                 aux_logits = _router_only_grad(router_logits, x_flat, self.router)
-                aux_weights = self._combine_weights(jnp.take_along_axis(aux_logits, selected_experts, axis=-1))
-                real_weight = jnp.sum(jnp.where(is_null, 0.0, aux_weights), axis=-1)
-            else:
-                real_weight = jnp.sum(combine_weights_f, axis=-1)
+                if self.cfg.null_aux_site == NullAuxSite.WEIGHT:
+                    aux_weights = self._combine_weights(jnp.take_along_axis(aux_logits, selected_experts, axis=-1))
+                    aux_term = jnp.sum(jnp.where(is_null, 0.0, aux_weights), axis=-1)
+                else:
+                    aux_term = _soft_real_slots(
+                        biased_logits,
+                        aux_logits + jax.lax.stop_gradient(self.router_bias),
+                        num_experts,
+                        k,
+                        self.cfg.null_aux_temperature,
+                    )
             selected_experts = jnp.where(is_null, num_experts, selected_experts)
             real_logits = router_logits[:, :num_experts]
             real_slots = jnp.sum(~is_null, axis=-1).astype(jnp.float32)
@@ -1313,11 +1344,10 @@ class MoEMLP(eqx.Module):
                     mesh,
                 )
             router_stats[f"{OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
-            router_stats[f"{OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
-            router_stats[NULL_REAL_WEIGHT] = reshard(
-                real_weight if self.cfg.null_aux != NullAux.NONE else jax.lax.stop_gradient(real_weight),
-                P(_BATCH_AXES),
-            )
+            router_stats[f"{OUTSTAT_PREFIX}null_real_weight"] = jnp.mean(real_weight)
+            router_stats[NULL_REAL_WEIGHT] = reshard(real_weight, P(_BATCH_AXES))
+            if aux_term is not None:
+                router_stats[NULL_AUX_TERM] = reshard(aux_term, P(_BATCH_AXES))
             router_stats[NULL_REAL_SLOTS] = reshard(real_slots, P(_BATCH_AXES))
         router_stats["qb_beta"] = beta
         router_stats[f"{OUTSTAT_PREFIX}moe_active_k"] = mean_real if num_null else jnp.asarray(float(k), jnp.float32)
@@ -1343,6 +1373,19 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+def _soft_real_slots(
+    biased_logits: Float[Array, "T C"], aux_biased: Float[Array, "T C"], num_experts: int, k: int, temperature: float
+) -> Float[Array, " T"]:
+    """``sum_i sigmoid(m_i / temperature)``: the soft real-slot count of ``NullAuxSite.SELECTION``, with the margins
+    ``m_i = R_i - Z_{k+1-i}`` (``null_qb_bias``) of the applied biases (``m_i > 0``: the ``i``-th real expert is
+    selected), ranked on ``biased_logits`` and differentiated through ``aux_biased`` (the same values)."""
+    _, real_index = _small_top_k(biased_logits[:, :num_experts], k)
+    _, null_index = _small_top_k(biased_logits[:, num_experts:], k)
+    top_real = jnp.take_along_axis(aux_biased[:, :num_experts], real_index, axis=-1)
+    top_null = jnp.take_along_axis(aux_biased[:, num_experts:], null_index, axis=-1)
+    return jnp.sum(jax.nn.sigmoid((top_real - top_null[:, ::-1]) / temperature), axis=-1)
 
 
 def null_qb_bias(
@@ -1912,7 +1955,7 @@ def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, t
     d_partial, d_blocks, d_block_logits, d_stats = grad_out
     layer, blocks, block_logits, _, _, _ = diff_args
     cfg = layer.attn.cfg
-    d_real_weight = d_stats.get(NULL_REAL_WEIGHT) if cfg.null_aux != NullAux.NONE else None
+    d_real_weight = d_stats.get(NULL_AUX_TERM) if cfg.null_aux != NullAux.NONE else None
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
         lambda d, x: jnp.zeros_like(x) if d is None else d, d_block_logits, block_logits, is_leaf=_is_none
@@ -1930,7 +1973,7 @@ def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, t
 
             def layer_out(args):
                 out, stats = _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)
-                return out, stats[NULL_REAL_WEIGHT]
+                return out, stats[NULL_AUX_TERM]
 
             _, vjp_fn = jax.vjp(layer_out, diff_args)
             cotangent = (d_partial, d_real_weight)
@@ -2187,7 +2230,7 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
             router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(OUTSTAT_PREFIX)})
-            for key in (NULL_REAL_WEIGHT, NULL_REAL_SLOTS):
+            for key in (NULL_REAL_WEIGHT, NULL_REAL_SLOTS, NULL_AUX_TERM):
                 if key in stacked_router_stats:
                     router_metrics[key] = stacked_router_stats[key]
         router_metrics.update(final_gate_stats)
@@ -2371,10 +2414,10 @@ class Transformer(eqx.Module):
         per_token: Float[Array, "B S"],
         weight: Float[Array, "B S"],
         count: jax.Array,
-        real_weight: Float[Array, "L T"],
+        aux_term: Float[Array, "L T"],
     ) -> tuple[jax.Array, dict[str, jax.Array]]:
         """``null_aux_weight * sum_layers mean_t[w_t * R_t]`` (``NullAux``) from this step's per-token training loss
-        (stop-gradient; the cross-entropy plus its z-loss term) and the layers' per-token real-expert weight ``R``."""
+        (stop-gradient; the cross-entropy plus its z-loss term) and the layers' per-token ``R`` (``NullAuxSite``)."""
         cfg = self.config
         loss_t = jax.lax.stop_gradient(per_token).astype(jnp.float32)
         if cfg.null_aux == NullAux.INVLOSS:
@@ -2384,8 +2427,8 @@ class Transformer(eqx.Module):
             w = jnp.exp(-loss_t)
         w = weight * w
         w = jax.lax.stop_gradient(w / (jnp.sum(w) / count))
-        layers = real_weight.shape[0]
-        r = real_weight.reshape(layers, *per_token.shape)
+        layers = aux_term.shape[0]
+        r = aux_term.reshape(layers, *per_token.shape)
         per_layer = jnp.sum(w[None] * r, axis=(1, 2)) / count
         aux = cfg.null_aux_weight * jnp.sum(per_layer)
         metrics = {
@@ -2427,7 +2470,8 @@ class Transformer(eqx.Module):
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(OUTSTAT_PREFIX)}
-        real_weight = router_metrics.pop(NULL_REAL_WEIGHT, None)
+        real_weight = router_metrics.pop(NULL_AUX_TERM, None)
+        router_metrics.pop(NULL_REAL_WEIGHT, None)
         router_metrics.pop(NULL_REAL_SLOTS, None)
         if self.config.null_aux == NullAux.NONE:
             real_weight = None
