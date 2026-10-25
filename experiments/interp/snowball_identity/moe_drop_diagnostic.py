@@ -18,9 +18,9 @@ it through the HF reload.
 Per arm, under ``<root>/<arm>/``:
 
 - ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records``
-  (validity-masked, with the backend's per-layer dispatch drops) and judged by ``precision_gate.evaluate``, the
-  gate's own code and thresholds (batch 8, pad multiple 64); ``gate.json`` holds the MoE settings, the drops and
-  per-device memory.
+  (validity-masked, with the backend's per-layer dispatch drops, gathered at vLLM's stored top-20 ids) and judged
+  by ``precision_gate.evaluate``, the gate's own code and thresholds (batch 8, pad multiple 64); ``gate.json`` holds
+  the MoE settings, the drops and per-device memory.
 - ``g1.json``: the G1 routes check (``route_proxy_check.check``) against the torch floor's pinned batch-1 top-6 and
   receipt.
 - ``item5.pt``: for the item-5 rows, the top-6 biased router logits at every position and layer from the same
@@ -89,7 +89,7 @@ from experiments.interp.snowball_identity.levanter_positions import (
     router_dot_dtypes,
     save_positions,
 )
-from experiments.interp.snowball_identity.logit_check import read, stored_sequences, write_json
+from experiments.interp.snowball_identity.logit_check import read, reference_ids, stored_sequences, write_json
 from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
 from experiments.interp.snowball_identity.precision_gate import (
     device_memory_report,
@@ -501,6 +501,20 @@ def device_memory() -> list[dict]:
     return device_memory_report(gather_host_rows(local_device_memory()))
 
 
+def score_positions(view, sequences: list[Sequence]) -> tuple[dict, dict]:
+    """The gate's scoring, as the LR0 gate scores: routes, and the log-prob at each of vLLM's stored top-20 ids, so
+    every vLLM token is measured."""
+    return positions_records(
+        view,
+        sequences,
+        BATCH,
+        PAD_MULTIPLE,
+        PAD_ID,
+        routes=True,
+        reference_ids=reference_ids(INPUTS.vllm, sequences),
+    )
+
+
 def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref, floor) -> dict:
     """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins."""
     started = time.time()
@@ -516,7 +530,7 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             "expert_mlp_combine_in_fp32": mlp.combine_in_fp32,
             "moe_implementation": mlp.implementation,
         }
-        records, dispatch = positions_records(view, sequences, BATCH, PAD_MULTIPLE, PAD_ID, routes=True)
+        records, dispatch = score_positions(view, sequences)
         dot_dtypes = router_dot_dtypes(view, jnp.bfloat16)
         g1 = route_proxy_check.check(records, floor["top6"], floor["receipt"])
         positions_path = prefix_join(out, "positions.pt")

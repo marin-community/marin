@@ -167,3 +167,17 @@ def test_router_top6_matches_the_scored_forward_routes():
     np.testing.assert_array_equal(routes, np.asarray(stats.routes))
     np.testing.assert_array_equal(ids[..., : config.num_experts_per_token], routes)
     assert (np.diff(values, axis=-1) <= 0).all()
+
+
+def test_scoring_gathers_at_the_stored_vllm_ids(monkeypatch):
+    seen = {}
+
+    def records(view, sequences, *args, **kwargs):
+        seen.update(args=args, kwargs=kwargs)
+        return {}, {}
+
+    monkeypatch.setattr(diag, "positions_records", records)
+    monkeypatch.setattr(diag, "reference_ids", lambda path, sequences: {"path": path, "count": len(sequences)})
+    diag.score_positions("view", ["a", "b"])
+    assert seen["args"] == (diag.BATCH, diag.PAD_MULTIPLE, diag.PAD_ID)
+    assert seen["kwargs"] == {"routes": True, "reference_ids": {"path": diag.INPUTS.vllm, "count": 2}}
