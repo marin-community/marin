@@ -28,6 +28,9 @@ def fixture_stream(tmp_path, monkeypatch):
     monkeypatch.setattr(jax, "device_count", lambda: 32)
     config = identity_sft_config(
         hosts=1,
+        moe_capacity_factor=4.0,
+        router_combine_fp32=True,
+        fp32_activations=True,
         dataset_uri="data",
         cache_uri="cache",
         output_uri=str(tmp_path),
