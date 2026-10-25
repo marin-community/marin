@@ -17,8 +17,10 @@ import numpy as np
 import pytest
 import torch
 from haliax import Axis
+from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import SnowballLMHeadModel
+from levanter.models import snowball
+from levanter.models.snowball import SnowballAttention, SnowballLMHeadModel
 
 from experiments.interp.snowball_identity import logit_check, torch_route_floor
 from experiments.interp.snowball_identity import moe_drop_diagnostic as diag
@@ -229,6 +231,7 @@ def test_launch_plan_binds_each_arm_receipt_and_xla_setting(tmp_path, capsys):
     assert plan["arm_order"] == list(diag.ARMS)
     for name, path, sha in args.arm_receipt:
         arm = plan["arms"][name]
+        assert arm["expected_resolved_attention_implementation"] == diag.RESOLVED_ATTENTION[name]
         assert (arm["runtime_receipt"], arm["runtime_receipt_sha256"]) == (path, sha)
         assert arm["xla_precision"] == diag.ARMS[name]["xla_precision"]
     assert plan["arms"]["torch-order-xla-default"]["XLA_FLAGS"] is None
@@ -252,6 +255,40 @@ def test_launch_refuses_a_missing_mismatched_or_old_receipt(tmp_path):
     wrong_sha = [[n, p, "0" * 64] for n, p, _ in _launch_args(tmp_path).arm_receipt]
     with pytest.raises(ValueError, match="differs from the reviewed receipt"):
         diag.launch_job(_launch_args(tmp_path, wrong_sha))
+
+
+@pytest.mark.parametrize("backend", ["gpu", "cpu"])
+@pytest.mark.parametrize("configured", [None, "torch_order"])
+def test_resolved_attention_is_what_the_module_passes(monkeypatch, backend, configured):
+    """``resolved_attention`` names the implementation the Snowball attention module hands to ``attention``."""
+    seen = []
+
+    def record(q, k, v, mask, *, implementation=None):
+        seen.append(implementation)
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+
+    config = dataclasses.replace(CONFIG, attention_implementation=configured)
+    monkeypatch.setattr(snowball, "attention", record)
+    monkeypatch.setattr(jax, "default_backend", lambda: backend)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        attn = SnowballAttention.init(config, key=jax.random.key(3))
+        x = jax.random.normal(jax.random.key(4), (1, 6, config.hidden_dim)).astype(attn.w_q.dtype)
+        attn(x, AttentionMask(is_causal=True, sliding_window=4))
+    assert seen == [diag.resolved_attention(configured)]
+
+
+def test_an_arm_fails_when_the_module_selects_another_attention(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    assert diag.check_resolved_attention("fa4-no-excess-precision", None) == "gpu_fa4_cute"
+    assert diag.check_resolved_attention("torch-order-xla-default", "torch_order") == "torch_order"
+    with pytest.raises(ValueError, match="needs 'gpu_fa4_cute'"):
+        diag.check_resolved_attention("fa4-no-excess-precision", "torch_order")
+    with pytest.raises(ValueError, match="needs 'torch_order'"):
+        diag.check_resolved_attention("torch-order-no-excess-precision", None)
+    monkeypatch.setattr(jax, "default_backend", lambda: "cpu")
+    with pytest.raises(ValueError, match="selects None"):
+        diag.check_resolved_attention("fa4-no-excess-precision", None)
+    assert set(diag.RESOLVED_ATTENTION) == set(diag.ARMS)
 
 
 def test_each_arm_gets_its_own_xla_flags(monkeypatch):

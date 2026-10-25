@@ -12,6 +12,9 @@ expert-axis size: dropless), FP32 combine and FP32 activations, set through the 
 - ``torch-order-no-excess-precision`` (b): ``torch_order`` attention, ``--xla_allow_excess_precision=false``.
 - ``fa4-no-excess-precision`` (c): the module's own attention (gpu_fa4_cute), ``--xla_allow_excess_precision=false``.
 
+The arm's process resolves the implementation the module selects on its backend and fails before scoring unless it
+is ``RESOLVED_ATTENTION``'s; gate.json records it as ``resolved_attention_implementation``.
+
 Each arm runs in its own process, started with the arm's ``XLA_FLAGS``; the process checks the setting before XLA's
 backend starts (``require_xla_precision``). Its runtime recipe is derived there (``configure_precision_runtime``) and
 must equal the arm's reviewed runtime receipt (schema 6), passed at launch with its sha256; the model is then loaded
@@ -151,6 +154,12 @@ ARMS = {
     "fa4-no-excess-precision": _RECIPE | {"attention_implementation": None, "xla_precision": "no_excess_precision"},
 }
 """The recipe settings each arm's reviewed runtime receipt must give."""
+RESOLVED_ATTENTION = {
+    "torch-order-xla-default": "torch_order",
+    "torch-order-no-excess-precision": "torch_order",
+    "fa4-no-excess-precision": "gpu_fa4_cute",
+}
+"""The attention implementation each arm's module must select on the job's GPUs (``resolved_attention``)."""
 PREFERENCE = ("fa4-no-excess-precision", "torch-order-xla-default", "torch-order-no-excess-precision")
 """The coordinator's order when more than one arm meets the rule."""
 L0_VLLM_FLOOR = 0.97
@@ -594,9 +603,26 @@ def peak_memory(memory: list[dict]) -> list[dict]:
     ]
 
 
+def resolved_attention(configured: str | None) -> str | None:
+    """The implementation ``SnowballAttention`` passes to ``attention`` for ``configured`` on this backend (the same
+    selection as snowball.py:507-509)."""
+    if configured is None and jax.default_backend() == "gpu":
+        return "gpu_fa4_cute"
+    return configured
+
+
+def check_resolved_attention(name: str, configured: str | None) -> str | None:
+    """The arm's resolved implementation; an arm whose module would select another one fails before scoring."""
+    resolved = resolved_attention(configured)
+    if resolved != RESOLVED_ATTENTION[name]:
+        raise ValueError(f"{name}: the module selects {resolved!r}, the arm needs {RESOLVED_ATTENTION[name]!r}")
+    return resolved
+
+
 def recipe_record(view) -> dict:
     return {
         "attention_implementation": view.config.attention_implementation,
+        "resolved_attention_implementation": resolved_attention(view.config.attention_implementation),
         "xla_precision": xla_precision_in_process(),
         "XLA_FLAGS": os.environ.get("XLA_FLAGS"),
     }
@@ -811,6 +837,7 @@ def arm_phase(root: str, name: str, receipt_path: str, receipt_sha256: str) -> N
     load_started = time.time()
     view, mesh, trainer_config = load_view(config, receipt, json.loads(config_bytes))
     load_seconds = round(time.time() - load_started, 1)
+    check_resolved_attention(name, view.config.attention_implementation)
     result = run_arm(
         name,
         view,
@@ -945,6 +972,7 @@ def launch_job(args) -> None:
             name: {
                 **ARMS[name],
                 "XLA_FLAGS": xla_precision_env(ARMS[name]["xla_precision"]).get("XLA_FLAGS"),
+                "expected_resolved_attention_implementation": RESOLVED_ATTENTION[name],
                 "runtime_receipt": paths[name],
                 "runtime_receipt_sha256": sha,
             }
