@@ -141,6 +141,23 @@ def test_unmatched_arms_are_refused():
         m16_gate.decide(GATE, BASE, other, byte_unchanged=False)
 
 
+def test_serve_changes_are_refused():
+    files = {name: name for name in m16_gate.SHARED_MODEL_FILES} | {"config.json": "base"}
+    serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
+    base = {**BASE, "provenance": {**serve, "file_sha256": files}}
+    own_weights = {**STRONG, "provenance": {**serve, "file_sha256": {**files, "config.json": "candidate"}}}
+    assert m16_gate.decide(GATE, base, own_weights, byte_unchanged=False)["label"] == "NOT_TOO_WEAK"
+    changed = [
+        {**serve, "serve_args": ["--dtype", "float16"], "file_sha256": files},
+        {**serve, "vllm": {"source_commit": "b"}, "file_sha256": files},
+        {**serve, "engine_log_markers": {"m": False}, "file_sha256": files},
+        {**serve, "file_sha256": {**files, "chat_template.jinja": "other"}},
+    ]
+    for provenance in changed:
+        with pytest.raises(ValueError, match=r"not matched|marker"):
+            m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)
+
+
 def test_bf16_byte_unchanged():
     names = [f"model.layers.{i}.w" for i in range(476)] + ["model.layers.0.mlp.router.bias"]
     reference = {"tensors": {n: {"sha256": n, "dtype": "bfloat16"} for n in names}}

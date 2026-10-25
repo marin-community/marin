@@ -320,12 +320,31 @@ def too_weak_value(
     return None if byte_unchanged is None and not weak_signal else weak_signal or bool(byte_unchanged)
 
 
+# Model files that must be identical across arms; the weights, config.json and index are the candidate's own.
+SHARED_MODEL_FILES = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
+
+
 def check_matched(base: dict, candidate: dict) -> None:
+    """Refuse to compare arms scored with different code, inputs or serves."""
     if base["arm"] != "baseline" or candidate["arm"] != "candidate":
         raise ValueError("decide takes the baseline receipt, then the candidate receipt")
-    for key in ("scorer", "sampling", "native_plain_template_sha256", "prompt_sha256"):
-        if base[key] != candidate[key]:
+    for key in ("scorer", "sampling", "native_plain_template_sha256", "prompt_sha256", "amendment_sha256"):
+        if base.get(key) != candidate.get(key):
             raise ValueError(f"Arms are not matched on {key}")
+    base_prov, cand_prov = base.get("provenance", {}), candidate.get("provenance", {})
+    for key in ("serve_args", "vllm", "engine_log_markers"):
+        if base_prov.get(key) != cand_prov.get(key):
+            raise ValueError(f"Arms are not matched on the serve: {key}")
+    markers = cand_prov.get("engine_log_markers")
+    if markers is not None and not all(markers.values()):
+        raise ValueError("An engine log marker is missing from the serve")
+    base_files, cand_files = base_prov.get("file_sha256"), cand_prov.get("file_sha256")
+    if (base_files is None) != (cand_files is None):
+        raise ValueError("Only one arm records model file hashes")
+    if base_files is not None:
+        for name in SHARED_MODEL_FILES:
+            if base_files[name] != cand_files[name]:
+                raise ValueError(f"Arms are not matched on the model file {name}")
 
 
 def deciding_families(improvement: dict[str, float], too_weak: bool | None, threshold: float) -> list[str]:
