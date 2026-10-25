@@ -53,7 +53,8 @@ REL_WINDOWS, IRR_WINDOWS, FORCE_WINDOWS = 12, 8, 4
 NEXT = 8
 H_SIZE = 5
 TOP_FIRINGS = 64
-MULTS = (2.0, 5.0, 10.0)
+MULTS = (2.0, 5.0, 10.0, 30.0)
+CTL_MULTS = (5.0, 10.0, 30.0)
 GEN_PROMPT, GEN_NEW, GEN_UNITS = 112, 16, 3  # prompt + new = 128 (the Inkling bias block)
 CONTEXTS = 12
 CLASSES = ("digit", "punctuation", "whitespace", "function_word", "word_start", "alpha_cont")
@@ -339,7 +340,13 @@ def unit_groups(u: dict, a_b: np.ndarray, tok_b: np.ndarray, rng) -> list[list[d
         for m in MULTS:
             g.append(dict(kind=f"rel_x{m:g}", **at, **base, unit=u["unit"], mult=m, d=(m - 1) * act))
         g.append(dict(kind="rel_p99", **at, **base, unit=u["unit"], mult=0.0, add=p99, d=p99 - act))
-        g.append(dict(kind="ctl_rel_x5", **at, **base, unit=ctl_unit, add=4 * act * ratio, d=4 * act))
+        for m in CTL_MULTS:
+            d = (m - 1) * act
+            g.append(dict(kind=f"ctl_rel_x{m:g}", **at, **base, unit=ctl_unit, add=d * ratio, d=d))
+        # Every position of the window up to t where the unit is routed (x10), and the control unit's same edit.
+        every = {**at, "pos_lo": 0}
+        g.append(dict(kind="all_x10", **every, **base, unit=u["unit"], mult=10.0, d=9 * act))
+        g.append(dict(kind="ctl_all_x10", **every, **base, unit=ctl_unit, mult=10.0, d=9 * act))
         g.append(dict(kind="ctl_rel_p99", **at, **base, unit=ctl_unit, add=(p99 - act) * ratio, d=p99 - act))
         groups.append(g)
     for w, t in _positions(a2d, (a2d == 0) & ~trig, IRR_WINDOWS, rng):
@@ -544,7 +551,7 @@ def main() -> None:
                     up=[(vocab[int(x)], float(dl[x])) for x in np.argsort(-dl)[:5]],
                     up_ids=[int(x) for x in np.argsort(-dl)[:20]],
                 )
-                if r["kind"] in ("rel_x10", "rel_p99", "irr_p99", "frc_p99", "rel_x5"):
+                if r["kind"] in ("rel_x10", "rel_x30", "rel_p99", "irr_p99", "frc_p99", "rel_x5", "all_x10"):
                     rec["before"] = topk(lp_ref, vocab)
                     rec["after"] = topk(lp, vocab)
                     w, t = r["w"], r["t"]
