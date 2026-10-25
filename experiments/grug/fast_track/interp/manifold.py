@@ -293,7 +293,7 @@ def structure_report(rows: np.ndarray, ctx: dict[str, np.ndarray], tok: np.ndarr
 def make_pass_a(layers: tuple[int, ...]):
     @jax.jit
     def run(model, tokens, seg, cls_ids, pos):
-        tr = forward.trace_forward(model, tokens, seg, forward.no_ablation())
+        tr = forward.replicate(forward.trace_forward(model, tokens, seg, forward.no_ablation()))
         cls_flat = cls_ids[tokens.reshape(-1)]
         out = []
         for i in layers:
@@ -312,7 +312,7 @@ def make_pass_b(layers: tuple[int, ...], sel_experts: dict[int, np.ndarray]):
 
     @jax.jit
     def run(model, tokens, seg):
-        tr = forward.trace_forward(model, tokens, seg, forward.no_ablation())
+        tr = forward.replicate(forward.trace_forward(model, tokens, seg, forward.no_ablation()))
         out = []
         for i in layers:
             lay = tr["layers"][i]
@@ -525,11 +525,11 @@ def make_eval(model):
             sel_mask=jnp.ones((forward.NUM_LAYERS, t), bool), sel_override=sel_override
         )
         tr = forward.trace_forward(model, tokens, seg, forward.no_ablation(), routing=routing, act_map=act_map)
-        return tr["loss"]
+        return forward.replicate(tr["loss"])
 
     @jax.jit
     def clean(model, tokens, seg):
-        tr = forward.trace_forward(model, tokens, seg, forward.no_ablation())
+        tr = forward.replicate(forward.trace_forward(model, tokens, seg, forward.no_ablation()))
         return tr["loss"], jnp.stack([lay["selected"] for lay in tr["layers"]])
 
     return run, clean
