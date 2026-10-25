@@ -127,7 +127,3 @@ def ray_init_for_tests():
     env_vars["NVTE_FUSED_ATTN"] = "0"
     env_vars["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH")
     ray.init(runtime_env={"env_vars": env_vars})
-
-
-# TODO: this is kind of messy. All these information are inside cfg but we are passing them in
-# again. Make a global get_test_config function that is parametrized.
