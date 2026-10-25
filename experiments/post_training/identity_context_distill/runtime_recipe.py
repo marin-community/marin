@@ -30,6 +30,11 @@ def check_runtime_config(config: TrainLmConfig, source: dict) -> None:
         raise ValueError("Only the exact router_bias FP32 compute exception is permitted")
     if config.model.router_dot_fp32 and overrides != {"router_bias": "float32"}:
         raise ValueError("FP32 router dot requires native FP32 router biases")
+    expert = config.trainer.mesh.axes["expert"]
+    if config.model.moe_capacity_factor != expert:
+        raise ValueError(
+            f"The MoE must be dropless: capacity factor {config.model.moe_capacity_factor}, expert axis {expert}"
+        )
 
 
 def configure_precision_runtime(
@@ -78,10 +83,14 @@ def configure_precision_runtime(
     )
     check_runtime_config(runtime, source)
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "source_metadata": source_metadata_receipt(config_bytes, generation_bytes),
         "runtime_model_config": asdict(runtime.model),
         "compute_dtype_overrides": overrides,
+        "moe_capacity": {
+            "factor": runtime.model.moe_capacity_factor,
+            "expert_axis": runtime.trainer.mesh.axes["expert"],
+        },
         "native_export_config_overrides": source_export_overrides(source),
         "routing_reference": {"path": rounding_path, "sha256": rounding_sha256},
         "trigger": {"bias_only": bias, "dot_only": dot},

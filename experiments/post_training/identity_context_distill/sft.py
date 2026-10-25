@@ -32,6 +32,7 @@ BASE_MODEL = "s3://marin-rno2a/marin/models/marin-snowball-67b-a2b-v0.1-adc0078a
 NATIVE_TEMPLATE_SHA256 = "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de"
 SEQUENCE_LENGTH = 8192
 GLOBAL_BATCH_SIZE = 8
+EXPERT_AXIS = 4
 logger = logging.getLogger(__name__)
 
 EXPORT_CONFIG_ALIASES = {
@@ -133,7 +134,7 @@ def check_source_metadata_receipt(expected: dict, config_bytes: bytes, generatio
 
 
 def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
-    """Allow only the runtime router-dot exception to differ from the source model.
+    """Allow only the runtime router settings (FP32 dot, MoE capacity) to differ from the source model.
 
     This checks architecture, not authorization of the precision exception. The
     pre-update routing gate must separately verify the measured trigger.
@@ -144,6 +145,7 @@ def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
         reference_checkpoint=BASE_MODEL,
         tokenizer=BASE_MODEL,
         router_dot_fp32=expected.router_dot_fp32,
+        moe_capacity_factor=expected.moe_capacity_factor,
     )
     if actual != expected:
         raise ValueError("Runtime model architecture differs from the native source")
@@ -163,6 +165,7 @@ def check_runtime_recipe(config: TrainLmConfig, *, source_config: dict, source_g
     check_runtime_model(config.model, source_config)
     if config.model.router_dot_fp32:
         assert trainer.compute_dtype_overrides == {"router_bias": "float32"}
+    assert config.model.moe_capacity_factor == trainer.mesh.axes["expert"]  # dropless (ruled 2026-10-25)
     assert config.use_hf_model_config is True
     assert config.hf_generation_eos_token_ids == source_generation_eos(source_config, source_generation_config)
     assert trainer.frozen_parameter_storage == FrozenParameterStorage.NATIVE
@@ -215,6 +218,7 @@ def identity_sft_config(
     hosts: int,
     source_config: dict,
     source_generation_config: dict,
+    moe_capacity_factor: float,
     stop_after_updates: int = 16,
     resume_checkpoint: str | None = None,
 ) -> TrainLmConfig:
@@ -229,6 +233,8 @@ def identity_sft_config(
         hosts: Physical host count: four H100 hosts, or one slice for CPU tests.
         source_config: Parsed config.json from the pinned native source, not Snowball defaults.
         source_generation_config: Parsed source generation_config.json with the approved EOS list.
+        moe_capacity_factor: Expert-parallel capacity; must equal the expert-axis size (4), so the MoE is
+            dropless in the gate and in training, as vLLM is.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
         resume_checkpoint: Committed native step directory. Required for continuation.
 
@@ -247,10 +253,12 @@ def identity_sft_config(
         raise ValueError("64 updates requires a committed native checkpoint; no HF reset")
     if not all((dataset_uri, cache_uri, output_uri, run_id)):
         raise ValueError("Dataset, cache, output, and run identity must be explicit")
+    if moe_capacity_factor != EXPERT_AXIS:
+        raise ValueError(f"The recipe is dropless: moe_capacity_factor must be {EXPERT_AXIS}, got {moe_capacity_factor}")
 
     output_uri = output_uri.rstrip("/")
     mesh = MeshConfig(
-        axes={"data": 2, "expert": 4, "replica": 1, "model": 1} | ({"context": 4} if hosts == 1 else {}),
+        axes={"data": 2, "expert": EXPERT_AXIS, "replica": 1, "model": 1} | ({"context": 4} if hosts == 1 else {}),
         dcn_axes={"replica_dcn": 1} | ({"context": 4} if hosts == 4 else {}),
         compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
         param_mapping={"embed": ["data", "context"]},
@@ -271,7 +279,7 @@ def identity_sft_config(
             train_weights={"identity": 1.0},
         ),
         data_seed=seed,
-        model=source_model_config(source_config),
+        model=replace(source_model_config(source_config), moe_capacity_factor=moe_capacity_factor),
         train_seq_len=SEQUENCE_LENGTH,
         initialize_from_hf=BASE_MODEL,
         use_hf_model_config=True,
