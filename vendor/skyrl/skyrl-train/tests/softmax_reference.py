@@ -1,8 +1,16 @@
 import math
 from collections.abc import Callable
 from decimal import Decimal, localcontext
+from typing import NamedTuple
 
 import torch
+
+
+class SoftmaxReference(NamedTuple):
+    logprobs: torch.Tensor
+    entropy: torch.Tensor
+    logprob_gradients: torch.Tensor
+    entropy_gradients: torch.Tensor
 
 
 def numerical_rows(vocab: int, dtype: torch.dtype, device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
@@ -23,7 +31,7 @@ def numerical_rows(vocab: int, dtype: torch.dtype, device: str = "cpu") -> tuple
     return torch.stack(rows).unsqueeze(0).to(device=device, dtype=dtype), torch.tensor([targets], device=device)
 
 
-def decimal_reference(logits: torch.Tensor, targets: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def decimal_reference(logits: torch.Tensor, targets: torch.Tensor) -> SoftmaxReference:
     values = []
     entropies = []
     gradients = []
@@ -57,7 +65,7 @@ def decimal_reference(logits: torch.Tensor, targets: torch.Tensor) -> tuple[torc
                 )[inverse]
             )
     shape = logits.shape[:-1]
-    return (
+    return SoftmaxReference(
         torch.tensor(values, dtype=torch.float64).reshape(shape),
         torch.tensor(entropies, dtype=torch.float64).reshape(shape),
         torch.stack(gradients).reshape(logits.shape),

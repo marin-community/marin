@@ -19,6 +19,8 @@ from transformer_engine.pytorch.cross_entropy import parallel_cross_entropy
 
 from skyrl_train.distributed.megatron.stable_softmax import token_entropy, token_logprobs
 
+VOCAB_SIZE = 151936
+
 
 @torch.compile(dynamic=True)
 def _mul_reduce(a, b):
@@ -109,7 +111,7 @@ def _varied_measurement(stable, kind, grad, chunk_size):
     shapes = [(16, seq) for seq in (32, 40, 42, 48, 64, 80, 87, 90, 96, 128)]
     inputs = [
         (
-            torch.randn((batch, seq, 151936), dtype=torch.bfloat16, device="cuda", requires_grad=grad),
+            torch.randn((batch, seq, VOCAB_SIZE), dtype=torch.bfloat16, device="cuda", requires_grad=grad),
             torch.zeros((batch, seq), dtype=torch.long, device="cuda"),
         )
         for batch, seq in shapes
@@ -225,10 +227,10 @@ def main():
             args.output.write_text(json.dumps(result, indent=2))
             return
         for tokens in args.tokens:
-            logits = torch.randn((1, tokens, 151936), dtype=torch.bfloat16, device="cuda")
+            logits = torch.randn((1, tokens, VOCAB_SIZE), dtype=torch.bfloat16, device="cuda")
             targets = torch.zeros((1, tokens), dtype=torch.long, device="cuda")
             for grad, kind in cases:
-                row = {"tokens": tokens, "vocab": 151936, "dtype": "bfloat16", "grad": grad, "kind": kind}
+                row = {"tokens": tokens, "vocab": VOCAB_SIZE, "dtype": "bfloat16", "grad": grad, "kind": kind}
                 for stable in (False, True):
                     row["stable" if stable else "baseline"] = _measurement(
                         logits, targets, stable, kind, grad, chunk_size
