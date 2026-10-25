@@ -127,15 +127,13 @@ ROUTER_BIAS_DTYPES = {f"model.layers.{layer}.mlp.router.bias": "float32" for lay
 RUNTIME_RECEIPT_SHA256S = frozenset(
     {
         "565cf0b2e09b0e1d58b647b698364a04d41b80615b47f8e6e1dbc7167f0d8e9e",
-        "3f9cb13590b7c861af2b4eddb352ac8e0037eab775551aab140c2d29729e5fc2",
-        "38e993dfca09124d2a94e0958e742faffc5fccc7ae1a0fcc2c6bef73834746dd",
     }
 )
 DISPATCH_METRICS = ("moe_dropped", "moe_sender_dropped", "moe_receiver_dropped")
 
 
 def sft_runtime_receipt(receipt_bytes: bytes, receipt_sha256: str) -> dict:
-    """Require one of the three reviewed schema-6 candidate forwards."""
+    """Require the reviewed schema-6 arm-(a) forward."""
     if receipt_sha256 not in RUNTIME_RECEIPT_SHA256S:
         raise ValueError("SFT requires a reviewed schema-6 runtime receipt")
     receipt = approved_receipt(receipt_bytes, receipt_sha256)
@@ -147,12 +145,8 @@ def sft_runtime_receipt(receipt_bytes: bytes, receipt_sha256: str) -> dict:
         or model["fp32_activations"] is not True
     ):
         raise ValueError("SFT requires dropless dispatch, FP32 combine and FP32 activations")
-    if (model["attention_implementation"], receipt["xla_precision"]) not in {
-        ("torch_order", "default"),
-        ("torch_order", "no_excess_precision"),
-        (None, "no_excess_precision"),
-    }:
-        raise ValueError("SFT attention and XLA precision must match a reviewed candidate arm")
+    if (model["attention_implementation"], receipt["xla_precision"]) != ("torch_order", "default"):
+        raise ValueError("SFT attention and XLA precision must match arm (a)")
     return receipt
 
 
