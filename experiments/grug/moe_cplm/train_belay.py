@@ -141,7 +141,9 @@ def build_config(
     model_config = draccus.decode(model.GrugModelConfig, model_values)
     optimizer = source["optimizer"]
     optimizer["type"] = "grug_fast_track_muonh_v1"
-    heuristic = MoeHeuristic().build_optimizer_config(num_train_steps=steps, batch_size=16, hidden_dim=width, seq_len=8192)
+    heuristic = MoeHeuristic().build_optimizer_config(
+        num_train_steps=steps, batch_size=16, hidden_dim=width, seq_len=8192
+    )
     for name in ("learning_rate", "adam_lr", "epsilon", "beta2"):
         optimizer[name] = getattr(heuristic, name)
     outer = source["trainer"]

@@ -25,7 +25,8 @@ Classes depend only on the frozen tokenizer. Decode byte-level BPE pieces,
 strip leading ASCII spaces then underscores, and lowercase nonempty ASCII
 alphanumeric strings containing a letter. Other pieces are singletons. A class
 has at most 12 members; a larger class raises an error. The launcher records a
-hash of both tables alongside the tokenizer hashes in `tokenizer_identity.json`.
+hash of both tables in `case-classes.json` and checks the tokenizer hashes
+against `tokenizer_identity.json`.
 
 Compared with ordinary CPLM, Plus adds `d² + 2d + 1` parameters (263,169 at
 d512, 591,361 at d768). It adds one predecessor projection and at most 12
@@ -40,6 +41,8 @@ reduction costs. It does not implement generation or KV-cache decoding.
 
 These are historical native-training results recovered on 2026-10-25, with
 seed 0, S=8192, Llama-3.1 vocabulary 128256 and the frozen July data mixture.
+The eight completed endpoints have matching W&B steps and GCS
+`final_eval_done.json` markers.
 They are distinct from the later Belay Ckpt 1 reproduction with vocabulary
 16384. Paloma and Uncheatable columns are macro BPB, lower is better.
 
@@ -119,6 +122,8 @@ uv run pytest -n 0 experiments/grug/moe_cplm/test_head.py \
 The dense oracle checks normalization, target NLL, all parameter gradients,
 causality and document isolation. CPU checks use the dense vocabulary path;
 they do not validate TPU compilation, throughput or checkpoint restoration.
+All 11 numerical/tokenizer tests passed on remote CPU with Python 3.12.11 and
+JAX 0.11.1. No optimizer updates were executed for this PR's checks.
 
 Research links: [predecessor keys](https://github.com/WhenWen/astra-d8-research/issues/230),
 [case-class emissions](https://github.com/WhenWen/astra-d8-research/issues/220),
