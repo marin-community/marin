@@ -1236,6 +1236,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = _init_state(model_key)
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        restored_step = int(state.step)
+        levanter.tracker.log_summary({"execution/initial_step": restored_step})
+        logger.info("Training state ready at optimizer step %d", restored_step)
 
         train_dataset = build_train_dataset(
             config.data,
@@ -1416,7 +1419,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
         last_ready_time: float | None = None
-        useful_mfu = UsefulMfuWindows.create(config)
+        useful_mfu = UsefulMfuWindows.create(config, initial_step=restored_step)
 
         def finish_step(rec: "_PendingStep", step_state: GrugTrainState | None) -> None:
             """Wait for ``rec``'s step and do its host work. With ``step_state`` (the state after the step, not yet

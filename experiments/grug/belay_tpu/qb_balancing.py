@@ -37,7 +37,7 @@ def bincount_upper_quantile(
     """
     if (
         jax.default_backend() == "tpu"
-        and s_local.shape == (32768, 384)
+        and s_local.shape in ((32768, 384), (16384, 384))
         and s_local.dtype == jnp.float32
         and num_experts == 384
         and n_bins == 10000

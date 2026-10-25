@@ -62,7 +62,7 @@ class UsefulMfuWindows:
     """Opt-in instrumentation; never changes parameters, gradients or batches."""
 
     @classmethod
-    def create(cls, config):
+    def create(cls, config, *, initial_step=0):
         if os.environ.get("BELAY_MEASURE_MFU") != "1":
             return None
         model = config.model
@@ -70,6 +70,9 @@ class UsefulMfuWindows:
         # Rematerialization changes storage/extra execution, not useful model FLOPs.
         # Its extra execution remains included in the measured duration.
         model_dict["attn_res_remat_attention"] = False
+        # Local-token execution changes transport and rounding, not the frozen
+        # model's useful FLOP count. Preserve the pre-backend configuration hash.
+        model_dict.pop("moe_local_gathered_experts", None)
         model_json = json.dumps(model_dict, sort_keys=True, separators=(",", ":"))
         if (
             hashlib.sha256(model_json.encode()).hexdigest() != MODEL_CONFIG_SHA256
@@ -83,9 +86,10 @@ class UsefulMfuWindows:
             or os.environ.get("GRUG_SKIP_OPTIMIZER")
         ):
             raise ValueError("Useful MFU measurement requires the frozen Ckpt 1 recipe on v4-32 or v4-64")
-        return cls()
+        return cls(initial_step=initial_step)
 
-    def __init__(self):
+    def __init__(self, *, initial_step=0):
+        self.window_starts = tuple(initial_step + offset for offset in WINDOW_STARTS)
         self.started = None
         self.first_step = None
         self.records = []
@@ -96,7 +100,7 @@ class UsefulMfuWindows:
             file.write(json.dumps(record) + "\n")
 
     def begin_if_due(self, step, state):
-        if step not in WINDOW_STARTS:
+        if step not in self.window_starts:
             return
         if self.started is not None:
             raise RuntimeError("Overlapping MFU windows")

@@ -17,12 +17,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-prefix", required=True)
     parser.add_argument("--reference-step1")
+    parser.add_argument("--update-steps", type=int, default=2)
     parser.add_argument("--first-port", type=int, required=True)
     parser.add_argument(
-        "--phases", nargs="+", choices=(*_DEFAULT_PHASES, "saved-ce", "routing", "saved-output"), default=_DEFAULT_PHASES
+        "--phases",
+        nargs="+",
+        choices=(*_DEFAULT_PHASES, "saved-ce", "routing", "saved-output", "local-experts"),
+        default=_DEFAULT_PHASES,
     )
     args = parser.parse_args()
-    if any(name in args.phases for name in ("source", "qb", "routing", "saved-output")) and not args.reference_step1:
+    if (
+        any(name in args.phases for name in ("source", "qb", "routing", "saved-output", "local-experts"))
+        and not args.reference_step1
+    ):
         parser.error("--reference-step1 is required for full-update comparisons")
     module_prefix = "experiments.grug.belay_tpu."
     reference = ["--reference-step1", args.reference_step1]
@@ -31,6 +38,7 @@ def main():
         "qb": ("belay_ckpt1_tpu_update_check", reference),
         "routing": ("belay_ckpt1_tpu_update_check", [*reference, "--routing-ops"]),
         "saved-output": ("belay_ckpt1_tpu_update_check", [*reference, "--saved-output"]),
+        "local-experts": ("belay_ckpt1_tpu_update_check", [*reference, "--local-experts", "--routing-ops"]),
         "transport": ("transport_kernel_check", []),
         "kda-tile": ("kda_tile_check", []),
         "saved-moe": ("saved_moe_check", []),
@@ -40,6 +48,8 @@ def main():
     failed = False
     for index, name in enumerate(args.phases):
         module, extra_args = phases[name]
+        if module == "belay_ckpt1_tpu_update_check":
+            extra_args = [*extra_args, "--update-steps", str(args.update_steps)]
         phase_output = output / name
         phase_output.mkdir(parents=True, exist_ok=True)
         environment = {

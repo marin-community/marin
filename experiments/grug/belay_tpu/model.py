@@ -71,6 +71,7 @@ from experiments.grug.belay_tpu.key_offset import (
     partial_key_offset,
     shifted_channels,
 )
+from experiments.grug.belay_tpu.local_experts import gathered_expert_mlp
 from experiments.grug.belay_tpu.qb_balancing import qb_beta_hist
 from experiments.grug.belay_tpu.router_metrics import (
     local_routing_stats,
@@ -944,6 +945,8 @@ class GrugModelConfig:
     mxfp8_fused_grad_quant: bool = False
     """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
+    moe_local_gathered_experts: bool = False
+    """Keep tokens local and gather sharded expert weights; retain sixteen capacity pools."""
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
@@ -3718,6 +3721,25 @@ def _run_expert_bank(
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
     ``overlap`` output when given. ``moe_drop_renorm`` also asks the backend for the per-slot keep mask
     (``MoeDispatchCounts.assignment_keep``)."""
+    if cfg.moe_local_gathered_experts and em.implementation == "ragged_all_to_all":
+        if (
+            em.w_gate is not None
+            or not cfg.moe_ungated_relu2
+            or not cfg.moe_ungated_kernel
+            or cfg.moe_drop_renorm
+            or cfg.fp8_recipe != Fp8Recipe.NONE
+            or overlap is not None
+            or cfg.moe_serial_pair
+        ):
+            raise ValueError("Local-token MoE currently supports the ungated BF16 Ckpt 1 recipe")
+        return gathered_expert_mlp(
+            routed_input,
+            selected,
+            combine_weights,
+            *_mixed_width_weights(cfg, em.w_up, em.w_down),
+            mesh=get_abstract_mesh(),
+            capacity_factor=em.capacity_factor,
+        )
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(

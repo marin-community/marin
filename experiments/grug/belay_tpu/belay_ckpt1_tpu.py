@@ -62,7 +62,14 @@ def settings(items: tuple[str, ...]) -> dict[str, str]:
 
 
 def build_config(
-    run_id: str, output_path: str, tokenizer: str, tpu: str, seed: int, *, expert_axis_size: int = 16
+    run_id: str,
+    output_path: str,
+    tokenizer: str,
+    tpu: str,
+    seed: int,
+    *,
+    expert_axis_size: int = 16,
+    local_experts: bool = False,
 ) -> train.GrugRunConfig:
     """Materialize the upstream recipe, changing only documented TPU bindings."""
     model_settings = settings((*belay_ckpt1.MODEL_SETTINGS, *belay_ckpt1.LADDER_MODEL_SETTINGS))
@@ -92,7 +99,9 @@ def build_config(
     )
     original = recipe.build_config(context)
     chips = {"v4-32": 16, "v4-64": 32}[tpu]
-    if expert_axis_size not in (8, 16):
+    if local_experts:
+        expert_axis_size = chips
+    elif expert_axis_size not in (8, 16):
         raise ValueError("Ckpt 1 supports the verified 8x2 or candidate 16x1 expert-pool layout")
     trackers = [
         JsonLoggerConfig(),
@@ -120,7 +129,8 @@ def build_config(
         original,
         model=dataclasses.replace(
             original.model,
-            moe_ragged_chunks=16 // expert_axis_size,
+            moe_ragged_chunks=max(1, 16 // expert_axis_size),
+            moe_local_gathered_experts=local_experts,
             # Save attention activations for backward.
             attn_res_remat_attention=False,
         ),
@@ -174,7 +184,10 @@ def validate_recipe(config: train.GrugRunConfig) -> None:
         raise ValueError("Expected one flat train cache and 23 evaluation components")
     if any(weight != 0 for name, weight in config.data.train_weights.items() if name != "train"):
         raise ValueError("Evaluation data entered the training mixture")
-    if config.trainer.expert_axis_size * model.moe_ragged_chunks != 16:
+    if model.moe_local_gathered_experts:
+        if config.trainer.model_axis_size != 1 or config.trainer.expert_axis_size not in (16, 32):
+            raise ValueError("Local-token Ckpt 1 requires 16 or 32 token shards with model axis one")
+    elif config.trainer.expert_axis_size * model.moe_ragged_chunks != 16:
         raise ValueError("Ckpt 1 must retain sixteen capacity pools of 24 experts")
 
 
@@ -185,6 +198,8 @@ def main() -> None:
     parser.add_argument("--tokenizer", default=TOKENIZER_ROOT)
     parser.add_argument("--tpu", choices=("v4-32", "v4-64"), default="v4-32")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--local-experts", action="store_true")
+    parser.add_argument("--resume-from", help="Restore complete training state; keep this run's checkpoints separate")
     parser.add_argument("--config-output", type=Path, required=True)
     parser.add_argument("--profile-start-step", type=int)
     parser.add_argument("--profile-steps", type=int, default=10)
@@ -193,7 +208,18 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     tokenizer = verified_tokenizer(args.tokenizer)
-    config = build_config(args.run_id, args.output_path, tokenizer, args.tpu, args.seed)
+    config = build_config(
+        args.run_id, args.output_path, tokenizer, args.tpu, args.seed, local_experts=args.local_experts
+    )
+    if args.resume_from:
+        trainer = config.trainer.trainer
+        trainer = dataclasses.replace(
+            trainer,
+            load_checkpoint=True,
+            load_checkpoint_path=[*trainer.checkpoint_search_paths(args.run_id), args.resume_from],
+            allow_partial_checkpoint=False,
+        )
+        config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, trainer=trainer))
     if args.profile_start_step is not None:
         if args.profile_start_step < 0 or args.profile_steps <= 0:
             parser.error("Profiling requires a nonnegative start step and a positive number of steps")

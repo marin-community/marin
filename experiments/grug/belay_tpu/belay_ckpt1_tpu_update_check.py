@@ -143,6 +143,10 @@ def batch_digest(batch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
+    parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
+    parser.add_argument(
+        "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
+    )
     parser.add_argument(
         "--compile-only", action="store_true", help="Compile the original saved-residual step; no updates"
     )
@@ -157,6 +161,8 @@ def main():
         "--saved-output", action="store_true", help="Compute routing gradients from saved expert returns"
     )
     args = parser.parse_args()
+    if args.update_steps < 2:
+        parser.error("Checkpoint continuation requires at least two consecutive updates")
     if args.source_qb:
         qb_balancing.bincount_upper_quantile = source_bincount_upper_quantile
     if args.routing_ops:
@@ -173,7 +179,7 @@ def main():
     run_id = os.environ["BELAY_RUN_ID"]
     output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
     tpu = os.environ.get("BELAY_TPU", "v4-64")
-    config = build_config(run_id, output_root, verified_tokenizer(), tpu, 0)
+    config = build_config(run_id, output_root, verified_tokenizer(), tpu, 0, local_experts=args.local_experts)
     if args.saved_output and config.model.moe_shared_placement == model.SharedExpertPlacement.OVERLAP:
         raise ValueError("Saved-output diagnostic requires the non-overlapped Ckpt 1 expert path")
     if args.compile_only:
@@ -198,6 +204,8 @@ def main():
             "diagnostic/source_qb_control": args.source_qb,
             "diagnostic/routing_ops": args.routing_ops,
             "diagnostic/saved_output": args.saved_output,
+            "diagnostic/local_experts": args.local_experts,
+            "diagnostic/requested_unique_updates": args.update_steps,
             "diagnostic/reference_step1": args.reference_step1,
         }
     )
@@ -215,7 +223,11 @@ def main():
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
-    mesh = compact_grug_mesh(expert_axis_size=16, replica_axis_size=1, model_axis_size=chips // 16)
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=1,
+        model_axis_size=config.trainer.model_axis_size,
+    )
     emit("full_update_check_start", rank=jax.process_index(), checkpoint_path=checkpoint_path)
 
     with set_mesh(mesh):
@@ -267,6 +279,8 @@ def main():
             tracker.current_tracker().finish()
             return
 
+        measurements = []
+
         def advance(current, batch, index, restored=False):
             started = time.perf_counter()
             next_leaves, metrics, _ = compiled(jax.tree.leaves(current), batch)
@@ -276,13 +290,16 @@ def main():
                 raise AssertionError(f"Non-finite full-shape loss: {loss}")
             metric_name = "diagnostic/restored_loss" if restored else "train/loss"
             tracker.log({metric_name: loss}, step=index)
+            elapsed = time.perf_counter() - started
+            if not restored:
+                measurements.append({"index": index, "seconds": elapsed, "loss": loss})
             emit(
                 "full_update_complete",
                 rank=jax.process_index(),
                 index=index,
                 restored=restored,
                 loss=loss,
-                seconds=time.perf_counter() - started,
+                seconds=elapsed,
             )
             return jax.tree.unflatten(tree, next_leaves), metrics
 
@@ -311,15 +328,37 @@ def main():
         restored2, restored_metrics2 = advance(restored1, restored_batch1, 2, restored=True)
         require_equal(state2, restored2, "complete next-step state after restore")
         require_equal(metrics2, restored_metrics2, "complete next-step metrics after restore")
+        del restored1, restored2
+        for index in range(2, args.update_steps):
+            state2, _ = advance(state2, next(iterator), index)
+        if args.update_steps > 5:
+            timings = [row["seconds"] for row in measurements if row["index"] >= 5]
+            emit(
+                "full_update_timing_window",
+                rank=jax.process_index(),
+                first_step=5,
+                last_step=args.update_steps - 1,
+                median_seconds=float(np.median(timings)),
+                mean_seconds=float(np.mean(timings)),
+                scope=(
+                    "Synchronized update plus loss logging; excludes batch loading and checkpoint I/O; "
+                    "not end-to-end MFU"
+                ),
+            )
         tracker.log_summary(
             {
                 "diagnostic/full_update_restore_pass": True,
-                "diagnostic/optimizer_evaluations": 3,
-                "diagnostic/unique_updates": 2,
+                "diagnostic/optimizer_evaluations": args.update_steps + 1,
+                "diagnostic/unique_updates": args.update_steps,
                 "diagnostic/checkpoint_path": checkpoint_path,
             }
         )
-        emit("full_update_restore_pass", rank=jax.process_index(), optimizer_evaluations=3, unique_updates=2)
+        emit(
+            "full_update_restore_pass",
+            rank=jax.process_index(),
+            optimizer_evaluations=args.update_steps + 1,
+            unique_updates=args.update_steps,
+        )
     tracker.current_tracker().finish()
 
 
