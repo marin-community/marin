@@ -14,6 +14,8 @@ rerun's torch dumps):
 - ``per_op``: every step its own jitted program, so each output is rounded to BF16 as torch eager rounds it.
 - ``isolated``: every step its own jitted program fed torch's input for that step, so each op's own error is measured
   without what came before it.
+- ``two_round`` / ``two_round_isolated``: ``per_op`` / ``isolated`` with both RMSNorms in vLLM's native-path order
+  (normalized value cast to BF16, then the weight multiply), and ``two_round`` vs ``composite`` at its outputs.
 
 Each mode runs at batch-1, on the gate grid holding the sequence, and on the rerun's 16 x 64 dump grid. The whole
 set runs twice, in two processes: with XLA's defaults, and with ``--xla_allow_excess_precision=false``.
@@ -73,6 +75,8 @@ CHECK_OPS = f"{T310}/diag-l0-ops-r1/check-ops.pt"
 CHECK_OPS_SHA256 = "0488704b205f0c9b844877f81418a61e5bf073ab7c9d7f2555ea3f1b20c73fb5"
 XLA_SETTINGS = {"default": None, "no_excess_precision": "--xla_allow_excess_precision=false"}
 GATED = ("down", "silu", "up", "sigmoid")
+MODES = ("composite", "per_op", "isolated", "two_round", "two_round_isolated")
+COMPOSITE_OUTPUTS = ("embed", "L0/attn_norm")
 NORMS = {
     "embed": ("embed_norm", "embed_gated_norm", "embed_rmsnorm", "embed_gated", "embed"),
     "attn": (
@@ -154,15 +158,29 @@ def trace(table: jax.Array, modules: dict, ids: jax.Array) -> dict:
     }
 
 
-def per_op(table: jax.Array, modules: dict, ids: jax.Array, torch_inputs: dict | None) -> dict[str, jax.Array]:
+def two_round_rms(rms: RMSNorm, x: jax.Array) -> jax.Array:
+    """vLLM's native (Python IR) RMSNorm order: the FP32-normalized value is cast to BF16, then multiplied by the
+    BF16 weight; two programs, so the first rounding cannot be fused away."""
+
+    def normalize(x, eps):
+        xf = x.astype(jnp.float32)
+        return (xf * jax.lax.rsqrt(jnp.mean(jnp.square(xf), axis=-1, keepdims=True) + eps)).astype(x.dtype)
+
+    normalized = _jit(normalize)(x, rms.eps)
+    return _jit(lambda n, w: n * w.astype(n.dtype))(normalized, rms.weight)
+
+
+def per_op(
+    table: jax.Array, modules: dict, ids: jax.Array, torch_inputs: dict | None, two_round: bool = False
+) -> dict[str, jax.Array]:
     """Every step its own program. With ``torch_inputs`` (op name -> torch's value), each step takes torch's input
-    for that step instead of this chain's previous output."""
+    for that step instead of this chain's previous output. ``two_round``: both RMSNorms round as ``two_round_rms``."""
     ops = {"embed_tokens": _jit(lambda t, i: t[i])(table, ids)}
     previous = "embed_tokens"
     for key, (_, _, rms_name, gated_name, out_name) in NORMS.items():
         rms, gated = modules[key]
         source = ops[previous] if torch_inputs is None else torch_inputs[previous]
-        ops[rms_name] = _jit(lambda m, x: m(x))(rms, source)
+        ops[rms_name] = two_round_rms(rms, source) if two_round else _jit(lambda m, x: m(x))(rms, source)
         source = ops[rms_name] if torch_inputs is None else torch_inputs[rms_name]
         steps = gated_steps(gated, source)
         ops |= {f"{gated_name}/{step}": steps[step] for step in GATED}
@@ -212,7 +230,7 @@ def phase(root: str, setting: str) -> None:
         StoragePath(prefix_join(root, f"{setting}-composite-hlo.txt")).write_bytes(hlo.encode())
         result["composite_hlo_sha256"] = hashlib.sha256(hlo.encode()).hexdigest()
         for kind, runs in grids(sequences, check).items():
-            found: dict[str, dict] = {mode: {} for mode in ("composite", "per_op", "isolated")}
+            found: dict[str, dict] = {mode: {} for mode in MODES}
             for grid, rows in runs:
                 ids = jnp.asarray(grid)
                 torch_inputs = None
@@ -221,15 +239,25 @@ def phase(root: str, setting: str) -> None:
                     torch_inputs = {
                         name: jnp.asarray(value[None], dtype=jnp.bfloat16) for name, value in reference[sid].items()
                     }
-                outputs = {"composite": composite(table, modules, ids), "per_op": per_op(table, modules, ids, None)}
+                outputs = {
+                    "composite": composite(table, modules, ids),
+                    "per_op": per_op(table, modules, ids, None),
+                    "two_round": per_op(table, modules, ids, None, two_round=True),
+                }
                 if torch_inputs is not None:
                     outputs["isolated"] = per_op(table, modules, ids, torch_inputs)
+                    outputs["two_round_isolated"] = per_op(table, modules, ids, torch_inputs, two_round=True)
                 for mode, ops in outputs.items():
                     host = {name: np.asarray(value.astype(jnp.float32)) for name, value in ops.items()}
                     for sid, row in rows.items():
                         n = len(reference[sid]["embed"])
                         found[mode][sid] = {name: value[row, :n] for name, value in host.items()}
             result[kind] = {mode: compare(by_sequence, reference) for mode, by_sequence in found.items() if by_sequence}
+            # The two-round RMSNorm's own effect at the composite's outputs.
+            result[kind]["two_round_vs_composite"] = compare(
+                {sid: {name: ops[name] for name in COMPOSITE_OUTPUTS} for sid, ops in found["two_round"].items()},
+                found["composite"],
+            )
     result["seconds"] = round(time.time() - started, 1)
     write_json(prefix_join(root, f"{setting}.json"), result)
 
@@ -294,6 +322,9 @@ def main() -> None:
             "composite (one program, as production)",
             "per_op (each step its own program)",
             "isolated (each step fed torch's input; batch-1 only)",
+            "two_round (per_op with vLLM's native RMSNorm order: cast to BF16, then the weight multiply)",
+            "two_round_isolated (batch-1 only)",
+            "two_round_vs_composite (embed, L0/attn_norm)",
         ],
         "grids": [
             "batch1",

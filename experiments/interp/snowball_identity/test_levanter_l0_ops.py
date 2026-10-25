@@ -91,3 +91,20 @@ def test_compare_counts_differing_elements():
     reference = {"check|a": {"embed": np.array([[1.0, 2.5]], dtype=np.float32)}}
     report = lev.compare(ours, reference)["embed"]
     assert (report["differing"], report["elements"], report["max_abs"]) == (1, 2, 0.5)
+
+
+def test_two_round_rms_rounds_before_the_weight_multiply(setup):
+    """vLLM's native order: round the normalized value to BF16, then multiply by the BF16 weight. It equals that
+    computed by hand, and differs from the production one-round RMSNorm on some elements."""
+    table, modules = setup
+    rms = modules["embed"][0]
+    x = table[jnp.asarray([[3, 7, 1, 9, 2, 11, 5]])]
+    xf = np.asarray(x, dtype=np.float32)
+    normalized = (xf / np.sqrt(np.mean(np.square(xf), axis=-1, keepdims=True) + rms.eps)).astype(jnp.bfloat16)
+    expected = (normalized.astype(np.float32) * np.asarray(rms.weight, dtype=np.float32)).astype(jnp.bfloat16)
+    two_round = np.asarray(lev.two_round_rms(rms, x))
+    assert np.array_equal(two_round.astype(np.float32), expected.astype(np.float32))
+    one_round = np.asarray(jax.jit(lambda m, x: m(x))(rms, x))
+    assert (two_round != one_round).any()
+    ops = lev.per_op(table, modules, jnp.asarray([[3, 7, 1]]), None, two_round=True)
+    assert jnp.array_equal(ops["embed_rmsnorm"], lev.two_round_rms(rms, table[jnp.asarray([[3, 7, 1]])]))
