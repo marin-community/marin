@@ -18,6 +18,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from haliax.nn.ragged_dot import _megablox_tiling
 from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
@@ -32,13 +33,13 @@ def _epilogue_gmm(
     saved_pre=None,
     *,
     backward=False,
-    tiling=(128, 128, 128),
+    tiling=_megablox_tiling,
     interpret=False,
 ):
     """Forward: (ReLU²(lhs @ rhs), pre); backward: (dpre, ReLU²(pre))."""
-    tm, tk, tn = tiling
     m, k = lhs.shape
     n = rhs.shape[1] if backward else rhs.shape[2]
+    tm, tk, tn = tiling(m, k, n) if callable(tiling) else tiling
     if m % tm or k % tk or n % tn:
         raise ValueError("This candidate requires whole M/K/N tiles")
     if lhs.dtype != rhs.dtype or lhs.dtype not in (jnp.float32, jnp.bfloat16):
@@ -128,7 +129,7 @@ def _epilogue_gmm(
     )(metadata, lhs, rhs, saved_pre)
 
 
-def make_saved_relu2_mlp(*, tiling=(128, 128, 128), interpret=False):
+def make_saved_relu2_mlp(*, tiling=_megablox_tiling, interpret=False):
     """Build y = ReLU²(x @ W_up) @ W_down with a six-matmul forward+VJP.
 
     Weights may be FP32 masters; GEMMs use x.dtype, weight gradients return in
