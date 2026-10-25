@@ -45,6 +45,7 @@ from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data.loader import DataLoader
 from levanter.data.text.datasets import LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
@@ -74,6 +75,7 @@ from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, apply_qb_betas
 from experiments.grug.moe_hero_ep.train import (
     _BATCH_AXES,
+    GrugTrainState,
     _apply_hero_ep_runtime_defaults,
     _loss_and_grads,
     build_train_dataset,
@@ -448,6 +450,65 @@ class Runner:
             "top_sequence": top_single["indices"][0],
             "leave_top_out": leave_out,
         }
+
+    def op_load_weights(self, cmd: dict) -> dict:
+        """Replace the probe's params and pending QB betas with another checkpoint's (read only)."""
+        probe = self.probe
+        path = cmd["checkpoint"]
+        # The checkpoint is one OCDBT store keyed by train-state field, so read it with a train-state
+        # template that names only the leaves we want; None fields are skipped.
+        template = GrugTrainState(
+            step=jax.ShapeDtypeStruct((), jnp.int32, sharding=NamedSharding(probe.mesh, P())),
+            params=restore_template_from(probe.params),
+            master_params=None,
+            opt_state=None,
+            ema_params=None,
+            pending_qb_betas=restore_template_from(probe.pending_qb_betas),
+        )
+        loaded = load_checkpoint(template, path, mesh=probe.mesh)
+        probe.params = loaded.params
+        probe.pending_qb_betas = loaded.pending_qb_betas
+        probe.restored_step = int(loaded.step)
+        probe.full_results.clear()
+        return {"checkpoint": path, "restored_step": probe.restored_step}
+
+    def op_swap(self, cmd: dict) -> dict:
+        """Slice gradient of (step, slice) with row ``seq`` replaced by row ``src_seq`` of (src_step, src_slice).
+
+        ``src_step`` of None leaves the batch unchanged and masks row ``seq`` out of the loss instead.
+        """
+        probe = self.probe
+        step, rack, seq = int(cmd["step"]), int(cmd["slice"]), int(cmd["seq"])
+        target = probe.batch(step, rack)
+        _, slice_denom, _, grads = probe.slice_grad(step, rack)
+        base = probe.norms(grads, 1.0)
+        del grads
+        out = {"step": step, "rack": rack, "seq": seq, "base_grad_total": base["grad/norm/total"]}
+        if cmd.get("src_step") is None:
+            indices = [i for i in range(RACK_BATCH) if i != seq]
+            out["removed"] = self._group_entry(step, rack, indices, slice_denom)
+            return out
+        source = probe.batch(int(cmd["src_step"]), int(cmd["src_slice"]))
+        src_seq = int(cmd["src_seq"])
+        rows = jnp.arange(RACK_BATCH)
+
+        @jax.jit
+        def splice(dst, src):
+            def leaf(x, y):
+                row = y[src_seq]
+                mask = (rows == seq).reshape((RACK_BATCH,) + (1,) * (x.ndim - 1))
+                return jnp.where(mask, row[None], x)
+
+            return jax.tree.map(leaf, dst, src)
+
+        key = (step, rack)
+        probe._batch_cache[key] = splice(target, source)
+        try:
+            out["swapped"] = self._group_entry(step, rack, list(range(RACK_BATCH)), slice_denom)
+            out["swapped_only"] = self._group_entry(step, rack, [seq], slice_denom)
+        finally:
+            probe._batch_cache[key] = target
+        return out
 
     def op_dump(self, cmd: dict) -> dict:
         step, rack = int(cmd["step"]), int(cmd["slice"])
