@@ -89,6 +89,11 @@ def _restore_bwd(order, gradient):
 restore_local.defvjp(_restore_fwd, _restore_bwd)
 
 
+def combine_local(rows, order, inverse, weights):
+    slots = restore_local(rows, order, inverse).reshape(*weights.shape, rows.shape[-1])
+    return (slots.astype(jnp.float32) * weights[..., None]).sum(axis=1).astype(rows.dtype)
+
+
 def _tiling(m, k, n):
     return math.gcd(m, 128), math.gcd(k, 256), math.gcd(n, 256)
 
@@ -126,9 +131,8 @@ def local_expert_mlp(x, selected, combine, w_up, w_down, *, accepted_counts):
     rows = jnp.where(active[:, None], dispatch_local(x, order, inverse, topk), 0)
     outputs = expert_mlp(rows, w_up, w_down, physical_counts, accepted_counts.sum())
     outputs = jnp.where(active[:, None], outputs, 0)
-    slots = restore_local(outputs, order, inverse).reshape(tokens, topk, w_down.shape[-1])
     # Match the source combine's FP32 sum; rejected routes have zero outputs.
-    result = (slots.astype(jnp.float32) * combine[..., None]).sum(axis=1).astype(x.dtype)
+    result = combine_local(outputs, order, inverse, combine)
     return result, keep.reshape(tokens, topk)
 
 

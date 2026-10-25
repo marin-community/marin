@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.routing_tpu import (
     accepted_assignments_cutoff,
     permute_assignment_weights_sort,
@@ -70,3 +71,42 @@ def test_scalar_sorts_preserve_float_payloads_in_both_directions():
     restored_values = jax.jit(restore_assignment_scalars_sort)(sorted_values, permutation)
     np.testing.assert_array_equal(jax.lax.bitcast_convert_type(sorted_values, jnp.uint32), bits[permutation])
     np.testing.assert_array_equal(jax.lax.bitcast_convert_type(restored_values, jnp.uint32), bits)
+
+
+@pytest.mark.parametrize("topk", [3, 10])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("case", ["mixed", "empty"])
+def test_expert_order_combine_matches_weighted_sum_and_derivatives(topk, dtype, case):
+    rng = np.random.default_rng(391)
+    tokens, width = 17, 128
+    order = rng.permutation(tokens * topk).astype(np.int32)
+    inverse = np.argsort(order).astype(np.int32)
+    rows = jnp.asarray(rng.normal(size=(tokens * topk, width)), dtype)
+    rows = rows.at[-19:].set(0)
+    if case == "empty":
+        rows = jnp.zeros_like(rows)
+    weights = jnp.asarray(rng.random((tokens, topk)), jnp.float32)
+    weights = weights.at[:, 0].set(0)
+    gradient = jnp.asarray(rng.normal(size=(tokens, width)), dtype)
+
+    def evaluate(x, w, dy):
+        output, pullback = jax.vjp(lambda a, b: combine_expert_order(a, order, inverse, b), x, w)
+        return output, *pullback(dy)
+
+    actual = jax.jit(evaluate)(rows, weights, gradient)
+    host_rows, host_weights, host_gradient = (np.asarray(x, np.float64) for x in (rows, weights, gradient))
+    expected_output = np.zeros((tokens, width), np.float64)
+    expected_rows = np.zeros_like(host_rows)
+    expected_weights = np.zeros_like(host_weights)
+    # A scalar route loop provides an oracle independent of the permutation VJP.
+    for row, slot in enumerate(order):
+        token, route = divmod(int(slot), topk)
+        expected_output[token] += host_rows[row] * host_weights[token, route]
+        expected_rows[row] = host_gradient[token] * host_weights[token, route]
+        expected_weights[token, route] = np.dot(host_gradient[token], host_rows[row])
+    expected = (jnp.asarray(expected_output, dtype), jnp.asarray(expected_rows, dtype), expected_weights)
+    tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
+    for got, want in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(got, np.float32), np.asarray(want, np.float32), rtol=tolerance, atol=tolerance
+        )

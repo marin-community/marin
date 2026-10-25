@@ -37,6 +37,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.expert_collectives import all_to_all_reduce_scatter, butterfly_reduce_scatter
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
+from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
 from experiments.grug.belay_tpu.remat_check import check_attention_remat
@@ -145,6 +146,7 @@ def batch_digest(batch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
+    parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
     parser.add_argument("--expert-reduction", choices=("native", "butterfly", "all-to-all"), default="native")
@@ -173,6 +175,10 @@ def main():
         parser.error("A continuation cannot compare its first update to the initialization reference")
     if args.expert_reduction != "native" and not args.local_experts:
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
+    if args.local_movement:
+        if not args.local_experts:
+            parser.error("Expert-order combine requires --local-experts")
+        local_experts.combine_local = combine_expert_order
     if args.expert_reduction == "butterfly":
         local_experts.reduce_expert_gradients = butterfly_reduce_scatter
     elif args.expert_reduction == "all-to-all":
@@ -228,6 +234,7 @@ def main():
             "diagnostic/expert_reduction": args.expert_reduction,
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
+            "diagnostic/local_movement": args.local_movement,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,
