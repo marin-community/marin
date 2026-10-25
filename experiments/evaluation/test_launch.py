@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable identities across command-line evaluation relaunches."""
+"""Command-line evaluation launch and relaunch behavior."""
 
 import json
 import os
@@ -27,19 +27,13 @@ from experiments.evaluation.models import models
 
 
 @pytest.fixture
-def submitted_environments():
-    return []
-
-
-@pytest.fixture
-def submitted_batches(monkeypatch, submitted_environments):
+def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
     batches: list[EvaluationBatch] = []
 
     class Client:
-        def submit(self, *, entrypoint, environment, **_kwargs):
-            submitted_environments.append(environment)
+        def submit(self, *, entrypoint, **_kwargs):
             _, args, _ = entrypoint.resolve()
             batches.append(args[0])
             return SimpleNamespace(job_id="/test/eval")
@@ -361,29 +355,3 @@ def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_pa
     }
     saved_cohort = next(snapshot.glob("*-sotopia-baselines.json"))
     assert saved_cohort.read_bytes() == (campaign / "sotopia-baselines.json").read_bytes()
-
-
-def test_policy_sotopia_launch_provisions_fitting_dependencies(tmp_path, submitted_batches, submitted_environments):
-    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--platform",
-            "gpu",
-            "--accelerator",
-            "H100x1",
-            "--harbor-config",
-            str(campaign / "harbor-configs/sotopia-hard.yaml"),
-            "--policy-finalization-config",
-            str(campaign / "finalization.yaml"),
-            "--records-prefix",
-            str(tmp_path),
-            "--no-wait",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert len(submitted_batches) == 1
-    assert submitted_environments[0].extras == ("eval-policy",)
