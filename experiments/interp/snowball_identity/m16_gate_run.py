@@ -64,7 +64,9 @@ VLLM = {
             "and FP32 weight parameter (whether cuBLAS uses TF32 for it is not verified); identical for both arms"
         ),
         "citations": {
-            "vllm/model_executor/models/grugmoe.py:592-601": "router = ReplicatedLinear(bias=True, params_dtype=torch.float32)",
+            "vllm/model_executor/models/grugmoe.py:592-601": (
+                "router = ReplicatedLinear(bias=True, params_dtype=torch.float32)"
+            ),
             "vllm/model_executor/models/grugmoe.py:701-716": (
                 "served CUDA forward: router_logits = _apply_grug_linear(self.router, x_flat.float()) (line 713); "
                 "line 666 is the CPU-only reference path"
@@ -75,7 +77,9 @@ VLLM = {
             ),
             "vllm/model_executor/models/grugmoe.py:559": "routing adds router_logits.float() + self.bias.float()",
             "vllm/model_executor/models/grugmoe.py:1427-1459": "load_weights: param weight_loader(param, loaded_weight)",
-            "vllm/model_executor/layers/linear.py:396-404": "ReplicatedLinear.weight_loader: shape assert, param.data.copy_",
+            "vllm/model_executor/layers/linear.py:396-404": (
+                "ReplicatedLinear.weight_loader: shape assert, param.data.copy_"
+            ),
         },
         "file_sha256": {
             "vllm/model_executor/models/grugmoe.py": "ce919b5292ee636699c2145e4ff588696925dfb99a74a8c7c8f96748fbae92b9",
