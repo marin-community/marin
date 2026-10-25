@@ -174,7 +174,9 @@ def token_validity_from_attention_mask(
             raise ValueError(f"token-validity sequence dimension must be {sequence_length}, got shape={valid.shape}")
         return jnp.broadcast_to(valid[None, :], (batch_size, sequence_length))
     if valid.ndim != 2 or valid.shape[0] not in (1, batch_size) or valid.shape[1] != sequence_length:
-        raise ValueError(f"token validity must have shape [1|{batch_size}, {sequence_length}], got shape={valid.shape}")
+        raise ValueError(
+            f"token validity must have shape [1|{batch_size}, {sequence_length}], got shape={valid.shape}"
+        )
     return jnp.broadcast_to(valid, (batch_size, sequence_length))
 
 
@@ -339,7 +341,9 @@ def torch_order_attention(
     if out_sharding is None:
         return _torch_order_attention_math(q, k, v, mask)
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
-    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_torch_order_attention_math, out_sharding=out_sharding)
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(
+        _torch_order_attention_math, out_sharding=out_sharding
+    )
     return wrapped(q, k, v, mask)
 
 
