@@ -5,6 +5,7 @@
 
 import argparse
 import dataclasses
+import functools
 import hashlib
 import json
 import math
@@ -36,7 +37,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
 )
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.expert_collectives import all_to_all_reduce_scatter, butterfly_reduce_scatter
-from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot
+from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot, whole_width_tiling
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
 from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
@@ -148,6 +149,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
     parser.add_argument("--partitioned-expert-gradients", action="store_true")
+    parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
@@ -177,10 +179,16 @@ def main():
         parser.error("A continuation cannot compare its first update to the initialization reference")
     if args.expert_reduction != "native" and not args.local_experts:
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
+    if args.whole_width_expert_tiles and not args.partitioned_expert_gradients:
+        parser.error("Whole-width expert tiles require --partitioned-expert-gradients")
     if args.partitioned_expert_gradients:
         if not args.local_experts or args.saved_relu2:
             parser.error("Partitioned expert gradients require --local-experts without --saved-relu2")
-        local_experts.grouped_dot = partitioned_grouped_dot
+        local_experts.grouped_dot = (
+            functools.partial(partitioned_grouped_dot, tiling=whole_width_tiling)
+            if args.whole_width_expert_tiles
+            else partitioned_grouped_dot
+        )
     if args.local_movement:
         if not args.local_experts:
             parser.error("Expert-order combine requires --local-experts")
@@ -242,6 +250,7 @@ def main():
             "diagnostic/local_experts": args.local_experts,
             "diagnostic/local_movement": args.local_movement,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
+            "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,

@@ -40,6 +40,7 @@ def main():
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
+            "local-gemm",
             "local-butterfly",
             "local-all-to-all",
         ),
@@ -61,6 +62,7 @@ def main():
                 "local-relu2",
                 "local-movement",
                 "local-gradient",
+                "local-gemm",
                 "local-butterfly",
                 "local-all-to-all",
             )
@@ -94,6 +96,16 @@ def main():
         "local-gradient": (
             "belay_ckpt1_tpu_update_check",
             [*reference, "--local-experts", "--routing-ops", "--partitioned-expert-gradients"],
+        ),
+        "local-gemm": (
+            "belay_ckpt1_tpu_update_check",
+            [
+                *reference,
+                "--local-experts",
+                "--routing-ops",
+                "--partitioned-expert-gradients",
+                "--whole-width-expert-tiles",
+            ],
         ),
         "local-butterfly": (
             "belay_ckpt1_tpu_update_check",
