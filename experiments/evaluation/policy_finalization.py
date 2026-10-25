@@ -26,9 +26,10 @@ from marin.evaluation.runner import (
     EvaluationError,
     EvaluationOutcome,
     check_inference_backend,
+    job_diagnostics,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.inference.iris import RemoteInferenceSession, remote_inference
+from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.inference.model_preparation import precache_inference_model
 from marin.inference.types import InferenceBackendState
 
@@ -162,43 +163,52 @@ class PolicyJudge:
             api_model=self.model.location,
         )
         precache_inference_model(inference)
-        with remote_inference(inference) as policy_judge:
-            jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}
-            policy_judge.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
-            configuration = EvalchemyJudgeConfig(
-                base_url=policy_judge.model.endpoint.base_url,
-                model=policy_judge.model.endpoint.model,
-                api_key=("env:JUDGE_API_KEY",),
-                protocol=POLICY,
-            )
-            executor = EvalchemyExecutor(replace(self.source.config, judge=configuration))
-
-            def dependencies() -> InferenceBackendState:
-                check_inference_backend(policy_judge.backend_state())
-                return backend_state()
-
-            try:
-                outcome = executor(
-                    session,
-                    output_dir,
-                    {**env_vars, "JUDGE_API_KEY": "local-policy-judge"},
-                    backend_state=dependencies,
+        try:
+            with remote_inference(inference) as policy_judge:
+                jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}
+                policy_judge.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
+                configuration = EvalchemyJudgeConfig(
+                    base_url=policy_judge.model.endpoint.base_url,
+                    model=policy_judge.model.endpoint.model,
+                    api_key=("env:JUDGE_API_KEY",),
+                    protocol=POLICY,
                 )
-            except EvaluationError as exc:
-                exc.jobs.update(jobs)
-                raise
-            jobs.update(outcome.jobs)
-            try:
-                outcome = trial_coverage(outcome, output_dir, self.repetitions)
-                _complete_coverage(outcome)
-            except Exception as exc:
-                raise EvaluationError(
-                    f"policy #10197 judge coverage failed: {exc}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=jobs,
-                    coverage=outcome.coverage,
-                ) from exc
-            return replace(outcome, jobs=jobs)
+                executor = EvalchemyExecutor(replace(self.source.config, judge=configuration))
+
+                def dependencies() -> InferenceBackendState:
+                    check_inference_backend(policy_judge.backend_state())
+                    return backend_state()
+
+                try:
+                    outcome = executor(
+                        session,
+                        output_dir,
+                        {**env_vars, "JUDGE_API_KEY": "local-policy-judge"},
+                        backend_state=dependencies,
+                    )
+                except EvaluationError as exc:
+                    exc.jobs.update(jobs)
+                    raise
+                jobs.update(outcome.jobs)
+                try:
+                    outcome = trial_coverage(outcome, output_dir, self.repetitions)
+                    _complete_coverage(outcome)
+                except Exception as exc:
+                    raise EvaluationError(
+                        f"policy #10197 judge coverage failed: {exc}",
+                        status=RunStatus.ARTIFACT_FAILED,
+                        jobs=jobs,
+                        coverage=outcome.coverage,
+                    ) from exc
+                return replace(outcome, jobs=jobs)
+        except RemoteInferenceStartupError as exc:
+            jobs, tails = job_diagnostics(exc.jobs, "policy-judge")
+            raise EvaluationError(
+                f"policy judge startup failed: {exc}",
+                status=RunStatus.INFRA_FAILED,
+                jobs=jobs,
+                log_tails=tails,
+            ) from exc
 
 
 @dataclass(frozen=True)
