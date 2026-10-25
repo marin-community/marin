@@ -270,7 +270,7 @@ def convert_svamp(row: RawRow, _context: ConversionContext) -> TaskSpec | Import
 
 @dataclass(frozen=True)
 class MathSource:
-    ("One SkyRL math source; ``controls=None`` for numeric answers the structural checks " "cover.")
+    "One SkyRL math source; ``controls=None`` for numeric answers the structural checks cover."
 
     name: str
     source: HfSource | UrlSource

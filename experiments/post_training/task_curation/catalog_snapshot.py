@@ -225,7 +225,9 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 reason = (
                     prior.reason
                     if unchanged
-                    else "No conversion pipeline" if declaration.pipeline is None else "No assessment published"
+                    else "No conversion pipeline"
+                    if declaration.pipeline is None
+                    else "No assessment published"
                 )
                 latest = prior.latest_attempt_key if unchanged else None
                 summary = prior.curation if unchanged else None

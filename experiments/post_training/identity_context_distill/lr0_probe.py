@@ -62,7 +62,11 @@ from rigging.timing import Duration
 
 from experiments.interp.snowball_identity.levanter_positions import save_positions
 from experiments.interp.snowball_identity.logit_check import read, stored_sequences, write_json
-from experiments.interp.snowball_identity.precision_gate import PrecisionGateInputs, make_pre_update_gate
+from experiments.interp.snowball_identity.precision_gate import (
+    ROUTE_POLICIES,
+    PrecisionGateInputs,
+    make_pre_update_gate,
+)
 from experiments.interp.snowball_identity.prompts import load_tokenizer
 from experiments.post_training.identity_context_distill import precision_source_audit
 from experiments.post_training.identity_context_distill.precision_audit import (
@@ -79,6 +83,7 @@ logger = logging.getLogger(__name__)
 T310 = "s3://marin-rno2a/marin/experiments/snowball-identity/t310"
 INPUTS = f"{T310}/inputs-20261024-0252"
 FLOOR = f"{T310}/diag-torch-floor-r1"
+VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
 """The torch floor job: G1's ``receipt.json`` and ``batch1/top6.pt``, each checked against its pinned sha256."""
 SOURCE_FILE_HASHES = {
     "config.json": "c7e1e7ac08e7b8b712d2728596765d2a5f954a7372ba1090cf87709e5fa9fbd5",
@@ -119,7 +124,7 @@ def approved_receipt(receipt_bytes: bytes, sha256: str) -> dict:
     return json.loads(receipt_bytes)
 
 
-def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
+def gate_inputs(run_root: str, routing_path: str, route_policy: str) -> PrecisionGateInputs:
     return PrecisionGateInputs(
         positions=f"{INPUTS}/positions.pt",
         vllm=f"{INPUTS}/vllm-positions-20261024-0252.json",
@@ -128,6 +133,8 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
         torch_routing=routing_path.rsplit("/", 1)[0],
         floor_receipt=f"{FLOOR}/receipt.json",
         torch_top6=f"{FLOOR}/batch1/top6.pt",
+        route_policy=route_policy,
+        vllm_capture=VLLM_CAPTURE,
         output=f"{run_root}/precision-gate",
         batch=8,
         pad_multiple=64,
@@ -171,7 +178,7 @@ def mesh_layout(mesh: MeshConfig) -> dict:
     }
 
 
-def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256: str) -> None:
+def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256: str, route_policy: str) -> None:
     """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
     check_pod_storage()
     runtime_receipt = approved_receipt(receipt_bytes, receipt_sha256)
@@ -198,7 +205,7 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256:
         receipt = f"{run_root}/audits/master-step-{completed_updates}.json"
         audit_initialized_masters(state.model.to_state_dict(), source_receipt, receipt)
 
-    gate = gate_inputs(run_root, reference["path"])
+    gate = gate_inputs(run_root, reference["path"], route_policy)
 
     def post_update_receipt(memory: list[dict]) -> None:
         """Every rank, after the update: its devices' memory in its rank receipt, stage ``updated`` (best effort)."""
@@ -234,6 +241,7 @@ def plan(
     priority: str,
     mesh: MeshConfig,
     receipt_sha256: str,
+    route_policy: str,
 ) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
@@ -242,7 +250,8 @@ def plan(
         "commit": head,
         "clean": not dirty,
         "run_root": run_root,
-        "gate": vars(gate_inputs(run_root, routing_path)),
+        "gate": vars(gate_inputs(run_root, routing_path, route_policy)),
+        "route_policy": route_policy,
         "mesh": mesh_layout(mesh),
         "runtime_receipt_sha256": receipt_sha256,
         "region": RESOURCES.target_cluster,
@@ -265,6 +274,7 @@ def submit(
     run_id: str,
     receipt_bytes: bytes,
     receipt_sha256: str,
+    route_policy: str,
     timeout_seconds: int,
     priority: str,
 ) -> str:
@@ -275,7 +285,9 @@ def submit(
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256),
+                entrypoint=Entrypoint.from_callable(
+                    lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256, route_policy
+                ),
                 name=job_name,
                 resources=convert_resources(RESOURCES),
                 environment=environment,
@@ -389,6 +401,9 @@ def main() -> None:
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
     parser.add_argument("--runtime-receipt", required=True, help="local reviewed runtime receipt JSON")
     parser.add_argument("--runtime-receipt-sha256", required=True, help="the reviewed receipt's sha256")
+    parser.add_argument(
+        "--route-policy", choices=ROUTE_POLICIES, required=True, help="the routes row's floor: G1 (torch) or G1a (vLLM)"
+    )
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
     parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
@@ -428,6 +443,7 @@ def main() -> None:
         args.priority,
         config.trainer.mesh,
         args.runtime_receipt_sha256,
+        args.route_policy,
     )
     print(json.dumps(job_plan, indent=2))
     if args.io_smoke:
@@ -482,6 +498,7 @@ def main() -> None:
         args.job_name,
         receipt_bytes,
         args.runtime_receipt_sha256,
+        args.route_policy,
         args.timeout_seconds,
         args.priority,
     )

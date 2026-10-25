@@ -78,7 +78,7 @@ def main() -> None:
         transform = partial(blend_serial_row, previous, donors[stage["donor"]], selected, stage["fraction"])
         output = stage["output"]
         materialize_serial_stage(original, recipe, stage, index + 1, support, transform)
-        previous = CheckpointReader(CheckpointSource(output, f"{recipe['id']}:stage-{index+1}"))
+        previous = CheckpointReader(CheckpointSource(output, f"{recipe['id']}:stage-{index + 1}"))
     if stages[-1]["output"] != recipe["output"] or stages[-1]["audit"] != recipe["audit"]:
         raise ValueError("Serial final output does not match experiment recipe")
 

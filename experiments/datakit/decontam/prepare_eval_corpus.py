@@ -191,8 +191,7 @@ AA_EVALS: tuple[AAEvalConfig, ...] = (
         subset=None,
         split="test",
         source_url=(
-            "https://github.com/harbor-framework/terminal-bench-2-1/archive/"
-            "c5ee500c185224c97cd6caff7866a990a0057f41.zip"
+            "https://github.com/harbor-framework/terminal-bench-2-1/archive/c5ee500c185224c97cd6caff7866a990a0057f41.zip"
         ),
         record_type=AARecordType.TERMINAL_BENCH_TASK,
         text_fields=("instruction", "solution"),
@@ -706,8 +705,7 @@ def _prepare_lmh() -> dict[str, Any]:
             raise ValueError(f"lmh manifest must be an object: {manifest_path}")
         if existing_manifest.get("corpus_version") != EVAL_CORPUS_VERSION:
             raise ValueError(
-                f"lmh manifest version is {existing_manifest.get('corpus_version')!r}, "
-                f"expected {EVAL_CORPUS_VERSION!r}"
+                f"lmh manifest version is {existing_manifest.get('corpus_version')!r}, expected {EVAL_CORPUS_VERSION!r}"
             )
         if existing_manifest.get("status") not in {"complete", "complete_with_failures"}:
             raise ValueError(f"lmh manifest is not complete: {manifest_path}")

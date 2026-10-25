@@ -141,7 +141,7 @@ def build_memory_soak_run(
     devices = expert_axis * dp_replicas
     if devices > MAX_SOAK_TRAYS * HERO_GPUS_PER_NODE:
         raise ValueError(
-            f"expert_axis x dp_replicas = {devices} exceeds {MAX_SOAK_TRAYS} " f"{HERO_GPUS_PER_NODE}-GPU trays"
+            f"expert_axis x dp_replicas = {devices} exceeds {MAX_SOAK_TRAYS} {HERO_GPUS_PER_NODE}-GPU trays"
         )
     if devices > HERO_GPUS_PER_NODE and devices % HERO_GPUS_PER_NODE != 0:
         raise ValueError(f"multi-tray soaks must use whole {HERO_GPUS_PER_NODE}-GPU trays, got {devices} devices")

@@ -129,7 +129,7 @@ VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
 """Byte copies of marten's capture (``marten-task310-vllm-routes-r1/capture``), pinned in ``route_proxy_check``."""
 POLICY = "p=f32,c=bfloat16,o=f32"
 MODULE = "experiments.interp.snowball_identity.moe_drop_diagnostic"
-INPUTS = gate_inputs("unused", f"{T310}/torch-ref-queue-r1/results/t310-router-rounding-r1/routing.json")
+INPUTS = gate_inputs("unused", f"{T310}/torch-ref-queue-r1/results/t310-router-rounding-r1/routing.json", "G1")
 """The r5 gate's inputs; each arm writes under its own ``output``."""
 
 

@@ -59,8 +59,9 @@ def source_requirements(configuration: dict) -> tuple[str, ...]:
 
 
 def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection:
-    judge_toml, conversation = archive_file(row.data, "tests/judge.toml"), archive_file(
-        row.data, "tests/conversation.txt"
+    judge_toml, conversation = (
+        archive_file(row.data, "tests/judge.toml"),
+        archive_file(row.data, "tests/conversation.txt"),
     )
     if judge_toml is None or conversation is None:
         return unsupported("missing_judge_config", "The source judge.toml and conversation.txt are required")

@@ -134,8 +134,8 @@ def _compare(run: dict, base: dict) -> str:
         cls = "neg" if r["d"] > 1e-9 else "pos" if r["d"] < -1e-9 else "zero"
         body += (
             f"<tr><td>{r['name']}</td><td class=num>{r['fa']:,}</td><td class=num>{r['fb']:,}</td>"
-            f"<td class=num>{100*r['ra']:.3f}%</td><td class=num>{100*r['rb']:.3f}%</td>"
-            f"<td class='num rate {cls}'>{100*r['d']:+.3f}%</td></tr>"
+            f"<td class=num>{100 * r['ra']:.3f}%</td><td class=num>{100 * r['rb']:.3f}%</td>"
+            f"<td class='num rate {cls}'>{100 * r['d']:+.3f}%</td></tr>"
         )
     head = (
         f"<header><h1>decon compare <span class=sub>base=<b>{base['label']}</b> → run=<b>{run['label']}</b> · "

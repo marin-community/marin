@@ -235,9 +235,7 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=4096,
-            notes=(
-                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
-            ),
+            notes=("Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at conversion."),
         ),
     ),
     MathSource(
@@ -252,7 +250,7 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=42636,
-            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), oracle present."),
         ),
     ),
     MathSource(
@@ -267,7 +265,7 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=57777,
-            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; subsample."),
         ),
     ),
     MathSource(
@@ -297,7 +295,7 @@ SOURCES = (
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=110730,
-            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback extraction."),
         ),
     ),
 )

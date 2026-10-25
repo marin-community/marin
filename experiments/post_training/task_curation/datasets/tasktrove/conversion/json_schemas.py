@@ -9,7 +9,6 @@ the shapes common enough to fix without guessing at intent; ``schema_error`` rep
 broken after that, so those tasks are rejected rather than shipped with a grader that always raises.
 """
 
-
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
 

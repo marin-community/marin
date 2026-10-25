@@ -457,8 +457,7 @@ def main() -> None:
     flops = {row["model"]: float(row["total_flops"]) for row in flops_rows}
     flops[winner] = SNOWBALL_FLOPS
     winner_flops_basis = (
-        "Step92 base-lineage proxy; incremental Step12/Step20 donor training and "
-        "weight-merge operations not estimated"
+        "Step92 base-lineage proxy; incremental Step12/Step20 donor training and weight-merge operations not estimated"
         if winner == SHARED100_MODEL
         else "September 17 Step92 proxy; checkpoint-specific posttraining differences not estimated"
     )

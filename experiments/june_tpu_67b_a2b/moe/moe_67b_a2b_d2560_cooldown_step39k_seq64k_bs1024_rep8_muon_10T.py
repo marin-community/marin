@@ -165,7 +165,7 @@ _optimizer = GrugMoeMuonHResumeConfig(
     lr_at_ramp_end=_LR_AT_RESUME,  # same → no ramp
 )
 
-_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_" f"seq{_SEQ}_sw2k_v4_2048_muon_cooldown_step39k"
+_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_seq{_SEQ}_sw2k_v4_2048_muon_cooldown_step39k"
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:

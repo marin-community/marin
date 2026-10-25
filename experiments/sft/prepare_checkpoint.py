@@ -30,6 +30,7 @@ inputs from a clean prefix, or point ``model_ref`` at a staged copy of its outpu
 adopts an already-staged prepared checkpoint instead of regenerating. The reserved-slot map is a
 parameter, so the step is not tied to one model; ``configs/delphi_1e22.py`` is the first example.
 """
+
 from __future__ import annotations
 
 import json

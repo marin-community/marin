@@ -308,7 +308,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
     primary.mkdir()
     file = primary / ("rows.jsonl" if primary_override == "root" else "sample.jsonl")
     file.write_text(
-        '{"dataset":"fixture","prompt":"First question"}\n' '{"dataset":"fixture","prompt":"Second question"}\n'
+        '{"dataset":"fixture","prompt":"First question"}\n{"dataset":"fixture","prompt":"Second question"}\n'
     )
     if prepared:
         with ZephyrContext(

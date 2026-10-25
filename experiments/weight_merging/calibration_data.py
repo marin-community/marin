@@ -75,13 +75,13 @@ def calibration_examples(seed: int, per_domain: int) -> list[dict]:
         x, y, z = (rng.randrange(11, 999) for _ in range(3))
         if index % 4 == 0:
             prompt = f"A store has {x} boxes with {y} objects each and receives {z} more objects. Explain the total."
-            answer = f"The boxes contain {x} * {y} = {x*y} objects. Adding {z} gives {x*y+z} objects."
+            answer = f"The boxes contain {x} * {y} = {x * y} objects. Adding {z} gives {x * y + z} objects."
         elif index % 4 == 1:
             prompt = f"Return JSON with keys sum and difference for integers {x} and {y}."
             answer = json.dumps({"sum": x + y, "difference": x - y})
         elif index % 4 == 2:
-            prompt = f"Write a Python function that returns the sum of integers from {x} through {x+y}, inclusive."
-            answer = f"def interval_sum():\n    return ({x} + {x+y}) * {y+1} // 2"
+            prompt = f"Write a Python function that returns the sum of integers from {x} through {x + y}, inclusive."
+            answer = f"def interval_sum():\n    return ({x} + {x + y}) * {y + 1} // 2"
         else:
             prompt = f"Sort these integers in increasing order and return only the list: {x}, {y}, {z}."
             answer = json.dumps(sorted([x, y, z]))

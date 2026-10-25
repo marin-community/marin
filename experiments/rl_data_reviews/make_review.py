@@ -609,7 +609,7 @@ def attempt(task: Task, config: dict, directory: Path, root: Path) -> dict:
             returncode = process.returncode
     if returncode != 0 or not (execution / "attempt.json").exists():
         raise RuntimeError(
-            f'Native worker failed; inspect {execution / "worker.stderr"}. Resume retries this unfinished task.'
+            f"Native worker failed; inspect {execution / 'worker.stderr'}. Resume retries this unfinished task."
         )
     result = json.loads((execution / "attempt.json").read_text())
     result["execution_path"] = str(execution.relative_to(root))
@@ -700,7 +700,7 @@ def independent_reviews(
         outcome = attempt(task, config, output / "tasks" / f"{index:04d}", output)
         outcomes.append(outcome)
         print(
-            f'Attempt {index + 1}/{n}: {task.source_id}/{task.id}; verifier={outcome["verification"]["status"]}',
+            f"Attempt {index + 1}/{n}: {task.source_id}/{task.id}; verifier={outcome['verification']['status']}",
             flush=True,
         )
     for index, (task, result) in enumerate(zip(tasks, outcomes, strict=True)):
@@ -746,7 +746,7 @@ def independent_reviews(
         runtime_id = task_id + "/runtime"
         runtime_opinion = {
             "summary": (
-                f'Native {task.route} verification: {verification["status"]}. ' + (verification.get("reason") or "")
+                f"Native {task.route} verification: {verification['status']}. " + (verification.get("reason") or "")
             ),
             "verdict": "unrated" if verification["status"] == "verified" else "inconclusive",
             "metrics": [{"key": "native_verifier_score", "value": verification["score"], "scale": None}],
@@ -815,7 +815,7 @@ def independent_reviews(
             validate_collection(bundle, output, schema)
         write_json(output / "panel-reviews.partial.json", bundle)
         print(
-            f'Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification["status"]}; judges={PANEL_SIZE}',
+            f"Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification['status']}; judges={PANEL_SIZE}",
             flush=True,
         )
     return PanelReviews(bundle, source_populations, task_sources, task_coverages)
@@ -1006,7 +1006,7 @@ def main() -> None:
     if args.n <= 0:
         parser.error("n must be positive")
     bundle = make_review(args.config, args.n, args.seed, args.output.resolve(), args.resume, args.max_evidence_bytes)
-    print(f'Saved {len(bundle["reviews"])} reviews to {args.output / "quality-reviews.json"}')
+    print(f"Saved {len(bundle['reviews'])} reviews to {args.output / 'quality-reviews.json'}")
 
 
 if __name__ == "__main__":

@@ -192,8 +192,7 @@ def mcqa_question(instruction: str) -> tuple[str, tuple[str, ...]]:
         # the wrapper; the actual question determines which answers are available.
         option_lists = (listed.group(1),) if listed is not None else ()
         valid_formats = {
-            f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' "
-            f"(e.g. 'Answer: {wrapper.format(example)}')."
+            f"{MCQA_FORMAT_PREFIX}'Answer: {wrapper.format(listed_options)}' (e.g. 'Answer: {wrapper.format(example)}')."
             for wrapper in MCQA_FORMAT_WRAPPERS
             for listed_options in option_lists
             for example in listed_options.split("/")

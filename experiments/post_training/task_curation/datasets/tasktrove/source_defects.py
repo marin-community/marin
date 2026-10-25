@@ -71,22 +71,17 @@ SOURCE_DEFECTS: dict[tuple[str, str], str] = {
     (
         "DCAgent__exp_rpt_stack-pytest-v2",
         "stack-pytest-0474",
-    ): (
-        "StreamFile tests require absent mitmproxy test helpers and use an invalid pytest.raises " "argument"
-    ),
+    ): ("StreamFile tests require absent mitmproxy test helpers and use an invalid pytest.raises argument"),
     (
         "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
         "task_1492",
     ): (
-        "oracle passes reverse-numeric inputs to comm, whose lexicographic comparison produces the wrong "
-        "file difference"
+        "oracle passes reverse-numeric inputs to comm, whose lexicographic comparison produces the wrong file difference"
     ),
     (
         "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
         "task_3002",
-    ): (
-        "captured character dump fixes the oracle's chosen text although the instruction permits any " "small text file"
-    ),
+    ): ("captured character dump fixes the oracle's chosen text although the instruction permits any small text file"),
     (
         "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
         "task_9748",

@@ -224,9 +224,10 @@ GATE_SEQUENCES = [SEQUENCES[0], Sequence("check|b", "check", tuple(range(1, 21))
 """Check-group only: ``compare`` requires the real long length and contrastive spans."""
 
 
-def write_floor(tmp_path, monkeypatch, routes: dict) -> tuple[str, str]:
+def write_floor(tmp_path, monkeypatch, routes: dict) -> tuple[str, str, str]:
     """A G1 torch floor for ``routes`` (this model's own): torch batch-1 picks the same experts with a 1.0 margin; the
-    floor allows 5% set disagreements per layer at own margins p50 0.02 / p99 0.04. Pinned by its own sha256."""
+    floor allows 5% set disagreements per layer at own margins p50 0.02 / p99 0.04. And a G1a vLLM capture whose two
+    passes pick the same experts. Each file is pinned by its own sha256."""
     k = CONFIG.num_experts_per_token
     monkeypatch.setattr(route_proxy_check, "K", k)
     top6 = {}
@@ -246,9 +247,20 @@ def write_floor(tmp_path, monkeypatch, routes: dict) -> tuple[str, str]:
     (tmp_path / "floor").mkdir()
     torch.save(top6, tmp_path / "floor" / "top6.pt")
     (tmp_path / "floor" / "receipt.json").write_text(json.dumps(floor))
-    for name, path in (("TORCH_TOP6_SHA256", "top6.pt"), ("FLOOR_RECEIPT_SHA256", "receipt.json")):
-        monkeypatch.setattr(precision_gate, name, hashlib.sha256((tmp_path / "floor" / path).read_bytes()).hexdigest())
-    return str(tmp_path / "floor" / "receipt.json"), str(tmp_path / "floor" / "top6.pt")
+    capture = tmp_path / "capture"
+    for n in (1, 2):
+        (capture / f"pass-{n}").mkdir(parents=True)
+        torch.save(dict(routes), capture / f"pass-{n}" / "routes.pt")
+    (capture / "receipt.json").write_text("{}")
+    for name, path in (
+        ("TORCH_TOP6_SHA256", tmp_path / "floor" / "top6.pt"),
+        ("FLOOR_RECEIPT_SHA256", tmp_path / "floor" / "receipt.json"),
+        ("VLLM_RECEIPT_SHA256", capture / "receipt.json"),
+        ("VLLM_PASS1_SHA256", capture / "pass-1" / "routes.pt"),
+        ("VLLM_PASS2_SHA256", capture / "pass-2" / "routes.pt"),
+    ):
+        monkeypatch.setattr(precision_gate, name, hashlib.sha256(path.read_bytes()).hexdigest())
+    return str(tmp_path / "floor" / "receipt.json"), str(tmp_path / "floor" / "top6.pt"), str(capture)
 
 
 def gate_fixture(mesh, model, policy, tmp_path, monkeypatch):
@@ -281,7 +293,9 @@ def gate_fixture(mesh, model, policy, tmp_path, monkeypatch):
     unchanged = {"positions": positions, "positions_changed": 0}
     totals = {variant: unchanged for variant in ("bf16_bias", "bf16_logits", "bf16_logits_bias")}
     (routing / "routing.json").write_text(json.dumps({"totals": totals}))
-    floor_receipt, torch_top6 = write_floor(tmp_path, monkeypatch, {sid: r["routes"] for sid, r in ours.items()})
+    floor_receipt, torch_top6, capture = write_floor(
+        tmp_path, monkeypatch, {sid: r["routes"] for sid, r in ours.items()}
+    )
     inputs = precision_gate.PrecisionGateInputs(
         positions=pinned,
         vllm=str(tmp_path / "vllm.json"),
@@ -290,6 +304,8 @@ def gate_fixture(mesh, model, policy, tmp_path, monkeypatch):
         torch_routing=str(routing),
         floor_receipt=floor_receipt,
         torch_top6=torch_top6,
+        route_policy="G1",
+        vllm_capture=capture,
         output=str(tmp_path / "gate"),
         batch=2,
         pad_multiple=8,
@@ -338,7 +354,9 @@ def test_pre_update_gate_raises_on_failures_and_passes_when_clean(mesh_and_model
     monkeypatch.setattr(precision_gate, "parity_gate", lambda report: [])
     gate(trainer, state)
     report = json.loads((tmp_path / "gate" / "gate.json").read_text())
-    assert report["failures"] == [] and report["g1"]["layers_passing"] == CONFIG.num_layers
+    assert report["failures"] == [] and report["route_policy"] == "G1"
+    assert report["route_proxy"]["G1"]["layers_passing"] == report["route_proxy"]["G1a"]["layers_passing"]
+    assert report["route_proxy"]["G1"]["layers_passing"] == CONFIG.num_layers
     # A torch route in a different order is reported, not gated: G1 bounds route differences.
     routes = torch.load(tmp_path / "torch" / "routes.pt")
     routes["check|a"][3, 1] = routes["check|a"][3, 1].flip(0)

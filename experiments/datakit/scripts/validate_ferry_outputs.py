@@ -108,8 +108,7 @@ def _validate_normalize(base: str, download_rows: int) -> int:
         raise SystemExit(f"Normalize: expected >= {NORMALIZE_MIN_ROWS} rows, got {rows}")
     if rows > download_rows:
         raise SystemExit(
-            f"Normalize: {rows} rows > download {download_rows} rows — "
-            "normalize cannot produce more rows than download"
+            f"Normalize: {rows} rows > download {download_rows} rows — normalize cannot produce more rows than download"
         )
 
     logger.info("Normalize OK: %d files, %d rows (%.1f%% of download)", len(files), rows, 100 * rows / download_rows)

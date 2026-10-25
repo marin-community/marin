@@ -176,11 +176,11 @@ def test_non_python_parser_requires_named_test_results(tmp_path, log, resolved):
     "log, resolved",
     [
         (
-            "  * test issue #63 (0.1ms) [L#217]\n" "  * test handles arbitrary properties (0.1ms) [L#528]\n",
+            "  * test issue #63 (0.1ms) [L#217]\n  * test handles arbitrary properties (0.1ms) [L#528]\n",
             True,
         ),
         (
-            "  1) test issue #63 (Tailwind.FormatterTest)\n" "  * test handles arbitrary properties (0.1ms) [L#528]\n",
+            "  1) test issue #63 (Tailwind.FormatterTest)\n  * test handles arbitrary properties (0.1ms) [L#528]\n",
             False,
         ),
     ],
