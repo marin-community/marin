@@ -43,9 +43,10 @@ L, E, I, K, H = forward.NUM_LAYERS, forward.NUM_EXPERTS, forward.EXPERT_WIDTH, f
 SW, D, HD = forward.SHARED_WIDTH, forward.HIDDEN, forward.HEAD_DIM
 NR = L * K * I
 NU = NR + L * SW
-MAX_DOC = 1023  # bucket(n + 1) must fit the largest bucket
-BUCKETS = (256, 512, 1024)
-G = 16  # attribution rows (positions) per backward
+MAX_DOC = 511  # bucket(n + 1) must fit the largest bucket (d1280 memory)
+BUCKETS = (256, 512)
+G = 8  # attribution rows (positions) per backward
+MIN_PALOMA_DOC = 128
 R = 32  # intervention rows per forward
 CURVE_K = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192)
 SUFF_K = (0, 1, 2, 4, 8, 16, 32, 64, 256, 1024, 4096)
@@ -297,11 +298,43 @@ def local_attribution(model, tokens, seg):
 
 def unit_means(tag: str) -> tuple[np.ndarray, np.ndarray]:
     """Each routed unit's mean activation over the tokens routed to its expert, and each shared unit's mean, from the
-    ``atlas`` pass."""
-    with fsspec.open(f"{common.OUTPUT_ROOT}/{tag}/atlas.npz", "rb") as f:
+    ``stats`` pass."""
+    with fsspec.open(f"{common.OUTPUT_ROOT}/{tag}/stats.npz", "rb") as f:
         z = np.load(f)
-        act_sum, routed, s_act_sum, tokens = z["act_sum"], z["expert_dom"].sum(-1), z["s_act_sum"], z["dom_tokens"]
-    return (act_sum / np.maximum(routed, 1)[..., None]).astype(np.float32), (s_act_sum / tokens.sum()).astype(np.float32)
+        act_sum, routed, s_act_sum, tokens = z["act_sum"], z["expert_tokens"], z["s_act_sum"], z["tokens"]
+    return (act_sum / np.maximum(routed, 1)[..., None]).astype(np.float32), (s_act_sum / tokens).astype(np.float32)
+
+
+def paloma_docs(spec: str) -> list[dict]:
+    """``set:count,...``: the first document of at least ``MIN_PALOMA_DOC`` tokens in each of the set's first
+    sequences, until ``count`` documents (ids ``set index * 1000 + sequence``)."""
+    want = {name: int(n) for name, n in (part.split(":") for part in spec.split(","))}
+    docs: list[dict] = []
+    got = dict.fromkeys(want, 0)
+    for batch in common.paloma_batches(8, max_sequences=64):
+        if batch.source not in want or got[batch.source] >= want[batch.source]:
+            continue
+        for b in range(batch.tokens.shape[0]):
+            if got[batch.source] >= want[batch.source] or batch.loss_weight[b].sum() == 0:
+                continue
+            seg = batch.segment_ids[b]
+            start = 0
+            while start < len(seg):
+                end = (
+                    start + int(np.argmax(seg[start:] != seg[start])) if np.any(seg[start:] != seg[start]) else len(seg)
+                )
+                if end - start >= MIN_PALOMA_DOC:
+                    docs.append(
+                        dict(
+                            doc=common.PALOMA_SETS.index(batch.source) * 1000 + got[batch.source],
+                            source=1 + common.PALOMA_SETS.index(batch.source),
+                            tokens=batch.tokens[b, start : min(end, start + MAX_DOC)],
+                        )
+                    )
+                    got[batch.source] += 1
+                    break
+                start = end
+    return docs
 
 
 def load_docs(tag: str, index: str, doc_ids: list[int]) -> list[dict]:
@@ -426,25 +459,29 @@ def analyse_doc(model, mesh, doc: dict, means, n_intervene: int, rng: np.random.
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tag", default="tn-d512-ckpt1-rno")
+    parser.add_argument("--tag", default=common.STUDY_TAG)
     parser.add_argument("--index", default="docs_index")
-    parser.add_argument("--docs", required=True, help="comma-separated index document ids")
+    parser.add_argument("--docs", default="", help="comma-separated index document ids")
+    parser.add_argument("--paloma", default="", help="set:count,... Paloma documents instead of index ones")
     parser.add_argument("--intervene", default="", help="per document: positions to intervene on (0: all)")
     parser.add_argument("--name", required=True)
     args = parser.parse_args()
-    doc_ids = [int(x) for x in args.docs.split(",")]
-    n_int = [int(x) for x in args.intervene.split(",")] if args.intervene else [0] * len(doc_ids)
+    doc_ids = [int(x) for x in args.docs.split(",")] if args.docs else []
     cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    docs = load_docs(args.tag, args.index, doc_ids)
+    docs = paloma_docs(args.paloma) if args.paloma else load_docs(args.tag, args.index, doc_ids)
+    n_int = [int(x) for x in args.intervene.split(",")] if args.intervene else [0] * len(docs)
+    if len(n_int) == 1:
+        n_int = n_int * len(docs)
     um, sm = unit_means(args.tag)
     rng = np.random.default_rng(0)
     t0 = time.time()
     arrays = {}
     with set_mesh(mesh):
         model = common.compute_model(params)
+        del params  # the float32 copy: device memory for the attribution backward
         means = (jnp.asarray(um), jnp.asarray(sm))
     for di, (doc, ni) in enumerate(zip(docs, n_int, strict=True)):
         res = analyse_doc(model, mesh, doc, means, ni if ni > 0 else MAX_DOC, rng)

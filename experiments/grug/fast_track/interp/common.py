@@ -119,12 +119,13 @@ def one_gpu_mesh() -> Mesh:
 
 
 def load_params(cfg: GrugModelConfig, mesh: Mesh, path: str) -> Transformer:
-    """The checkpoint's float32 params (the weights the run's final eval scored)."""
+    """The checkpoint's params (the weights the run's final eval scored) in the compute dtype: the float32 copy is
+    dropped after the cast (26 GB at d1280), since every interp pass runs the bf16 compute model."""
     with set_mesh(mesh):
         template = jax.jit(lambda key: MP.cast_to_param(Transformer.init(cfg, key=key)))(jax.random.PRNGKey(0))
         template = restore_template_from(template)
         loaded = load_checkpoint({"params": template}, path, axis_mapping=None, mesh=mesh, allow_partial=False)
-    return loaded["params"]
+        return MP.cast_to_compute(loaded.pop("params"))
 
 
 def compute_model(params: Transformer) -> Transformer:

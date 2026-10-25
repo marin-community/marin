@@ -5,8 +5,8 @@
 
 Usage: ``python -m experiments.grug.fast_track.interp.fanout "<module> <args...>" "<module> <args...>" ...``. Command
 ``i`` runs ``python -m experiments.grug.fast_track.interp.<module> <args...>`` with ``CUDA_VISIBLE_DEVICES=i % 8``
-(more than 8 commands queue for the next free GPU). Every line of a command's output is prefixed with its index; the
-job fails if any command fails.
+(more than 8 commands queue for the next free GPU). Every line of a command's output is prefixed with its index. A
+failed command is logged but does not fail the job (a job retry would rerun every command).
 """
 
 import logging
@@ -70,8 +70,6 @@ def main() -> None:
         t.join()
     failed = {i: c for i, c in codes.items() if c != 0}
     logger.info("fanout done: %d commands, failed %s", len(commands), failed)
-    if failed:
-        raise SystemExit(1)
 
 
 if __name__ == "__main__":
