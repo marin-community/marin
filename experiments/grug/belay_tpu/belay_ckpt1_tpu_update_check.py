@@ -148,6 +148,9 @@ def main():
         "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
     )
     parser.add_argument(
+        "--profile-steps", type=int, default=0, help="Additional updates to trace after the timing window"
+    )
+    parser.add_argument(
         "--compile-only", action="store_true", help="Compile the original saved-residual step; no updates"
     )
     parser.add_argument(
@@ -163,6 +166,9 @@ def main():
     args = parser.parse_args()
     if args.update_steps < 2:
         parser.error("Checkpoint continuation requires at least two consecutive updates")
+    if args.profile_steps < 0:
+        parser.error("Profile steps cannot be negative")
+    total_updates = args.update_steps + args.profile_steps
     if args.source_qb:
         qb_balancing.bincount_upper_quantile = source_bincount_upper_quantile
     if args.routing_ops:
@@ -205,7 +211,8 @@ def main():
             "diagnostic/routing_ops": args.routing_ops,
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
-            "diagnostic/requested_unique_updates": args.update_steps,
+            "diagnostic/requested_unique_updates": total_updates,
+            "diagnostic/profile_updates": args.profile_steps,
             "diagnostic/reference_step1": args.reference_step1,
         }
     )
@@ -345,19 +352,32 @@ def main():
                     "not end-to-end MFU"
                 ),
             )
+        if args.profile_steps:
+            profile_path = str(output / "profile")
+            with jax.profiler.trace(profile_path):
+                for index in range(args.update_steps, total_updates):
+                    with jax.profiler.StepTraceAnnotation("train", step_num=index):
+                        state2, _ = advance(state2, next(iterator), index)
+            emit(
+                "full_update_profile_saved",
+                rank=jax.process_index(),
+                path=profile_path,
+                first_step=args.update_steps,
+                last_step=total_updates - 1,
+            )
         tracker.log_summary(
             {
                 "diagnostic/full_update_restore_pass": True,
-                "diagnostic/optimizer_evaluations": args.update_steps + 1,
-                "diagnostic/unique_updates": args.update_steps,
+                "diagnostic/optimizer_evaluations": total_updates + 1,
+                "diagnostic/unique_updates": total_updates,
                 "diagnostic/checkpoint_path": checkpoint_path,
             }
         )
         emit(
             "full_update_restore_pass",
             rank=jax.process_index(),
-            optimizer_evaluations=args.update_steps + 1,
-            unique_updates=args.update_steps,
+            optimizer_evaluations=total_updates + 1,
+            unique_updates=total_updates,
         )
     tracker.current_tracker().finish()
 

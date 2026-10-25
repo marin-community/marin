@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--run-prefix", required=True)
     parser.add_argument("--reference-step1")
     parser.add_argument("--update-steps", type=int, default=2)
+    parser.add_argument("--profile-steps", type=int, default=0)
     parser.add_argument("--first-port", type=int, required=True)
     parser.add_argument(
         "--phases",
@@ -49,7 +50,13 @@ def main():
     for index, name in enumerate(args.phases):
         module, extra_args = phases[name]
         if module == "belay_ckpt1_tpu_update_check":
-            extra_args = [*extra_args, "--update-steps", str(args.update_steps)]
+            extra_args = [
+                *extra_args,
+                "--update-steps",
+                str(args.update_steps),
+                "--profile-steps",
+                str(args.profile_steps),
+            ]
         phase_output = output / name
         phase_output.mkdir(parents=True, exist_ok=True)
         environment = {
