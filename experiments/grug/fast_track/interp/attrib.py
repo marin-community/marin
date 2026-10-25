@@ -163,43 +163,44 @@ def make_fns():
             dla_y_pos=jnp.einsum("cbs,tbs->ct", cats, (dla_y > 0).astype(jnp.float32)),
             recon_err=recon_err,
         )
-        # Lenses.
+        # Lenses, one stage at a time (lax.map): every stage's vocabulary log-softmax live at once does not fit.
         final_q = model_r.attn_res_query_final
-        gate_loss, gate_agree, tuned_loss, tuned_agree, gate_kl = [], [], [], [], []
         final_logp = _labels_logp(model_r, tr["hidden"])
-        for k, srcs in enumerate(_stage_sources(tr)):
-            _, _, mixed = forward._history_gate(srcs, final_q, eps, plain_sum=model_r.config.attn_res_plain_sum)
-            for kind, hidden in (
-                ("gate", model_r.final_norm(mixed)),
+        mixes = jnp.stack(
+            [
+                forward._history_gate(srcs, final_q, eps, plain_sum=model_r.config.attn_res_plain_sum)[2]
+                for srcs in _stage_sources(tr)
+            ]
+        )
+
+        def stage_lens(xs):
+            mixed, tuned_k = xs
+            res = []
+            for hidden in (
+                model_r.final_norm(mixed),
                 (
-                    "tuned",
-                    (
-                        jnp.concatenate(
-                            [forward.rms_norm(mixed.astype(jnp.float32), eps), jnp.ones((*mixed.shape[:2], 1))], axis=-1
-                        )
-                        @ tuned[k]
-                    ).astype(mixed.dtype),
-                ),
+                    jnp.concatenate(
+                        [forward.rms_norm(mixed.astype(jnp.float32), eps), jnp.ones((*mixed.shape[:2], 1))], axis=-1
+                    )
+                    @ tuned_k
+                ).astype(mixed.dtype),
             ):
                 logp = _labels_logp(model_r, hidden)
                 loss = -jnp.take_along_axis(logp, labels[..., None], axis=-1)[..., 0]
                 agree = (jnp.argmax(logp, axis=-1) == top1).astype(jnp.float32)
                 kl = jnp.sum(jnp.exp(final_logp) * (final_logp - logp), axis=-1)
-                if kind == "gate":
-                    gate_loss.append(loss)
-                    gate_agree.append(agree)
-                    gate_kl.append(kl)
-                else:
-                    tuned_loss.append(loss)
-                    tuned_agree.append(agree)
+                res.append((loss, agree, kl))
+            return res
+
+        (g_loss, g_agree, g_kl), (t_loss, t_agree, _) = jax.lax.map(stage_lens, (mixes, tuned))
         for name, arr in (
-            ("lens_gate_loss", gate_loss),
-            ("lens_gate_agree", gate_agree),
-            ("lens_gate_kl", gate_kl),
-            ("lens_tuned_loss", tuned_loss),
-            ("lens_tuned_agree", tuned_agree),
+            ("lens_gate_loss", g_loss),
+            ("lens_gate_agree", g_agree),
+            ("lens_gate_kl", g_kl),
+            ("lens_tuned_loss", t_loss),
+            ("lens_tuned_agree", t_agree),
         ):
-            out[name] = jnp.einsum("cbs,kbs->ck", cats, jnp.stack(arr))
+            out[name] = jnp.einsum("cbs,kbs->ck", cats, arr)
         # AttnRes gate weights: [gate, source] sums per category.
         gate_w = []
         for lay in tr["layers"]:
