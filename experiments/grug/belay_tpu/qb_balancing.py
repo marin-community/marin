@@ -8,6 +8,8 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
+from experiments.grug.belay_tpu.qb_hist_tpu import bincount_upper_quantile_tpu
+
 try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
@@ -24,14 +26,31 @@ def bincount_upper_quantile(
     target_rank: float | jax.Array,
     batch_axes: tuple[str, ...],
 ) -> jax.Array:
-    """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
+    """Per-expert (1-K/E) upper quantile of ``s_local`` over the original ``[lo, hi]`` bin grid.
 
     ``target_rank`` is the number of tokens at or above each expert's threshold: a scalar, or one per expert.
 
-    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
+    The qualified Ckpt 1 TPU shape uses two-stage integer matrix-product counts.
+    Other shapes run inside a ``shard_map`` with a single ``jnp.bincount`` over an expert-major flat index
     (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
     pools it globally, and beta is read from the top-cumulative counts, interpolated in the crossing bin.
     """
+    if (
+        jax.default_backend() == "tpu"
+        and s_local.shape == (32768, 384)
+        and s_local.dtype == jnp.float32
+        and num_experts == 384
+        and n_bins == 10000
+    ):
+        return bincount_upper_quantile_tpu(
+            s_local,
+            num_experts=num_experts,
+            n_bins=n_bins,
+            lo=lo,
+            hi=hi,
+            target_rank=target_rank,
+            batch_axes=batch_axes,
+        )
     bin_width = (hi - lo) / n_bins
     expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
     idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)

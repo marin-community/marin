@@ -99,6 +99,9 @@ def main():
     parser.add_argument(
         "--compile-only", action="store_true", help="Compile the original saved-residual step; no updates"
     )
+    parser.add_argument(
+        "--reference-step1", help="Require the first update to exactly match this frozen step-1 checkpoint"
+    )
     args = parser.parse_args()
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
@@ -210,6 +213,10 @@ def main():
             return jax.tree.unflatten(tree, next_leaves), metrics
 
         state1, _ = advance(state, batch0, 0)
+        if args.reference_step1:
+            reference1 = load_checkpoint(state1, args.reference_step1, mesh=mesh, allow_partial=False)
+            require_equal(state1, reference1, "first update against frozen reference checkpoint")
+            del reference1
         save_checkpoint(
             state1,
             step=1,
