@@ -528,6 +528,10 @@ def _create_ocdbt_spec(
             "data_type": entry.dtype,
             "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": list(entry.chunk_shape)}},
         }
+        # Write every chunk. Eliding fill-valued chunks drops some whole chunks written from referenced source data
+        # (TensorStore 0.1.84, e.g. a (4, 96, 256, 384) float32 chunk): the commit succeeds, no chunk key is stored,
+        # and the array restores as zeros.
+        spec["store_data_equal_to_fill_value"] = True
 
     return spec
 
