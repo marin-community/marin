@@ -57,11 +57,31 @@ VLLM = {
     "release_tag": "marin-vllm-gpu-20260924-01911be34fac",
     "source_commit": "01911be34fac8715347962a8d791ca34a879e01e",
     "x86_64_wheel_sha256": "d04fa6af4a7161f8995154cbdbbc8dddc61b9a9ff198b3947985b2d998ef60e0",
-    "router_bias_load": (
-        "grugmoe.py @ 01911be3: router = ReplicatedLinear(bias=True, params_dtype=torch.float32); load_weights "
-        "routes mlp.router.bias to ReplicatedLinear.weight_loader (shape assert, param.data.copy_, no cast); "
-        "GrugMoeRouter adds bias.float(). Not a runtime readback of the loaded parameter."
-    ),
+    "router_bias_load": {
+        "evidence": "source at the vLLM pin + safetensors headers + engine log markers; not a runtime readback",
+        "summary": (
+            "router bias FP32 (loader lines cited, not a runtime readback); router dot as served has FP32 input "
+            "and FP32 weight parameter (whether cuBLAS uses TF32 for it is not verified); identical for both arms"
+        ),
+        "citations": {
+            "vllm/model_executor/models/grugmoe.py:592-601": "router = ReplicatedLinear(bias=True, params_dtype=torch.float32)",
+            "vllm/model_executor/models/grugmoe.py:701-716": (
+                "served CUDA forward: router_logits = _apply_grug_linear(self.router, x_flat.float()) (line 713); "
+                "line 666 is the CPU-only reference path"
+            ),
+            "vllm/model_executor/layers/linear.py:371-384": (
+                "ReplicatedLinear passes params_dtype to create_weights and to the bias Parameter, "
+                "so the router weight is also an FP32 parameter (BF16 checkpoint values upcast exactly on copy_)"
+            ),
+            "vllm/model_executor/models/grugmoe.py:559": "routing adds router_logits.float() + self.bias.float()",
+            "vllm/model_executor/models/grugmoe.py:1427-1459": "load_weights: param weight_loader(param, loaded_weight)",
+            "vllm/model_executor/layers/linear.py:396-404": "ReplicatedLinear.weight_loader: shape assert, param.data.copy_",
+        },
+        "file_sha256": {
+            "vllm/model_executor/models/grugmoe.py": "ce919b5292ee636699c2145e4ff588696925dfb99a74a8c7c8f96748fbae92b9",
+            "vllm/model_executor/layers/linear.py": "a3943e520e55c12b5048b821183978c60901ba78619ca21629692f403e1f3b4f",
+        },
+    },
 }
 SERVE_ARGS = [
     "--cluster", "marin", "--backend", "vllm", "--gpu", "H100x8", "--target-cluster", "cw-rno2a",
@@ -73,8 +93,9 @@ SERVE_ARGS = [
     "--max-retries-preemption", "0", "--no-cache", "--no-wait", "--priority-band", "production",
 ]  # fmt: skip
 ENGINE_LOG_MARKERS = (
-    "dtype=torch.bfloat16", "FLASH_ATTN", "data_parallel_size=8", "enable_expert_parallel=True",
-    "01911be34fac", "max_model_len=32768", "max_num_seqs=256",
+    "v0.0.0.dev20260924+marin.01911be34fac", "dtype=torch.bfloat16", "max_seq_len=32768",
+    "tensor_parallel_size=1", "data_parallel_size=8", "quantization=None", "reasoning_parser='grug'",
+    "use_ep=True", "FLASH_ATTN",
 )  # fmt: skip
 ENDPOINT_WAIT_SECONDS = 1800
 # The iris CLI of this checkout, in this interpreter (the package has no __main__).
