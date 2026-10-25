@@ -10,6 +10,7 @@ harness lives on the marin side (``tests/test_snowball_grug_parity.py``) to resp
 levanter -> experiments dependency direction.
 """
 
+import collections
 import json
 import subprocess
 import sys
@@ -32,12 +33,16 @@ from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
+    DenseMLP,
+    GatedNorm,
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
     _activation_spec,
+    silu_fp32,
     validate_single_name_config,
 )
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
@@ -303,6 +308,129 @@ def test_snowball_moe_capacity_is_a_runtime_setting():
     assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).moe_capacity_factor == 1.0
     with pytest.raises(ValueError, match="moe_capacity_factor"):
         _tiny_config(moe_capacity_factor=0.0)
+
+
+def test_snowball_fp32_activations_is_a_runtime_setting():
+    """The flag reaches every GatedNorm, shared MLP, attention and expert MLP, is not exported to HF metadata, and
+    cannot run on sonic_cute's fused BF16 SiLU."""
+    for flag in (False, True):
+        cfg = _tiny_config(fp32_activations=flag)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        t = model.transformer
+        norms = [t.embed_gated_norm, t.final_gated_norm]
+        norms += [n for b in t.blocks for n in (b.attn_gated_norm, b.mlp_gated_norm)]
+        assert {n.fp32_activations for n in norms} == {flag}
+        assert {b.shared.fp32_activations for b in t.blocks} == {flag}
+        assert {b.attn.cfg.fp32_activations for b in t.blocks} == {flag}
+        expected = silu_fp32 if flag else ActivationFunctionEnum.silu
+        assert all(b.mlp.expert_mlp.activation is expected for b in t.blocks)
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "fp32_activations" not in hf
+    assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).fp32_activations is False
+    with pytest.raises(ValueError, match="fp32_activations"):
+        _tiny_config(fp32_activations=True, moe_implementation="sonic_cute")
+
+
+def _bf16(key, shape, scale):
+    return (scale * jax.random.normal(key, shape)).astype(jnp.bfloat16)
+
+
+def _all_eqns(jaxpr) -> list:
+    found = []
+    for eqn in jaxpr.eqns:
+        found.append(eqn)
+        for value in eqn.params.values():
+            for sub in value if isinstance(value, (list, tuple)) else (value,):
+                inner = getattr(sub, "jaxpr", sub)
+                if hasattr(inner, "eqns"):
+                    found += _all_eqns(inner)
+    return found
+
+
+def test_snowball_fp32_activations_round_once():
+    """On, GatedNorm and the shared MLP equal their activations computed in FP32 by hand and cast to BF16 once; off,
+    they equal the BF16 activations, with no FP32 cast in the program."""
+    k = iter(jax.random.split(jax.random.key(0), 8))
+    x = _bf16(next(k), (3, 5, 32), 2.0)
+    w_down, w_up = _bf16(next(k), (32, 16), 0.5), _bf16(next(k), (16, 32), 0.5)
+    w_gate, w_up2, w_down2 = (
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (24, 32), 0.5),
+    )
+
+    def by_hand(fp32):
+        def act(fn, h):
+            return fn(h.astype(jnp.float32)).astype(h.dtype) if fp32 else fn(h)
+
+        hidden = act(jax.nn.silu, jnp.einsum("...d,dr->...r", x, w_down))
+        gated = x * act(jax.nn.sigmoid, jnp.einsum("...r,rd->...d", hidden, w_up))
+        flat = x.reshape(15, 32)
+        mlp = jnp.einsum("tm,md->td", act(jax.nn.silu, flat @ w_gate) * (flat @ w_up2), w_down2)
+        return gated, mlp.reshape(3, 5, 32)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        outputs = {}
+        for flag in (False, True):
+            norm = GatedNorm(w_down=w_down, w_up=w_up, fp32_activations=flag)
+            mlp = DenseMLP(w_gate=w_gate, w_up=w_up2, w_down=w_down2, fp32_activations=flag)
+            outputs[flag] = (norm(x), mlp(x))
+            for got, want in zip(outputs[flag], by_hand(flag)):
+                assert got.dtype == jnp.bfloat16
+                assert np.array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
+            program = _all_eqns(jax.make_jaxpr(lambda v: norm(v))(x).jaxpr)
+            assert any(e.primitive.name == "convert_element_type" for e in program) == flag
+    assert not np.array_equal(np.asarray(outputs[False][0], np.float32), np.asarray(outputs[True][0], np.float32))
+
+
+def _logistic_sites(jaxpr, path: tuple = ()) -> collections.Counter:
+    """Count ``logistic`` eqns (sigmoid; SiLU is ``x * logistic(x)``) by (enclosing primitives, input dtype),
+    walking nested jaxprs (pjit, custom_jvp, scan, remat, cond, shard_map)."""
+    found: collections.Counter = collections.Counter()
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == "logistic":
+            found[(path, eqn.invars[0].aval.dtype.name)] += 1
+        for value in eqn.params.values():
+            for sub in value if isinstance(value, (list, tuple)) else (value,):
+                inner = getattr(sub, "jaxpr", sub)
+                if hasattr(inner, "eqns"):
+                    found += _logistic_sites(inner, (*path, eqn.primitive.name))
+    return found
+
+
+def test_snowball_fp32_activations_cover_every_sigmoid():
+    """Traced BF16 forward: with the flag on, every sigmoid and SiLU takes an FP32 input -- the embed/final and block
+    GatedNorms, the attention head gate (both ``cond`` branches), the shared MLP and the routed experts
+    (``shard_map``). Off, all of them take BF16 and only the router combine (always FP32) does not."""
+    sites = {}
+    for flag in (False, True):
+        cfg = _tiny_config(fp32_activations=flag)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+            model = jax.tree.map(lambda a: a.astype(jnp.bfloat16) if a.dtype == jnp.float32 else a, model)
+            ids = _device_batched_ids(cfg.vocab_size, 8)
+            jaxpr = jax.make_jaxpr(lambda m, i: m(i).array)(model, ids)
+        found = _logistic_sites(jaxpr.jaxpr)
+        sites[flag] = {
+            "top": sum(n for (path, _), n in found.items() if "scan" not in path),
+            "head_gate": sum(n for (path, _), n in found.items() if "cond" in path),
+            "experts": sum(n for (path, _), n in found.items() if "shard_map" in path),
+            "fp32": sum(n for (_, dtype), n in found.items() if dtype == "float32"),
+            "total": sum(found.values()),
+            "dtypes_by_path": found,
+        }
+    on, off = sites[True], sites[False]
+    # Embed + final GatedNorm (2 SiLU, 2 sigmoid); one scanned block: 2 GatedNorms (4), the head gate in both
+    # branches (2), the shared MLP (1), the routed experts (1) and the router combine (1).
+    assert (off["top"], off["head_gate"], off["experts"], off["total"]) == (4, 2, 1, 13)
+    assert {k: on[k] for k in ("top", "head_gate", "experts", "total")} == {
+        k: off[k] for k in ("top", "head_gate", "experts", "total")
+    }
+    assert on["fp32"] == on["total"]
+    assert off["fp32"] == 1, "flag off: only the router combine sigmoid is FP32"
+    router = [(path, dtype) for (path, dtype) in off["dtypes_by_path"] if dtype == "float32"]
+    assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
 
 
 def test_snowball_forward_shapes_and_finite():
