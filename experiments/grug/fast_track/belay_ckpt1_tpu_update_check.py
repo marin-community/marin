@@ -64,8 +64,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
     args = parser.parse_args()
-    if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu":
-        raise RuntimeError("Optimizer checks require explicit JAX_PLATFORMS=tpu")
+    if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
+        raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
         raise RuntimeError("The checkpoint diagnostic requires real optimizer updates")
     run_id = os.environ["BELAY_RUN_ID"]

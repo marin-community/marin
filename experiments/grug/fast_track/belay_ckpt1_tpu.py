@@ -217,8 +217,8 @@ def main() -> None:
     )
     if not args.run:
         return
-    if os.environ.get("JAX_PLATFORMS") != "tpu":
-        raise RuntimeError("Training requires explicit JAX_PLATFORMS=tpu")
+    if os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
+        raise RuntimeError("Training requires JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     log_dir = Path(os.environ["IRIS_OUTPUT_DIR"]) / args.run_id / os.environ.get("HOSTNAME", "host")
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_dir / "native-metrics.jsonl")
