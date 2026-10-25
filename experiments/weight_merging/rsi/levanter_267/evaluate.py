@@ -11,13 +11,16 @@ import os
 import tempfile
 import time
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, iris_ctx
+from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, _run_config_json
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -97,7 +100,9 @@ def run_eval(
             sha256=hashlib.sha256(checkpoint_source.encode()).hexdigest(),
             upstream_task_sha256=checkpoint_entrypoint.PINNED_SOURCES[commit],
             chunk_size=8,
-            note="Checkpoint chunks8 plus selected-prefix MATH500 bookkeeping; grader remains unchanged.",
+            nll_chunk_size=256,
+            nll_native_sha256=checkpoint_entrypoint.NLL_NATIVE_SHA256,
+            note="Generation chunks8 / NLL choice chunks256 plus selected-prefix MATH500 bookkeeping; grader unchanged.",
         ),
         config={**config, "base_url": "<resolved inside Iris; omitted>"},
         server_context=context,
@@ -132,7 +137,15 @@ def run_eval(
         HF_ALLOW_CODE_EVAL="1",
         TQDM_MININTERVAL="30",
     )
-    with tempfile.TemporaryDirectory() as directory:
+    job_info = get_job_info()
+    if job_info is None or not job_info.controller_address:
+        raise RuntimeError("Evaluator watchdog requires its Iris controller identity")
+    controller = ControllerServiceClientSync(
+        address=job_info.controller_address,
+        timeout_ms=10000,
+        interceptors=job_info.credentials.interceptors() if job_info.credentials else (),
+    )
+    with closing(controller), tempfile.TemporaryDirectory() as directory:
         client_path = Path(directory) / "evalchemy_client.py"
         client_path.write_text(effective_source)
         entrypoint = Path(directory) / "checkpoint_entrypoint.py"
@@ -144,9 +157,7 @@ def run_eval(
                 env,
                 config["base_url"] + "/models",
                 timeout=runtime_minutes * 60 - 60,
-                check_gang=functools.partial(
-                    gang_healthy, iris_ctx().client, JobName.from_wire(provenance["serve_job"])
-                ),
+                check_gang=functools.partial(gang_healthy, controller, JobName.from_wire(provenance["serve_job"])),
             )
         except Exception as error:
             # Exception messages can contain resolved endpoint credentials.

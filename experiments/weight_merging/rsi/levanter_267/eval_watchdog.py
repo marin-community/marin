@@ -10,7 +10,7 @@ import subprocess
 import time
 import urllib.request
 
-from iris.resources.state import TERMINAL_TASK_STATES
+from iris.rpc import controller_pb2, job_pb2
 
 
 def models_healthy(url):
@@ -22,15 +22,31 @@ def models_healthy(url):
         return False
 
 
-def gang_healthy(client, job):
-    """Read one serving-gang snapshot; terminal peers invalidate HTTP liveness."""
+def gang_healthy(rpc, job, *, timeout_ms=10000):
+    """Issue one no-retry RPC with a short deadline; require every serving rank."""
+    terminal = {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
+    }
     try:
-        tasks = client.list_tasks(job)
+        tasks = rpc.list_tasks(
+            controller_pb2.Controller.ListTasksRequest(job_id=job.to_wire()), timeout_ms=timeout_ms
+        ).tasks
     except Exception:
         return False
-    if any(task.state in TERMINAL_TASK_STATES for task in tasks):
+    if any(task.state in terminal for task in tasks):
         raise RuntimeError("Serving gang has a terminal task; stopping evaluator")
-    return bool(tasks)
+    expected = {f"{job.to_wire()}/{rank}" for rank in range(4)}
+    return (
+        len(tasks) == 4
+        and {task.task_id for task in tasks} == expected
+        and all(task.state == job_pb2.TASK_STATE_RUNNING for task in tasks)
+    )
 
 
 def run_watched(command, env, models_url, timeout, *, interval=60, failure_seconds=300, check_gang=None):

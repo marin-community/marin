@@ -15,6 +15,8 @@ import importlib
 import importlib.metadata
 import inspect
 import json
+import math
+import numbers
 import os
 import sys
 import textwrap
@@ -113,11 +115,104 @@ def selected_prefix_results(results, limit):
     return dict(results, examples=selected)
 
 
+NLL_NATIVE_SHA256 = "683151acfdfef0991224081eb4cb1c1f666d0789cabcb69403441c8c937c046a"
+
+
+def valid_nll_output(output):
+    """Reject transport failures and nonfinite scores before commit or restore."""
+    if (
+        not isinstance(output, (list, tuple))
+        or len(output) != 2
+        or not isinstance(output[0], numbers.Real)
+        or isinstance(output[0], bool)
+        or not math.isfinite(output[0])
+        or not isinstance(output[1], bool)
+    ):
+        raise RuntimeError("Invalid loglikelihood result; refusing checkpoint and scoring")
+    return float(output[0]), output[1]
+
+
+def checkpoint_loglikelihood(owner, requests, plan_batch, find_restored, *args, chunk_size=256, **kwargs):
+    """Commit choice-level NLL requests without changing requests, order or grading."""
+    manager = owner._manager
+    if manager is None:
+        raise RuntimeError("NLL checkpointing requires the pinned FineStore manager")
+    entries, unique = plan_batch(owner._sample_manifest, requests)
+    restored = manager.restore()
+    owner._sample_manifest.validate_prior_entries(list(restored.values()), unique)
+    keys = []
+    for request, entry in zip(requests, entries, strict=True):
+        if len(request.args) != 2 or not all(isinstance(arg, str) for arg in request.args):
+            raise ValueError("Only materialized context/continuation loglikelihood requests are supported")
+        identity = json.dumps(dict(args=request.args, choice_index=request.idx), sort_keys=True, allow_nan=False)
+        key = dict(
+            task=owner._task_name,
+            request_type="loglikelihood",
+            request_sha256=hashlib.sha256(identity.encode()).hexdigest(),
+            sample_id=entry.unit_id if entry is not None else None,
+        )
+        keys.append(key)
+    results = [None] * len(requests)
+    remaining = []
+    matched_keys = set()
+    for pos, key in enumerate(keys):
+        match = find_restored(restored, [key])
+        if match is not None:
+            matched_keys.add(tuple(sorted(match[0].items())))
+            results[pos] = valid_nll_output(match[1]["output"])
+        else:
+            remaining.append(pos)
+    if set(restored) != matched_keys:
+        raise ValueError("Persisted NLL request identities differ from the materialized request batch")
+    for start in range(0, len(remaining), chunk_size):
+        positions = remaining[start : start + chunk_size]
+        outputs = owner.lm.loglikelihood([requests[pos] for pos in positions], *args, **kwargs)
+        owner._sample_manifest.validate_output_count(len(positions), outputs)
+        outputs = [valid_nll_output(output) for output in outputs]
+        for pos, output in zip(positions, outputs, strict=True):
+            results[pos] = output
+            if entries[pos] is not None:
+                manager.record(keys[pos], dict(output=output, sample=entries[pos].to_dict()))
+        manager.finalize()
+        print(
+            "NLL_CHECKPOINT_COMMITTED",
+            json.dumps(
+                dict(
+                    new_requests=len(positions),
+                    restored_requests=len(requests) - len(remaining),
+                    completed_requests=len(requests) - len(remaining) + start + len(positions),
+                    total_requests=len(requests),
+                )
+            ),
+            flush=True,
+        )
+    owner._sample_manifest.mark_generated(unique, [None] * len(unique))
+    return results
+
+
+def install_nll_checkpointing():
+    native = importlib.import_module("eval.resume.lm_eval_native")
+    if hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() != NLL_NATIVE_SHA256:
+        raise ValueError("Pinned native lm-eval resume source differs; refusing NLL patch")
+    original = native._track_request_method
+
+    @functools.wraps(original)
+    def track(owner, method_name, requests, *args, **kwargs):
+        if method_name != "loglikelihood":
+            return original(owner, method_name, requests, *args, **kwargs)
+        return checkpoint_loglikelihood(
+            owner, requests, native._plan_request_batch, native.find_restored_payload, *args, **kwargs
+        )
+
+    native._track_request_method = track
+
+
 def install_checkpointing(commit, chunk_size=8, math_prefix=False):
     module = importlib.import_module("eval.task")
     source_hash = hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
     if PINNED_SOURCES.get(commit) != source_hash:
         raise ValueError("Evalchemy source differs from the explicitly pinned checkpoint patch")
+    install_nll_checkpointing()
     source = patched_resume_source(inspect.getsource(module.BaseBenchmark._generate_with_resume), chunk_size)
     namespace = {}
     exec(compile(source, "<levanter267-checkpoint-only>", "exec"), module.__dict__, namespace)
@@ -143,7 +238,15 @@ def install_checkpointing(commit, chunk_size=8, math_prefix=False):
         module.find_custom_benchmark_classes = find_selected_classes
     print(
         "BOUNDED_EVALUATOR_PATCH",
-        json.dumps(dict(commit=commit, module_sha256=source_hash, chunk_size=chunk_size, math_prefix=math_prefix)),
+        json.dumps(
+            dict(
+                commit=commit,
+                module_sha256=source_hash,
+                chunk_size=chunk_size,
+                nll_chunk_size=256,
+                math_prefix=math_prefix,
+            )
+        ),
         flush=True,
     )
 
