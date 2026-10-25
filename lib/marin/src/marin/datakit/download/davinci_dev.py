@@ -40,6 +40,7 @@ from marin.datakit.download.rollout_transforms import (
     checked_openai_chat_document,
     load_parquet_batched,
     render_tool_message,
+    repair_assistant_messages,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
@@ -227,7 +228,10 @@ def env_row_to_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("davinci_dev/env/dropped", 1)
         return []
     tag = _success_to_tag(row.get("success") if "success" in row else None)
-    rendered = "\n\n".join(render_tool_message(m) for m in messages)
+    messages, repairs = repair_assistant_messages(messages)
+    if repairs:
+        counters.pipeline.update_counter("davinci_dev/env/orphan_reasoning_closes_repaired", repairs)
+    rendered = "\n\n".join(render_tool_message(message) for message in messages)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.pipeline.update_counter("davinci_dev/env/kept", 1)
@@ -307,7 +311,7 @@ def download_davinci_dev_env_native_step() -> StepSpec:
             input_path=dl.output_path,
             output_path=output_path,
         ),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "v2"},
     )
 
 
@@ -334,7 +338,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.quarantine"},
+        hash_attrs={"version": "2026.10.22.reject-thinking-markup"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA,
