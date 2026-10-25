@@ -18,7 +18,7 @@ from experiments.post_training.identity_context_distill import dataset_audit
 from experiments.post_training.identity_context_distill.dataset_audit import (
     DatasetAuditInputs,
     audit_training_iterator,
-    check_update,
+    checked_update,
 )
 from experiments.post_training.identity_context_distill.sft import identity_sft_config
 from experiments.post_training.identity_context_distill.test_sft import source_arguments
@@ -100,7 +100,7 @@ def test_same_loader_objects_replayed_and_consumed_batches_checked(tmp_path, mon
     for update in range(64):
         consumed = next(replay)
         assert consumed is batch
-        receipt = check_update(consumed, update, frozen)
+        receipt = checked_update(consumed, update, frozen)
         assert receipt["ids"] == [f"row-{index}" for index in range(8)]
         assert receipt["identity_tokens"] == 1 and receipt["supervised_tokens"] == 36
     assert next(replay) is sentinel
@@ -133,4 +133,30 @@ def test_peer_failure_stops_successful_rank(tmp_path, monkeypatch):
     _, frozen, batch = fixture_stream(tmp_path, monkeypatch)
     monkeypatch.setattr(dataset_audit, "gather_host_scalar", lambda value: np.array([value, 1]))
     with pytest.raises(ValueError, match="at least one rank"):
-        check_update(batch, 0, frozen)
+        checked_update(batch, 0, frozen)
+
+
+def test_check_exception_is_synchronized_before_receipt(tmp_path, monkeypatch):
+    config, frozen, batch = fixture_stream(tmp_path, monkeypatch)
+    statuses = []
+
+    def fail_check(*args):
+        raise RuntimeError("batch check failed before its comparison")
+
+    def gather_status(value):
+        statuses.append(value)
+        return np.array([value, 0])
+
+    monkeypatch.setattr(dataset_audit, "check_update", fail_check)
+    monkeypatch.setattr(dataset_audit, "gather_host_scalar", gather_status)
+    with pytest.raises(ValueError, match="at least one rank") as failure:
+        audit_training_iterator(
+            iter([batch] * 64),
+            config=config,
+            completed_updates=0,
+            frozen=frozen,
+            receipt_path=str(tmp_path / "audit.json"),
+        )
+    assert isinstance(failure.value.__cause__, RuntimeError)
+    assert statuses == [0, 0, 1]
+    assert not (tmp_path / "audit.json").exists()

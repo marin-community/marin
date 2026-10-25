@@ -152,37 +152,42 @@ def _fingerprint(array: np.ndarray) -> str:
     return hashlib.sha256(np.asarray(array, dtype="<i4").tobytes()).hexdigest()
 
 
-def check_update(batch: LmExample, update: int, frozen: DatasetAuditInputs) -> dict:
-    """Check a consumed global batch collectively; return its exact token coefficient mass."""
-    tokens = gather_global(batch.tokens.array)
-    weights = gather_global(batch.loss_weight.array)
+def checked_update(batch: LmExample, update: int, frozen: DatasetAuditInputs) -> dict:
+    """Propagate batch-check failures on every rank before the next training step."""
     error = None
     receipt = None
     try:
-        if tokens.shape != (BATCH_SIZE, SEQUENCE_LENGTH) or weights.shape != tokens.shape:
-            raise ValueError("Expected one global eight-sequence batch")
-        if not np.issubdtype(tokens.dtype, np.integer):
-            raise ValueError("Token IDs must be integers")
-        if not np.all((weights == 0) | (weights == 1)):
-            raise ValueError("Loss weights must be binary native assistant masks")
-        identifiers = []
-        for offset, (row, mask) in enumerate(zip(tokens, weights, strict=True)):
-            fingerprint = (_fingerprint(row), _fingerprint(mask))
-            identifier = frozen.fingerprints[fingerprint]
-            expected = frozen.ordered[update * BATCH_SIZE + offset]
-            if identifier != expected["id"] or int(mask.sum()) != expected["supervised_tokens"]:
-                raise ValueError("Consumed batch differs from the frozen ordered stream")
-            identifiers.append(identifier)
-        accounting = account_ordered_occurrences(frozen.rows, identifiers, batch_size=BATCH_SIZE)
-        summary = _summary(accounting.pooled, frozen.rows, identifiers)
-        if summary != frozen.freeze["updates"][update]:
-            raise ValueError("Per-family update integers differ from the freeze")
-        receipt = {"update": update, "ids": identifiers, **summary, "coefficient_mass_not_gradient_share": True}
+        receipt = check_update(batch, update, frozen)
     except Exception as exc:
         error = exc
     _raise_on_any_rank(error)
     assert receipt is not None
     return receipt
+
+
+def check_update(batch: LmExample, update: int, frozen: DatasetAuditInputs) -> dict:
+    """Gather a batch and compute its receipt; use checked_update for failure synchronization."""
+    tokens = gather_global(batch.tokens.array)
+    weights = gather_global(batch.loss_weight.array)
+    if tokens.shape != (BATCH_SIZE, SEQUENCE_LENGTH) or weights.shape != tokens.shape:
+        raise ValueError("Expected one global eight-sequence batch")
+    if not np.issubdtype(tokens.dtype, np.integer):
+        raise ValueError("Token IDs must be integers")
+    if not np.all((weights == 0) | (weights == 1)):
+        raise ValueError("Loss weights must be binary native assistant masks")
+    identifiers = []
+    for offset, (row, mask) in enumerate(zip(tokens, weights, strict=True)):
+        fingerprint = (_fingerprint(row), _fingerprint(mask))
+        identifier = frozen.fingerprints[fingerprint]
+        expected = frozen.ordered[update * BATCH_SIZE + offset]
+        if identifier != expected["id"] or int(mask.sum()) != expected["supervised_tokens"]:
+            raise ValueError("Consumed batch differs from the frozen ordered stream")
+        identifiers.append(identifier)
+    accounting = account_ordered_occurrences(frozen.rows, identifiers, batch_size=BATCH_SIZE)
+    summary = _summary(accounting.pooled, frozen.rows, identifiers)
+    if summary != frozen.freeze["updates"][update]:
+        raise ValueError("Per-family update integers differ from the freeze")
+    return {"update": update, "ids": identifiers, **summary, "coefficient_mass_not_gradient_share": True}
 
 
 def audit_training_iterator(
@@ -197,7 +202,7 @@ def audit_training_iterator(
 
     Call on every rank's main thread. The returned iterator yields the original
     batch objects first, then continues the original loader; no second sampler or
-    iterator is constructed. The worker must call check_update immediately before
+    iterator is constructed. The worker must call checked_update immediately before
     each train_step and retain those consumed-update receipts separately.
     """
     error = None
@@ -222,7 +227,7 @@ def audit_training_iterator(
             error = exc
         _raise_on_any_rank(error)
         assert batch is not None
-        updates.append(check_update(batch, update, frozen))
+        updates.append(checked_update(batch, update, frozen))
         buffered.append(batch)
     prefixes = {}
     error = None
