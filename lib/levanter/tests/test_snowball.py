@@ -1618,3 +1618,73 @@ def test_snowball_four_device_decode_preserves_explicit_cache_sharding():
     np.testing.assert_array_equal(np.asarray(updated.kv_pages.array)[:, 1:], expected[:, 1:])
     assert output.shape == x.shape
     assert bool(jnp.isfinite(output).all())
+
+
+@pytest.mark.timeout(120)
+def test_snowball_attention_project_output_matches_compatible_layout_on_explicit_mesh(monkeypatch):
+    monkeypatch.delenv("JAX_NUM_CPU_DEVICES", raising=False)
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.models.snowball import SnowballAttention, SnowballConfig
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        gate_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+        attention_sharding = NamedSharding(mesh, P(("replica_dcn", "data"), "expert", None, None))
+        compatible_attention_sharding = NamedSharding(
+            mesh, P(("replica_dcn", "data", "expert"), None, None, None)
+        )
+        config = SnowballConfig(
+            hidden_dim=128,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=128,
+            max_seq_len=256,
+            attention_implementation="reference",
+        )
+        x_host = jnp.linspace(-0.5, 0.5, 4 * 256 * 128, dtype=jnp.float32).reshape(4, 256, 128)
+        attention_output_host = jnp.linspace(-0.25, 0.25, 4 * 256 * 2 * 128, dtype=jnp.float32).reshape(
+            4, 256, 2, 128
+        )
+        value_host = jnp.linspace(-0.2, 0.2, 4 * 256 * 1 * 128, dtype=jnp.float32).reshape(4, 256, 1, 128)
+        with jax.set_mesh(mesh):
+            attention = SnowballAttention.init(config, key=jax.random.key(19))
+            attention = eqx.tree_at(
+                lambda module: module.attn_gate,
+                attention,
+                jax.device_put(jnp.full((128, 2), 0.01, dtype=jnp.float32), NamedSharding(mesh, P(None, None))),
+            )
+            x = jax.device_put(x_host, gate_sharding)
+            attention_output = jax.device_put(attention_output_host, attention_sharding)
+            compatible_output = jax.device_put(jax.device_get(attention_output), compatible_attention_sharding)
+            value = jax.device_put(value_host, attention_sharding)
+
+            project_actual = eqx.filter_jit(
+                lambda value_x: attention._project_output(value_x, attention_output, value)
+            )
+            project_reference = eqx.filter_jit(
+                lambda value_x: attention._project_output(value_x, compatible_output, value)
+            )
+            actual = project_actual(x)
+            reference = project_reference(x)
+            np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), rtol=1e-5, atol=1e-5)
+            assert actual.shape == (4, 256, 128)
+            assert bool(jnp.isfinite(actual).all())
+
+            _, input_gradient = eqx.filter_jit(
+                jax.value_and_grad(lambda value_x: jnp.mean(project_actual(value_x)))
+            )(x)
+            assert input_gradient.sharding.spec == x.sharding.spec
+            assert bool(jnp.isfinite(input_gradient).all())
+            assert float(jnp.max(jnp.abs(input_gradient))) > 0
+        """,
+        device_count=4,
+    )

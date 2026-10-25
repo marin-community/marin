@@ -802,6 +802,7 @@ class SnowballAttention(eqx.Module):
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        gate = _partition_match(gate, attn_out)
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
             attn_out,
