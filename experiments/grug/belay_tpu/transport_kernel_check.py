@@ -20,7 +20,7 @@ from levanter.grug._moe.ep_common import _clip_receiver_group_sizes, _expert_gra
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
-from experiments.grug.belay_tpu.ragged_transport_tpu import coalesced_ragged_all_to_all
+from experiments.grug.belay_tpu.ragged_transport_tpu import coalesced_ragged_all_to_all, gather_rows
 
 
 def transfer(values, initial, group_sizes, *, direction, implementation):
@@ -38,6 +38,40 @@ def mismatch_count(actual, expected):
     return jnp.sum(
         jax.lax.bitcast_convert_type(actual, bits_dtype) != jax.lax.bitcast_convert_type(expected, bits_dtype)
     )
+
+
+def check_row_gathers(emit):
+    """Measure the BF16 row permutations used by dispatch and combine on one chip."""
+    with jax.default_device(jax.local_devices()[0]):
+        for case, input_rows in (("dispatch", 32768), ("combine", 327680)):
+            rng = np.random.RandomState(74)
+            values = jnp.asarray(rng.normal(size=(input_rows, 256)), jnp.bfloat16)
+            indices = jnp.asarray(rng.permutation(327680) // (10 if case == "dispatch" else 1), jnp.int32)
+            expected = None
+            for name, function in (("source", lambda x, i: x[i]), ("packed", gather_rows)):
+                compiled = jax.jit(function).lower(values, indices).compile()
+                timings = []
+                for _ in range(7):
+                    start = time.perf_counter()
+                    actual = jax.block_until_ready(compiled(values, indices))
+                    timings.append(time.perf_counter() - start)
+                if expected is None:
+                    expected = actual
+                errors = int(mismatch_count(actual, expected))
+                emit(
+                    {
+                        "stage": "row_gather_comparison",
+                        "case": case,
+                        "implementation": name,
+                        "scope": "single_chip",
+                        "bit_mismatches": errors,
+                        "median_seconds": float(np.median(timings[2:])),
+                        "timings": timings,
+                        "memory": str(compiled.memory_analysis()),
+                    }
+                )
+                if errors:
+                    raise AssertionError(f"Row gather changed {errors} BF16 elements: {case}/{name}")
 
 
 def main():
@@ -141,6 +175,8 @@ def main():
                         del actual
                     del expected, values, initial
         tracker.log_summary({"kernel_check/transport_exact_pass": True})
+    check_row_gathers(emit)
+    tracker.log_summary({"kernel_check/row_gather_exact_pass": True})
     tracker.current_tracker().finish()
 
 

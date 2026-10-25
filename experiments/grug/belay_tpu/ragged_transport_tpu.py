@@ -6,6 +6,8 @@
 import jax
 import jax.numpy as jnp
 
+_SCALAR_BLOCK_WIDTH = 128
+
 
 def gather_rows(values, indices):
     """Copy BF16 pairs as uint32 to avoid TPU subword gather expansion."""
@@ -41,6 +43,34 @@ def restore_segments(packed, initial, offsets, sizes):
     return jnp.where(valid[:, None], selected, initial)
 
 
+def pack_scalar_peers(values, sizes, *, block_width=_SCALAR_BLOCK_WIDTH):
+    """Pack each peer's contiguous scalar segment into whole TPU vector rows."""
+    blocks = (sizes + block_width - 1) // block_width
+    starts = jnp.cumsum(sizes) - sizes
+    block_ends = jnp.cumsum(blocks) * block_width
+    block_starts = block_ends - blocks * block_width
+    capacity = (values.shape[0] + block_width - 1) // block_width + sizes.size
+    positions = jnp.arange(capacity * block_width, dtype=jnp.int32)
+    peers = jnp.minimum(jnp.searchsorted(block_ends, positions, side="right"), sizes.size - 1)
+    within = positions - block_starts[peers]
+    selected = jnp.take(values[:, 0], starts[peers] + within, mode="clip")
+    packed = jnp.where(within < sizes[peers], selected, 0)
+    return packed.reshape(capacity, block_width), blocks
+
+
+def unpack_scalar_peers(packed, sizes, *, rows):
+    """Remove per-peer vector padding from a received scalar buffer."""
+    block_width = packed.shape[1]
+    blocks = (sizes + block_width - 1) // block_width
+    block_starts = (jnp.cumsum(blocks) - blocks) * block_width
+    ends = jnp.cumsum(sizes)
+    starts = ends - sizes
+    positions = jnp.arange(rows, dtype=jnp.int32)
+    peers = jnp.minimum(jnp.searchsorted(ends, positions, side="right"), sizes.size - 1)
+    selected = jnp.take(packed.reshape(-1), block_starts[peers] + positions - starts[peers], mode="clip")
+    return jnp.where(positions < ends[-1], selected, 0)[:, None]
+
+
 def coalesced_ragged_all_to_all(
     values, initial, input_offsets, send_sizes, output_offsets, recv_sizes, *, axis_name: str, peers: int
 ):
@@ -50,22 +80,34 @@ def coalesced_ragged_all_to_all(
     and output segments must be disjoint, and their total sizes must fit their
     static buffers. One small metadata all-to-all supplies incoming destination
     offsets and the remote packed-buffer offsets. No routing capacity changes.
+    FP32 scalar rows are packed into vectors of 128 to avoid TPU expansion of
+    each scalar to the minimum transfer width; only peer boundaries are padded.
     """
     local_experts = send_sizes.size // peers
     peer_sends = send_sizes.reshape(peers, local_experts).sum(axis=1)
     peer_receives = recv_sizes.reshape(peers, local_experts).sum(axis=1)
-    send_starts = jnp.cumsum(peer_sends) - peer_sends
-    receive_starts = jnp.cumsum(peer_receives) - peer_receives
+    packed = compact_segments(values, input_offsets, send_sizes)
+    scalar = values.shape[1] == 1 and values.dtype == jnp.float32
+    transfer_sends, transfer_receives = peer_sends, peer_receives
+    receive_buffer = jnp.zeros_like(initial)
+    if scalar:
+        packed, transfer_sends = pack_scalar_peers(packed, peer_sends)
+        transfer_receives = (peer_receives + _SCALAR_BLOCK_WIDTH - 1) // _SCALAR_BLOCK_WIDTH
+        receive_capacity = (initial.shape[0] + _SCALAR_BLOCK_WIDTH - 1) // _SCALAR_BLOCK_WIDTH + peers
+        receive_buffer = jnp.zeros((receive_capacity, _SCALAR_BLOCK_WIDTH), initial.dtype)
+    send_starts = jnp.cumsum(transfer_sends) - transfer_sends
+    receive_starts = jnp.cumsum(transfer_receives) - transfer_receives
     metadata = jnp.concatenate((output_offsets.reshape(peers, local_experts), receive_starts[:, None]), axis=1)
     incoming = jax.lax.all_to_all(metadata, axis_name, split_axis=0, concat_axis=0, tiled=True)
-    packed = compact_segments(values, input_offsets, send_sizes)
     received = jax.lax.ragged_all_to_all(
         packed,
-        jnp.zeros_like(initial),
+        receive_buffer,
         send_starts,
-        peer_sends,
+        transfer_sends,
         incoming[:, -1],
-        peer_receives,
+        transfer_receives,
         axis_name=axis_name,
     )
+    if scalar:
+        received = unpack_scalar_peers(received, peer_receives, rows=initial.shape[0])
     return restore_segments(received, initial, incoming[:, :-1].reshape(-1), recv_sizes)
