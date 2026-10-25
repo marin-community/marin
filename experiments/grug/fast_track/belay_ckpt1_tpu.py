@@ -5,6 +5,7 @@
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import uuid
 from pathlib import Path
 
 import draccus
+import gcsfs
 from fray.cluster import ResourceConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -25,13 +27,36 @@ ISSUE_URL = "https://github.com/WhenWen/astra-d8-research/issues/253"
 DATA_ROOT = "gs://marin-us-central2"
 TRAIN_CACHE = DATA_ROOT + "/datakit/hero_tok/v16384_shuf/train"
 FULL_STEPS = belay_ckpt1.LADDER_RUNGS["d512"][1]
+TOKENIZER_ROOT = DATA_ROOT + "/tokenizers/hero-bpe-v16384/hf-hub-1.21.0"
+TOKENIZER_HASHES = {
+    "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
+    "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e",
+}
+
+
+def verified_tokenizer(source: str = TOKENIZER_ROOT) -> str:
+    """Load the frozen tokenizer on this execution host and verify every file."""
+    remote = source.startswith("gs://")
+    destination = Path("/tmp/belay-ckpt1-tokenizer") if remote else Path(source)
+    destination.mkdir(parents=True, exist_ok=True)
+    fs = gcsfs.GCSFileSystem(project="hai-gcp-models") if remote else None
+    for name, expected in TOKENIZER_HASHES.items():
+        path = destination / name
+        data = fs.cat(f"{source}/{name}") if fs is not None else path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ValueError(f"Ckpt 1 tokenizer checksum mismatch: {name}")
+        if remote:
+            path.write_bytes(data)
+    return str(destination)
 
 
 def settings(items: tuple[str, ...]) -> dict[str, str]:
     return dict(item.split("=", 1) for item in items)
 
 
-def build_config(run_id: str, output_path: str, tokenizer: str, tpu: str, seed: int) -> train.GrugRunConfig:
+def build_config(
+    run_id: str, output_path: str, tokenizer: str, tpu: str, seed: int, *, expert_axis_size: int = 16
+) -> train.GrugRunConfig:
     """Materialize the upstream recipe, changing only documented TPU bindings."""
     model_settings = settings((*belay_ckpt1.MODEL_SETTINGS, *belay_ckpt1.LADDER_MODEL_SETTINGS))
     model_settings.update(mla_num_heads="4", intermediate_dim="384", shared_expert_intermediate_dim="384")
@@ -60,6 +85,8 @@ def build_config(run_id: str, output_path: str, tokenizer: str, tpu: str, seed: 
     )
     original = recipe.build_config(context)
     chips = {"v4-32": 16, "v4-64": 32}[tpu]
+    if expert_axis_size not in (8, 16):
+        raise ValueError("Ckpt 1 supports the verified 8x2 or candidate 16x1 expert-pool layout")
     trackers = [
         JsonLoggerConfig(),
         WandbConfig(
@@ -84,16 +111,25 @@ def build_config(run_id: str, output_path: str, tokenizer: str, tpu: str, seed: 
     )
     return dataclasses.replace(
         original,
+        model=dataclasses.replace(original.model, moe_ragged_chunks=16 // expert_axis_size),
         data=dataclasses.replace(original.data, tokenizer=tokenizer),
-        # Receiver capacity and accepted token prefixes depend on the expert
-        # group. Keep the source eight ranks instead of changing drop semantics.
+        # EP8/chunks2 and EP16/chunks1 retain the same sixteen capacity pools
+        # of 24 experts and global token order within each expert.
         trainer=dataclasses.replace(
-            original.trainer, trainer=trainer, expert_axis_size=8, replica_axis_size=1, model_axis_size=chips // 8
+            original.trainer,
+            trainer=trainer,
+            expert_axis_size=expert_axis_size,
+            replica_axis_size=1,
+            model_axis_size=chips // expert_axis_size,
         ),
         # Sonic is a GPU kernel. Scatter preserves dropless evaluation semantics;
         # equivalence remains a required TPU gate before claiming reproduction.
         # Upstream evaluates every example (max_examples_per_dataset=None).
-        eval=dataclasses.replace(original.eval, dropless_eval_moe_implementation="scatter"),
+        # Dropless examples are independent; grouping 16 instead of 8 examples
+        # changes neither the evaluated examples nor their weights.
+        eval=dataclasses.replace(
+            original.eval, dropless_eval_moe_implementation="scatter", eval_batch_size=expert_axis_size
+        ),
         processes_per_task=1,
     )
 
@@ -126,13 +162,15 @@ def validate_recipe(config: train.GrugRunConfig) -> None:
         raise ValueError("Expected one flat train cache and 23 evaluation components")
     if any(weight != 0 for name, weight in config.data.train_weights.items() if name != "train"):
         raise ValueError("Evaluation data entered the training mixture")
+    if config.trainer.expert_axis_size * model.moe_ragged_chunks != 16:
+        raise ValueError("Ckpt 1 must retain sixteen capacity pools of 24 experts")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-path", required=True)
-    parser.add_argument("--tokenizer", required=True)
+    parser.add_argument("--tokenizer", default=TOKENIZER_ROOT)
     parser.add_argument("--tpu", choices=("v4-32", "v4-64"), default="v4-32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--config-output", type=Path, required=True)
@@ -140,7 +178,8 @@ def main() -> None:
     # optimizer schedule hidden inside a smoke configuration.
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
-    config = build_config(args.run_id, args.output_path, args.tokenizer, args.tpu, args.seed)
+    tokenizer = verified_tokenizer(args.tokenizer)
+    config = build_config(args.run_id, args.output_path, tokenizer, args.tpu, args.seed)
     validate_recipe(config)
     args.config_output.parent.mkdir(parents=True, exist_ok=True)
     with args.config_output.open("w") as file:

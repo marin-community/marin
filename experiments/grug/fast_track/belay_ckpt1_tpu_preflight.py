@@ -3,8 +3,8 @@
 
 """TPU-only Ckpt 1 access and numerical gates; never performs optimizer updates."""
 
-import hashlib
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -21,13 +21,15 @@ from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.activation import ActivationFunctionEnum
 
-from experiments.grug.fast_track.belay_ckpt1_tpu import DATA_ROOT, SOURCE_COMMIT, build_config, validate_recipe
+from experiments.grug.fast_track.belay_ckpt1_tpu import (
+    DATA_ROOT,
+    SOURCE_COMMIT,
+    TOKENIZER_HASHES,
+    build_config,
+    validate_recipe,
+    verified_tokenizer,
+)
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
-
-TOKENIZER_HASHES = {
-    "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
-    "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e",
-}
 
 
 def emit(stage: str, **values):
@@ -69,14 +71,36 @@ def check_kda():
     emit("kda_oracle_pass", rank=jax.process_index(), fp32_atol=1e-4, bf16_atol=2e-2)
 
 
-def check_ragged(mesh):
+def source_assignment_mask(selected, valid, factor):
+    """Independent EP8/chunks2 capacity oracle in global token order."""
+    tokens, topk = selected.shape
+    experts, ranks, local_experts, chunks = 384, 8, 48, 2
+    physical = max(local_experts, math.ceil(factor * (tokens // ranks) * topk))
+    logical = min(physical, max(local_experts, math.ceil(int(valid.sum()) * topk * factor / ranks)))
+    capacity = max(local_experts // chunks, (logical + chunks - 1) // chunks)
+    flat = np.where(valid[:, None], selected, experts).reshape(-1)
+    keep = np.zeros_like(flat, dtype=bool)
+    for start in range(0, experts, local_experts // chunks):
+        indices = np.flatnonzero((flat >= start) & (flat < start + local_experts // chunks))
+        # Stable expert sort retains global token order (and hence the source's
+        # sender-major order). This does not call any candidate routing helper.
+        ordered = indices[np.argsort(flat[indices], kind="stable")]
+        keep[ordered[:capacity]] = True
+    return keep.reshape(selected.shape)
+
+
+def check_ragged(mesh, *, chunks, concentrated=False):
     """Actual TPU collective vs dense ungated ReLU² oracle, including gradients."""
     rng = np.random.RandomState(1)
     tokens, hidden, intermediate, experts, topk = 128, 32, 16, 384, 10
     x_np = rng.randn(tokens, hidden).astype(np.float32)
     selected_np = np.argsort(rng.rand(tokens, experts), axis=-1)[:, :topk].astype(np.int32)
+    if concentrated:
+        selected_np[:] = np.arange(topk)
     weights_np = np.full((tokens, topk), 1 / topk, np.float32)
     valid_np = np.arange(tokens) % 5 != 3
+    factor = 1.05
+    accepted_np = source_assignment_mask(selected_np, valid_np, factor)
     up_np = (rng.randn(experts, hidden, intermediate) / np.sqrt(hidden)).astype(np.float32)
     down_np = (rng.randn(experts, intermediate, hidden) / np.sqrt(intermediate)).astype(np.float32)
     cotangent_np = rng.randn(tokens, hidden).astype(np.float32)
@@ -89,39 +113,39 @@ def check_ragged(mesh):
         x, weights, cotangent = (place(a, token_spec) for a in (x_np, weights_np, cotangent_np))
         selected = place(selected_np, token_spec)
         valid = place(valid_np, P(("data", "expert")))
+        accepted = place(accepted_np, token_spec)
         up, down = (place(a, P("expert", None, None)) for a in (up_np, down_np))
 
-        def dense(x, up, down, weights):
+        def dense(x, up, down, weights, sel, mask):
             # Replicate this small oracle so explicit-sharding gathers cannot
             # silently turn the reference into the candidate's dispatch path.
-            x, up, down, weights, sel, mask = (
-                jax.sharding.reshard(a, P()) for a in (x, up, down, weights, selected, valid)
-            )
+            x, up, down, weights, sel, mask = (jax.sharding.reshard(a, P()) for a in (x, up, down, weights, sel, mask))
             pre = jnp.einsum("th,tkhi->tki", x, up[sel])
             outputs = jnp.einsum("tki,tkih->tkh", jnp.square(jax.nn.relu(pre)), down[sel])
-            return jnp.einsum("tkh,tk->th", outputs, weights * mask[:, None])
+            return jnp.einsum("tkh,tk->th", outputs, weights * mask)
 
-        def ragged(x, up, down, weights):
+        def ragged(x, up, down, weights, sel, mask):
             return moe_mlp(
                 x,
-                selected,
+                sel,
                 weights,
                 up,
                 down,
-                token_valid=valid,
+                token_valid=mask,
                 activation=ActivationFunctionEnum.relu2,
                 implementation="ragged_all_to_all",
                 mesh=mesh,
-                capacity_factor=4.0,
+                capacity_factor=factor,
                 report_capacity_overflow=True,
-                ragged_expert_chunks=2,
+                ragged_expert_chunks=chunks,
             )
 
-        expected = jax.jit(dense)(x, up, down, weights)
-        actual, counts = jax.jit(ragged)(x, up, down, weights)
+        expected = jax.jit(dense)(x, up, down, weights, selected, accepted)
+        actual, counts = jax.jit(ragged)(x, up, down, weights, selected, valid)
         jax.block_until_ready(actual)
-        if int(counts.dropped) != 0:
-            raise AssertionError("No-drop oracle fixture overflowed")
+        expected_dropped = int(valid_np.sum()) * topk - int(accepted_np.sum())
+        if int(counts.dropped) != expected_dropped:
+            raise AssertionError(f"Capacity mismatch: {int(counts.dropped)} != {expected_dropped}")
 
         def error(actual, expected):
             actual, expected = (jax.sharding.reshard(a, P()) for a in (actual, expected))
@@ -129,36 +153,51 @@ def check_ragged(mesh):
             return jnp.max(jnp.abs(actual - expected) / tolerance)
 
         errors = [float(jax.jit(error)(actual, expected))]
-        args = (x, up, down, weights)
-        expected_grads = jax.jit(jax.grad(lambda *a: jnp.sum(dense(*a) * cotangent), argnums=(0, 1, 2, 3)))(*args)
-        actual_grads = jax.jit(jax.grad(lambda *a: jnp.sum(ragged(*a)[0] * cotangent), argnums=(0, 1, 2, 3)))(*args)
+
+        def dense_loss(x, up, down, weights, sel, mask, cot):
+            cot = jax.sharding.reshard(cot, P())
+            return jnp.sum(dense(x, up, down, weights, sel, mask) * cot)
+
+        def ragged_loss(x, up, down, weights, sel, mask, cot):
+            return jnp.sum(ragged(x, up, down, weights, sel, mask)[0] * cot)
+
+        expected_grads = jax.jit(jax.grad(dense_loss, argnums=(0, 1, 2, 3)))(
+            x, up, down, weights, selected, accepted, cotangent
+        )
+        actual_grads = jax.jit(jax.grad(ragged_loss, argnums=(0, 1, 2, 3)))(
+            x, up, down, weights, selected, valid, cotangent
+        )
         errors.extend(float(jax.jit(error)(a, e)) for a, e in zip(actual_grads, expected_grads, strict=True))
         if not all(np.isfinite(errors)) or max(errors) > 1:
             raise AssertionError(f"Ragged forward/gradient mismatch: normalized errors {errors}")
-    emit("ragged_dense_oracle_pass", rank=jax.process_index(), normalized_errors=errors)
+    emit(
+        "ragged_dense_oracle_pass",
+        rank=jax.process_index(),
+        normalized_errors=errors,
+        expert_ranks=mesh.shape["expert"],
+        chunks=chunks,
+        dropped=expected_dropped,
+        concentrated=concentrated,
+    )
 
 
 def main():
     if os.environ.get("JAX_PLATFORMS") != "tpu":
         raise RuntimeError("This preflight requires real TPU execution")
     fs = gcsfs.GCSFileSystem(project="hai-gcp-models")
-    tokenizer = Path("/tmp/belay-ckpt1-tokenizer")
-    tokenizer.mkdir(exist_ok=True)
-    for name, expected in TOKENIZER_HASHES.items():
-        data = fs.cat(f"{DATA_ROOT}/tokenizers/hero-bpe-v16384/hf-hub-1.21.0/{name}")
-        if hashlib.sha256(data).hexdigest() != expected:
-            raise AssertionError(f"Tokenizer changed: {name}")
-        (tokenizer / name).write_bytes(data)
+    tokenizer = verified_tokenizer()
     stats = json.loads(fs.cat(f"{DATA_ROOT}/datakit/hero_tok/v16384_shuf/train/.stats.json"))
     emit("worker_gcs_access_pass", train_stats=stats, tokenizer_sha256=TOKENIZER_HASHES)
     run_id = os.environ["BELAY_RUN_ID"]
     output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
-    config = build_config(run_id, output_root, str(tokenizer), "v4-32", 0)
+    tpu = os.environ.get("BELAY_TPU", "v4-32")
+    chips = {"v4-32": 16, "v4-64": 32}[tpu]
+    config = build_config(run_id, output_root, str(tokenizer), tpu, 0)
     validate_recipe(config)
     config.trainer.trainer.initialize()
     jax.config.update("jax_default_matmul_precision", "highest")
-    if jax.default_backend() != "tpu" or jax.device_count() != 16:
-        raise AssertionError(f"Expected 16 physical v4 chips, got {jax.devices()}")
+    if jax.default_backend() != "tpu" or jax.device_count() != chips:
+        raise AssertionError(f"Expected {chips} physical v4 chips, got {jax.devices()}")
     (Path(os.environ["IRIS_OUTPUT_DIR"]) / "resolved-config.json").write_text(
         json.dumps(draccus.encode(config), indent=2) + "\n"
     )
@@ -172,8 +211,10 @@ def main():
         device_kind=jax.devices()[0].device_kind,
     )
     check_kda()
-    mesh = compact_grug_mesh(expert_axis_size=8, replica_axis_size=1, model_axis_size=2)
-    check_ragged(mesh)
+    for ranks in (8, 16):
+        mesh = compact_grug_mesh(expert_axis_size=ranks, replica_axis_size=1, model_axis_size=chips // ranks)
+        for concentrated in (False, True):
+            check_ragged(mesh, chunks=16 // ranks, concentrated=concentrated)
     tracker.log_summary({"preflight/access_kda_ragged_pass": True})
     tracker.current_tracker().finish()
     emit("preflight_complete", optimizer_updates=0, rank=jax.process_index())
