@@ -1600,12 +1600,12 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         for _ in range(THRESH_RESOLVE_PASSES):
             betas = np.mean(np.stack([p["qb_beta"] for p in resolved]), axis=0)
             resolved = dump_pass(jnp.asarray(betas, jnp.float32))
-        extra["resolved_qb_beta"] = betas.astype(np.float32)
+        extra["resolved_applied_qb_beta"] = betas.astype(np.float32)
+        extra["resolved_expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in resolved]), axis=0)
         for k in parts[0]:
             if k in per_batch:
-                extra[f"resolved_{k}"] = np.sum(np.stack([p[k] for p in resolved]), axis=0).astype(np.float32)
-            else:
-                extra[f"resolved_{k}"] = np.concatenate([p[k] for p in resolved]).astype(np.float16)
+                continue
+            extra[f"resolved_{k}"] = np.concatenate([p[k] for p in resolved]).astype(np.float16)
         extra["expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in parts]), axis=0).astype(np.float32)
     if jax.process_index() != 0:
         return
