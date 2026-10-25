@@ -100,10 +100,16 @@ def spectrum_stats(eig: np.ndarray) -> dict:
     )
 
 
+def pca(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Descending covariance eigenvalues and eigenvectors (columns) of the rows, on the device in float32."""
+    xd = jnp.asarray(x, jnp.float32)
+    xc = xd - jnp.mean(xd, axis=0, keepdims=True)
+    w, v = jnp.linalg.eigh(xc.T @ xc / max(len(x) - 1, 1))
+    return np.asarray(w[::-1], np.float64), np.asarray(v[:, ::-1], np.float64)
+
+
 def sample_spectrum(x: np.ndarray) -> np.ndarray:
-    xc = x - x.mean(0, keepdims=True)
-    s = np.linalg.svd(xc.astype(np.float64), compute_uv=False)
-    return s**2 / max(len(x) - 1, 1)
+    return np.clip(pca(x)[0], 0, None)
 
 
 CANDIDATES = 4 * (MLE_K + 1)
@@ -162,8 +168,8 @@ def id_report(x: np.ndarray, rng: np.random.Generator) -> dict:
         out["by_n"][str(n)] = row
     n = min(NULL_N, len(x))
     sub = x[rng.choice(len(x), size=n, replace=False)].astype(np.float64)
-    mean, cov = sub.mean(0), np.cov(sub, rowvar=False)
-    gauss = rng.multivariate_normal(mean, cov, size=n, method="eigh").astype(np.float32)
+    w, v = pca(sub)
+    gauss = (sub.mean(0) + (rng.standard_normal((n, len(w))) * np.sqrt(np.clip(w, 0, None))) @ v.T).astype(np.float32)
     shuffled = np.stack([rng.permutation(sub[:, j]) for j in range(sub.shape[1])], axis=1).astype(np.float32)
     out["null_gauss"] = {**intrinsic_dims(gauss), **spectrum_stats(sample_spectrum(gauss))}
     out["null_shuffle"] = {**intrinsic_dims(shuffled), **spectrum_stats(sample_spectrum(shuffled))}
@@ -469,9 +475,8 @@ def run_fit(args, model, mesh, vocab, cls_ids: np.ndarray) -> None:
                 detail["class"] = spectrum_stats(sample_spectrum(xc)) | {"id": id_report(xc, rng), "n": int(m.sum())}
                 detail["structure"] = structure_report(xc, {k: v[m] for k, v in ctx.items()}, ids[m], vocab, cname, rng)
                 cm = xc.mean(0)
-                _, _, vt = np.linalg.svd(xc - cm, full_matrices=False)
                 class_means.append(cm)
-                class_bases.append(vt[:RMAX].T)
+                class_bases.append(pca(xc)[1][:, :RMAX])
             report["selected_detail"][role] = detail
         common.save_json(args.tag, f"manifold_fit_L{i}", report)
         buf = dict(
@@ -652,7 +657,7 @@ def run_geom(args, model, mesh, vocab, cls_ids: np.ndarray) -> None:
                 xc = xj[m].astype(np.float64)
                 cm = {k: v[m] for k, v in ctx.items()}
                 single = cm["token_digits"] == 1
-                pcs = (xc - xc.mean(0)) @ np.linalg.svd(xc - xc.mean(0), full_matrices=False)[2][:32].T
+                pcs = (xc - xc.mean(0)) @ pca(xc)[1][:, :32]
                 det["last_digit_centroids"] = centroid_geometry(xc, cm["last_digit"], rng)
                 det["single_digit_centroids"] = centroid_geometry(xc[single], cm["last_digit"][single], rng)
                 nd = cm["next_first_digit"]
