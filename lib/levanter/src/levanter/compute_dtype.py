@@ -1,3 +1,6 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Explicit per-field exceptions to the model's compute precision policy."""
 
 from collections.abc import Mapping

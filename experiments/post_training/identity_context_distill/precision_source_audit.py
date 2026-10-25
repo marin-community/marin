@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Regional source checkpoint audit, independent of the SFT factory."""
 
 import hashlib

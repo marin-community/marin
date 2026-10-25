@@ -28,6 +28,7 @@ This is a log-probability comparison at matched positions, not raw-logit parity.
 
 import io
 import logging
+import math
 import time
 
 import haliax as hax
@@ -39,6 +40,7 @@ from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from levanter.compute_dtype import cast_model_for_compute
+from levanter.models.snowball import _BATCH_AXES as SNOWBALL_BATCH_AXES
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.interp.snowball_identity.sequences import Sequence
@@ -94,9 +96,9 @@ def positions_records(
         grid = np.full((batch, length), pad_id, dtype=np.int32)
         for row, row_tokens in enumerate(rows):
             grid[row, : len(row_tokens)] = row_tokens
-        actual, top_ids, top_lp, selected = (
-            None if x is None else np.asarray(jax.device_get(x)) for x in scores(model, jnp.asarray(grid), routes)
-        )
+        *outputs, routes_out = scores(model, jnp.asarray(grid), routes)
+        actual, top_ids, top_lp = (np.asarray(jax.device_get(x)) for x in outputs)
+        selected = None if routes_out is None else np.asarray(jax.device_get(routes_out))
         for row, index in enumerate(indices):
             n = len(sequences[index].tokens)
             records[index] = {
@@ -131,10 +133,17 @@ def _dot_generals(jaxpr, found: list) -> list:
 
 def router_dot_dtypes(view, compute_dtype) -> list[dict]:
     """The dtypes of the router dot in the first block of ``view``, read from its traced forward (the dot whose
-    right operand has the router's shape). This is the source witness for the FP32 router dot exception."""
+    right operand has the router's shape). This is the source witness for the FP32 router dot exception.
+
+    The trace is abstract (no arrays are allocated), under the current mesh, with an input the mesh can shard:
+    batch = the product of Snowball's batch axes, sequence = 8 x the context axis."""
     mlp = next(iter(view.transformer.blocks)).mlp
-    x = jnp.zeros((1, 8, mlp.router.shape[0]), compute_dtype)
-    jaxpr = jax.make_jaxpr(lambda m, x: m(x))(mlp, x).jaxpr
+    mesh = jax.sharding.get_abstract_mesh()
+    sizes = {} if mesh.empty else dict(mesh.shape)
+    shape = (math.prod(sizes.get(axis, 1) for axis in SNOWBALL_BATCH_AXES), 8 * sizes.get("context", 1))
+    abstract = jax.tree.map(lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype) if isinstance(a, jax.Array) else a, mlp)
+    x = jax.ShapeDtypeStruct((*shape, mlp.router.shape[0]), compute_dtype)
+    jaxpr = jax.make_jaxpr(lambda m, x: m(x))(abstract, x).jaxpr
     return [
         {"lhs": str(e.invars[0].aval.dtype), "rhs": str(e.invars[1].aval.dtype), "out": str(e.outvars[0].aval.dtype)}
         for e in _dot_generals(jaxpr, [])
@@ -171,10 +180,13 @@ def write_positions(
         view = cast_model_for_compute(model, mp, compute_dtype_overrides)
         records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes)
         dot_dtypes = router_dot_dtypes(view, mp.compute_dtype)
-    if jax.process_index() != 0:
-        return dot_dtypes
+    if jax.process_index() == 0:
+        save_positions(records, path)
+    return dot_dtypes
+
+
+def save_positions(records: dict[str, dict], path: str) -> None:
     buffer = io.BytesIO()
     torch.save(records, buffer)
     fs, local = filesystem_for(path)
     fs.pipe_file(local, buffer.getvalue())
-    return dot_dtypes

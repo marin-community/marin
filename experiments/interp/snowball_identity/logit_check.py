@@ -195,8 +195,13 @@ def compare(positions_path: str, vllm_path: str, scorer_path: str | None, identi
 def candidate_spans(identity_path: str, tokenizer_source: str = SNOWBALL_V01) -> dict:
     """The ``compare`` argument: each contrastive sequence's candidate span and correct indices. Only the tokenizer
     files of ``tokenizer_source`` are read; ``compare`` checks the token ids against the stored vLLM ones."""
-    sequences = build_sequences(load_tokenizer(tokenizer_source), identity_path)
-    return {s.id: (s.score, s.meta["correct"]) for s in sequences if s.score}
+    spans = {}
+    for s in build_sequences(load_tokenizer(tokenizer_source), identity_path):
+        if s.score:
+            if not s.meta or "correct" not in s.meta:
+                raise ValueError(f"{s.id}: a scored sequence without correct candidate indices")
+            spans[s.id] = (s.score, s.meta["correct"])
+    return spans
 
 
 def parity_gate(report: dict) -> list[str]:

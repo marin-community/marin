@@ -3,7 +3,9 @@
 
 """CPU checks of the Levanter positions writer on a tiny random Levanter Snowball."""
 
+import dataclasses
 import json
+import threading
 from types import SimpleNamespace
 
 import equinox as eqx
@@ -15,6 +17,7 @@ import numpy as np
 import pytest
 import torch
 from haliax import Axis
+from jax.sharding import AbstractMesh, AxisType
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
@@ -125,7 +128,7 @@ def test_routes_sidecar_matches_the_observer(mesh_and_model):
         assert torch.equal(single[s.id]["routes"], batched[s.id]["routes"])
 
 
-def test_compute_dtype_override_reaches_the_scored_view(mesh_and_model, tmp_path):
+def test_compute_dtype_override_reaches_the_scored_view(mesh_and_model, tmp_path, monkeypatch):
     mesh, model = mesh_and_model
     policy = jmp.get_policy("p=f32,c=bfloat16")
     # Give the router biases values that BF16 cannot hold, so keeping them in FP32 is observable.
@@ -142,21 +145,18 @@ def test_compute_dtype_override_reaches_the_scored_view(mesh_and_model, tmp_path
         seen.append({str(b.mlp.router_bias.dtype) for b in view.transformer.blocks})
         return original(view, *args)
 
+    monkeypatch.setattr(levanter_positions, "positions_records", spy)
     with jax.set_mesh(mesh):
-        levanter_positions.positions_records = spy
-        try:
-            write_positions(model, policy, SEQUENCES[:1], str(tmp_path / "a.pt"), pad_multiple=4, pad_id=63)
-            write_positions(
-                model,
-                policy,
-                SEQUENCES[:1],
-                str(tmp_path / "b.pt"),
-                pad_multiple=4,
-                pad_id=63,
-                compute_dtype_overrides={"router_bias": "float32"},
-            )
-        finally:
-            levanter_positions.positions_records = original
+        write_positions(model, policy, SEQUENCES[:1], str(tmp_path / "a.pt"), pad_multiple=4, pad_id=63)
+        write_positions(
+            model,
+            policy,
+            SEQUENCES[:1],
+            str(tmp_path / "b.pt"),
+            pad_multiple=4,
+            pad_id=63,
+            compute_dtype_overrides={"router_bias": "float32"},
+        )
     assert seen == [{"bfloat16"}, {"float32"}]
 
 
@@ -174,11 +174,13 @@ def gate_fixture(mesh, model, policy, tmp_path):
         sid: {
             "tokens": r["tokens"],
             "actual": [None, *r["actual"][1:].tolist()],
-            "top": [None]
-            + [
-                dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
-                for ids, values in zip(r["top_ids"][1:], r["top_lp"][1:], strict=True)
-            ],
+            "top": (
+                [None]
+                + [
+                    dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
+                    for ids, values in zip(r["top_ids"][1:], r["top_lp"][1:], strict=True)
+                ]
+            ),
         }
         for sid, r in ours.items()
     }
@@ -256,3 +258,77 @@ def test_router_dot_witness_reads_the_traced_dtypes(mesh_and_model):
     assert bf16 == [{"lhs": "bfloat16", "rhs": "bfloat16", "out": "bfloat16"}]
     assert not levanter_positions.router_dot_is_fp32(bf16)
     assert levanter_positions.router_dot_is_fp32(fp32) and not levanter_positions.router_dot_is_fp32([])
+
+
+@pytest.mark.parametrize("router_dot_fp32", [False, True])
+def test_router_dot_witness_traces_on_the_32_device_mesh(router_dot_fp32):
+    # The real worker mesh (data 2 x expert 4 x context 4), abstract: no devices or arrays are needed.
+    config = dataclasses.replace(CONFIG, num_layers=1, router_dot_fp32=router_dot_fp32)
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh):
+        model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(5))
+        view = levanter_positions.cast_model_for_compute(model, jmp.get_policy("p=f32,c=bfloat16"), None)
+    sizes = {"data": 2, "expert": 4, "context": 4}
+    names = tuple(mesh.axis_names)
+    abstract = AbstractMesh(tuple(sizes.get(n, 1) for n in names), names, axis_types=(AxisType.Explicit,) * len(names))
+    with jax.sharding.use_abstract_mesh(abstract):
+        witness = levanter_positions.router_dot_dtypes(view, jnp.bfloat16)
+    dtype = "float32" if router_dot_fp32 else "bfloat16"
+    assert witness == [{"lhs": dtype, "rhs": dtype, "out": dtype}]
+
+
+def test_pre_update_gate_turns_process_zero_write_failures_into_a_raise(mesh_and_model, tmp_path, monkeypatch):
+    mesh, model = mesh_and_model
+    inputs, trainer, state = gate_fixture(mesh, model, jmp.get_policy("p=f32,c=bfloat16"), tmp_path)
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "parity_gate", lambda report: [])
+    write_json = precision_gate.write_json
+
+    def failing_gate_json(path, value):
+        if path.endswith("gate.json"):
+            raise OSError("bucket unavailable")
+        write_json(path, value)
+
+    monkeypatch.setattr(precision_gate, "write_json", failing_gate_json)
+    with pytest.raises(precision_gate.PrecisionGateFailed, match="did not complete"):
+        precision_gate.make_pre_update_gate(inputs)(trainer, state)
+    receipt = json.loads((tmp_path / "gate" / "ranks" / "0.json").read_text())
+    assert receipt["stage"] == "gated" and receipt["failures"] == 1
+
+    monkeypatch.setattr(precision_gate, "write_json", write_json)
+    monkeypatch.setattr(precision_gate, "save_positions", lambda *args: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(precision_gate.PrecisionGateFailed, match="did not complete"):
+        precision_gate.make_pre_update_gate(inputs)(trainer, state)
+    assert "OSError('full')" in json.loads((tmp_path / "gate" / "gate.json").read_text())["failures"][0]
+
+
+def test_pre_update_gate_stops_every_rank_on_unreadable_inputs(mesh_and_model, tmp_path):
+    mesh, model = mesh_and_model
+    inputs, trainer, state = gate_fixture(mesh, model, jmp.get_policy("p=f32,c=bfloat16"), tmp_path)
+    inputs = dataclasses.replace(inputs, positions=str(tmp_path / "missing.pt"))
+    with pytest.raises(precision_gate.PrecisionGateFailed, match="could not read"):
+        precision_gate.make_pre_update_gate(inputs)(trainer, state)
+    assert json.loads((tmp_path / "gate" / "ranks" / "0.json").read_text())["stage"] == "inputs"
+    assert not (tmp_path / "gate" / "gate.json").exists()
+
+
+def test_deadline_fires_unless_cancelled(mesh_and_model, tmp_path, monkeypatch):
+    fired = threading.Event()
+    precision_gate.Deadline(0.05, on_expire=fired.set)
+    assert fired.wait(5)
+    cancelled = threading.Event()
+    precision_gate.Deadline(0.2, on_expire=cancelled.set).cancel()
+    assert not cancelled.wait(0.5)
+    # The gate cancels its deadline whether it passes or raises.
+    mesh, model = mesh_and_model
+    inputs, trainer, state = gate_fixture(mesh, model, jmp.get_policy("p=f32,c=bfloat16"), tmp_path)
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    timers = []
+
+    def deadline(seconds):
+        timers.append(precision_gate.Deadline(seconds, on_expire=lambda: pytest.fail("deadline fired")))
+        return timers[-1]
+
+    with pytest.raises(precision_gate.PrecisionGateFailed):
+        precision_gate.make_pre_update_gate(inputs, deadline=deadline)(trainer, state)
+    assert timers and timers[0]._done.is_set()

@@ -195,9 +195,9 @@ def test_snowball_state_dict_key_and_shape_manifest():
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
         sd = model.to_state_dict()
     expected = _expected_state_dict_manifest(cfg)
-    assert set(sd.keys()) == set(expected.keys()), (
-        f"missing={set(expected) - set(sd)} unexpected={set(sd) - set(expected)}"
-    )
+    assert set(sd.keys()) == set(
+        expected.keys()
+    ), f"missing={set(expected) - set(sd)} unexpected={set(sd) - set(expected)}"
     for key, shape in expected.items():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
 

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Router compute precision tests using the real positions-writer witness."""
 
 from dataclasses import replace

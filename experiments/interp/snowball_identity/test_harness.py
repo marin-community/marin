@@ -159,18 +159,20 @@ def test_positions_and_logit_check(harness, tmp_path):
         reference[sequence.id] = {
             "tokens": record["tokens"],
             "actual": [None, *record["actual"][1:].tolist()],
-            "top": [None]
-            + [
-                dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
-                for ids, values in zip(record["top_ids"][1:], record["top_lp"][1:], strict=True)
-            ],
+            "top": (
+                [None]
+                + [
+                    dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
+                    for ids, values in zip(record["top_ids"][1:], record["top_lp"][1:], strict=True)
+                ]
+            ),
         }
     (tmp_path / "vllm.json").write_text(json.dumps(reference))
     result = compare(
         str(tmp_path / "out" / "positions.pt"),
         str(tmp_path / "vllm.json"),
         None,
-        {s.id: (s.score, s.meta["correct"]) for s in sequences if s.score},
+        {s.id: (s.score, (s.meta or {})["correct"]) for s in sequences if s.score},
     )
     check = result["positions"]["check"]
     assert check["top1_agree"] == check["positions"] == len(TOKENS) - 1
