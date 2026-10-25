@@ -45,6 +45,23 @@ torch, not much interesting here given jetstream. focused on batch inference I t
 
 ## Technical Design
 
+### Snowball paged serving
+
+Snowball serving uses `levanter.grug.attention.ragged_paged_attention` for
+mixed prefill and decode batches. Queries use the layout
+`[tokens, kv_heads, query_heads_per_group, head_dim]`; KV pages use
+`[pages, page_size, 2 * kv_heads, head_dim]`, with interleaved key/value
+slots. `implementation="reference"` is the portable CPU/GPU path and
+`implementation="tpu"` selects JAX's standard TPU ragged paged-attention
+kernel for eligible FP32 inputs. The TPU path falls back to the reference
+implementation for lower-precision inputs.
+
+The public implementation set is limited to `reference` and `tpu`. The former
+`tpu_fp32_tiles`, `tpu_dma_buffers`, custom TPU decode kernel, compensated
+FP64 arithmetic, and related precision-oracle helpers are removed. Callers
+should use the reference path for CPU validation and the standard TPU path for
+accelerator validation; no compatibility aliases remain.
+
 ### Service Architecture
 The inference server is built around a `GenerationService` that encapsulates:
 - Model loading and initialization via `HFCheckpointConverter`
@@ -90,3 +107,19 @@ The inference server is built around a `GenerationService` that encapsulates:
 - **Configuration**: Uses `draccus` for configuration management, consistent with other Levanter components
 - **Error Handling**: Comprehensive error reporting with proper HTTP status codes
 - **Logging**: Structured logging with configurable verbosity levels
+
+## Paged short-convolution history
+
+`levanter.layers.paged_short_conv` provides the causal history needed by Hero's
+key-projection, attention-output, and MoE-output convolutions. It uses the
+attention page allocation and keeps `min(page_size, kernel_size - 1)` input rows
+per physical page. A page-local ring updates in packed token order; each token
+reads its own request's preceding positions before overwriting a ring entry.
+This supports chunked prefill, incremental decode, and kernels wider than a page.
+
+`ShortConvPageCache` implements `PageCache.copy_page` and `reset`, so a cloned
+partial page receives independent convolution history. Padding does not update
+the rings. The implementation uses a JAX scan and matches the existing
+short-convolution reference's lag-ordered arithmetic. CPU FP32/BF16 parity covers
+mixed request order, page crossings, clone divergence, and reset. This component
+has not yet been integrated into a native Hero model or validated on accelerators.
