@@ -20,6 +20,7 @@ from marinskyrl.speculative_decoding import (  # noqa: E402
     parse_speculative_decoding_config,
 )
 from skyrl_train.entrypoints.main_base import config_dir  # noqa: E402
+from cloud.iris.role_plan import derive_num_nodes, derive_role_plan  # noqa: E402
 
 
 _DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
@@ -108,21 +109,20 @@ def test_local_speculator_uses_model_without_hub_resolution() -> None:
     }
 
 
-def test_null_speculator_keeps_the_default_disabled() -> None:
+def test_default_rollout_pool_stays_within_its_colocated_gpu_budget():
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="ppo_base_config")
+    cfg.trainer.placement.policy_num_nodes = 3
+    cfg.trainer.placement.policy_num_gpus_per_node = 8
+    cfg.trainer.placement.ref_num_nodes = 3
+    cfg.trainer.placement.ref_num_gpus_per_node = 8
+    cfg.generator.num_inference_engines = 12
+    cfg.generator.inference_engine_tensor_parallel_size = 2
 
-    assert cfg.generator.speculative_decoding is None
-    assert (
-        parse_speculative_decoding_config(
-            None,
-            backend=cfg.generator.backend,
-            run_engines_locally=cfg.generator.run_engines_locally,
-            entrypoint="skyrl_train.entrypoints.main_base",
-            colocate_all=cfg.trainer.placement.colocate_all,
-        )
-        is None
-    )
+    plan = derive_role_plan(OmegaConf.to_container(cfg, resolve=True))
+
+    assert derive_num_nodes(plan) == 3
+    assert {claim.role_id for claim in plan.claims} == {"policy", "reference", "rollout"}
 
 
 def test_frozen_object_store_speculator_is_supported(tmp_path: Path) -> None:

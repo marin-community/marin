@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import sys
+import json
+from omegaconf import OmegaConf
+from rolloutengine.models import ModelTurn
+from skyrl_gym.nemotron_tasks import NemotronTaskSession
+from skyrl_gym.task_records import grade_skipped
+from skyrl_train.dataset.tasks import source_row_task
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,12 +65,37 @@ def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
     return path
 
 
-def test_launcher_composes_skipped_grading_for_pure_distillation(tmp_path):
+@pytest.mark.asyncio
+async def test_pure_distillation_session_omits_verifier_credit(tmp_path):
     parsed = parse_rl_config(str(_skipped_grading_config(tmp_path, eval_interval=-1)))
-
     cfg = compose_skyrl_config(parsed, {"job_name": "grading-test", "num_nodes": 1}, _HPCStub()).config
-
-    assert cfg.environment.task_sessions.nemotron_ultra.grading == "skip"
+    lowered = source_row_task(
+        {
+            "env_class": "nemotron_ultra",
+            "prompt": [{"role": "user", "content": "Choose A."}],
+            "extra_info": {
+                "nemotron_ultra": {
+                    "agent": "mcqa_simple_agent",
+                    "route": "task_session",
+                    "record_json": json.dumps({"expected_answer": "A"}),
+                    "request_json": json.dumps({"input": []}),
+                }
+            },
+        },
+        0,
+        source_name="skip-grading",
+        environment_configs=OmegaConf.to_container(cfg.environment.task_sessions, resolve=True),
+    )
+    session = NemotronTaskSession(lowered, None)
+    try:
+        await session.prepare()
+        result = await session.advance(
+            ModelTurn({"role": "assistant", "content": r"\boxed{A}"}, (1,), (2,), (-0.1,), "stop")
+        )
+        assert result.done and result.reward == 0.0
+        assert result.grade is not None and grade_skipped(result.grade)
+    finally:
+        await session.close()
 
 
 def test_launcher_rejects_skipped_grading_with_eval_before_submission(tmp_path):

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import base64
+import pickle
+import fsspec
+from skyrl_train.io import io
+from skyrl_train.rollouts.buffer import RolloutGroup
+from skyrl_train.rollouts.payloads import ObjectStorePayloads
 from pathlib import Path
 from typing import Any
 
@@ -276,15 +281,31 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     assert load_launch_config(path).runtime.training_type == expected
 
 
-def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_object_store_payloads_round_trip_through_the_loaded_launch(tmp_path, monkeypatch):
     raw = _raw_config()
+    expected_uri = "s3://runs/smoke/rollouts/payload.pkl"
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    filesystem = fsspec.filesystem("memory")
+    group = RolloutGroup({"response_ids": [[17, 19]], "rewards": [[0.25]]}, "trial-1", 7, {"uid": "trial-1"})
+    with filesystem.open(expected_uri, "wb") as destination:
+        destination.write(pickle.dumps(group))
+    transport = io.filesystem_and_path
+    monkeypatch.setattr(
+        io,
+        "filesystem_and_path",
+        lambda uri: (filesystem, uri) if uri.startswith("s3://runs/smoke/rollouts/") else transport(uri),
+    )
 
     config = load_launch_config(path)
+    store = ObjectStorePayloads(config.skyrl.trainer.rollout_buffer.object_store_root)
+    [loaded] = await store.fetch([store.object_store_root + "/payload.pkl"])
 
-    assert config.skyrl.trainer.rollout_buffer.object_store_root == "s3://runs/smoke/rollouts"
+    assert (loaded.uid, loaded.policy_step, loaded.prompt) == ("trial-1", 7, {"uid": "trial-1"})
+    assert loaded.trajectory_batch["response_ids"] == [[17, 19]]
+    assert loaded.trajectory_batch["rewards"] == [[0.25]]
 
 
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(

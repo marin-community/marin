@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sys
+
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import create_default_callbacks
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,3 +87,22 @@ def test_parse_rejects_bad_tp_against_declared_heads(tmp_path):
     )
     with pytest.raises(ValueError, match="does not divide"):
         parse_rl_config(str(bad))
+
+
+@pytest.mark.parametrize("export_artifact", [False, True])
+def test_artifact_only_launch_schedules_exports_on_the_requested_steps(math_rl_config_path, export_artifact):
+    cfg = compose_skyrl_config(
+        parse_rl_config(str(math_rl_config_path)),
+        {"job_name": "artifact-only", "num_nodes": 4, "export_hf_artifact": export_artifact, "hf_hub_repo_id": None},
+        _HPCStub(),
+    ).config
+    cfg.trainer.hf_save_interval = 2
+    cfg.trainer.ckpt_interval = 2
+    handler = CallbackHandler(create_default_callbacks(cfg))
+    exports = []
+    for step in (1, 2, 3):
+        state = TrainerState(global_step=step, epoch=0, total_steps=4, num_steps_per_epoch=4)
+        control = handler.call_event("on_step_end", state, TrainerControl())
+        exports.append(control.should_save_hf_model)
+
+    assert exports == ([False, True, False] if export_artifact else [False, False, False])

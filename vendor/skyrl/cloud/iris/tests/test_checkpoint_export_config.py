@@ -14,6 +14,7 @@ from cloud.iris.export_hf_checkpoint import (
     checkpoint_export_launch_config,
 )
 from cloud.iris.launch_config import validate_iris_allocation
+from cloud.iris.iris_backend import _gpu_constraints, _gpu_resources
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.hf_export_schema import HFExportRequest
 
@@ -87,7 +88,7 @@ def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
     assert config.skyrl.checkpoint_export.export_root == request.export_path
 
 
-def test_checkpoint_export_config_preserves_federated_routing() -> None:
+def test_checkpoint_export_targets_the_federated_scheduler_peer() -> None:
     request = _request()
     spec = replace(
         _spec(request),
@@ -97,7 +98,11 @@ def test_checkpoint_export_config_preserves_federated_routing() -> None:
 
     config = checkpoint_export_launch_config(_training_config(), request, spec)
 
-    assert config.iris.target_cluster == "cw-rno2a"
+    resources = _gpu_resources("H100", 4, cpu=16, memory="128GB", disk="256GB")
+    constraints = _gpu_constraints(resources.to_proto(), replicas=1, target_cluster=config.iris.target_cluster)
+    [route] = [constraint.to_proto() for constraint in constraints if constraint.key == "cluster"]
+
+    assert route.value.string_value == "cw-rno2a"
     assert config.iris.parent_cluster_config == "/tmp/marin.yaml"
 
 

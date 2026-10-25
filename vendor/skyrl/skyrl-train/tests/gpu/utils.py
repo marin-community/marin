@@ -1,28 +1,17 @@
-import asyncio
 import os
 import ray
-import time
 import importlib
 from loguru import logger
 from ray.util.placement_group import placement_group
 from omegaconf import DictConfig
 import hydra
-from typing import List
-from transformers import AutoTokenizer
 from functools import lru_cache
 
 from skyrl_train.workers.worker import PPORayActorGroup
-from skyrl_train.dataset import PromptDataset
 from skyrl_train.entrypoints.main_base import config_dir
-from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.utils import get_ray_pg_ready_with_timeout
-from skyrl_train.trajectory_runners.base import ConversationType
-from skyrl_train.utils.utils import peer_access_supported, print_mem, initialize_ray, validate_cfg
-from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ray_wrapped_inference_engines
-from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.inference_engines.base import InferenceEngineInput
+from skyrl_train.utils.utils import peer_access_supported, print_mem, validate_cfg
 
-TEST_DATA_PATH = os.path.expanduser("~/data/gsm8k/validation.parquet")
 
 # Rank diagnostics file the DPO equivalence runner cats at the end of the job stream.
 # run_equivalence.sh references the same filename; keep them in sync.
@@ -95,18 +84,6 @@ def init_worker_with_type(
     return model
 
 
-class Timer:
-    def __init__(self, message):
-        self.message = message
-
-    def __enter__(self):
-        self.start_time = time.time()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        logger.opt(depth=1).info(f"{self.message}, time cost: {time.time() - self.start_time:.2f}s")
-
-
 def get_available_gpus():
     """Get list of available GPU IDs from CUDA_VISIBLE_DEVICES or all available GPUs"""
     cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
@@ -132,27 +109,6 @@ def get_available_gpus():
             return []
 
 
-def get_test_prompts(model: str, num_samples: int = 20) -> List[ConversationType]:
-    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
-    # Ensure pad_token is set correctly
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    dataset = PromptDataset(
-        datasets=[TEST_DATA_PATH],
-        tokenizer=tokenizer,
-        max_prompt_length=512,
-    )
-
-    # Extract the actual prompts from the dataset
-    prompts = []
-    for i in range(min(num_samples, len(dataset))):
-        prompt_data, _, _, _ = dataset[i]  # dataset returns (messages, env_class, extra, uid)
-        prompts.append(prompt_data)
-
-    return prompts
-
-
 @lru_cache(5)
 def log_once(msg):
     logger.info(msg)
@@ -173,61 +129,5 @@ def ray_init_for_tests():
     ray.init(runtime_env={"env_vars": env_vars})
 
 
-async def run_inference(client, prompts, sampling_params):
-    engine_input = InferenceEngineInput(prompts=prompts, sampling_params=sampling_params)
-    return await client.generate(engine_input)
-
-
 # TODO: this is kind of messy. All these information are inside cfg but we are passing them in
 # again. Make a global get_test_config function that is parametrized.
-def init_inference_engines(
-    cfg,
-    model,
-    use_local,
-    tp_size,
-    colocate_all,
-    backend,
-    gpu_memory_utilization=0.6,
-    num_inference_engines=1,
-    sleep_level=2,  # use level 1 in unit tests that do not explicitly sync weights or for LoRA
-    enable_lora=False,
-    max_num_seqs=1024,
-    engine_init_kwargs=None,
-):
-    assert use_local, "This test does not yet support remote engines."
-    assert backend == "vllm"
-    if not ray.is_initialized():
-        initialize_ray(cfg)
-    if colocate_all:
-        pg = placement_group([{"GPU": 1, "CPU": 1}] * tp_size * num_inference_engines, strategy="PACK")
-        get_ray_pg_ready_with_timeout(pg, timeout=30)
-        sleep = True
-    else:
-        pg, sleep = None, False
-
-    tokenizer = AutoTokenizer.from_pretrained(model)
-    eps = create_ray_wrapped_inference_engines(
-        num_inference_engines=num_inference_engines,
-        tensor_parallel_size=tp_size,
-        model_dtype="bfloat16",
-        pretrain=model,
-        seed=42,
-        vllm_v1_disable_multiproc=True,
-        enable_prefix_caching=True,
-        enforce_eager=False,
-        shared_pg=pg,
-        engine_init_timeout_seconds=cfg.generator.engine_init_timeout_seconds,
-        gpu_memory_utilization=gpu_memory_utilization,
-        inference_engine_enable_sleep=sleep,
-        max_num_batched_tokens=8192,
-        max_num_seqs=max_num_seqs,
-        backend=backend,
-        sleep_level=sleep_level,
-        enable_lora=enable_lora,
-        engine_init_kwargs=engine_init_kwargs or {},
-        weight_sync_pause_policy=resolve_weight_sync_pause_policy(cfg.generator),
-    )
-    client = InferenceEngineClient(eps, tokenizer, cfg)
-    if sleep:
-        asyncio.run(client.wake_up())
-    return client, pg

@@ -13,7 +13,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import click
 import pytest
 from click.testing import CliRunner
 from finestore.eval import (
@@ -2482,18 +2481,6 @@ def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
     assert "region_or_cluster=cw-rno2a" in result.output
 
 
-def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_path):
-    config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
-
-    with pytest.raises(click.BadParameter):
-        resolve_model_config("qwen3-8b", config_path)
-
-
-def test_resolve_model_config_requires_one_selector():
-    with pytest.raises(click.BadParameter):
-        resolve_model_config(None, None)
-
-
 def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
     config_path = tmp_path / "invalid.yaml"
     config_path.write_text("{}")
@@ -2761,3 +2748,14 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
+
+
+@pytest.mark.parametrize("both_selectors", [False, True])
+def test_launch_cli_reports_invalid_model_selection_as_usage_error(tmp_path, both_selectors):
+    options = []
+    if both_selectors:
+        path = _write_model_config(tmp_path / "model.yaml")
+        options = ["--model", "qwen3-8b", "--model-config", str(path)]
+    result = CliRunner().invoke(cli, ["launch", *options, "--evals", "mmlu-smoke", "--dry-run"])
+
+    assert result.exit_code == 2

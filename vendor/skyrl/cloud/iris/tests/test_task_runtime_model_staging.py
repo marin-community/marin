@@ -8,7 +8,7 @@ import pytest
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
-from cloud.iris import hf_model_cache, task_runtime
+from cloud.iris import artifacts, hf_model_cache, task_runtime
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, HuggingFaceSnapshotFile, publish_hugging_face_snapshot
 from cloud.iris.task_runtime import (
     _write_final_config,
@@ -18,6 +18,9 @@ from cloud.iris.task_runtime import (
     prepare_policy_tokenizer,
 )
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
+from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
+from types import SimpleNamespace
+import json
 from marinskyrl.resource_locator import RolloutModelLoading
 
 
@@ -215,3 +218,71 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
         assert model.path == "/tmp/policy-metadata"
         assert model.tokenizer_path == "/tmp/policy-metadata"
         assert model.tokenizer_revision is None
+
+
+def _composed_policy_config(launch_values):
+    recipe = Path(__file__).parents[1] / "configs/qwen_megatron_smoke.yaml"
+    return compose_skyrl_config(
+        parse_rl_config(str(recipe)), {"num_nodes": 1, **launch_values}, SimpleNamespace(gpus_per_node=8)
+    ).config
+
+
+def test_composed_policy_locator_materializes_the_published_checkpoint(tmp_path, monkeypatch):
+    source = f"s3://fixture/composed-policy/{tmp_path.name}"
+    memory = fsspec.filesystem("memory")
+    real_transport = artifacts.filesystem_and_path
+
+    def object_store_transport(uri):
+        if uri.startswith("s3://fixture/"):
+            return memory, "/" + uri.removeprefix("s3://")
+        return real_transport(uri)
+
+    monkeypatch.setattr(artifacts, "filesystem_and_path", object_store_transport)
+    snapshot = _memory_model_snapshot(f"composed-source/{tmp_path.name}")
+    manifest = publish_hugging_face_snapshot(snapshot, source, model_id="org/policy", revision="a" * 40)
+    cfg = _composed_policy_config(
+        {
+            "model_path": "/tmp/materialized-model",
+            "model_source_uri": source,
+            "model_source_identity": manifest.identity,
+        }
+    )
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    model = prepare_policy_model(
+        Namespace(
+            model_source_uri=cfg.trainer.policy.model.source_uri,
+            model_source_identity=cfg.trainer.policy.model.source_identity,
+            runtime_profile="megatron",
+            rollout_model_loading=RolloutModelLoading.STAGE_LOCAL,
+        )
+    )
+
+    assert model is not None
+    assert (Path(model.local_path) / "model.safetensors").read_bytes() == snapshot.filesystem.read_bytes(
+        snapshot.root + "/model.safetensors"
+    )
+
+
+def test_composed_revision_selects_the_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
+    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
+    cfg = _composed_policy_config({"model_path": "org/policy", "model_revision": revision})
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def download(model_id, *, revision, destination, allow_patterns):
+        # Hugging Face I/O boundary: the returned bytes identify the selected revision.
+        (destination / "tokenizer.json").write_text(json.dumps({"model": model_id, "revision": revision}))
+        (destination / "tokenizer_config.json").write_text("{}")
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    tokenizer = prepare_policy_tokenizer(
+        Namespace(
+            policy_tokenizer=cfg.trainer.policy.model.tokenizer_path,
+            policy_tokenizer_revision=cfg.trainer.policy.model.tokenizer_revision,
+        )
+    )
+
+    assert tokenizer is not None
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text()) == {
+        "model": "org/policy",
+        "revision": revision,
+    }
