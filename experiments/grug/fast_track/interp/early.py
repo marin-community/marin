@@ -38,7 +38,7 @@ from haliax.partitioning import set_mesh
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
-from experiments.grug.fast_track.interp import categories, common, forward, heads
+from experiments.grug.fast_track.interp import attrib, categories, common, forward, heads
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +216,23 @@ def load_means(tag: str) -> tuple[jax.Array, jax.Array]:
     with fsspec.open(f"{common.OUTPUT_ROOT}/{tag}/attrib.npz", "rb") as f:
         z = np.load(io.BytesIO(f.read()))
         return jnp.asarray(z["head_mean"]), jnp.asarray(z["sub_mean"])
+
+
+def fit_means(params, mesh, num_sequences: int) -> tuple[jax.Array, jax.Array]:
+    """``attrib``'s per-head and per-sublayer means, on ``num_sequences`` of its fit sequences (seed 1)."""
+    _, means_fn, _, _ = attrib.make_fns()
+    head_sum = sub_sum = None
+    n_sum = 0.0
+    with set_mesh(mesh):
+        model = common.compute_model(params)
+        for b in common.train_batches(attrib.BATCH, num_sequences, seed=1):
+            tokens, seg, w = common.device_batch(b, mesh)
+            h, s_, n = means_fn(model, tokens, seg, w)
+            head_sum = h if head_sum is None else head_sum + h
+            sub_sum = s_ if sub_sum is None else sub_sum + s_
+            n_sum += float(n)
+    logger.info("means fit on %d tokens", n_sum)
+    return head_sum / n_sum, sub_sum / n_sum
 
 
 def mean_ablation(head_mean, sub_mean, *, subs=(), heads_=()) -> forward.Ablation:
@@ -897,12 +914,21 @@ def main() -> None:
     parser.add_argument("--tag", default="tn-d512-ckpt1-rno")
     parser.add_argument("--phases", default="ablate,probe,heads,consume")
     parser.add_argument("--out", default="early")
+    parser.add_argument(
+        "--means-sequences",
+        type=int,
+        default=0,
+        help="fit the head / sublayer means in-job on this many train sequences (attrib's fit) instead of attrib.npz",
+    )
     args = parser.parse_args()
     cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    head_mean, sub_mean = load_means(args.tag)
+    if args.means_sequences:
+        head_mean, sub_mean = fit_means(params, mesh, args.means_sequences)
+    else:
+        head_mean, sub_mean = load_means(args.tag)
     vocab = common.vocab_strings()
     t0 = time.time()
     data = eval_rows()
