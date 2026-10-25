@@ -108,3 +108,14 @@ def test_two_round_rms_rounds_before_the_weight_multiply(setup):
     assert (two_round != one_round).any()
     ops = lev.per_op(table, modules, jnp.asarray([[3, 7, 1]]), None, two_round=True)
     assert jnp.array_equal(ops["embed_rmsnorm"], lev.two_round_rms(rms, table[jnp.asarray([[3, 7, 1]])]))
+
+
+def test_composite_two_round_uses_the_two_round_norms(setup):
+    table, modules = setup
+    ids = jnp.asarray([[3, 7, 1, 9]])
+    out = lev.composite_two_round(table, modules, ids)
+    rms, gated = modules["embed"]
+    expected = jax.jit(lambda g, x: g(x))(gated, lev.two_round_rms(rms, table[ids]))
+    # One program vs separate programs may round the gated norm differently; the inputs to it are equal.
+    assert out["embed"].shape == expected.shape
+    assert float(jnp.max(jnp.abs(out["embed"].astype(jnp.float32) - expected.astype(jnp.float32)))) < 0.05

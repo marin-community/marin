@@ -15,7 +15,8 @@ rerun's torch dumps):
 - ``isolated``: every step its own jitted program fed torch's input for that step, so each op's own error is measured
   without what came before it.
 - ``two_round`` / ``two_round_isolated``: ``per_op`` / ``isolated`` with both RMSNorms in vLLM's native-path order
-  (normalized value cast to BF16, then the weight multiply), and ``two_round`` vs ``composite`` at its outputs.
+  (normalized value cast to BF16, then the weight multiply); ``composite_two_round``: the composite with those norms;
+  and both vs ``composite`` at its outputs.
 
 Each mode runs at batch-1, on the gate grid holding the sequence, and on the rerun's 16 x 64 dump grid. The whole
 set runs twice, in two processes: with XLA's defaults, and with ``--xla_allow_excess_precision=false``.
@@ -75,7 +76,7 @@ CHECK_OPS = f"{T310}/diag-l0-ops-r1/check-ops.pt"
 CHECK_OPS_SHA256 = "0488704b205f0c9b844877f81418a61e5bf073ab7c9d7f2555ea3f1b20c73fb5"
 XLA_SETTINGS = {"default": None, "no_excess_precision": "--xla_allow_excess_precision=false"}
 GATED = ("down", "silu", "up", "sigmoid")
-MODES = ("composite", "per_op", "isolated", "two_round", "two_round_isolated")
+MODES = ("composite", "per_op", "isolated", "two_round", "two_round_isolated", "composite_two_round")
 COMPOSITE_OUTPUTS = ("embed", "L0/attn_norm")
 NORMS = {
     "embed": ("embed_norm", "embed_gated_norm", "embed_rmsnorm", "embed_gated", "embed"),
@@ -130,6 +131,21 @@ def composite(table: jax.Array, modules: dict, ids: jax.Array) -> dict[str, jax.
     (e_rms, e_gated), (a_rms, a_gated) = modules["embed"], modules["attn"]
     hidden = e_gated(e_rms(table[ids]))
     return {"embed": hidden, "L0/attn_norm": a_gated(a_rms(hidden))}
+
+
+def _two_round_inline(rms: RMSNorm, x: jax.Array) -> jax.Array:
+    xf = x.astype(jnp.float32)
+    normalized = (xf * jax.lax.rsqrt(jnp.mean(jnp.square(xf), axis=-1, keepdims=True) + rms.eps)).astype(x.dtype)
+    return normalized * rms.weight.astype(x.dtype)
+
+
+@jax.jit
+def composite_two_round(table: jax.Array, modules: dict, ids: jax.Array) -> dict[str, jax.Array]:
+    """``composite`` with both RMSNorms in vLLM's native order, in one program (XLA may fuse the rounding away under
+    its default excess-precision setting)."""
+    (e_rms, e_gated), (a_rms, a_gated) = modules["embed"], modules["attn"]
+    hidden = e_gated(_two_round_inline(e_rms, table[ids]))
+    return {"embed": hidden, "L0/attn_norm": a_gated(_two_round_inline(a_rms, hidden))}
 
 
 def jaxpr_dtypes(fn, *args) -> list[dict]:
@@ -243,6 +259,7 @@ def phase(root: str, setting: str) -> None:
                     "composite": composite(table, modules, ids),
                     "per_op": per_op(table, modules, ids, None),
                     "two_round": per_op(table, modules, ids, None, two_round=True),
+                    "composite_two_round": composite_two_round(table, modules, ids),
                 }
                 if torch_inputs is not None:
                     outputs["isolated"] = per_op(table, modules, ids, torch_inputs)
@@ -254,10 +271,13 @@ def phase(root: str, setting: str) -> None:
                         found[mode][sid] = {name: value[row, :n] for name, value in host.items()}
             result[kind] = {mode: compare(by_sequence, reference) for mode, by_sequence in found.items() if by_sequence}
             # The two-round RMSNorm's own effect at the composite's outputs.
-            result[kind]["two_round_vs_composite"] = compare(
-                {sid: {name: ops[name] for name in COMPOSITE_OUTPUTS} for sid, ops in found["two_round"].items()},
-                found["composite"],
-            )
+            result[kind]["two_round_vs_composite"] = {
+                mode: compare(
+                    {sid: {name: ops[name] for name in COMPOSITE_OUTPUTS} for sid, ops in found[mode].items()},
+                    found["composite"],
+                )
+                for mode in ("two_round", "composite_two_round")
+            }
     result["seconds"] = round(time.time() - started, 1)
     write_json(prefix_join(root, f"{setting}.json"), result)
 
@@ -324,7 +344,8 @@ def main() -> None:
             "isolated (each step fed torch's input; batch-1 only)",
             "two_round (per_op with vLLM's native RMSNorm order: cast to BF16, then the weight multiply)",
             "two_round_isolated (batch-1 only)",
-            "two_round_vs_composite (embed, L0/attn_norm)",
+            "composite_two_round (composite with the two-round RMSNorms, one program)",
+            "two_round_vs_composite (two_round and composite_two_round vs composite at embed, L0/attn_norm)",
         ],
         "grids": [
             "batch1",
