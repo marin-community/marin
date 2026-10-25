@@ -1,28 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 two-arm rerun on the integrated pin: the dropless Levanter Snowball forward with and without the FP32 combine.
+"""#310 diagnostic arm on the integrated pin: the dropless Levanter Snowball forward, one arm per job.
 
-One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. Both arms are the gate's compute
-view (BF16 compute, FP32 router bias, FP32 router dot) on data 2 x expert 4 with ``moe_capacity_factor`` 4 (the
-expert-axis size: dropless), set through the recipe, not by editing the model. They differ only in
-``router_combine_fp32``:
+One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. The arm is the gate's compute view
+(BF16 compute, FP32 router bias, FP32 router dot) on data 2 x expert 4 with ``moe_capacity_factor`` 4 (the
+expert-axis size: dropless), set through the recipe, not by editing the model. ``ARMS`` names the recipe flags each
+arm must have:
 
-- ``dropless``: ``router_combine_fp32`` False.
-- ``dropless-fp32-combine``: ``router_combine_fp32`` True.
+- ``dropless-fp32-combine-fp32-activations``: ``router_combine_fp32`` and ``fp32_activations`` True.
 
-Each arm's runtime recipe is derived in the job (``configure_precision_runtime``) and must equal that arm's reviewed
-runtime receipt, pinned by sha256 in ``ARMS``; the model is then loaded the LR0 probe's way, so the two fields reach
-it through the HF reload.
+The arm's runtime recipe is derived in the job (``configure_precision_runtime``) and must equal the reviewed runtime
+receipt passed at launch with its sha256 (``--runtime-receipt-sha256``); the model is then loaded the LR0 probe's
+way, so the fields reach it through the HF reload.
 
-Per arm, under ``<root>/<arm>/``:
+Under ``<root>/<arm>/``:
 
 - ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records``
   (validity-masked, with the backend's per-layer dispatch drops, gathered at vLLM's stored top-20 ids) and judged
   by ``precision_gate.evaluate``, the gate's own code and thresholds (batch 8, pad multiple 64); ``gate.json`` holds
   the MoE settings, the drops and per-device memory.
 - ``g1.json``: the G1 routes check (``route_proxy_check.check``) against the torch floor's pinned batch-1 top-6 and
-  receipt.
+  receipt; ``g1a.json``: G1a (``route_proxy_check.check_vllm_floor``) against the served-stack floor, marten's
+  pinned vLLM route capture at ``VLLM_CAPTURE``.
 - ``item5.pt``: for the item-5 rows, the top-6 biased router logits at every position and layer from the same
   validity-masked forward on the gate's own batch, with the routes; the receipt summarises the 4th/5th margins at
   the position-layers where Levanter and torch batch-1 choose different expert sets, from both stacks.
@@ -37,7 +37,6 @@ a running maximum over the process).
 """
 
 import argparse
-import gc
 import importlib
 import io
 import json
@@ -121,23 +120,13 @@ TOP = 6
 K = 4
 MARGIN_POSITION = 4
 OPS = ("attn_norm", "attn_out", "mlp_norm", "router_logits", "moe_out", "shared_out", "resid")
-ARMS = {
-    # margay's metadata-only receipts on 4188e87c: t310/runtime-recipe-4188e87c-combine-{off,on}.json
-    "dropless": {
-        "router_combine_fp32": False,
-        "fp32_activations": False,
-        "receipt_sha256": "dcddbf4d59d0863a773e11a97002567dbea622fab52506d9c716fa4b4a30b7d2",
-    },
-    "dropless-fp32-combine": {
-        "router_combine_fp32": True,
-        "fp32_activations": False,
-        "receipt_sha256": "d123ddbdbeed0c3cc843cd247e23d74cb2b21e7538056150da8139843c81fddd",
-    },
-}
-"""The arms differ only in ``router_combine_fp32``; each is bound to its reviewed runtime receipt by sha256."""
+ARMS = {"dropless-fp32-combine-fp32-activations": {"router_combine_fp32": True, "fp32_activations": True}}
+"""The recipe flags each arm's reviewed runtime receipt must give."""
 ITEM5_ROWS = ("contrastive|id296-imp-031|no_system|4", "contrastive|id296-imp-031|no_system|7")
 """Item 5: the rows of the ep4-dropless contrastive maximum (4.28) in r2."""
 FLOOR = f"{T310}/diag-torch-floor-r1"
+VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
+"""Byte copies of marten's capture (``marten-task310-vllm-routes-r1/capture``), pinned in ``route_proxy_check``."""
 POLICY = "p=f32,c=bfloat16,o=f32"
 MODULE = "experiments.interp.snowball_identity.moe_drop_diagnostic"
 INPUTS = gate_inputs("unused", f"{T310}/torch-ref-queue-r1/results/t310-router-rounding-r1/routing.json")
@@ -518,7 +507,8 @@ def score_positions(view, sequences: list[Sequence]) -> tuple[dict, dict]:
 
 
 def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref, floor) -> dict:
-    """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins."""
+    """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins, and the
+    vLLM capture's ``pass1`` / ``pass2`` routes for G1a."""
     started = time.time()
     memory_before = device_memory()
     out = prefix_join(root, name)
@@ -536,6 +526,9 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
         records, dispatch = score_positions(view, sequences)
         dot_dtypes = router_dot_dtypes(view, jnp.bfloat16)
         g1 = route_proxy_check.check(records, floor["top6"], floor["receipt"])
+        g1a = route_proxy_check.check_vllm_floor(
+            records, floor["top6"], floor["receipt"], floor["pass1"], floor["pass2"]
+        )
         positions_path = prefix_join(out, "positions.pt")
         save_positions(records, positions_path)
         moe = {
@@ -552,6 +545,13 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             "floor_receipt_sha256": route_proxy_check.FLOOR_RECEIPT_SHA256,
         }
         write_json(prefix_join(out, "g1.json"), g1)
+        g1a["inputs"] = g1["inputs"] | {
+            "vllm_capture": VLLM_CAPTURE,
+            "vllm_receipt_sha256": route_proxy_check.VLLM_RECEIPT_SHA256,
+            "vllm_pass1_sha256": route_proxy_check.VLLM_PASS1_SHA256,
+            "vllm_pass2_sha256": route_proxy_check.VLLM_PASS2_SHA256,
+        }
+        write_json(prefix_join(out, "g1a.json"), g1a)
 
         item5 = item5_dumps(view, sequences)
         dumps, dump_batch = levanter_dumps(view, check)
@@ -604,6 +604,12 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             "failures": g1["failures"],
             "totals": g1["totals"],
         },
+        "g1a": {
+            "layers_passing": g1a["layers_passing"],
+            "lines_passing": g1a["lines_passing"],
+            "overall": g1a["overall"],
+            "failures": g1a["failures"],
+        },
         "item5": item5_summary,
         "dump_batch_grid": dump_batch["grid"],
         "sublayers_vs_torch": compare_dumps(dumps, torch_ref, bias),
@@ -627,7 +633,8 @@ def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
 
 
 def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generation_bytes: bytes):
-    """The arm's runtime recipe, derived as the LR0 probe derives it, which must equal the arm's reviewed receipt."""
+    """The arm's runtime recipe, derived as the LR0 probe derives it, which must equal the reviewed receipt and give
+    the arm's flags."""
     base = base_config(root, f"diag-{name}", config_bytes, generation_bytes, receipt)
     reference = receipt["routing_reference"]
     config, observed = configure_precision_runtime(
@@ -657,10 +664,17 @@ def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generat
 def load_floor() -> dict:
     top6 = route_proxy_check.load_pinned(f"{FLOOR}/batch1/top6.pt", route_proxy_check.TORCH_TOP6_SHA256)
     receipt = route_proxy_check.load_pinned(f"{FLOOR}/receipt.json", route_proxy_check.FLOOR_RECEIPT_SHA256)
-    return {"top6": torch.load(io.BytesIO(top6), map_location="cpu"), "receipt": json.loads(receipt)}
+    route_proxy_check.load_pinned(f"{VLLM_CAPTURE}/receipt.json", route_proxy_check.VLLM_RECEIPT_SHA256)
+    passes = {
+        f"pass{n}": torch.load(
+            io.BytesIO(route_proxy_check.load_pinned(f"{VLLM_CAPTURE}/pass-{n}/routes.pt", sha)), map_location="cpu"
+        )
+        for n, sha in ((1, route_proxy_check.VLLM_PASS1_SHA256), (2, route_proxy_check.VLLM_PASS2_SHA256))
+    }
+    return {"top6": torch.load(io.BytesIO(top6), map_location="cpu"), "receipt": json.loads(receipt), **passes}
 
 
-def diagnostic_worker(root: str, receipts: dict[str, bytes]) -> None:
+def diagnostic_worker(root: str, name: str, receipt_bytes: bytes, receipt_sha256: str) -> None:
     check_pod_storage()
     started = time.time()
     torch_started = time.time()
@@ -680,32 +694,27 @@ def diagnostic_worker(root: str, receipts: dict[str, bytes]) -> None:
     result: dict = {
         "torch_seconds": round(torch_seconds, 1),
         "torch_routes_equal_gate_routes_layers_0_2": torch_routes_match_gate_reference(torch_ref),
-        "receipts": {name: arm["receipt_sha256"] for name, arm in ARMS.items()},
+        "runtime_receipt_sha256": receipt_sha256,
         "arms": {},
     }
     write_json(prefix_join(root, "receipt.json"), result)
-    for name, arm in ARMS.items():
-        receipt = approved_receipt(receipts[name], arm["receipt_sha256"])
-        config = arm_config(name, receipt, root, config_bytes, generation_bytes)
-        load_started = time.time()
-        view, mesh, trainer_config = load_view(config, receipt, source)
-        result[f"load_seconds_{name}"] = round(time.time() - load_started, 1)
-        result["arms"][name] = run_arm(
-            name,
-            view,
-            mesh,
-            trainer_config,
-            config.trainer.compute_dtype_overrides,
-            root,
-            sequences,
-            check,
-            torch_ref,
-            floor,
-        )
-        write_json(prefix_join(root, "receipt.json"), result)
-        del view
-        gc.collect()
-        jax.clear_caches()
+    receipt = approved_receipt(receipt_bytes, receipt_sha256)
+    config = arm_config(name, receipt, root, config_bytes, generation_bytes)
+    load_started = time.time()
+    view, mesh, trainer_config = load_view(config, receipt, source)
+    result[f"load_seconds_{name}"] = round(time.time() - load_started, 1)
+    result["arms"][name] = run_arm(
+        name,
+        view,
+        mesh,
+        trainer_config,
+        config.trainer.compute_dtype_overrides,
+        root,
+        sequences,
+        check,
+        torch_ref,
+        floor,
+    )
     result["seconds"] = round(time.time() - started, 1)
     write_json(prefix_join(root, "receipt.json"), result)
 
@@ -721,8 +730,9 @@ def main() -> None:
     launch = sub.add_parser("launch", help="print the plan; with --run, submit one H100x8 job")
     launch.add_argument("--job-name", required=True)
     launch.add_argument("--root", required=True, help=f"fresh prefix under {T310}/")
-    for name in ARMS:
-        launch.add_argument(f"--receipt-{name}", required=True, help=f"local runtime receipt for the {name} arm")
+    launch.add_argument("--arm", choices=sorted(ARMS), required=True)
+    launch.add_argument("--runtime-receipt", required=True, help="local reviewed runtime receipt for the arm")
+    launch.add_argument("--runtime-receipt-sha256", required=True)
     launch.add_argument("--timeout-seconds", type=int, default=2700)
     launch.add_argument("--priority", choices=("interactive", "production"), default="production")
     launch.add_argument("--expect-commit")
@@ -737,9 +747,15 @@ def main() -> None:
 def launch_job(args) -> None:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
-    receipts = {name: Path(getattr(args, f"receipt_{name.replace('-', '_')}")).read_bytes() for name in ARMS}
-    for name, arm in ARMS.items():
-        approved_receipt(receipts[name], arm["receipt_sha256"])
+    receipt_bytes = Path(args.runtime_receipt).read_bytes()
+    receipt = approved_receipt(receipt_bytes, args.runtime_receipt_sha256)
+    model = receipt["runtime_model_config"]
+    arm = ARMS[args.arm]
+    if (model.get("router_combine_fp32"), model.get("fp32_activations")) != (
+        arm["router_combine_fp32"],
+        arm["fp32_activations"],
+    ):
+        raise ValueError(f"receipt flags {model} do not match arm {args.arm}: {arm}")
     if not args.root.startswith(f"{T310}/diag-"):
         raise ValueError(f"root must be a fresh {T310}/diag-* prefix")
     resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768GB", disk="1TB", target_cluster="cw-rno2a")
@@ -748,7 +764,9 @@ def launch_job(args) -> None:
         "commit": head,
         "clean": not dirty,
         "root": args.root,
-        "arms": ARMS,
+        "arm": {args.arm: ARMS[args.arm]},
+        "runtime_receipt": args.runtime_receipt,
+        "runtime_receipt_sha256": args.runtime_receipt_sha256,
         "capacity_factor": CAPACITY_FACTOR,
         "expert_axis": EXPERT_AXIS,
         "item5_rows": ITEM5_ROWS,
@@ -757,6 +775,13 @@ def launch_job(args) -> None:
             "torch_top6_sha256": route_proxy_check.TORCH_TOP6_SHA256,
             "floor_receipt_sha256": route_proxy_check.FLOOR_RECEIPT_SHA256,
             "rule": {"k": route_proxy_check.K_RATE, "margin_factor": route_proxy_check.MARGIN_FACTOR},
+        },
+        "g1a": {
+            "vllm_capture": VLLM_CAPTURE,
+            "vllm_receipt_sha256": route_proxy_check.VLLM_RECEIPT_SHA256,
+            "vllm_pass1_sha256": route_proxy_check.VLLM_PASS1_SHA256,
+            "vllm_pass2_sha256": route_proxy_check.VLLM_PASS2_SHA256,
+            "rule": {"k": route_proxy_check.K_RATE_VLLM, "margin_factor": route_proxy_check.MARGIN_FACTOR},
         },
         "gate_inputs": vars(INPUTS),
         "resources": "1 x H100x8 cw-rno2a, 64 cpu, 768GB, 1TB",
@@ -776,7 +801,13 @@ def launch_job(args) -> None:
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
-    entrypoint = Entrypoint.from_callable(importlib.import_module(MODULE).diagnostic_worker, args.root, receipts)
+    entrypoint = Entrypoint.from_callable(
+        importlib.import_module(MODULE).diagnostic_worker,
+        args.root,
+        args.arm,
+        receipt_bytes,
+        args.runtime_receipt_sha256,
+    )
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(

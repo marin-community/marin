@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
+import json
+from types import SimpleNamespace
 
 import haliax as hax
 import jax
@@ -181,3 +184,37 @@ def test_scoring_gathers_at_the_stored_vllm_ids(monkeypatch):
     diag.score_positions("view", ["a", "b"])
     assert seen["args"] == (diag.BATCH, diag.PAD_MULTIPLE, diag.PAD_ID)
     assert seen["kwargs"] == {"routes": True, "reference_ids": {"path": diag.INPUTS.vllm, "count": 2}}
+
+
+def _launch_args(tmp_path, runtime: dict, sha: str | None = None):
+    receipt = tmp_path / "receipt.json"
+    receipt.write_bytes(json.dumps({"runtime_model_config": runtime}).encode())
+    return SimpleNamespace(
+        job_name="t",
+        root=f"{diag.T310}/diag-test",
+        arm="dropless-fp32-combine-fp32-activations",
+        runtime_receipt=str(receipt),
+        runtime_receipt_sha256=sha or hashlib.sha256(receipt.read_bytes()).hexdigest(),
+        timeout_seconds=2700,
+        priority="production",
+        expect_commit=None,
+        run=False,
+    )
+
+
+def test_launch_plan_binds_the_receipt_sha_and_both_checkers(tmp_path, capsys):
+    args = _launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": True})
+    diag.launch_job(args)
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["runtime_receipt_sha256"] == args.runtime_receipt_sha256
+    assert plan["arm"] == {args.arm: {"router_combine_fp32": True, "fp32_activations": True}}
+    assert plan["g1a"]["vllm_pass1_sha256"] == diag.route_proxy_check.VLLM_PASS1_SHA256
+    assert plan["g1a"]["rule"]["k"] == 1.25
+    assert plan["h100_hour_ceiling"] == 6.0
+
+
+def test_launch_refuses_a_receipt_without_the_arm_flags(tmp_path):
+    with pytest.raises(ValueError, match="do not match arm"):
+        diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": False}))
+    with pytest.raises(ValueError, match="differs from the reviewed receipt"):
+        diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": True}, "0" * 64))
