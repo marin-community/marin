@@ -543,14 +543,20 @@ def full_logp(model, hidden: jax.Array) -> jax.Array:
     return jax.nn.log_softmax(logits, axis=-1)
 
 
-def run_steer(model, mesh, deep: dict, layer: int, expert: int, spec: list[dict]) -> dict:
-    """Each spec entry: ``unit``, ``mode`` ("scale" or "set"), ``value``, ``targets`` (token ids of the hypothesis).
-    Steered wherever the expert is routed, on the expert's richest windows."""
+def run_steer(model, mesh, deep: dict, layer: int, expert: int, spec: dict) -> dict:
+    """``spec``: ``sets`` (token-id lists whose log-probability is recorded at every position, e.g. the digits by
+    first digit) and ``runs`` (each ``unit``, ``mode`` "scale" or "set", ``value``). Each run sets the unit's
+    activation (``value x act``, or ``value``) wherever its expert is routed (natural routing), on the expert's
+    richest windows; recorded per position: the set log-probabilities, the next token's loss change, the KL from the
+    clean distribution and the top-1."""
     toks, segs, valid, _ = richest_windows(deep)
     base = forward.no_ablation()
+    sets = np.zeros((len(spec["sets"]), V), bool)
+    for j, ids in enumerate(spec["sets"]):
+        sets[j, np.asarray(ids, np.int64)] = True
 
     @jax.jit
-    def run(model, tokens, seg, unit, mult, mean, targets):
+    def run(model, tokens, seg, unit, mult, mean, sets):
         abl = base._replace(
             neuron_mult=base.neuron_mult.at[layer, expert, unit].set(mult),
             neuron_mean=base.neuron_mean.at[layer, expert, unit].set(mean),
@@ -563,33 +569,37 @@ def run_steer(model, mesh, deep: dict, layer: int, expert: int, spec: list[dict]
             .max((lay["expert_sorted"] == expert).astype(jnp.float32))
         )
         lp = full_logp(model, tr["hidden"])
-        lp_set = jax.scipy.special.logsumexp(jnp.where(targets[None, None, :], lp, -jnp.inf), axis=-1)
-        return tr["top_ids"][..., 0], tr["loss"], rmask.reshape(toks.shape), lp_set, lp
+        lp_sets = jnp.stack(
+            [
+                jax.scipy.special.logsumexp(jnp.where(sets[j][None, None, :], lp, -jnp.inf), axis=-1)
+                for j in range(len(sets))
+            ],
+            axis=-1,
+        )
+        return tr["top_ids"][..., 0], tr["loss"], rmask.reshape(toks.shape), lp_sets, lp
 
     @jax.jit
     def kl_of(lp0, lp1):
         return jnp.sum(jnp.exp(lp0) * (lp0 - lp1), axis=-1)
 
     out = {}
+    t0 = time.time()
     with set_mesh(mesh):
-        tokens, seg = jnp.asarray(toks), jnp.asarray(segs)
-        clean = None
-        for j, s in enumerate(spec):
-            targets = np.zeros(V, bool)
-            targets[np.asarray(s["targets"], np.int64)] = True
-            tj = jnp.asarray(targets)
-            unit = jnp.asarray(s["unit"], jnp.int32)
-            top0, loss0, rmask, set0, lp0 = run(model, tokens, seg, unit, 1.0, 0.0, tj)
-            if clean is None:
-                clean = dict(top0=top0, loss0=loss0)
-            mult, mean = (float(s["value"]), 0.0) if s["mode"] == "scale" else (0.0, float(s["value"]))
-            top1, loss1, _, set1, lp1 = run(model, tokens, seg, unit, mult, mean, tj)
-            rec = dict(top1=top1, dloss=loss1 - loss0, set0=set0, set1=set1, kl=kl_of(lp0, lp1), routed=rmask)
-            for k, v in rec.items():
-                out[f"s{j}/{k}"] = np.asarray(v, np.int32 if k == "top1" else np.float32)
-            logger.info("steer %d/%d %s", j + 1, len(spec), s.get("name", ""))
-        out["top0"] = np.asarray(clean["top0"], np.int32)
-        out["loss0"] = np.asarray(clean["loss0"], np.float32)
+        tokens, seg, sets_d = jnp.asarray(toks), jnp.asarray(segs), jnp.asarray(sets)
+        top0, loss0, rmask, sets0, lp0 = run(model, tokens, seg, jnp.asarray(0, jnp.int32), 1.0, 0.0, sets_d)
+        for j, r in enumerate(spec["runs"]):
+            mult, mean = (float(r["value"]), 0.0) if r["mode"] == "scale" else (0.0, float(r["value"]))
+            top1, loss1, _, sets1, lp1 = run(model, tokens, seg, jnp.asarray(r["unit"], jnp.int32), mult, mean, sets_d)
+            out[f"r{j}/top1"] = np.asarray(top1, np.int32)
+            out[f"r{j}/dloss"] = np.asarray(loss1 - loss0, np.float16)
+            out[f"r{j}/dsets"] = np.asarray(sets1 - sets0, np.float16)
+            out[f"r{j}/kl"] = np.asarray(kl_of(lp0, lp1), np.float16)
+            if j % 20 == 0:
+                logger.info("steer run %d/%d (%.0fs)", j + 1, len(spec["runs"]), time.time() - t0)
+        out["top0"] = np.asarray(top0, np.int32)
+        out["loss0"] = np.asarray(loss0, np.float32)
+        out["sets0"] = np.asarray(sets0, np.float32)
+        out["routed"] = np.asarray(rmask, np.float32)
     out["window_tokens"] = toks
     out["window_segments"] = segs
     out["window_valid"] = valid
