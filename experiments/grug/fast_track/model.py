@@ -341,6 +341,11 @@ class GrugModelConfig:
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_state_block_v: int = 32
     """d_v tile of the fused KDA state pass (same math)."""
+    kda_key_dim: int | None = None
+    """KDA per-head query/key width: the state rows and decay channels (None: ``inferred_head_dim``). With
+    ``kda_value_dim`` it reshapes each head's ``d_k x d_v`` state (64 x 256 keeps the 128 x 128 state size)."""
+    kda_value_dim: int | None = None
+    """KDA per-head value/output width: the state columns (None: ``inferred_head_dim``)."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
@@ -467,6 +472,16 @@ class GrugModelConfig:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
+        for name, width in (("kda_key_dim", self.kda_key_dim), ("kda_value_dim", self.kda_value_dim)):
+            # The fused KDA chunk kernels tile both state dims in powers of two.
+            if width is not None and (width < 16 or width & (width - 1)):
+                raise ValueError(f"{name} must be a power of two >= 16, got {width}")
+        if self.local_mixer == LocalMixer.KDA and self.kda_head_value_dim % min(
+            self.kda_state_block_v, self.kda_head_value_dim
+        ):
+            raise ValueError(
+                f"kda_state_block_v={self.kda_state_block_v} must divide the KDA value width {self.kda_head_value_dim}"
+            )
         if self.entropy_skip_layers:
             if not self.attn_res:
                 raise ValueError("entropy_skip_layers needs attn_res")
@@ -512,6 +527,14 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def kda_head_key_dim(self) -> int:
+        return self.inferred_head_dim if self.kda_key_dim is None else self.kda_key_dim
+
+    @property
+    def kda_head_value_dim(self) -> int:
+        return self.inferred_head_dim if self.kda_value_dim is None else self.kda_value_dim
 
     @property
     def stored_kv_heads(self) -> int:
@@ -943,23 +966,24 @@ class KimiDeltaAttention(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KimiDeltaAttention":
         k_q, k_k, k_v, k_o, k_g, k_ad, k_au, k_b, k_dt = random.split(key, 9)
-        d, n, h, r, std = cfg.hidden_dim, cfg.num_heads, cfg.inferred_head_dim, _KDA_GATE_RANK, cfg.initializer_std
+        d, n, r, std = cfg.hidden_dim, cfg.num_heads, _KDA_GATE_RANK, cfg.initializer_std
+        h, hv = cfg.kda_head_key_dim, cfg.kda_head_value_dim  # state rows (q/k, decay) and columns (v, output)
         beta_std = std * (cfg.init_std_mult_gates if cfg.init_std_mult_beta is None else cfg.init_std_mult_beta)
         return KimiDeltaAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
-            w_g=reshard(_init_weight(k_g, (d, n * h), std * cfg.init_std_mult_gates), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (d, n * hv), std), P(_FSDP_AXES, "model")),
+            w_o=reshard(_init_weight(k_o, (n * hv, d), std), P("model", _FSDP_AXES)),
+            w_g=reshard(_init_weight(k_g, (d, n * hv), std * cfg.init_std_mult_gates), P(_FSDP_AXES, "model")),
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(_init_weight(k_au, (r, n * h), std), P(None, "model")),
             a_log=jnp.zeros((n,)),
             dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, h)),
             w_beta=reshard(_init_weight(k_b, (d, n), beta_std), P(None, None)),
-            o_norm=RMSNorm.init(h, 1e-6),
+            o_norm=RMSNorm.init(hv, 1e-6),
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
-            sconv_v=ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+            sconv_v=ShortConv.init(n * hv, cfg.sconv_kernel, cfg.sconv_impl),
             cfg=cfg,
         )
 
@@ -973,12 +997,12 @@ class KimiDeltaAttention(eqx.Module):
         """``kv_input`` (``attn_res_kv_layers``) is the normed stream that the ``k`` / ``v`` projections (and their
         SConvs) read instead of ``x``; beta and the decay stay on ``x``. Also returns logging stats."""
         cfg = self.cfg
-        head_dim = cfg.inferred_head_dim
+        value_dim = cfg.kda_head_value_dim
         b, s, _ = x.shape
 
         def project(w: jax.Array, conv: ShortConv, source: jax.Array) -> jax.Array:
             y = jax.nn.silu(conv(_proj(source, w), segment_ids))
-            return rearrange(y, "... (n d) -> ... n d", d=head_dim)
+            return rearrange(y, "... (n d) -> ... n d", n=cfg.num_heads)
 
         kv_source = x if kv_input is None else kv_input
         q = project(self.w_q, self.sconv_q, x)
@@ -1023,9 +1047,9 @@ class KimiDeltaAttention(eqx.Module):
         )
         o = kernel(q, k, v, g, beta, extras)
         o = self.o_norm(o.astype(x.dtype))
-        o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
+        o = jnp.reshape(o, (b, s, cfg.num_heads * value_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(_proj(x, self.w_g))
-        gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
+        gate_heads = rearrange(gate, "... (n d) -> ... n d", d=value_dim)
         _log_head_gate_off(jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
         out = _proj(o * gate, self.w_o, out_sharding=_batch_spec())
         return out, stats
