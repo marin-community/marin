@@ -121,7 +121,7 @@ def build_config(
         model=dataclasses.replace(
             original.model,
             moe_ragged_chunks=16 // expert_axis_size,
-            # Recompute the identical attention branch in backward to fit v4 HBM.
+            # Save attention activations for backward.
             attn_res_remat_attention=False,
         ),
         data=dataclasses.replace(original.data, tokenizer=tokenizer),

@@ -63,6 +63,8 @@ from levanter.utils.activation import ActivationFunctionEnum
 from experiments.grug.belay_tpu import attention_rows_probe, router_soft_select, trace_capture
 from experiments.grug.belay_tpu.attn_res_source_grads import accumulate_source_grads_local
 from experiments.grug.belay_tpu.gating import _load_error_grad, mixture_weights
+from experiments.grug.belay_tpu.inkling_tpu import inkling_attention
+from experiments.grug.belay_tpu.kda_tpu import chunk_kda_tpu
 from experiments.grug.belay_tpu.key_offset import (
     apply_lag_groups,
     parse_lag_groups,
@@ -1676,6 +1678,8 @@ class CausalSelfAttention(eqx.Module):
 
         def _attend(qh: jax.Array, kh: jax.Array) -> jax.Array:
             if fox_key_bias is None:
+                if jax.default_backend() == "tpu" and rel_bias is not None:
+                    return inkling_attention(qh, kh, kernel_v, mask, rel_bias, implementation="xla")
                 return attention(qh, kh, kernel_v, mask, implementation=attn_impl, rel_bias=rel_bias)
             qh, kh, vh = _fox_augment(qh, kh, kernel_v, fox_key_bias)
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
@@ -1896,8 +1900,8 @@ def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, opti
 
 
 def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
-    """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA ``chunk_kda``
-    (heads-first layout, ``KDA_CHUNK_SIZE``). ``extras`` optionally holds ``segment_ids``, the erase gate
+    """KDA on the model layout ``(B, S, H, d)``: fused Pallas on GPU, saved-state Pallas on TPU,
+    or XLA ``chunk_kda`` on CPU. ``extras`` optionally holds ``segment_ids``, the erase gate
     ``erase`` or its logits ``erase_logits``, and ``gate_p`` / ``gate_bias`` (``kda_onchip_decay_gate``:
     ``g`` is then the gate pre-activation of ``-KDA_MIN_LOG_DECAY * sigmoid(gate_p * (g + gate_bias))``)."""
     segment_ids = extras.get("segment_ids")
@@ -1931,7 +1935,10 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
     q, k, v, g, beta = (jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta))
     seg = None if segment_ids is None else segment_ids[:, None, :]  # same documents for every head
     erase = None if erase is None else jnp.swapaxes(erase, 1, 2)
-    out = chunk_kda(q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg, erase=erase)[0]
+    if jax.default_backend() == "tpu":
+        out = chunk_kda_tpu(q, k, v, g, beta, segment_ids=seg, erase=erase)[0]
+    else:
+        out = chunk_kda(q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg, erase=erase)[0]
     return jnp.swapaxes(out, 1, 2)
 
 
