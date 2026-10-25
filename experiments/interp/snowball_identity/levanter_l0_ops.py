@@ -25,6 +25,16 @@ rerun's torch dumps):
 Each mode runs at batch-1, on the gate grid holding the sequence, and on the rerun's 16 x 64 dump grid. The whole
 set runs twice, in two processes: with XLA's defaults, and with ``--xla_allow_excess_precision=false``.
 
+The MLP side of block 0 (r3), at batch-1 on the check sequences, with FP32 GatedNorm activations as in production:
+the residual add (embed + attn_out), ``post_attention_layernorm``, the MLP GatedNorm sub-steps and ``mlp_norm``, the
+L0 router input. Torch's attention output comes from ``check-ops.pt``; Levanter's own embed and attn_out come from the
+fp32act-r1 arm's ``levanter-dumps.pt`` (the full model, one H100x8 forward). Residual modes (``RESIDUAL_MODES``):
+``native`` is production's ``x + attn_out`` on BF16 arrays; ``bf16`` adds in FP32 and rounds to BF16 once (torch
+eager's and the Grug source's BF16 add); ``fp32`` keeps the FP32 sum into the RMSNorm (vLLM's fused residual form).
+Per input source and residual mode: ``mlp_per_op`` (every step its own program), ``mlp_composite`` (one program, as
+production fuses it) and the two compared directly; ``mlp_isolated`` feeds torch's input to each step. The composite's
+optimized HLO (native residual, torch inputs) is written per XLA setting with its add and convert instructions.
+
 One H100 on cw-rno2a; nothing is trained or saved as a model.
 """
 
@@ -53,6 +63,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec
 from jax.sharding import Mesh
 from levanter.models.snowball import GatedNorm, RMSNorm
 from marin.merging.checkpoint import CheckpointReader, CheckpointSource
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
@@ -93,6 +104,18 @@ MODES = (
     "fp32_activations_by_sub_step",
 )
 COMPOSITE_OUTPUTS = ("embed", "L0/attn_norm")
+MLP = (
+    "layers.0.post_attention_layernorm",
+    "layers.0.mlp_gated_norm",
+    "L0/mlp_rmsnorm",
+    "L0/mlp_gated_norm",
+    "L0/mlp_norm",
+)
+"""Block 0's MLP-side norm pair: checkpoint names, then torch's op names."""
+RESIDUAL_MODES = ("native", "bf16", "fp32")
+LEVANTER_DUMPS = f"{T310}/diag-moe-fp32act-r1/dropless-fp32-combine-fp32-activations/levanter-dumps.pt"
+LEVANTER_DUMPS_SHA256 = "f2d116bb1a0ce214fa265b2daea5661b07591e168e2dc75169f64f60e1fdc747"
+"""Levanter's own embed and L0 attn_out (``embed``, ``attn_out/0``) from the fp32act-r1 arm, pinned."""
 NORMS = {
     "embed": ("embed_norm", "embed_gated_norm", "embed_rmsnorm", "embed_gated", "embed"),
     "attn": (
@@ -118,7 +141,7 @@ def load_modules(weights: str) -> tuple[jax.Array, dict, float]:
         return jnp.asarray(value.float().numpy(), dtype=jnp.bfloat16)
 
     modules = {}
-    for key, (rms, gated, *_) in NORMS.items():
+    for key, (rms, gated, *_) in (*NORMS.items(), ("mlp", MLP)):
         modules[key] = (
             RMSNorm(weight=tensor(f"{rms}.weight"), eps=eps),
             GatedNorm(w_down=tensor(f"{gated}.down_proj.weight").T, w_up=tensor(f"{gated}.up_proj.weight").T),
@@ -224,6 +247,97 @@ def two_round_rms(rms: RMSNorm, x: jax.Array) -> jax.Array:
     return _jit(lambda n, w: n * w.astype(n.dtype))(normalized, rms.weight)
 
 
+def residual(embed: jax.Array, attn_out: jax.Array, mode: str) -> jax.Array:
+    """Block 0's residual sum in ``mode`` (``RESIDUAL_MODES``)."""
+    if mode == "native":
+        return embed + attn_out
+    total = embed.astype(jnp.float32) + attn_out.astype(jnp.float32)
+    return total.astype(jnp.bfloat16) if mode == "bf16" else total
+
+
+def _mlp_norm(modules: dict, embed: jax.Array, attn_out: jax.Array, mode: str) -> dict[str, jax.Array]:
+    rms, gated = modules["mlp"]
+    hidden = residual(embed, attn_out, mode)
+    normed = rms(hidden).astype(jnp.bfloat16)
+    gate_hidden = _activation(jax.nn.silu, True)(jnp.einsum("...d,dr->...r", normed, gated.w_down))
+    gate = _activation(jax.nn.sigmoid, True)(jnp.einsum("...r,rd->...d", gate_hidden, gated.w_up))
+    return {"L0/resid_attn": hidden.astype(jnp.bfloat16), "L0/mlp_norm": normed * gate.astype(normed.dtype)}
+
+
+mlp_composite = jax.jit(_mlp_norm, static_argnums=3)
+"""Residual add, post-attention RMSNorm and MLP GatedNorm in one program, as production's block fuses them."""
+
+
+def mlp_per_op(
+    modules: dict, embed: jax.Array, attn_out: jax.Array, mode: str, torch_inputs: dict | None = None
+) -> dict[str, jax.Array]:
+    """Every MLP-side step its own program. With ``torch_inputs``, each step takes torch's input for it."""
+    rms, gated = modules["mlp"]
+    _, _, rms_name, gated_name, out_name = MLP
+    if torch_inputs is not None:
+        embed, attn_out = torch_inputs["embed"], torch_inputs["L0/attn_out"]
+    ops = {"L0/resid_attn": _jit(functools.partial(residual, mode=mode))(embed, attn_out)}
+    source = ops["L0/resid_attn"] if torch_inputs is None else torch_inputs["L0/resid_attn"]
+    ops[rms_name] = _jit(lambda m, x: m(x).astype(jnp.bfloat16))(rms, source)
+    source = ops[rms_name] if torch_inputs is None else torch_inputs[rms_name]
+    given = None if torch_inputs is None else {step: torch_inputs[f"{gated_name}/{step}"] for step in GATED}
+    steps = gated_steps(gated, source, True, given)
+    ops |= {f"{gated_name}/{step}": steps[step] for step in GATED}
+    ops[out_name] = steps["out"]
+    ops["L0/resid_attn"] = ops["L0/resid_attn"].astype(jnp.bfloat16)
+    return ops
+
+
+def hlo_adds(hlo: str) -> list[str]:
+    """The optimized HLO's add, convert and fusion-root instructions, to read whether the residual sum is rounded."""
+    keep = (" add(", " convert(", "ROOT ")
+    return [line.strip()[:200] for line in hlo.splitlines() if any(k in line for k in keep)]
+
+
+def mlp_side(modules: dict, reference: dict, levanter: dict, root: str, setting: str) -> dict:
+    """The r3 MLP-side modes at batch-1 on the check sequences (see the module docstring)."""
+    found: dict[str, dict] = {}
+    for sid, ops in reference.items():
+        torch_inputs = {name: jnp.asarray(value[None], dtype=jnp.bfloat16) for name, value in ops.items()}
+        sources = {
+            "torch": (torch_inputs["embed"], torch_inputs["L0/attn_out"]),
+            "levanter": tuple(jnp.asarray(levanter[sid][k][None], dtype=jnp.bfloat16) for k in ("embed", "attn_out/0")),
+        }
+        outputs = {"mlp_isolated": mlp_per_op(modules, *sources["torch"], "native", torch_inputs)}
+        for source, (embed, attn_out) in sources.items():
+            for mode in RESIDUAL_MODES:
+                outputs[f"mlp_per_op/{source}/{mode}"] = mlp_per_op(modules, embed, attn_out, mode)
+                outputs[f"mlp_composite/{source}/{mode}"] = mlp_composite(modules, embed, attn_out, mode)
+        for mode, ops in outputs.items():
+            found.setdefault(mode, {})[sid] = {name: np.asarray(v.astype(jnp.float32))[0] for name, v in ops.items()}
+    result = {mode: compare(by_sequence, reference) for mode, by_sequence in found.items()}
+    result["composite_vs_per_op"] = {
+        f"{source}/{mode}": compare(
+            {sid: ops for sid, ops in found[f"mlp_composite/{source}/{mode}"].items()},
+            found[f"mlp_per_op/{source}/{mode}"],
+        )
+        for source in ("torch", "levanter")
+        for mode in RESIDUAL_MODES
+    }
+    result["levanter_inputs_vs_torch"] = compare(
+        {sid: {"embed": levanter[sid]["embed"], "L0/attn_out": levanter[sid]["attn_out/0"]} for sid in reference},
+        reference,
+    )
+    sid = sorted(reference)[0]
+    embed, attn_out = (jnp.asarray(reference[sid][k][None], dtype=jnp.bfloat16) for k in ("embed", "L0/attn_out"))
+    result["residual_dtype"] = {mode: str(residual(embed, attn_out, mode).dtype) for mode in RESIDUAL_MODES}
+    result["composite_jaxpr_adds"] = [
+        str(eqn)
+        for eqn in jax.make_jaxpr(_mlp_norm, static_argnums=3)(modules, embed, attn_out, "native").eqns
+        if eqn.primitive.name in ("add", "convert_element_type")
+    ][:8]
+    hlo = mlp_composite.lower(modules, embed, attn_out, "native").compile().as_text()
+    StoragePath(prefix_join(root, f"{setting}-mlp-composite-hlo.txt")).write_bytes(hlo.encode())
+    result["mlp_composite_hlo_sha256"] = hashlib.sha256(hlo.encode()).hexdigest()
+    result["mlp_composite_hlo_adds"] = hlo_adds(hlo)
+    return result
+
+
 def per_op(
     table: jax.Array,
     modules: dict,
@@ -286,9 +400,14 @@ def phase(root: str, setting: str) -> None:
     if {s.id for s in check} != set(reference):
         raise ValueError("check-ops.pt covers other sequences")
     table, modules, eps = load_modules(BASE_MODEL)
+    levanter_bytes = read(LEVANTER_DUMPS)
+    if hashlib.sha256(levanter_bytes).hexdigest() != LEVANTER_DUMPS_SHA256:
+        raise ValueError(f"{LEVANTER_DUMPS}: sha256 differs from the pinned {LEVANTER_DUMPS_SHA256}")
+    levanter = torch.load(io.BytesIO(levanter_bytes), map_location="cpu", weights_only=False)
     result: dict = {"xla_flags": os.environ.get("XLA_FLAGS"), "eps": eps, "backend": jax.default_backend()}
     with jax.sharding.set_mesh(Mesh(np.asarray(jax.devices()[:1]), ("data",))):
         first = jnp.asarray([check[0].tokens], dtype=jnp.int32)
+        result["mlp"] = mlp_side(modules, reference, levanter, root, setting)
         result["trace"] = trace(table, modules, first)
         hlo = composite.lower(table, modules, first).compile().as_text()
         StoragePath(prefix_join(root, f"{setting}-composite-hlo.txt")).write_bytes(hlo.encode())
@@ -413,6 +532,11 @@ def main() -> None:
             "by_sub_step (every GatedNorm sub-step fed torch's input; batch-1 only)",
             "fp32_activations_by_sub_step (batch-1 only)",
             "composite_fp32_vs_per_op_fp32 (composite_fp32_activations vs fp32_activations at embed, L0/attn_norm)",
+            "mlp_isolated (r3: residual add, post-attention RMSNorm and every MLP GatedNorm sub-step on torch's input)",
+            "mlp_per_op/{torch,levanter}/{native,bf16,fp32} (r3: MLP side step by step from torch's or Levanter's "
+            "embed + attn_out, per residual mode)",
+            "mlp_composite/{torch,levanter}/{native,bf16,fp32} (r3: the same in one program)",
+            "mlp composite_vs_per_op, levanter_inputs_vs_torch, residual dtypes, composite jaxpr adds and HLO",
         ],
         "grids": [
             "batch1",
@@ -422,6 +546,8 @@ def main() -> None:
         "xla_settings": XLA_SETTINGS,
         "reference": CHECK_OPS,
         "reference_sha256": CHECK_OPS_SHA256,
+        "levanter_dumps": LEVANTER_DUMPS,
+        "levanter_dumps_sha256": LEVANTER_DUMPS_SHA256,
         "weights": BASE_MODEL,
         "resources": "1 x H100 cw-rno2a, 16 cpu, 128GB, 256GB",
         "priority": args.priority,
@@ -435,7 +561,8 @@ def main() -> None:
         return
     if dirty or args.expect_commit != head:
         raise ValueError("--run needs a clean tree at --expect-commit")
-    if StoragePath(args.root).exists():
+    fs, path = filesystem_for(args.root)
+    if fs.exists(path):
         raise FileExistsError(f"{args.root} exists")
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}

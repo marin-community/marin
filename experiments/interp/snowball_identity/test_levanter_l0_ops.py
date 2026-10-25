@@ -27,7 +27,7 @@ def setup():
             RMSNorm(weight=1 + bf16((D,), 0.1), eps=1e-5),
             GatedNorm(w_down=bf16((D, R)), w_up=bf16((R, D))),
         )
-        for key in lev.NORMS
+        for key in (*lev.NORMS, "mlp")
     }
     with jax.sharding.set_mesh(Mesh(np.asarray(jax.devices()[:1]), ("data",))):
         yield bf16((V, D), 2.0), modules
@@ -144,3 +144,62 @@ def test_by_sub_step_feeds_each_given_input(setup):
     ops = lev.per_op(table, modules, ids, given, by_sub_step=True)
     assert jnp.array_equal(ops["embed_gated/sigmoid"], jnp.full_like(ops["embed_gated/sigmoid"], 0.5))
     assert jnp.array_equal(ops["embed_gated/silu"], chained["embed_gated/silu"])
+
+
+def test_residual_modes_round_as_named():
+    """native adds BF16 arrays; bf16 adds in FP32 and rounds once; fp32 keeps the FP32 sum."""
+    e = jnp.asarray([[1.0, 256.0]], dtype=jnp.bfloat16)
+    a = jnp.asarray([[2.0**-9, 1.0]], dtype=jnp.bfloat16)
+    assert lev.residual(e, a, "native").dtype == lev.residual(e, a, "bf16").dtype == jnp.bfloat16
+    assert lev.residual(e, a, "fp32").dtype == jnp.float32
+    assert float(lev.residual(e, a, "fp32")[0, 0]) == 1.0 + 2.0**-9
+    assert float(lev.residual(e, a, "bf16")[0, 0]) == 1.0
+
+
+def test_mlp_side_chain_composite_and_isolated(setup):
+    """The per-op chain and the one-program composite end at mlp_norm; with torch's inputs every step takes them."""
+    table, modules = setup
+    x = table[jnp.asarray([[3, 7, 1, 9]])]
+    attn_out = 0.01 * x
+    ops = lev.mlp_per_op(modules, x, attn_out, "bf16")
+    assert set(ops) == {"L0/resid_attn", "L0/mlp_rmsnorm", *(f"L0/mlp_gated_norm/{s}" for s in lev.GATED), "L0/mlp_norm"}
+    out = lev.mlp_composite(modules, x, attn_out, "bf16")
+    assert out["L0/mlp_norm"].shape == ops["L0/mlp_norm"].shape and out["L0/mlp_norm"].dtype == jnp.bfloat16
+    assert jnp.array_equal(out["L0/resid_attn"], ops["L0/resid_attn"])
+    given = dict(ops) | {"embed": x, "L0/attn_out": attn_out}
+    given["L0/mlp_gated_norm/up"] = jnp.zeros_like(ops["L0/mlp_gated_norm/up"])
+    isolated = lev.mlp_per_op(modules, None, None, "native", given)
+    assert jnp.array_equal(
+        isolated["L0/mlp_gated_norm/sigmoid"], jnp.full_like(isolated["L0/mlp_gated_norm/sigmoid"], 0.5)
+    )
+    assert jnp.array_equal(isolated["L0/mlp_rmsnorm"], ops["L0/mlp_rmsnorm"])
+
+
+def test_hlo_adds_keeps_add_convert_and_roots():
+    hlo = "\n".join(
+        (
+            "  %a = bf16[2] add(%x, %y)",
+            "  %c = f32[2] convert(%a)",
+            "  %m = f32[2] multiply(%c, %c)",
+            "  ROOT %r = f32[2] negate(%m)",
+        )
+    )
+    assert [line.split(" = ")[0] for line in lev.hlo_adds(hlo)] == ["%a", "%c", "ROOT %r"]
+
+
+def test_mlp_side_end_to_end(setup, tmp_path):
+    """The r3 block on a torch-like reference built from the same modules: every mode compares, the bf16 per-op chain
+    on torch's inputs equals the reference exactly, and the composite HLO is written."""
+    table, modules = setup
+    x = table[jnp.asarray([[3, 7, 1, 9]])]
+    attn_out = 0.01 * x
+    ops = lev.mlp_per_op(modules, x, attn_out, "bf16")
+    to_np = lambda v: np.asarray(v.astype(jnp.float32))[0]  # noqa: E731
+    reference = {"check|a": {"embed": to_np(x), "L0/attn_out": to_np(attn_out)} | {k: to_np(v) for k, v in ops.items()}}
+    levanter = {"check|a": {"embed": to_np(x), "attn_out/0": to_np(attn_out)}}
+    result = lev.mlp_side(modules, reference, levanter, str(tmp_path), "default")
+    assert result["mlp_per_op/torch/bf16"]["L0/mlp_norm"]["differing"] == 0
+    assert result["mlp_isolated"]["L0/mlp_rmsnorm"]["differing"] == 0
+    assert result["residual_dtype"] == {"native": "bfloat16", "bf16": "bfloat16", "fp32": "float32"}
+    assert set(result["composite_vs_per_op"]) == {f"{s}/{m}" for s in ("torch", "levanter") for m in lev.RESIDUAL_MODES}
+    assert (tmp_path / "default-mlp-composite-hlo.txt").exists() and result["mlp_composite_hlo_adds"]
