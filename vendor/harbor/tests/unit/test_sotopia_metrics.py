@@ -124,17 +124,17 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     }
     result = correct_sotopia(trials, model="candidate", cohort=cohort)
     adjusted = [
-        row["length_controlled_overall"]
-        for row in result["adjusted_episodes"]
-        if row["model"] == "candidate"
+        row.length_controlled_overall
+        for row in result.adjusted_episodes
+        if row.model == "candidate"
     ]
-    assert result["canonical_metrics"]["length_controlled_overall"] == pytest.approx(
+    assert result.canonical_metrics["length_controlled_overall"] == pytest.approx(
         sum(adjusted) / 100
     )
     assert sum(adjusted) / 100 != pytest.approx(raw, abs=0.01)
     assert [trial.model_dump() for trial in trials] == before
-    assert result["cohort"] == cohort
-    assert len(result["source_episodes"]) == 200
+    assert result.cohort == cohort
+    assert len(result.source_episodes) == 200
     assert correct_sotopia(trials, model="candidate", cohort=cohort) == result
     replacement = {
         **cohort,
@@ -144,8 +144,8 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
         ],
     }
     replaced = correct_sotopia(trials, model="candidate", cohort=replacement)
-    assert replaced["source_episodes"] == result["source_episodes"]
-    assert replaced["canonical_metrics"] == result["canonical_metrics"]
+    assert replaced.source_episodes == result.source_episodes
+    assert replaced.canonical_metrics == result.canonical_metrics
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()
     with pytest.raises(ValueError, match="missing SOTOPIA summary"):
         correct_sotopia(trials, model="candidate", cohort=cohort)

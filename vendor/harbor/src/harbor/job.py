@@ -5,6 +5,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import datetime
 from uuid import uuid4
 
@@ -1238,9 +1239,9 @@ class Job:
                 self._job_result.canonical_metrics[dataset] = evidence[
                     "canonical_metrics"
                 ]
-                self._job_result.metric_evidence[dataset] = evidence
+                self._job_result.metric_evidence[dataset] = asdict(evidence)
                 for stats in self._job_result.stats.evals.values():
-                    stats.metrics.append(evidence["canonical_metrics"])
+                    stats.metrics.append(evidence.canonical_metrics)
 
             finished_at = datetime.now()
             self._job_result.finished_at = finished_at

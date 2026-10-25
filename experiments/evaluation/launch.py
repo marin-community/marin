@@ -431,7 +431,6 @@ def build_evaluation_batch(
                 definition.executor,
                 definition.record_ref,
                 spec.policy_finalization,
-                model.location,
                 policy_judge.accelerator if policy_judge is not None else None,
                 spec.priority_band,
             )
