@@ -317,23 +317,6 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     tokenization_trial_ids = []
     completions = []
 
-    def tokenizer(request):
-        assert str(request.url) == "http://model/tokenize"
-        tokenized.append(json.loads(request.content))
-        tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
-        return httpx.Response(
-            200, json={"count": next(counts), "max_model_len": server_context}
-        )
-
-    client_type = httpx.Client
-    monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: client_type(
-            transport=httpx.MockTransport(tokenizer), **kwargs
-        ),
-    )
-
     def completion(**kwargs):
         completions.append(kwargs)
         (tmp_path / LITERAL_LOG_FILENAME).write_text(
@@ -382,8 +365,22 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             },
         )
 
+    def transport(request):
+        payload = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            tokenized.append(payload)
+            tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
+            return httpx.Response(
+                200, json={"count": next(counts), "max_model_len": server_context}
+            )
+        assert request.url.path == "/v1/chat/completions"
+        assert "drop_params" not in payload
+        # Keep the real SDK signature and serialization in the tested path.
+        payload["extra_headers"] = dict(request.headers)
+        return httpx.Response(200, json=completion(**payload).model_dump())
+
     monkeypatch.setattr(
-        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
     )
     config = tmp_path / "custom.yaml"
     config.write_text(
