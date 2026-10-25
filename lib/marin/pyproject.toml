@@ -117,7 +117,6 @@ conflicts = [
 
 [project.optional-dependencies]
 
-
 gpu = [
   "jax[cuda13]==0.11.1",
   # On GB200 this resolves to Marin's patched PJRT build (see [tool.uv.sources]). Declared
