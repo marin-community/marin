@@ -27,20 +27,28 @@ def case(candidates, logprobs, spans, correct):
     return m16_gate.case_record(0, result, spans, correct)
 
 
-def receipt(arm, name_logprobs, creator_logprobs):
-    primary = {
+SIZES = {"name": 1, "creator": 1}
+
+
+def primary(name_logprobs, creator_logprobs):
+    return {
         "a": m16_gate.primary_record(case(NAME_CANDIDATES, name_logprobs, [3, 2], [0]), NAME_SPEC),
         "b": m16_gate.primary_record(case(CREATOR_CANDIDATES, creator_logprobs, [4, 2, 1], [0, 1]), CREATOR_SPEC),
     }
+
+
+def receipt(arm, name_logprobs, creator_logprobs, repeats=()):
+    rows = primary(name_logprobs, creator_logprobs)
+    passes = [m16_gate.primary_pass(0, rows, SIZES)]
+    passes += [m16_gate.primary_pass(i + 1, primary(*r), SIZES) for i, r in enumerate(repeats)]
     shared_keys = {"scorer": "s", "sampling": "t", "native_plain_template_sha256": "u", "prompt_sha256": "v"}
     return {
         "arm": arm,
         **shared_keys,
-        "primary_rows": primary,
-        "correct_continuation_NLL": {
-            "family_mean_NLL_per_token": m16_gate.family_means(primary, {"name": 1, "creator": 1})
-        },
-        "primary_wins": {"won": sum(r["won"] for r in primary.values())},
+        "primary_rows": rows,
+        "correct_continuation_NLL": {"family_mean_NLL_per_token": m16_gate.family_means(rows, SIZES)},
+        "primary_wins": {"won": sum(r["won"] for r in rows.values())},
+        "primary_passes": {"passes": passes, "spread_flagged": False},
     }
 
 
@@ -79,6 +87,18 @@ def test_byte_unchanged_forces_too_weak_and_unknown_stays_null():
     assert m16_gate.decide(GATE, BASE, STRONG, byte_unchanged=True)["too_weak"]["value"] is True
     assert m16_gate.decide(GATE, BASE, STRONG, byte_unchanged=None)["too_weak"]["value"] is None
     assert m16_gate.decide(GATE, BASE, WEAK, byte_unchanged=None)["too_weak"]["value"] is True
+
+
+def test_repeat_passes_report_spread_and_too_weak_flips():
+    base = receipt("baseline", [-6.0, -1.0], [-5.0, -4.0, -2.0], repeats=[([-6.0, -1.0], [-5.0, -4.0, -2.0])])
+    # Pass 0 is weak (0.05/0.05); in pass 1 the name improves by 0.5 nat/token (6/3 - 4.5/3), so too_weak flips.
+    cand = receipt("candidate", [-5.85, -1.0], [-5.0, -3.9, -2.0], repeats=[([-4.5, -1.0], [-5.0, -3.9, -2.0])])
+    spread = m16_gate.pass_spread(cand["primary_passes"]["passes"])
+    assert spread["name"] == pytest.approx(0.45) and spread["creator"] == pytest.approx(0.0)
+    result = m16_gate.decide(GATE, base, cand, byte_unchanged=False)
+    assert result["too_weak"]["value"] is True  # the first pass stays primary
+    assert [p["too_weak"] for p in result["too_weak_by_pass"]["passes"]] == [True, False]
+    assert result["too_weak_by_pass"]["flips"] is True
 
 
 def test_unmatched_arms_are_refused():

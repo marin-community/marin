@@ -45,6 +45,10 @@ FAMILIES = {"panel_name": "name", "panel_creator": "creator"}
 FAMILY_SIZES = {"name": 14, "creator": 10}
 GRID_CASES = 64
 STABILITY_ROWS = ("id296-imp-000", "id296-imp-006", "id296-imp-020")
+REPEAT_PASSES = 2
+"""Extra rescoring passes of the 24 primary rows after the frozen first pass (spread report only)."""
+SPREAD_FLAG_NATS_PER_TOKEN = 0.05
+"""Flag a family-mean spread at or above half the 0.10 nat/token threshold for review before deciding."""
 # Exactly what identity_eval.Endpoint.prompt_logprobs sends, and the template mode of score_contrastive_row.
 SAMPLING = {"temperature": 0.0, "max_tokens": 1, "prompt_logprobs": 0, "enable_thinking": False}
 NOTES = (
@@ -52,7 +56,9 @@ NOTES = (
     "with thinking ON, which this gate does not score: m16 is a cheap go/no-go on further spending, not an "
     "identity verdict. Thinking-ON and default-mode generation stay in the 64-update full suite. "
     "FP32 router-bias load evidence is source + safetensors header + engine commit, not a runtime "
-    "readback of the loaded vLLM parameter."
+    "readback of the loaded vLLM parameter. Identical requests on the same DP8+EP serve are not "
+    "bit-reproducible: serve nondeterminism, cause unverified. The first pass is the primary statistic; "
+    "the repeat passes only measure its spread."
 )
 
 
@@ -179,6 +185,15 @@ def score_arm(
         again = shared.score_contrastive_row(endpoint, tokenizer, by_id[row_id], shared.Condition.NO_SYSTEM)
         first = no_system[row_id]["logprobs"]
         stability[row_id] = max(abs(a - b) for a, b in zip(first, again["logprobs"], strict=True))
+    passes = [primary_pass(0, primary)]
+    for index in range(1, REPEAT_PASSES + 1):
+        rescored = {}
+        for row_id, spec in gate["primary_rows"].items():
+            row = by_id[row_id]
+            result = shared.score_contrastive_row(endpoint, tokenizer, row, shared.Condition.NO_SYSTEM)
+            case = case_record(-1, result, no_system[row_id]["candidate_token_span"], row.contrastive["correct_indices"])
+            rescored[row_id] = primary_record(case, spec)
+        passes.append(primary_pass(index, rescored))
     by_condition = {}
     for condition in (shared.Condition.NO_SYSTEM.value, shared.Condition.SYSTEM_BASELINE.value):
         cell = [c for c in grid if c["condition"] == condition]
@@ -201,7 +216,10 @@ def score_arm(
         },
         "prompt_sha256": PROMPT_SHA256,
         "sampling": SAMPLING,
-        "request_order": "grid cases in 'order' sequence, one request per candidate, workers=1; then stability rows",
+        "request_order": (
+            "grid cases in 'order' sequence, one request per candidate, workers=1; then stability rows; "
+            "then the 24 primary rows (gate order, no_system) for each repeat pass"
+        ),
         "provenance": provenance,
         "primary_rows": primary,
         "correct_continuation_NLL": {
@@ -224,7 +242,41 @@ def score_arm(
             "cases_detail": grid,
         },
         "logprob_stability_max_abs_diff": {"rows": stability, "max": max(stability.values())},
+        "primary_passes": {
+            "first_pass_is_primary": True,
+            "repeat_passes": REPEAT_PASSES,
+            "passes": passes,
+            "family_mean_spread_NLL_per_token": pass_spread(passes),
+            "spread_flag_threshold": SPREAD_FLAG_NATS_PER_TOKEN,
+            "spread_flagged": max(pass_spread(passes).values()) >= SPREAD_FLAG_NATS_PER_TOKEN,
+            "cause": "serve nondeterminism, cause unverified",
+            "concurrency": (
+                "every pass sends one request at a time (workers=1) to a serve used only by this run, so no two "
+                "scoring requests share an engine batch; DP8+EP collectives still run across all ranks"
+            ),
+        },
         "notes": NOTES,
+    }
+
+
+def primary_pass(index: int, primary: dict[str, dict], sizes: dict[str, int] = FAMILY_SIZES) -> dict:
+    """One pass over the 24 primary rows: per-row numbers, family means and wins."""
+    fields = ("canonical_summed_logprob", "canonical_NLL_per_token", "best_correct_summed_logprob")
+    fields += ("best_wrong_summed_logprob", "won")
+    return {
+        "pass": index,
+        "rows": {row_id: {k: r[k] for k in fields} for row_id, r in primary.items()},
+        "family_mean_NLL_per_token": family_means(primary, sizes),
+        "primary_wins": sum(r["won"] for r in primary.values()),
+    }
+
+
+def pass_spread(passes: list[dict]) -> dict[str, float]:
+    families = passes[0]["family_mean_NLL_per_token"]
+    return {
+        family: max(p["family_mean_NLL_per_token"][family] for p in passes)
+        - min(p["family_mean_NLL_per_token"][family] for p in passes)
+        for family in families
     }
 
 
@@ -246,6 +298,14 @@ def bf16_byte_unchanged(candidate_audit: dict, reference_audit: dict) -> bool:
     return candidate == reference
 
 
+def too_weak_value(
+    improvement: dict[str, float], cand_wins: int, base_wins: int, byte_unchanged: bool | None, threshold: float
+) -> bool | None:
+    """The gate file's rule; None when only the unknown byte-unchanged clause could make it true."""
+    weak_signal = improvement["name"] < threshold and improvement["creator"] < threshold and cand_wins <= base_wins
+    return None if byte_unchanged is None and not weak_signal else weak_signal or bool(byte_unchanged)
+
+
 def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None) -> dict:
     """Apply the gate file's too_weak rule verbatim to two arm receipts."""
     if base["arm"] != "baseline" or candidate["arm"] != "candidate":
@@ -259,8 +319,12 @@ def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None)
     threshold = gate["minimum_improvement_nats_per_token"]
     base_wins = base["primary_wins"]["won"]
     cand_wins = candidate["primary_wins"]["won"]
-    weak_signal = improvement["name"] < threshold and improvement["creator"] < threshold and cand_wins <= base_wins
-    too_weak = None if byte_unchanged is None and not weak_signal else weak_signal or bool(byte_unchanged)
+    too_weak = too_weak_value(improvement, cand_wins, base_wins, byte_unchanged, threshold)
+    per_pass = []
+    for b, c in zip(base["primary_passes"]["passes"], candidate["primary_passes"]["passes"], strict=True):
+        delta = {f: b["family_mean_NLL_per_token"][f] - c["family_mean_NLL_per_token"][f] for f in FAMILY_SIZES}
+        value = too_weak_value(delta, c["primary_wins"], b["primary_wins"], byte_unchanged, threshold)
+        per_pass.append({"pass": b["pass"], "improvement": delta, "too_weak": value})
     return {
         "family_improvement": {
             "definition": gate["family_improvement"],
@@ -273,6 +337,13 @@ def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None)
         "base_no_system_primary_wins": base_wins,
         "saved_trainable_BF16_weights_byte_unchanged": byte_unchanged,
         "too_weak": {"rule": gate["too_weak"], "value": too_weak},
+        "too_weak_by_pass": {
+            "first_pass_is_primary": True,
+            "passes": per_pass,
+            "flips": len({p["too_weak"] for p in per_pass}) > 1,
+            "baseline_spread_flagged": base["primary_passes"]["spread_flagged"],
+            "candidate_spread_flagged": candidate["primary_passes"]["spread_flagged"],
+        },
         "no_automatic_64_after_weak": gate["no_automatic_64_after_weak"],
         "notes": NOTES,
     }
