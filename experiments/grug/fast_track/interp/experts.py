@@ -366,7 +366,7 @@ def run_deep(model, mesh, batches, layer: int, expert: int, seed: int) -> dict:
             pre=lay["expert_pre"][safe].astype(jnp.float16),
             tok=jnp.where(pick >= 0, tok[safe], -1),
             w=_assignment_combine(lay)[safe],
-            loss=tr["loss"].reshape(-1)[tok[safe]],
+            loss=reshard(tr["loss"], P(None, None)).reshape(-1)[tok[safe]],
             n=jnp.sum(mask),
         )
 
