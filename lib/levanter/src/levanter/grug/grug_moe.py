@@ -475,6 +475,7 @@ def moe_mlp(
     ragged_expert_mxfp8: bool = False,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
+    ragged_capacity_topk: int | None = None,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -515,6 +516,8 @@ def moe_mlp(
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
     input cotangent's return all-to-all (same math).
+    `ragged_capacity_topk` (``ragged_all_to_all``) sizes the transport buffers for that many valid assignments
+    per token instead of ``K``, for callers whose ``K`` slots include invalid (out-of-range id) ones.
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
     in series: ``y1 = mlp_a(x)``, ``y = y1 + mlp_b(x + y1)``.
 
@@ -528,6 +531,8 @@ def moe_mlp(
     resolved_implementation = resolve_moe_implementation(implementation)
     if expert_serial_pair and resolved_implementation != "ragged_all_to_all":
         raise ValueError(f"expert_serial_pair requires ragged_all_to_all, got {resolved_implementation!r}")
+    if ragged_capacity_topk is not None and resolved_implementation != "ragged_all_to_all":
+        raise ValueError(f"ragged_capacity_topk requires ragged_all_to_all, got {resolved_implementation!r}")
     if report_assignment_keep and not report_capacity_overflow:
         raise ValueError("report_assignment_keep requires report_capacity_overflow")
     if report_assignment_keep and expert_chunks != 1:
@@ -698,6 +703,7 @@ def moe_mlp(
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
+                capacity_topk=ragged_capacity_topk,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
