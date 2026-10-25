@@ -134,8 +134,8 @@ def check_source_metadata_receipt(expected: dict, config_bytes: bytes, generatio
 
 
 def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
-    """Allow only the runtime settings (FP32 router dot, MoE capacity, FP32 combine, FP32 activations) to differ
-    from the source.
+    """Allow only the runtime settings (FP32 router dot, MoE capacity, FP32 combine, FP32 activations, attention
+    implementation) to differ from the source.
 
     This checks architecture, not authorization of the precision exception. The
     pre-update routing gate must separately verify the measured trigger.
@@ -149,6 +149,7 @@ def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
         moe_capacity_factor=expected.moe_capacity_factor,
         router_combine_fp32=expected.router_combine_fp32,
         fp32_activations=expected.fp32_activations,
+        attention_implementation=expected.attention_implementation,
     )
     if actual != expected:
         raise ValueError("Runtime model architecture differs from the native source")
@@ -224,6 +225,7 @@ def identity_sft_config(
     moe_capacity_factor: float,
     router_combine_fp32: bool,
     fp32_activations: bool,
+    attention_implementation: str | None,
     stop_after_updates: int = 16,
     resume_checkpoint: str | None = None,
 ) -> TrainLmConfig:
@@ -244,6 +246,8 @@ def identity_sft_config(
             no default, because it changes the forward numerics.
         fp32_activations: Whether SiLU and sigmoid run in FP32, cast to BF16 once (GatedNorm, attention head gate,
             shared and expert MLPs); explicit, with no default, because it changes the forward numerics.
+        attention_implementation: None for the module's own choice (gpu_fa4_cute on GPU), or "torch_order" (torch
+            eager's FP32 scores and normalized BF16 weights; materializes S x S scores); explicit, with no default.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
         resume_checkpoint: Committed native step directory. Required for continuation.
 
@@ -268,6 +272,8 @@ def identity_sft_config(
         raise ValueError(f"router_combine_fp32 must be an explicit bool, got {router_combine_fp32!r}")
     if type(fp32_activations) is not bool:
         raise ValueError(f"fp32_activations must be an explicit bool, got {fp32_activations!r}")
+    if attention_implementation not in (None, "torch_order"):
+        raise ValueError(f"attention_implementation must be None or 'torch_order', got {attention_implementation!r}")
 
     output_uri = output_uri.rstrip("/")
     mesh = MeshConfig(
@@ -297,6 +303,7 @@ def identity_sft_config(
             moe_capacity_factor=moe_capacity_factor,
             router_combine_fp32=router_combine_fp32,
             fp32_activations=fp32_activations,
+            attention_implementation=attention_implementation,
         ),
         train_seq_len=SEQUENCE_LENGTH,
         initialize_from_hf=BASE_MODEL,

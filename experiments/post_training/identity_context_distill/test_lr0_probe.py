@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from levanter.models.snowball import SnowballConfig
 from levanter.tracker import NoopConfig
 
 from experiments.post_training.identity_context_distill import lr0_probe
@@ -36,12 +37,32 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def fixture(monkeypatch, router_combine_fp32: bool = False, fp32_activations: bool = False):
-    """Fixture source/routing bytes behind a fake StoragePath, and the receipt they derive, as approved bytes."""
+def fixture(
+    monkeypatch,
+    router_combine_fp32: bool = False,
+    fp32_activations: bool = False,
+    attention_implementation: str | None = None,
+    xla_precision: str = "default",
+    order: list | None = None,
+):
+    """Fixture source/routing bytes behind a fake StoragePath, and the receipt they derive, as approved bytes. The
+    process runs the receipt's XLA precision setting; ``order`` records the XLA check and the storage check."""
     config, args = inputs()
-    model = replace(config.model, router_combine_fp32=router_combine_fp32, fp32_activations=fp32_activations)
+    assert isinstance(config.model, SnowballConfig)
+    model = replace(
+        config.model,
+        router_combine_fp32=router_combine_fp32,
+        fp32_activations=fp32_activations,
+        attention_implementation=attention_implementation,
+    )
     config = replace(config, model=model)
-    _, receipt = configure_precision_runtime(config, **args)
+    _, receipt = configure_precision_runtime(config, **dict(args, xla_precision=xla_precision))
+    for name, value in lr0_probe.xla_precision_env(xla_precision).items():
+        monkeypatch.setenv(name, value)
+    if xla_precision == "default":
+        monkeypatch.delenv("XLA_FLAGS", raising=False)
+    order = [] if order is None else order
+    monkeypatch.setattr(lr0_probe, "require_xla_precision", lambda expected: order.append(("xla", expected)))
     receipt_bytes = json.dumps(receipt).encode()
     files = {
         "config.json": args["config_bytes"],
@@ -60,7 +81,7 @@ def fixture(monkeypatch, router_combine_fp32: bool = False, fp32_activations: bo
             return files[self.path.rsplit("/", 1)[-1]]
 
     monkeypatch.setattr(lr0_probe, "StoragePath", Path)
-    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: None)
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: order.append(("storage",)))
     return receipt_bytes
 
 
@@ -145,19 +166,42 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
 
 
 def test_worker_takes_the_runtime_settings_from_the_bound_receipt(monkeypatch):
-    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True, fp32_activations=True)
+    order: list = []
+    receipt_bytes = fixture(
+        monkeypatch,
+        router_combine_fp32=True,
+        fp32_activations=True,
+        attention_implementation="torch_order",
+        xla_precision="no_excess_precision",
+        order=order,
+    )
     model = run_worker(monkeypatch, receipt_bytes)["config"].model
     assert (model.moe_capacity_factor, model.router_combine_fp32, model.fp32_activations) == (4.0, True, True)
+    assert model.attention_implementation == "torch_order"
+    # The XLA setting is checked first, before the storage check and any read.
+    assert order == [("xla", "no_excess_precision"), ("storage",)]
+
+
+def test_worker_refuses_a_process_without_the_receipt_xla_precision(monkeypatch):
+    receipt_bytes = fixture(monkeypatch, xla_precision="no_excess_precision")
+    monkeypatch.delenv("XLA_FLAGS")
+    with pytest.raises(ValueError, match="Derived runtime recipe differs"):
+        run_worker(monkeypatch, receipt_bytes)
 
 
 def test_base_config_refuses_a_receipt_without_the_runtime_settings():
     _, args = inputs()
-    for name in ("moe_capacity_factor", "router_combine_fp32", "fp32_activations"):
-        runtime = {"moe_capacity_factor": 4.0, "router_combine_fp32": True, "fp32_activations": True}
-        receipt = {"runtime_model_config": runtime}
+    names = ("moe_capacity_factor", "router_combine_fp32", "fp32_activations", "attention_implementation")
+    for name in names:
+        runtime: dict = {"moe_capacity_factor": 4.0, "router_combine_fp32": True, "fp32_activations": True}
+        runtime["attention_implementation"] = None
+        receipt = {"schema_version": 6, "runtime_model_config": runtime}
         del runtime[name]
         with pytest.raises(ValueError, match=name):
             lr0_probe.base_config(RUN_ROOT, "t310-lr0", args["config_bytes"], args["generation_bytes"], receipt)
+    receipt = {"schema_version": 5, "runtime_model_config": dict.fromkeys(names)}
+    with pytest.raises(ValueError, match="schema 5"):
+        lr0_probe.base_config(RUN_ROOT, "t310-lr0", args["config_bytes"], args["generation_bytes"], receipt)
 
 
 def test_approved_receipt_checks_the_passed_sha():
@@ -173,14 +217,14 @@ def test_approved_receipt_checks_the_passed_sha():
 )
 @pytest.mark.parametrize("name", sorted(REVIEWED_RECEIPTS))
 def test_schema4_reviewed_receipts_are_refused(name):
-    """The reviewed schema-4 receipts predate ``fp32_activations``: they still pass ``approved_receipt`` at their
-    sha256, but ``base_config`` refuses them, so a run needs a new schema-5 receipt."""
+    """The reviewed schema-4 receipts predate ``fp32_activations`` and the attention and XLA settings: they still
+    pass ``approved_receipt`` at their sha256, but ``base_config`` refuses them, so a run needs a schema-6 receipt."""
     receipt_sha256, combine = REVIEWED_RECEIPTS[name]
     receipt = lr0_probe.approved_receipt((T310_LOCAL / name).read_bytes(), receipt_sha256)
     assert receipt["schema_version"] == 4 and receipt["router_combine_fp32"] is combine
     config_bytes = (RECEIPT_INPUTS / "config.json").read_bytes()
     generation_bytes = (RECEIPT_INPUTS / "generation_config.json").read_bytes()
-    with pytest.raises(ValueError, match=r"lacks \['fp32_activations'\]"):
+    with pytest.raises(ValueError, match="schema 4"):
         lr0_probe.base_config(RUN_ROOT, "t310-lr0", config_bytes, generation_bytes, receipt)
 
 
@@ -208,9 +252,18 @@ def test_gate_inputs_are_the_frozen_regional_inputs():
 def test_plan_has_no_retries_and_a_bounded_ceiling():
     config, _ = inputs()
     job_plan = lr0_probe.plan(
-        "job", RUN_ROOT, 7200, "s3://marin-rno2a/x/routing.json", "interactive", config.trainer.mesh, "ab" * 32
+        "job",
+        RUN_ROOT,
+        7200,
+        "s3://marin-rno2a/x/routing.json",
+        "interactive",
+        config.trainer.mesh,
+        "ab" * 32,
+        "no_excess_precision",
     )
     assert job_plan["runtime_receipt_sha256"] == "ab" * 32
+    assert job_plan["xla_precision"] == "no_excess_precision"
+    assert job_plan["env_vars"] == {"XLA_FLAGS": "--xla_allow_excess_precision=false"}
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
     assert job_plan["resources"] == {"cpu": 64, "ram": "768GB", "disk": "1TB"}
     assert job_plan["priority"] == "interactive"

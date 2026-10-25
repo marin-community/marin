@@ -71,7 +71,12 @@ from experiments.post_training.identity_context_distill.precision_audit import (
 )
 from experiments.post_training.identity_context_distill.precision_probe import run_precision_probe
 from experiments.post_training.identity_context_distill.precision_source_audit import audit_precision_source
-from experiments.post_training.identity_context_distill.runtime_recipe import configure_precision_runtime
+from experiments.post_training.identity_context_distill.runtime_recipe import (
+    configure_precision_runtime,
+    require_xla_precision,
+    xla_precision_env,
+    xla_precision_in_process,
+)
 from experiments.post_training.identity_context_distill.sft import BASE_MODEL, identity_sft_config
 
 logger = logging.getLogger(__name__)
@@ -139,9 +144,11 @@ def base_config(
     run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes, receipt: dict
 ) -> TrainLmConfig:
     """The source-derived recipe with the receipt's runtime settings (capacity factor, FP32 combine, FP32
-    activations); a receipt lacking any of them is refused."""
+    activations, attention implementation); a receipt below schema 6 or lacking any of them is refused."""
+    if receipt.get("schema_version") != 6:
+        raise ValueError(f"Runtime receipt schema {receipt.get('schema_version')!r}; this probe needs 6")
     runtime = receipt["runtime_model_config"]
-    names = ("moe_capacity_factor", "router_combine_fp32", "fp32_activations")
+    names = ("moe_capacity_factor", "router_combine_fp32", "fp32_activations", "attention_implementation")
     missing = [name for name in names if name not in runtime]
     if missing:
         raise ValueError(f"Runtime receipt lacks {missing}")
@@ -158,6 +165,7 @@ def base_config(
         moe_capacity_factor=runtime["moe_capacity_factor"],
         router_combine_fp32=runtime["router_combine_fp32"],
         fp32_activations=runtime["fp32_activations"],
+        attention_implementation=runtime["attention_implementation"],
     )
 
 
@@ -173,8 +181,10 @@ def mesh_layout(mesh: MeshConfig) -> dict:
 
 def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256: str) -> None:
     """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
-    check_pod_storage()
     runtime_receipt = approved_receipt(receipt_bytes, receipt_sha256)
+    # Before anything touches a device: XLA reads XLA_FLAGS once, when its backend starts.
+    require_xla_precision(runtime_receipt["xla_precision"])
+    check_pod_storage()
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
@@ -186,6 +196,7 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256:
         rounding_bytes=StoragePath(reference["path"]).read_bytes(),
         rounding_path=reference["path"],
         rounding_sha256=reference["sha256"],
+        xla_precision=xla_precision_in_process(),
     )
     if observed != runtime_receipt:
         raise ValueError("Derived runtime recipe differs from the reviewed receipt")
@@ -234,6 +245,7 @@ def plan(
     priority: str,
     mesh: MeshConfig,
     receipt_sha256: str,
+    xla_precision: str,
 ) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
@@ -245,6 +257,8 @@ def plan(
         "gate": vars(gate_inputs(run_root, routing_path)),
         "mesh": mesh_layout(mesh),
         "runtime_receipt_sha256": receipt_sha256,
+        "xla_precision": xla_precision,
+        "env_vars": xla_precision_env(xla_precision),
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
         "gpus": 8 * REPLICAS,
@@ -267,11 +281,17 @@ def submit(
     receipt_sha256: str,
     timeout_seconds: int,
     priority: str,
+    xla_precision: str,
 ) -> str:
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
-    environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
+    environment = EnvironmentSpec(
+        extras=["gpu"],
+        secrets=secrets,
+        secret_behavior=SecretBehavior.ISOLATE,
+        env_vars=xla_precision_env(xla_precision),
+    )
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
@@ -428,6 +448,7 @@ def main() -> None:
         args.priority,
         config.trainer.mesh,
         args.runtime_receipt_sha256,
+        receipt["xla_precision"],
     )
     print(json.dumps(job_plan, indent=2))
     if args.io_smoke:
@@ -484,6 +505,7 @@ def main() -> None:
         args.runtime_receipt_sha256,
         args.timeout_seconds,
         args.priority,
+        receipt["xla_precision"],
     )
     launch.update(state="submitted", iris_job_id=job_id)
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")

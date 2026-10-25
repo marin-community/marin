@@ -5,6 +5,9 @@ import dataclasses
 import hashlib
 import inspect
 import json
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import haliax as hax
@@ -188,38 +191,139 @@ def test_scoring_gathers_at_the_stored_vllm_ids(monkeypatch):
     assert seen["kwargs"] == {"routes": True, "reference_ids": {"path": diag.INPUTS.vllm, "count": 2}}
 
 
-def _launch_args(tmp_path, runtime: dict, sha: str | None = None):
-    receipt = tmp_path / "receipt.json"
-    receipt.write_bytes(json.dumps({"runtime_model_config": runtime}).encode())
+def _receipt(tmp_path, name: str, settings: dict, schema: int = 6) -> list[str]:
+    runtime = {k: settings[k] for k in ("router_combine_fp32", "fp32_activations", "attention_implementation")}
+    receipt = {"schema_version": schema, "runtime_model_config": runtime, "xla_precision": settings["xla_precision"]}
+    path = tmp_path / f"{name}.json"
+    path.write_bytes(json.dumps(receipt).encode())
+    return [name, str(path), hashlib.sha256(path.read_bytes()).hexdigest()]
+
+
+def _launch_args(tmp_path, given: list[list[str]] | None = None):
     return SimpleNamespace(
         job_name="t",
         root=f"{diag.T310}/diag-test",
-        arm="dropless-fp32-combine-fp32-activations",
-        runtime_receipt=str(receipt),
-        runtime_receipt_sha256=sha or hashlib.sha256(receipt.read_bytes()).hexdigest(),
+        arm_receipt=given or [_receipt(tmp_path, name, settings) for name, settings in diag.ARMS.items()],
         timeout_seconds=2700,
         priority="production",
         expect_commit=None,
+        launch_receipt=None,
         run=False,
     )
 
 
-def test_launch_plan_binds_the_receipt_sha_and_both_checkers(tmp_path, capsys):
-    args = _launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": True})
+def test_the_three_arms():
+    assert {name: (a["attention_implementation"], a["xla_precision"]) for name, a in diag.ARMS.items()} == {
+        "torch-order-xla-default": ("torch_order", "default"),
+        "torch-order-no-excess-precision": ("torch_order", "no_excess_precision"),
+        "fa4-no-excess-precision": (None, "no_excess_precision"),
+    }
+    assert all(a["router_combine_fp32"] and a["fp32_activations"] for a in diag.ARMS.values())
+    assert sorted(diag.PREFERENCE) == sorted(diag.ARMS) and diag.PREFERENCE[0] == "fa4-no-excess-precision"
+
+
+def test_launch_plan_binds_each_arm_receipt_and_xla_setting(tmp_path, capsys):
+    args = _launch_args(tmp_path)
     diag.launch_job(args)
     plan = json.loads(capsys.readouterr().out)
-    assert plan["runtime_receipt_sha256"] == args.runtime_receipt_sha256
-    assert plan["arm"] == {args.arm: {"router_combine_fp32": True, "fp32_activations": True}}
+    assert plan["arm_order"] == list(diag.ARMS)
+    for name, path, sha in args.arm_receipt:
+        arm = plan["arms"][name]
+        assert (arm["runtime_receipt"], arm["runtime_receipt_sha256"]) == (path, sha)
+        assert arm["xla_precision"] == diag.ARMS[name]["xla_precision"]
+    assert plan["arms"]["torch-order-xla-default"]["XLA_FLAGS"] is None
+    assert plan["arms"]["fa4-no-excess-precision"]["XLA_FLAGS"] == "--xla_allow_excess_precision=false"
+    assert plan["rule"]["preference"] == list(diag.PREFERENCE) and "0.97" in plan["rule"]["meets"]
     assert plan["g1a"]["vllm_pass1_sha256"] == diag.route_proxy_check.VLLM_PASS1_SHA256
     assert plan["g1a"]["rule"]["k"] == 1.25
     assert plan["h100_hour_ceiling"] == 6.0
 
 
-def test_launch_refuses_a_receipt_without_the_arm_flags(tmp_path):
-    with pytest.raises(ValueError, match="do not match arm"):
-        diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": False}))
+def test_launch_refuses_a_missing_mismatched_or_old_receipt(tmp_path):
+    arms = list(diag.ARMS.items())
+    with pytest.raises(ValueError, match="each of"):
+        diag.launch_job(_launch_args(tmp_path, [_receipt(tmp_path, n, a) for n, a in arms[:2]]))
+    swapped = [_receipt(tmp_path, arms[0][0], arms[1][1])] + [_receipt(tmp_path, n, a) for n, a in arms[1:]]
+    with pytest.raises(ValueError, match="are not the arm's"):
+        diag.launch_job(_launch_args(tmp_path, swapped))
+    old = [_receipt(tmp_path, arms[0][0], arms[0][1], schema=5)] + [_receipt(tmp_path, n, a) for n, a in arms[1:]]
+    with pytest.raises(ValueError, match="schema 5"):
+        diag.launch_job(_launch_args(tmp_path, old))
+    wrong_sha = [[n, p, "0" * 64] for n, p, _ in _launch_args(tmp_path).arm_receipt]
     with pytest.raises(ValueError, match="differs from the reviewed receipt"):
-        diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": True}, "0" * 64))
+        diag.launch_job(_launch_args(tmp_path, wrong_sha))
+
+
+def test_each_arm_gets_its_own_xla_flags(monkeypatch):
+    cache = "--xla_gpu_per_fusion_autotune_cache_dir=/scratch/x"
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_allow_excess_precision=false {cache}")
+    monkeypatch.setenv("KEEP", "1")
+    assert diag.arm_env("torch-order-xla-default")["XLA_FLAGS"] == cache
+    env = diag.arm_env("fa4-no-excess-precision")
+    assert env["XLA_FLAGS"] == f"{cache} --xla_allow_excess_precision=false" and env["KEEP"] == "1"
+    monkeypatch.delenv("XLA_FLAGS")
+    assert "XLA_FLAGS" not in diag.arm_env("torch-order-xla-default")
+    assert diag.arm_env("torch-order-no-excess-precision")["XLA_FLAGS"] == "--xla_allow_excess_precision=false"
+
+
+def test_arm_phase_checks_xla_precision_first(monkeypatch):
+    def refuse(expected):
+        raise ValueError(f"checked {expected}")
+
+    monkeypatch.setattr(diag, "require_xla_precision", refuse)
+    monkeypatch.setattr(diag, "approved_receipt", lambda *a: pytest.fail("read before the XLA check"))
+    with pytest.raises(ValueError, match="checked no_excess_precision"):
+        diag.arm_phase("root", "fa4-no-excess-precision", "missing.json", "0" * 64)
+
+
+def test_importing_the_diagnostic_leaves_xla_unstarted():
+    """The arm process imports this module before ``require_xla_precision``; the import must not start XLA."""
+    code = (
+        "from jax._src import xla_bridge\n"
+        f"import {diag.MODULE}\n"
+        "assert not xla_bridge.backends_are_initialized()\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, env=os.environ | {"JAX_PLATFORMS": "cpu"})
+
+
+def _g1a(l0: tuple[float, float], failures: list | None = None) -> dict:
+    layers = [
+        {"layer": layer, "levanter_vs_vllm": {"set": [rate, rate], "ordered": [rate, rate]}}
+        for layer, rate in ((1, 0.99), (2, 0.98))
+    ]
+    layers.insert(0, {"layer": 0, "levanter_vs_vllm": {"set": list(l0), "ordered": [0.9, 0.9]}})
+    return {"layers": layers, "overall": {"levanter_vs_vllm": [0.98, 0.981]}, "failures": failures or []}
+
+
+def test_direct_levanter_vs_vllm_keeps_both_passes_and_takes_the_l0_minimum():
+    direct = diag.direct_levanter_vs_vllm(_g1a((0.9712, 0.9695)))
+    assert direct["l0_set_passes"] == [0.9712, 0.9695]
+    assert direct["l0_rule_value"] == 0.9695 and direct["l0_ok"] is False
+    assert direct["layers"][0] == {"layer": 0, "set": [0.9712, 0.9695], "ordered": [0.9, 0.9]}
+    assert direct["overall_set"] == [0.98, 0.981] and direct["l0_floor"] == 0.97
+    assert diag.direct_levanter_vs_vllm(_g1a((0.97, 0.975)))["l0_ok"] is True
+
+
+def test_decision_rule_and_preference():
+    ok = _g1a((0.98, 0.98))
+    passing = diag.decision([], {"failures": ["L3"]}, ok, diag.direct_levanter_vs_vllm(ok))
+    assert passing["lines"] == {"logprob_gate": True, "g1": False, "g1a": True, "l0_levanter_vs_vllm": True}
+    assert passing["meets_rule"] is True
+    assert not diag.decision(["max"], {"failures": []}, ok, diag.direct_levanter_vs_vllm(ok))["meets_rule"]
+    no_routes = _g1a((0.98, 0.98), ["L1"])
+    assert not diag.decision([], {"failures": ["L3"]}, no_routes, diag.direct_levanter_vs_vllm(no_routes))["meets_rule"]
+    low = _g1a((0.98, 0.9699))
+    assert not diag.decision([], {"failures": []}, low, diag.direct_levanter_vs_vllm(low))["meets_rule"]
+
+    def arm(meets):
+        return {"decision": {"meets_rule": meets}}
+
+    a, b, c = "torch-order-xla-default", "torch-order-no-excess-precision", "fa4-no-excess-precision"
+    assert diag.choose({a: arm(True), b: arm(True), c: arm(True)}) == c
+    assert diag.choose({a: arm(True), b: arm(True), c: arm(False)}) == a
+    assert diag.choose({a: arm(False), b: arm(True)}) == b
+    assert diag.choose({a: arm(False), b: arm(False), c: arm(False)}) == "hold"
+    assert diag.choose({}) == "hold"
 
 
 def test_launchers_use_the_routed_root_check():

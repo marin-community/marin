@@ -1,25 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 diagnostic arm on the integrated pin: the dropless Levanter Snowball forward, one arm per job.
+"""#310 diagnostic arms on the integrated pin: the dropless Levanter Snowball forward, three arms in one job.
 
-One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. The arm is the gate's compute view
+One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. Each arm is the gate's compute view
 (BF16 compute, FP32 router bias, FP32 router dot) on data 2 x expert 4 with ``moe_capacity_factor`` 4 (the
-expert-axis size: dropless), set through the recipe, not by editing the model. ``ARMS`` names the recipe flags each
-arm must have:
+expert-axis size: dropless), FP32 combine and FP32 activations, set through the recipe, not by editing the model.
+``ARMS`` names the attention implementation and XLA precision setting each arm must have:
 
-- ``dropless-fp32-combine-fp32-activations``: ``router_combine_fp32`` and ``fp32_activations`` True.
+- ``torch-order-xla-default`` (a): ``torch_order`` attention, XLA's default flags.
+- ``torch-order-no-excess-precision`` (b): ``torch_order`` attention, ``--xla_allow_excess_precision=false``.
+- ``fa4-no-excess-precision`` (c): the module's own attention (gpu_fa4_cute), ``--xla_allow_excess_precision=false``.
 
-The arm's runtime recipe is derived in the job (``configure_precision_runtime``) and must equal the reviewed runtime
-receipt passed at launch with its sha256 (``--runtime-receipt-sha256``); the model is then loaded the LR0 probe's
-way, so the fields reach it through the HF reload.
+Each arm runs in its own process, started with the arm's ``XLA_FLAGS``; the process checks the setting before XLA's
+backend starts (``require_xla_precision``). Its runtime recipe is derived there (``configure_precision_runtime``) and
+must equal the arm's reviewed runtime receipt (schema 6), passed at launch with its sha256; the model is then loaded
+the LR0 probe's way, so the fields reach it through the HF reload. Peak device memory is per arm, since each arm has
+its own process.
 
 Under ``<root>/<arm>/``:
 
 - ``positions.pt`` and ``gate.json``: the 465 pinned sequences scored by ``levanter_positions.positions_records``
   (validity-masked, with the backend's per-layer dispatch drops, gathered at vLLM's stored top-20 ids) and judged
   by ``precision_gate.evaluate``, the gate's own code and thresholds (batch 8, pad multiple 64); ``gate.json`` holds
-  the MoE settings, the drops and per-device memory.
+  the MoE settings, the drops, per-device memory, the arm's ``recipe`` (attention implementation, XLA precision
+  setting, ``XLA_FLAGS``), ``direct_levanter_vs_vllm`` (per layer, both vLLM passes; the L0 rule value is the minimum
+  over the passes) and ``decision`` (the coordinator's rule, below).
 - ``g1.json``: the G1 routes check (``route_proxy_check.check``) against the torch floor's pinned batch-1 top-6 and
   receipt; ``g1a.json``: G1a (``route_proxy_check.check_vllm_floor``) against the served-stack floor, marten's
   pinned vLLM route capture at ``VLLM_CAPTURE``.
@@ -32,11 +38,14 @@ The torch reference is the gate's: the vendored torch GrugMoE (``harness.import_
 eager experts. A subprocess loads only the embedding and layers 0-2 on one GPU, before JAX starts, and writes
 ``<root>/torch-dumps.pt``; its routes must equal the gate's torch ``routes.pt`` for those layers.
 
-Everything lands in ``<root>/receipt.json``, including each device's memory before and after each arm (the peak is
-a running maximum over the process).
+Each arm's process writes ``<root>/<arm>/arm.json``; everything lands in ``<root>/receipt.json``, including each
+device's memory before and after each arm and the arm chosen by the rule. The rule: an arm meets it when the
+log-prob gate passes, G1 or G1a passes, and its L0 Levanter-vs-vLLM set agreement, the minimum over the two vLLM
+passes, is at least ``L0_VLLM_FLOOR``; among arms that meet it, ``PREFERENCE`` picks; with none, hold.
 """
 
 import argparse
+import datetime
 import importlib
 import io
 import json
@@ -44,6 +53,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from dataclasses import asdict, replace
@@ -109,7 +119,13 @@ from experiments.post_training.identity_context_distill.lr0_probe import (
     check_pod_storage,
     gate_inputs,
 )
-from experiments.post_training.identity_context_distill.runtime_recipe import configure_precision_runtime
+from experiments.post_training.identity_context_distill.runtime_recipe import (
+    XLA_CACHE_FLAGS,
+    configure_precision_runtime,
+    require_xla_precision,
+    xla_precision_env,
+    xla_precision_in_process,
+)
 from experiments.post_training.identity_context_distill.sft import BASE_MODEL
 
 logger = logging.getLogger(__name__)
@@ -126,8 +142,19 @@ TOP = 6
 K = 4
 MARGIN_POSITION = 4
 OPS = ("attn_norm", "attn_out", "mlp_norm", "router_logits", "moe_out", "shared_out", "resid")
-ARMS = {"dropless-fp32-combine-fp32-activations": {"router_combine_fp32": True, "fp32_activations": True}}
-"""The recipe flags each arm's reviewed runtime receipt must give."""
+_RECIPE = {"router_combine_fp32": True, "fp32_activations": True}
+ARMS = {
+    "torch-order-xla-default": _RECIPE | {"attention_implementation": "torch_order", "xla_precision": "default"},
+    "torch-order-no-excess-precision": (
+        _RECIPE | {"attention_implementation": "torch_order", "xla_precision": "no_excess_precision"}
+    ),
+    "fa4-no-excess-precision": _RECIPE | {"attention_implementation": None, "xla_precision": "no_excess_precision"},
+}
+"""The recipe settings each arm's reviewed runtime receipt must give."""
+PREFERENCE = ("fa4-no-excess-precision", "torch-order-xla-default", "torch-order-no-excess-precision")
+"""The coordinator's order when more than one arm meets the rule."""
+L0_VLLM_FLOOR = 0.97
+"""Minimum L0 Levanter-vs-vLLM route set agreement, taken as the minimum over the two vLLM passes."""
 ITEM5_ROWS = ("contrastive|id296-imp-031|no_system|4", "contrastive|id296-imp-031|no_system|7")
 """Item 5: the rows of the ep4-dropless contrastive maximum (4.28) in r2."""
 FLOOR = f"{T310}/diag-torch-floor-r1"
@@ -512,6 +539,60 @@ def score_positions(view, sequences: list[Sequence]) -> tuple[dict, dict]:
     )
 
 
+def direct_levanter_vs_vllm(g1a: dict) -> dict:
+    """Levanter-vs-vLLM route agreement per layer against each vLLM pass, both kept; the L0 rule value is the
+    minimum over the two passes of L0's set agreement."""
+    layers = [{"layer": r["layer"], **r["levanter_vs_vllm"]} for r in g1a["layers"]]
+    l0 = next(r for r in layers if r["layer"] == 0)["set"]
+    return {
+        "layers": layers,
+        "overall_set": g1a["overall"]["levanter_vs_vllm"],
+        "l0_set_passes": l0,
+        "l0_rule_value": min(l0),
+        "l0_rule": "min over the two vLLM passes of L0 set agreement",
+        "l0_floor": L0_VLLM_FLOOR,
+        "l0_ok": min(l0) >= L0_VLLM_FLOOR,
+    }
+
+
+def decision(gate_failures: list, g1: dict, g1a: dict, direct: dict) -> dict:
+    """The coordinator's rule for one arm: the log-prob gate passes, G1 or G1a passes, and the L0 rule value is at
+    least ``L0_VLLM_FLOOR``. A check passes when it lists no failures."""
+    lines = {
+        "logprob_gate": not gate_failures,
+        "g1": not g1["failures"],
+        "g1a": not g1a["failures"],
+        "l0_levanter_vs_vllm": direct["l0_ok"],
+    }
+    return {
+        "lines": lines,
+        "meets_rule": lines["logprob_gate"] and (lines["g1"] or lines["g1a"]) and lines["l0_levanter_vs_vllm"],
+    }
+
+
+def choose(arms: dict) -> str:
+    """The first arm in ``PREFERENCE`` that ran and meets the rule, else ``hold``."""
+    for name in PREFERENCE:
+        if name in arms and arms[name]["decision"]["meets_rule"]:
+            return name
+    return "hold"
+
+
+def peak_memory(memory: list[dict]) -> list[dict]:
+    return [
+        {"process": row["process"], "local_device": row["local_device"], "peak_bytes_in_use": row["peak_bytes_in_use"]}
+        for row in memory
+    ]
+
+
+def recipe_record(view) -> dict:
+    return {
+        "attention_implementation": view.config.attention_implementation,
+        "xla_precision": xla_precision_in_process(),
+        "XLA_FLAGS": os.environ.get("XLA_FLAGS"),
+    }
+
+
 def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref, floor) -> dict:
     """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins, and the
     vLLM capture's ``pass1`` / ``pass2`` routes for G1a."""
@@ -526,6 +607,7 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             "expert_axis": dict(mesh.shape)["expert"],
             "router_combine_fp32": view.config.router_combine_fp32,
             "fp32_activations": view.config.fp32_activations,
+            "attention_implementation": view.config.attention_implementation,
             "expert_mlp_combine_in_fp32": mlp.combine_in_fp32,
             "moe_implementation": mlp.implementation,
         }
@@ -544,6 +626,10 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
         report = evaluate(
             replace(INPUTS, output=out), overrides, positions_path, dot_dtypes, moe | {"dispatch": dispatch}, memory
         )
+        direct = direct_levanter_vs_vllm(g1a)
+        report["recipe"] = recipe_record(view)
+        report["direct_levanter_vs_vllm"] = direct
+        report["decision"] = decision(report["failures"], g1, g1a, direct)
         write_json(prefix_join(out, "gate.json"), report)
         g1["inputs"] = {
             "positions": positions_path,
@@ -577,9 +663,14 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
     torch.save(dumps, buffer)
     StoragePath(prefix_join(out, "levanter-dumps.pt")).write_bytes(buffer.getvalue())
     parity = report["parity"]["positions"]
+    memory_after = device_memory()
     return {
         "arm": name,
         "mesh": {"axes": dict(mesh.shape)},
+        "recipe": report["recipe"],
+        "decision": report["decision"],
+        "direct_levanter_vs_vllm": report["direct_levanter_vs_vllm"],
+        "peak_device_memory": peak_memory(memory_after),
         "settings": settings,
         "router_dot_dtypes": dot_dtypes,
         "gate_failures": report["failures"],
@@ -620,7 +711,7 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
         "dump_batch_grid": dump_batch["grid"],
         "sublayers_vs_torch": compare_dumps(dumps, torch_ref, bias),
         "device_memory_before_arm": memory_before,
-        "device_memory_after_arm": device_memory(),
+        "device_memory_after_arm": memory_after,
         "seconds": round(time.time() - started, 1),
     }
 
@@ -639,8 +730,8 @@ def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
 
 
 def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generation_bytes: bytes):
-    """The arm's runtime recipe, derived as the LR0 probe derives it, which must equal the reviewed receipt and give
-    the arm's flags."""
+    """The arm's runtime recipe, derived as the LR0 probe derives it (with this process's XLA precision setting),
+    which must equal the reviewed receipt and give the arm's settings."""
     base = base_config(root, f"diag-{name}", config_bytes, generation_bytes, receipt)
     reference = receipt["routing_reference"]
     config, observed = configure_precision_runtime(
@@ -650,21 +741,25 @@ def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generat
         rounding_bytes=StoragePath(reference["path"]).read_bytes(),
         rounding_path=reference["path"],
         rounding_sha256=reference["sha256"],
+        xla_precision=xla_precision_in_process(),
     )
     if observed != receipt:
         raise ValueError(f"{name}: derived runtime recipe differs from the reviewed receipt")
-    model = config.model
-    arm = ARMS[name]
-    if (model.moe_capacity_factor, model.router_combine_fp32, model.fp32_activations) != (
-        CAPACITY_FACTOR,
-        arm["router_combine_fp32"],
-        arm["fp32_activations"],
-    ):
-        raise ValueError(
-            f"{name}: capacity {model.moe_capacity_factor}, combine {model.router_combine_fp32}, "
-            f"fp32 activations {model.fp32_activations}"
-        )
+    found = receipt_settings(observed)
+    if found != ARMS[name] or config.model.moe_capacity_factor != CAPACITY_FACTOR:
+        raise ValueError(f"{name}: capacity {config.model.moe_capacity_factor}, settings {found}")
     return config
+
+
+def receipt_settings(receipt: dict) -> dict:
+    """The ``ARMS`` settings a runtime receipt gives."""
+    model = receipt["runtime_model_config"]
+    return {
+        "router_combine_fp32": model.get("router_combine_fp32"),
+        "fp32_activations": model.get("fp32_activations"),
+        "attention_implementation": model.get("attention_implementation"),
+        "xla_precision": receipt.get("xla_precision"),
+    }
 
 
 def load_floor() -> dict:
@@ -680,36 +775,33 @@ def load_floor() -> dict:
     return {"top6": torch.load(io.BytesIO(top6), map_location="cpu"), "receipt": json.loads(receipt), **passes}
 
 
-def diagnostic_worker(root: str, name: str, receipt_bytes: bytes, receipt_sha256: str) -> None:
-    check_pod_storage()
+def arm_env(name: str) -> dict[str, str]:
+    """The worker's environment with ``XLA_FLAGS`` set to the arm's XLA precision setting (Iris's cache flags kept)."""
+    env = os.environ.copy()
+    kept = [f for f in env.pop("XLA_FLAGS", "").split() if f.partition("=")[0] in XLA_CACHE_FLAGS]
+    flags = " ".join([*kept, *xla_precision_env(ARMS[name]["xla_precision"]).values()])
+    if flags:
+        env["XLA_FLAGS"] = flags
+    return env
+
+
+def arm_phase(root: str, name: str, receipt_path: str, receipt_sha256: str) -> None:
+    """One arm, in its own process: check the XLA precision setting before anything starts XLA's backend, then run
+    the arm and write ``<root>/<arm>/arm.json``."""
+    require_xla_precision(ARMS[name]["xla_precision"])
     started = time.time()
-    torch_started = time.time()
-    subprocess.run(
-        [sys.executable, "-m", MODULE, "torch-phase", "--root", root],
-        check=True,
-        env=os.environ.copy(),
-    )
-    torch_seconds = time.time() - torch_started
+    receipt = approved_receipt(Path(receipt_path).read_bytes(), receipt_sha256)
     torch_ref = torch.load(io.BytesIO(read(prefix_join(root, "torch-dumps.pt"))), map_location="cpu", weights_only=False)
     floor = load_floor()
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    source = json.loads(config_bytes)
     sequences = stored_sequences(INPUTS.positions)
     check = [s for s in sequences if s.group == "check"]
-    result: dict = {
-        "torch_seconds": round(torch_seconds, 1),
-        "torch_routes_equal_gate_routes_layers_0_2": torch_routes_match_gate_reference(torch_ref),
-        "runtime_receipt_sha256": receipt_sha256,
-        "arms": {},
-    }
-    write_json(prefix_join(root, "receipt.json"), result)
-    receipt = approved_receipt(receipt_bytes, receipt_sha256)
     config = arm_config(name, receipt, root, config_bytes, generation_bytes)
     load_started = time.time()
-    view, mesh, trainer_config = load_view(config, receipt, source)
-    result[f"load_seconds_{name}"] = round(time.time() - load_started, 1)
-    result["arms"][name] = run_arm(
+    view, mesh, trainer_config = load_view(config, receipt, json.loads(config_bytes))
+    load_seconds = round(time.time() - load_started, 1)
+    result = run_arm(
         name,
         view,
         mesh,
@@ -721,8 +813,50 @@ def diagnostic_worker(root: str, name: str, receipt_bytes: bytes, receipt_sha256
         torch_ref,
         floor,
     )
+    result |= {"runtime_receipt_sha256": receipt_sha256, "load_seconds": load_seconds}
+    result["process_seconds"] = round(time.time() - started, 1)
+    write_json(prefix_join(root, f"{name}/arm.json"), result)
+
+
+def diagnostic_worker(root: str, arms: list[tuple[str, bytes, str]]) -> None:
+    """``arms``: (name, the reviewed runtime receipt's exact bytes, its sha256), run in this order. The torch phase
+    runs once; each arm runs in its own process with its own ``XLA_FLAGS``. A failed arm is recorded and the next
+    one still runs; the job fails at the end if any arm failed."""
+    check_pod_storage()
+    started = time.time()
+    torch_started = time.time()
+    subprocess.run(
+        [sys.executable, "-m", MODULE, "torch-phase", "--root", root],
+        check=True,
+        env=os.environ.copy(),
+    )
+    torch_ref = torch.load(io.BytesIO(read(prefix_join(root, "torch-dumps.pt"))), map_location="cpu", weights_only=False)
+    result: dict = {
+        "torch_seconds": round(time.time() - torch_started, 1),
+        "torch_routes_equal_gate_routes_layers_0_2": torch_routes_match_gate_reference(torch_ref),
+        "runtime_receipt_sha256": {name: sha for name, _, sha in arms},
+        "arms": {},
+        "arm_exit_codes": {},
+    }
+    del torch_ref
+    write_json(prefix_join(root, "receipt.json"), result)
+    local = Path(tempfile.mkdtemp())
+    for name, receipt_bytes, sha in arms:
+        receipt_path = local / f"{name}-runtime-receipt.json"
+        receipt_path.write_bytes(receipt_bytes)
+        command = [sys.executable, "-m", MODULE, "arm-phase", "--root", root, "--arm", name]
+        command += ["--receipt-file", str(receipt_path), "--receipt-sha256", sha]
+        code = subprocess.run(command, env=arm_env(name)).returncode
+        result["arm_exit_codes"][name] = code
+        if code == 0:
+            result["arms"][name] = json.loads(read(prefix_join(root, f"{name}/arm.json")))
+        write_json(prefix_join(root, "receipt.json"), result)
+    result["chosen"] = choose(result["arms"])
     result["seconds"] = round(time.time() - started, 1)
     write_json(prefix_join(root, "receipt.json"), result)
+    failed = [name for name, code in result["arm_exit_codes"].items() if code]
+    if failed:
+        raise RuntimeError(f"arms failed: {failed}")
 
 
 # ---- launcher ----------------------------------------------------------------------------------------------------
@@ -733,35 +867,62 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     phase = sub.add_parser("torch-phase", help="inside the job: write <root>/torch-dumps.pt")
     phase.add_argument("--root", required=True)
-    launch = sub.add_parser("launch", help="print the plan; with --run, submit one H100x8 job")
+    arm = sub.add_parser("arm-phase", help="inside the job: run one arm in this process")
+    arm.add_argument("--root", required=True)
+    arm.add_argument("--arm", choices=sorted(ARMS), required=True)
+    arm.add_argument("--receipt-file", required=True)
+    arm.add_argument("--receipt-sha256", required=True)
+    launch = sub.add_parser("launch", help="print the plan; with --run, submit one H100x8 job running every arm")
     launch.add_argument("--job-name", required=True)
     launch.add_argument("--root", required=True, help=f"fresh prefix under {T310}/")
-    launch.add_argument("--arm", choices=sorted(ARMS), required=True)
-    launch.add_argument("--runtime-receipt", required=True, help="local reviewed runtime receipt for the arm")
-    launch.add_argument("--runtime-receipt-sha256", required=True)
+    launch.add_argument(
+        "--arm-receipt",
+        nargs=3,
+        action="append",
+        required=True,
+        metavar=("ARM", "RECEIPT", "SHA256"),
+        help="one per arm: the arm, its local reviewed runtime receipt and that receipt's sha256",
+    )
     launch.add_argument("--timeout-seconds", type=int, default=2700)
     launch.add_argument("--priority", choices=("interactive", "production"), default="production")
     launch.add_argument("--expect-commit")
+    launch.add_argument("--launch-receipt", help="local JSON receipt to write; required with --run")
     launch.add_argument("--run", action="store_true")
     args = parser.parse_args()
     if args.command == "torch-phase":
         run_torch_phase(args.root, INPUTS.positions)
         return
+    if args.command == "arm-phase":
+        arm_phase(args.root, args.arm, args.receipt_file, args.receipt_sha256)
+        return
     launch_job(args)
+
+
+def arm_receipts(given: list[list[str]]) -> list[tuple[str, bytes, str]]:
+    """Every arm exactly once, in ``ARMS`` order; each receipt's bytes must hash to its sha256 and give the arm's
+    settings."""
+    names = [name for name, _, _ in given]
+    if sorted(names) != sorted(ARMS):
+        raise ValueError(f"--arm-receipt must name each of {sorted(ARMS)} once, got {names}")
+    by_name = {name: (path, sha) for name, path, sha in given}
+    arms = []
+    for name in ARMS:
+        path, sha = by_name[name]
+        data = Path(path).read_bytes()
+        receipt = approved_receipt(data, sha)
+        if receipt.get("schema_version") != 6:
+            raise ValueError(f"{name}: receipt schema {receipt.get('schema_version')!r}, need 6")
+        if receipt_settings(receipt) != ARMS[name]:
+            raise ValueError(f"{name}: receipt settings {receipt_settings(receipt)} are not the arm's {ARMS[name]}")
+        arms.append((name, data, sha))
+    return arms
 
 
 def launch_job(args) -> None:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
-    receipt_bytes = Path(args.runtime_receipt).read_bytes()
-    receipt = approved_receipt(receipt_bytes, args.runtime_receipt_sha256)
-    model = receipt["runtime_model_config"]
-    arm = ARMS[args.arm]
-    if (model.get("router_combine_fp32"), model.get("fp32_activations")) != (
-        arm["router_combine_fp32"],
-        arm["fp32_activations"],
-    ):
-        raise ValueError(f"receipt flags {model} do not match arm {args.arm}: {arm}")
+    arms = arm_receipts(args.arm_receipt)
+    paths = {name: path for name, path, _ in args.arm_receipt}
     if not args.root.startswith(f"{T310}/diag-"):
         raise ValueError(f"root must be a fresh {T310}/diag-* prefix")
     resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768GB", disk="1TB", target_cluster="cw-rno2a")
@@ -770,9 +931,24 @@ def launch_job(args) -> None:
         "commit": head,
         "clean": not dirty,
         "root": args.root,
-        "arm": {args.arm: ARMS[args.arm]},
-        "runtime_receipt": args.runtime_receipt,
-        "runtime_receipt_sha256": args.runtime_receipt_sha256,
+        "arms": {
+            name: {
+                **ARMS[name],
+                "XLA_FLAGS": xla_precision_env(ARMS[name]["xla_precision"]).get("XLA_FLAGS"),
+                "runtime_receipt": paths[name],
+                "runtime_receipt_sha256": sha,
+            }
+            for name, _, sha in arms
+        },
+        "arm_order": [name for name, _, _ in arms],
+        "rule": {
+            "meets": (
+                "log-prob gate passes, G1 or G1a passes, L0 Levanter-vs-vLLM set agreement (min over the two "
+                f"vLLM passes) >= {L0_VLLM_FLOOR}"
+            ),
+            "preference": PREFERENCE,
+            "otherwise": "hold",
+        },
         "capacity_factor": CAPACITY_FACTOR,
         "expert_axis": EXPERT_AXIS,
         "item5_rows": ITEM5_ROWS,
@@ -802,17 +978,16 @@ def launch_job(args) -> None:
         return
     if dirty or args.expect_commit != head:
         raise ValueError("--run needs a clean tree at --expect-commit")
+    if not args.launch_receipt:
+        raise ValueError("--run needs --launch-receipt")
     require_fresh_root(args.root)
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
+    # No job-level XLA_FLAGS: each arm's process gets its own (``arm_env``).
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
-    entrypoint = Entrypoint.from_callable(
-        importlib.import_module(MODULE).diagnostic_worker,
-        args.root,
-        args.arm,
-        receipt_bytes,
-        args.runtime_receipt_sha256,
-    )
+    entrypoint = Entrypoint.from_callable(importlib.import_module(MODULE).diagnostic_worker, args.root, arms)
+    launch = {**plan, "state": "pre-submit", "submit_utc": datetime.datetime.now(datetime.UTC).isoformat()}
+    Path(args.launch_receipt).write_text(json.dumps(launch, indent=1) + "\n")
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
@@ -826,6 +1001,8 @@ def launch_job(args) -> None:
                 max_retries_preemption=0,
                 priority_band=PRIORITY_BANDS[args.priority],
             )
+    launch.update(state="submitted", iris_job_id=str(job.job_id))
+    Path(args.launch_receipt).write_text(json.dumps(launch, indent=1) + "\n")
     print(json.dumps({"job_id": str(job.job_id)}))
 
 

@@ -9,11 +9,15 @@ from dataclasses import replace
 import pytest
 from levanter.models.snowball import SnowballConfig
 
+from experiments.post_training.identity_context_distill import runtime_recipe
 from experiments.post_training.identity_context_distill.runtime_recipe import (
     POSITIONS_SHA256,
     check_precision_runtime_receipt,
     check_runtime_config,
     configure_precision_runtime,
+    require_xla_precision,
+    xla_precision_env,
+    xla_precision_in_process,
 )
 from experiments.post_training.identity_context_distill.sft import identity_sft_config
 from experiments.post_training.identity_context_distill.test_sft import source_arguments
@@ -27,6 +31,7 @@ def inputs():
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
         fp32_activations=False,
+        attention_implementation=None,
         dataset_uri="synthetic",
         cache_uri="cache",
         output_uri="s3://marin-rno2a/fixture",
@@ -53,6 +58,7 @@ def inputs():
         rounding_bytes=rounding_bytes,
         rounding_path="s3://marin-rno2a/fixture/routing.json",
         rounding_sha256=hashlib.sha256(rounding_bytes).hexdigest(),
+        xla_precision="default",
     )
     return config, args
 
@@ -68,11 +74,12 @@ def test_measured_dot_policy_accepts_runtime_flag_without_changing_native_metada
     assert receipt["source_metadata"]["schema_version"] == 2
     assert receipt["source_metadata"]["model_config"]["router_dot_fp32"] is False
     assert receipt["runtime_model_config"]["router_dot_fp32"] is True
-    assert receipt["schema_version"] == 5
+    assert receipt["schema_version"] == 6
     assert receipt["moe_capacity"] == {"factor": 4.0, "expert_axis": 4}
     assert receipt["router_combine_fp32"] is False
     assert receipt["fp32_activations"] is False
     assert receipt["runtime_model_config"]["fp32_activations"] is False
+    assert receipt["attention_implementation"] is None and receipt["xla_precision"] == "default"
     assert receipt["runtime_model_config"]["moe_capacity_factor"] == 4.0
     assert receipt["source_metadata"]["model_config"]["moe_capacity_factor"] == 1.0
     assert receipt["native_export_config_overrides"] == config.adapter.hf_config_overrides
@@ -126,3 +133,69 @@ def test_runtime_recipe_requires_a_dropless_moe():
     binding = {k: args[k] for k in ("config_bytes", "generation_bytes", "rounding_bytes")}
     with pytest.raises(ValueError, match="Runtime recipe"):
         check_precision_runtime_receipt(runtime, changed, **binding)
+
+
+def test_the_receipt_binds_the_attention_implementation_and_xla_precision():
+    config, args = inputs()
+    assert isinstance(config.model, SnowballConfig)
+    torch_order = replace(config, model=replace(config.model, attention_implementation="torch_order"))
+    runtime, receipt = configure_precision_runtime(torch_order, **dict(args, xla_precision="no_excess_precision"))
+    assert receipt["attention_implementation"] == "torch_order"
+    assert receipt["runtime_model_config"]["attention_implementation"] == "torch_order"
+    assert receipt["xla_precision"] == "no_excess_precision"
+    with pytest.raises(ValueError, match="not a recipe option"):
+        configure_precision_runtime(
+            replace(config, model=replace(config.model, attention_implementation="reference")), **args
+        )
+    for value in (None, "", "false", "--xla_allow_excess_precision=false"):
+        with pytest.raises(ValueError, match="Unknown XLA precision"):
+            configure_precision_runtime(config, **dict(args, xla_precision=value))
+    with pytest.raises(TypeError, match="xla_precision"):
+        configure_precision_runtime(config, **{k: v for k, v in args.items() if k != "xla_precision"})
+
+
+def test_the_receipt_check_reads_xla_precision_from_the_process(monkeypatch):
+    config, args = inputs()
+    runtime, receipt = configure_precision_runtime(config, **dict(args, xla_precision="no_excess_precision"))
+    binding = {k: args[k] for k in ("config_bytes", "generation_bytes", "rounding_bytes")}
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    with pytest.raises(ValueError, match="Runtime recipe"):
+        check_precision_runtime_receipt(runtime, receipt, **binding)
+    monkeypatch.setenv("XLA_FLAGS", "--xla_allow_excess_precision=false")
+    check_precision_runtime_receipt(runtime, receipt, **binding)
+
+
+def test_xla_precision_enum_env_and_process(monkeypatch):
+    assert xla_precision_env("default") == {}
+    assert xla_precision_env("no_excess_precision") == {"XLA_FLAGS": "--xla_allow_excess_precision=false"}
+    with pytest.raises(ValueError, match="Unknown"):
+        xla_precision_env("off")
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    assert xla_precision_in_process() == "default"
+    monkeypatch.setenv("XLA_FLAGS", "")
+    assert xla_precision_in_process() == "default"
+    monkeypatch.setenv("XLA_FLAGS", "--xla_allow_excess_precision=false")
+    assert xla_precision_in_process() == "no_excess_precision"
+    # Iris adds its autotune cache location at JAX init; that is not a numeric setting.
+    cache = "--xla_gpu_per_fusion_autotune_cache_dir=/scratch/x"
+    monkeypatch.setenv("XLA_FLAGS", f"--xla_allow_excess_precision=false {cache}")
+    assert xla_precision_in_process() == "no_excess_precision"
+    monkeypatch.setenv("XLA_FLAGS", cache)
+    assert xla_precision_in_process() == "default"
+    for other in ("--xla_allow_excess_precision=true", "--xla_gpu_enable_triton_gemm=false"):
+        monkeypatch.setenv("XLA_FLAGS", other)
+        with pytest.raises(ValueError, match="not a recipe XLA precision"):
+            xla_precision_in_process()
+
+
+def test_require_xla_precision_runs_before_xla_starts(monkeypatch):
+    monkeypatch.setattr(runtime_recipe.xla_bridge, "backends_are_initialized", lambda: False)
+    monkeypatch.setenv("XLA_FLAGS", "--xla_allow_excess_precision=false")
+    require_xla_precision("no_excess_precision")
+    with pytest.raises(ValueError, match="receipt binds 'default'"):
+        require_xla_precision("default")
+    with pytest.raises(ValueError, match="Unknown"):
+        require_xla_precision("no-excess")
+    monkeypatch.setattr(runtime_recipe.xla_bridge, "backends_are_initialized", lambda: True)
+    with pytest.raises(RuntimeError, match="backend started"):
+        require_xla_precision("no_excess_precision")
