@@ -45,7 +45,7 @@ def main():
     tracker.log_summary({"kernel_check/optimizer_updates": 0})
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     device = jax.local_devices()[0]
-    with jax.default_device(device), jax.default_matmul_precision("highest"):
+    with jax.default_device(device):
         cases = (
             ("padding", "empty", "skewed", "target", "local-target", "local-v432-target")
             if args.fused_relu2
@@ -88,7 +88,11 @@ def main():
                 for implementation, expert_mlp in implementations:
                     function = jax.jit(functools.partial(evaluate, expert_mlp))
                     start = time.perf_counter()
-                    compiled = function.lower(inputs, cotangent).compile()
+                    # TPU BF16 MXU inputs use the training precision. Requesting
+                    # FP32 contract precision for BF16 Mosaic matmuls is invalid.
+                    precision = "highest" if dtype == jnp.float32 else "default"
+                    with jax.default_matmul_precision(precision):
+                        compiled = function.lower(inputs, cotangent).compile()
                     compile_seconds = time.perf_counter() - start
                     actual = jax.block_until_ready(compiled(inputs, cotangent))
                     if expected is None:
@@ -106,6 +110,7 @@ def main():
                         "case": case,
                         "implementation": implementation,
                         "dtype": str(dtype),
+                        "matmul_precision": precision,
                         "shape": [rows, width, hidden, experts],
                         "passed": passed,
                         "errors": deviations,
