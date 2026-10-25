@@ -34,6 +34,8 @@ from transformers import AutoTokenizer
 from experiments.interp.snowball_identity import identity_eval as shared
 
 GATE_SHA256 = "d854803cee2f53f77ffa45b7850cb060ad1c6cfd1fb6c128a1674c3c37b518ad"
+A1_SHA256 = "9d735eb931f527681750407bb183bd091bab02f31449650a2c862009f4bf0691"
+"""milestone16-spending-gate-A1.md: five primary passes per arm and the INCONCLUSIVE label; authorizes nothing."""
 SCORER_REVISION = "2a1de41d86b5d6469a49ed35da505abcb202f189"
 IDENTITY_EVAL_SHA256 = "50e3c8730b9995b1134db0c0281e6aeab9061f1ea17d0844db24367abf8095b1"
 TEMPLATE_SHA256 = "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de"
@@ -45,8 +47,8 @@ FAMILIES = {"panel_name": "name", "panel_creator": "creator"}
 FAMILY_SIZES = {"name": 14, "creator": 10}
 GRID_CASES = 64
 STABILITY_ROWS = ("id296-imp-000", "id296-imp-006", "id296-imp-020")
-REPEAT_PASSES = 2
-"""Extra rescoring passes of the 24 primary rows after the frozen first pass (spread report only)."""
+REPEAT_PASSES = 4
+"""A1: the 24 primary rows are scored five times per serve; the first pass is primary, passes 2-5 are repeats."""
 SPREAD_FLAG_NATS_PER_TOKEN = 0.05
 """Flag a family-mean spread at or above half the 0.10 nat/token threshold for review before deciding."""
 # Exactly what identity_eval.Endpoint.prompt_logprobs sends, and the template mode of score_contrastive_row.
@@ -64,6 +66,12 @@ NOTES = (
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_amendment(path: Path) -> dict:
+    if sha256_file(path) != A1_SHA256:
+        raise click.ClickException("Amendment hash differs from milestone16-spending-gate-A1.json")
+    return json.loads(path.read_text())
 
 
 def load_gate(path: Path) -> dict:
@@ -168,7 +176,12 @@ def alias_means(primary: dict[str, dict]) -> dict[str, float]:
 
 
 def score_arm(
-    endpoint: shared.PromptScorer, tokenizer, prompt_dir: Path, gate: dict, arm: str, provenance: dict
+    endpoint: shared.PromptScorer,
+    tokenizer,
+    prompt_dir: Path,
+    gate: dict,
+    arm: str,
+    provenance: dict,
 ) -> dict:
     """Score the 64 cases in the fixed order, one request at a time, then rescore the stability rows."""
     jobs = grid_jobs(prompt_dir, gate)
@@ -206,6 +219,7 @@ def score_arm(
     return {
         "arm": arm,
         "gate_file_sha256": GATE_SHA256,
+        "amendment_sha256": A1_SHA256,
         "milestone_completed_updates": gate["milestone_completed_updates"],
         "native_checkpoint_label": gate["native_checkpoint_label"],
         "native_plain_template_sha256": TEMPLATE_SHA256,
@@ -306,13 +320,32 @@ def too_weak_value(
     return None if byte_unchanged is None and not weak_signal else weak_signal or bool(byte_unchanged)
 
 
-def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None) -> dict:
-    """Apply the gate file's too_weak rule verbatim to two arm receipts."""
+def check_matched(base: dict, candidate: dict) -> None:
     if base["arm"] != "baseline" or candidate["arm"] != "candidate":
         raise ValueError("decide takes the baseline receipt, then the candidate receipt")
     for key in ("scorer", "sampling", "native_plain_template_sha256", "prompt_sha256"):
         if base[key] != candidate[key]:
             raise ValueError(f"Arms are not matched on {key}")
+
+
+def deciding_families(improvement: dict[str, float], too_weak: bool | None, threshold: float) -> list[str]:
+    """Families whose side of 0.10 decides the verdict (A1 3b).
+
+    A too_weak verdict needs both improvements below 0.10, so either family crossing would change it: both
+    decide. A not-too_weak verdict reached through improvements needs at least one family at or above 0.10;
+    it changes only if all such families fall below, so those families decide. A verdict carried only by the
+    wins clause or by the byte-unchanged clause has no deciding family (3a still applies to the wins clause).
+    """
+    if too_weak is None:
+        return []
+    if too_weak:
+        return list(FAMILY_SIZES)
+    return [f for f in FAMILY_SIZES if improvement[f] >= threshold]
+
+
+def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None) -> dict:
+    """The gate file's too_weak rule on the first passes, labelled INCONCLUSIVE per amendment A1."""
+    check_matched(base, candidate)
     base_means = base["correct_continuation_NLL"]["family_mean_NLL_per_token"]
     cand_means = candidate["correct_continuation_NLL"]["family_mean_NLL_per_token"]
     improvement = {family: base_means[family] - cand_means[family] for family in FAMILY_SIZES}
@@ -320,11 +353,25 @@ def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None)
     base_wins = base["primary_wins"]["won"]
     cand_wins = candidate["primary_wins"]["won"]
     too_weak = too_weak_value(improvement, cand_wins, base_wins, byte_unchanged, threshold)
+    base_passes = base["primary_passes"]["passes"]
+    cand_passes = candidate["primary_passes"]["passes"]
+    if len(base_passes) != REPEAT_PASSES + 1 or len(cand_passes) != REPEAT_PASSES + 1:
+        raise ValueError("A1 requires five primary passes per arm")
     per_pass = []
-    for b, c in zip(base["primary_passes"]["passes"], candidate["primary_passes"]["passes"], strict=True):
+    for b, c in zip(base_passes, cand_passes, strict=True):
         delta = {f: b["family_mean_NLL_per_token"][f] - c["family_mean_NLL_per_token"][f] for f in FAMILY_SIZES}
         value = too_weak_value(delta, c["primary_wins"], b["primary_wins"], byte_unchanged, threshold)
         per_pass.append({"pass": b["pass"], "improvement": delta, "too_weak": value})
+    disagreement = len({p["too_weak"] for p in per_pass}) > 1
+    base_range, cand_range = pass_spread(base_passes), pass_spread(cand_passes)
+    pooled = {f: math.sqrt(base_range[f] ** 2 + cand_range[f] ** 2) for f in FAMILY_SIZES}
+    deciding = [] if byte_unchanged else deciding_families(improvement, too_weak, threshold)
+    near = {f: abs(improvement[f] - threshold) < pooled[f] for f in deciding}
+    if too_weak:
+        band_hit = any(near.values())
+    else:
+        band_hit = bool(near) and all(near.values())
+    inconclusive = not byte_unchanged and (disagreement or band_hit)
     return {
         "family_improvement": {
             "definition": gate["family_improvement"],
@@ -337,13 +384,22 @@ def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None)
         "base_no_system_primary_wins": base_wins,
         "saved_trainable_BF16_weights_byte_unchanged": byte_unchanged,
         "too_weak": {"rule": gate["too_weak"], "value": too_weak},
-        "too_weak_by_pass": {
-            "first_pass_is_primary": True,
-            "passes": per_pass,
-            "flips": len({p["too_weak"] for p in per_pass}) > 1,
-            "baseline_spread_flagged": base["primary_passes"]["spread_flagged"],
-            "candidate_spread_flagged": candidate["primary_passes"]["spread_flagged"],
+        "amendment_A1": {
+            "amendment_sha256": A1_SHA256,
+            "pass_wise": {"passes": per_pass, "too_weak_disagreement": disagreement},
+            "family_range": {"baseline": base_range, "candidate": cand_range},
+            "pooled_spread": pooled,
+            "deciding_families": deciding,
+            "deciding_family_within_pooled_spread": near,
+            "band_hit": band_hit,
+            "INCONCLUSIVE": inconclusive,
+            "authorizes": "nothing; the coordinator records the next step"
+            if inconclusive
+            else "read as the gate file says",
         },
+        "label": "INCONCLUSIVE"
+        if inconclusive
+        else {True: "TOO_WEAK", False: "NOT_TOO_WEAK", None: "UNKNOWN"}[too_weak],
         "no_automatic_64_after_weak": gate["no_automatic_64_after_weak"],
         "notes": NOTES,
     }
