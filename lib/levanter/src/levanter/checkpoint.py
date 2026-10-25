@@ -27,7 +27,7 @@ import fsspec
 import haliax.partitioning
 import humanfriendly
 import jax
-import jax.numpy as jnp
+import numpy as np
 from draccus import field
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
@@ -624,7 +624,7 @@ class Checkpointer:
                 my_save_permanent_ckpt = False
 
         should_save, save_permanent_ckpt = broadcast_one_to_all(
-            jnp.array([my_should_save, my_save_permanent_ckpt], dtype=jnp.bool_)
+            np.array([my_should_save, my_save_permanent_ckpt], dtype=np.bool_)
         )
         # this comes out as np.bool_, so we need to convert it to a regular bool so json serialization works
         save_permanent_ckpt = bool(save_permanent_ckpt)
