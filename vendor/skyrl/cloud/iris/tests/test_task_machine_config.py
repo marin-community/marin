@@ -8,6 +8,8 @@ from omegaconf import OmegaConf
 from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import Backend
 from marinskyrl.task_machine_factories import task_machine_factories
+from skyrl_gym.rollout_specs import rollout_spec, shell_harness
+from skyrl_train.dataset.tasks import source_row_task
 
 from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
@@ -43,12 +45,6 @@ def test_omitted_or_null_local_settings_keep_the_backend_disabled(tmp_path, monk
     assert "shellsim" in factories
 
 
-def test_empty_settings_do_not_clear_existing_mapping_defaults(tmp_path):
-    baseline = composed_config(tmp_path, {})
-    config = composed_config(tmp_path, {"session": {}})
-    assert config.environment.task_sessions.session == baseline.environment.task_sessions.session
-
-
 @pytest.mark.parametrize(
     "key,error",
     [
@@ -66,3 +62,23 @@ def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
         compose_skyrl_config(
             parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
+
+
+def test_empty_session_settings_preserve_published_limits_and_shell_timeout(tmp_path):
+    config = composed_config(tmp_path, {"session": {}})
+    config.generator.max_turns = 3
+    config.trajectory_runner.command_timeout = 17
+    task = source_row_task(
+        {
+            "env_class": "gsm8k",
+            "prompt": [{"role": "user", "content": "1 + 1?"}],
+            "reward_model": {"ground_truth": "2"},
+        },
+        0,
+        source_name="empty-session-merge",
+        environment_configs=OmegaConf.to_container(config.environment.task_sessions, resolve=True),
+    ).task
+    spec = rollout_spec(task, {**dict(config.environment.task_sessions.session), "task_session": "shellbox"})
+
+    assert spec.limits.max_turns == 3
+    assert shell_harness(spec.harness).command_timeout == 17

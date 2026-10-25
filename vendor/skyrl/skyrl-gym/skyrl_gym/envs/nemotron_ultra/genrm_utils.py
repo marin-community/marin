@@ -26,12 +26,11 @@ This module provides:
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from pydantic import BaseModel
@@ -83,65 +82,6 @@ def _to_jsonable_data(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_to_jsonable_data(item) for item in value]
     return value
-
-
-def get_prompt_key_from_input(input_messages: List[Any], principle: Optional[str] = None) -> str:
-    """Stable key for grouping rollouts by prompt and principle.
-
-    Used by cohort-based verify to group N rollouts per prompt.
-
-    Args:
-        input_messages: Conversation input (e.g. responses_create_params.input)
-        principle: Optional principle string (principle-based GenRM)
-
-    Returns:
-        A stable string key for the prompt + principle combination
-    """
-    key_data = {"input": _to_jsonable_data(input_messages), "principle": principle}
-    return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
-
-
-def get_prompt_key(example: Dict) -> str:
-    """Get stable key for grouping examples by prompt and principle.
-
-    Examples with the same conversation history but different principles
-    should be in separate groups. Accepts either prompt_id or hashes input + principle.
-
-    Args:
-        example: Dict with optional "prompt_id", or "responses_create_params" with "input"
-
-    Returns:
-        A stable string key
-    """
-    if "prompt_id" in example:
-        prompt_id = str(example["prompt_id"])
-        principle = example.get("principle")
-        if principle is not None:
-            return f"{prompt_id}::{principle}"
-        return prompt_id
-    conv = extract_conversation_history(example)
-    principle = example.get("principle")
-    return get_prompt_key_from_input(conv, principle)
-
-
-def extract_conversation_history(example: Dict) -> List[Dict]:
-    """Extract conversation history from example (responses_create_params.input).
-
-    Args:
-        example: Dict with responses_create_params.input (list of message dicts)
-
-    Returns:
-        List of message dicts with 'role' and 'content'
-
-    Raises:
-        ValueError: If required fields are missing
-    """
-    responses_create_params = example.get("responses_create_params")
-    if responses_create_params is None:
-        raise ValueError(f"Example missing 'responses_create_params': {list(example.keys())}")
-    if "input" not in responses_create_params:
-        raise ValueError(f"responses_create_params missing 'input': {list(responses_create_params.keys())}")
-    return responses_create_params["input"]
 
 
 # =============================================================================

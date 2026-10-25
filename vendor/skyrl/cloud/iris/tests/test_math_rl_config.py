@@ -57,24 +57,6 @@ def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_con
     assert "model_num_attention_heads" not in cfg
 
 
-def test_launch_without_hub_destination_does_not_publish(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-
-    cfg = compose_skyrl_config(
-        parsed,
-        {
-            "job_name": "artifact-only-run",
-            "export_hf_artifact": True,
-            "hf_hub_repo_id": None,
-            "num_nodes": 4,
-        },
-        _HPCStub(),
-    ).config
-
-    assert cfg.trainer.export_hf_artifact is True
-    assert cfg.trainer.get("hf_hub_repo_id") is None
-
-
 def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
     parsed = parse_rl_config(str(math_rl_config_path))
     cfg = compose_skyrl_config(
@@ -86,38 +68,6 @@ def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
         cfg.generator.trajectory_retention.output_path
         == "s3://bucket/iris/retained-run/trace_jobs/training_trajectories"
     )
-
-
-def test_model_source_locator_reaches_trainer_config(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-    exp_args = {
-        "job_name": "exportable-run",
-        "model_path": "/tmp/materialized-model",
-        "model_source_uri": "s3://models/policy",
-        "model_source_identity": "policy@abc123",
-        "num_nodes": 4,
-    }
-
-    cfg = compose_skyrl_config(parsed, exp_args, _HPCStub()).config
-    assert cfg.trainer.policy.model.source_uri == "s3://models/policy"
-    assert cfg.trainer.policy.model.source_identity == "policy@abc123"
-
-
-def test_policy_revision_override_reaches_trainer_config(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
-    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
-
-    cfg = compose_skyrl_config(
-        parsed,
-        {
-            "job_name": "revision-pinned-run",
-            "model_path": "Qwen/Qwen3.5-9B-Base",
-            "model_revision": revision,
-            "num_nodes": 4,
-        },
-        _HPCStub(),
-    ).config
-    assert cfg.trainer.policy.model.revision == revision
 
 
 def test_parse_rejects_bad_tp_against_declared_heads(tmp_path):

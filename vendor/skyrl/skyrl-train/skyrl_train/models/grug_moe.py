@@ -96,23 +96,6 @@ def _validate_flash_attention_mask(attention_mask: torch.Tensor) -> None:
     )
 
 
-def validate_grug_expert_parallel_options(
-    model_type: str | None,
-    *,
-    expert_model_parallel_size: int,
-    use_grouped_mm: bool,
-    ep_comm_backend: str,
-) -> None:
-    """Reject unsupported execution choices when native Grug EP is enabled."""
-
-    if model_type != GRUG_MOE_MODEL_TYPE or expert_model_parallel_size <= 1:
-        return
-    validate_grug_expert_parallel_runtime(
-        use_grouped_mm=use_grouped_mm,
-        ep_comm_backend=ep_comm_backend,
-    )
-
-
 def validate_grug_expert_parallel_runtime(*, use_grouped_mm: bool, ep_comm_backend: str) -> None:
     """Validate the execution choices required by native Grug expert sharding."""
 

@@ -222,12 +222,3 @@ def start_phase(phase: CollectivePhase) -> None:
         return
     context.moe_boundary_logged = False
     _log_phase(context, phase)
-
-
-def log_moe_ep_boundary_once() -> None:
-    """Log the first MoE boundary when a diagnostic phase is active."""
-    context = _active_region()
-    if context is None or context.moe_boundary_logged:
-        return
-    context.moe_boundary_logged = True
-    _log_phase(context, CollectivePhase.MOE_EP_A2A_FIRST)

@@ -62,9 +62,34 @@ def test_iris_config_materializes_one_coherent_context_budget(config_path):
         assert parsed.terminal_bench["harbor"]["max_turns"] == budget.max_turns
 
 
-def test_context_budget_derives_all_hydra_length_arguments(context_config_path):
+@pytest.mark.parametrize(
+    "launch_values",
+    [
+        {},
+        {"export_hf_artifact": True, "hf_hub_repo_id": None},
+        {
+            "model_path": "/tmp/materialized-model",
+            "model_source_uri": "s3://models/policy",
+            "model_source_identity": "policy@abc123",
+        },
+        {
+            "model_path": "Qwen/Qwen3.5-9B-Base",
+            "model_revision": "68c46c4b3498877f3ef123c856ecfde50c39f404",
+        },
+    ],
+)
+def test_context_budget_derives_all_hydra_length_arguments(context_config_path, launch_values):
     parsed = parse_rl_config(str(context_config_path))
-    cfg = compose_skyrl_config(parsed, {"job_name": "context-test", "num_nodes": 4}, _HPCStub()).config
+    launch = {"job_name": "context-test", "num_nodes": 4, **launch_values}
+    cfg = compose_skyrl_config(parsed, launch, _HPCStub()).config
+    if "model_source_uri" in launch_values:
+        assert cfg.trainer.policy.model.source_uri == "s3://models/policy"
+        assert cfg.trainer.policy.model.source_identity == "policy@abc123"
+    if "model_revision" in launch_values:
+        assert cfg.trainer.policy.model.revision == "68c46c4b3498877f3ef123c856ecfde50c39f404"
+    if "export_hf_artifact" in launch_values:
+        assert cfg.trainer.export_hf_artifact is True
+        assert cfg.trainer.get("hf_hub_repo_id") is None
 
     assert cfg.trainer.max_prompt_length == 114688
     assert cfg.generator.max_input_length == 114688

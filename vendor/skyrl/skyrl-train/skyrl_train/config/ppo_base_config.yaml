@@ -81,9 +81,7 @@ trainer:
     # geometry after launch. Do not override either field without updating the canonical launch topology.
     policy_num_nodes: 1
     policy_num_gpus_per_node: 4
-    # TOPOLOGY-SENSITIVE: trainer.critic.model.path activates this physical role. These values are ignored only
-    # while that path is null; setting the path in a wrapper can therefore increase the requested gang size.
-    critic_num_nodes: 1
+    # Retained for launcher overrides and the runtime peer-access topology probe.
     critic_num_gpus_per_node: 4
     # TOPOLOGY-SENSITIVE: use_kl_loss or use_kl_in_reward activates this physical role. Do not repurpose these
     # values as generic non-policy capacity; they must describe the active reference role and its bundle.
@@ -119,27 +117,19 @@ trainer:
       source_identity: null
       lora:
           rank: 0
-          alpha: 16
-          dropout: 0
           # Load an existing adapter instead of creating fresh LoRA weights. Its
           # stored PEFT config is authoritative; rank must match for vLLM sync.
           adapter_path: null
-          adapter_revision: null
-          lora_sync_path: "/tmp/skyrl_lora_sync"
-          target_modules: "all-linear"
-          exclude_modules: null
     optimizer_config:
       optimizer: "AdamW"
       lr: 1.0e-6
       adam_betas: [0.9, 0.999]
       weight_decay: 1e-2
       max_grad_norm: 1.0
-      offload_after_step: true
       num_warmup_steps: 0
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
-    use_torch_compile: false
     record_memory: false
     # Limit per-peer NCCL buffers before Megatron policy process-group initialization.
     # Null preserves NCCL's default; useful when a reference actor shares each GPU.
@@ -158,26 +148,8 @@ trainer:
     sequence_parallel_size: 1
   critic:
     model:
-      # ROLE-ACTIVATING: a non-null path creates a local critic role. The launcher then claims critic_num_nodes and
-      # the runtime creates critic actors, so a wrapper that sets this also changes the launch topology.
+      # Validation requires null; callers may explicitly set this selector.
       path: null
-      lora:
-        rank: 0
-        alpha: 16
-        dropout: 0
-        target_modules: "all-linear"
-        exclude_modules: null
-    optimizer_config:
-      optimizer: "AdamW"
-      lr: 5.0e-6
-      adam_betas: [0.9, 0.999]
-      weight_decay: 1e-2
-      max_grad_norm: 1.0
-      offload_after_step: true
-      num_warmup_steps: 0
-      scheduler: "constant_with_warmup"
-      optimizer_kwargs: {}
-    sequence_parallel_size: 1
   algorithm:
     batch_invariant: false
     advantage_estimator: "grpo"
@@ -201,7 +173,6 @@ trainer:
     use_entropy_loss: false
     entropy_loss_coef: 0.01
     advantage_batch_normalize: false
-    value_head_prefix: "value_head"
     policy_loss_type: "regular"
     # FTPOConfig owns the defaults. policy_loss_type=ftpo selects standalone
     # supervision; ftpo.auxiliary_weight adds it to a task-reward policy loss.
@@ -221,7 +192,6 @@ trainer:
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
-    tis_splice: true
     tis_lcs_alert_threshold: 0.005
     enable_token_reward_channel: false
     think_token_weight: 1.0
@@ -229,7 +199,6 @@ trainer:
       tau_pos: 1.0
       tau_neg: 1.05
     
-    value_clip: 0.2
     dynamic_sampling:
       type: null
       max_sample_batches: 30
@@ -320,7 +289,6 @@ trainer:
   update_epochs_per_batch: 1
   train_batch_size: 1024
   policy_mini_batch_size: 256
-  critic_mini_batch_size: 256
   micro_train_batch_size_per_gpu: 1
   micro_forward_batch_size_per_gpu: ${trainer.micro_train_batch_size_per_gpu}
   update_ref_every_epoch: false
@@ -344,7 +312,6 @@ trainer:
     on_failure: "abort"
   max_prompt_length: 512
   flash_attn: false
-  attn_backend: "auto"
   disable_fast_tokenizer: false
   project_name: "skyrl"
   run_name: "test_run"
@@ -391,7 +358,6 @@ generator:
   fuse_weights: false
   r3_transport: "decentral"
   r3_dispatch_put_timeout_seconds: 600
-  gdn_backend: "torch"
   weight_transfer_threshold_cuda_ipc_GB: 1.0
   # TOPOLOGY-INPUT: TP and PP determine the node-atomic GPU group for each engine. Their product must fit on one
   # node unless the compiled plan and backend explicitly support a cross-node engine.

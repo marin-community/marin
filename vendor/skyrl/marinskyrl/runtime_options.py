@@ -16,11 +16,6 @@ class WeightSyncTransport(StrEnum):
     EXPERT_BLOCK = "expert_block"
 
 
-class GDNBackend(StrEnum):
-    TORCH = "torch"
-    FLASHQLA = "flashqla"
-
-
 TRAJECTORY_SELECTOR_TYPE_PATH = "trainer.trajectory_selector.type"
 
 

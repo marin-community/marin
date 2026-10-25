@@ -1193,8 +1193,3 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             raise
 
     return callbacks
-
-
-def get_available_callback_types() -> List[str]:
-    """Get list of available callback type names for YAML configs."""
-    return list(CALLBACK_REGISTRY.keys())

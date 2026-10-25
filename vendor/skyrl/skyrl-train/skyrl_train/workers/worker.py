@@ -32,14 +32,12 @@ from skyrl_train.utils import ray_noset_visible_devices, get_ray_pg_ready_with_t
 from skyrl_train.utils.constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from skyrl_train.io import io
 from skyrl_train.utils.numa import physical_gpu_id_for_worker, set_numa_affinity_for_gpu
-from skyrl_train.tensor_math import masked_mean
 from skyrl_train.distributed.dispatch import ActorInfo, Dispatch, DispatchRegistry, DispatchSettings, MeshRank
 from skyrl_train.distributed import collective_phase_diagnostics as _phase_diagnostics
 from skyrl_train.distributed.strategy import DistributedStrategy
 from loguru import logger
 from skyrl_train.distributed.utils import init_custom_process_group, init_worker_process_group_with_device
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
-from skyrl_train.utils.policy_math import ppo_critic_loss
 from skyrl_train.utils.importance_ratio_diagnostics import (
     LogRatioMonitor,
 )
@@ -59,7 +57,7 @@ from skyrl_train.training_batch import (
     per_data_parallel_batch_size,
 )
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt
-from skyrl_train.utils.metrics import mean_metrics, policy_progress_metrics, policy_training_metrics
+from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.models.grug_query_bias import (
     GrugLossFreeBiasUpdater,
@@ -484,7 +482,7 @@ class Worker(DistributedTorchRayActor):
         # chunk land on EVERY rank (ungated; no-op when the batch carries no routes).
         log_r3_resident_set(self._rank, data)
         # run in micro batches of cfg.trainer.micro_forward_batch_size_per_gpu
-        # TODO (sumanthrh): this can be in the policy/critic impl if the micro batch size can be specific to policy, critic, etc.
+        # Worker implementations select the micro-batch size.
         micro_batches = data.chunk(self.cfg.trainer.micro_forward_batch_size_per_gpu)
 
         outputs = []
@@ -960,7 +958,6 @@ class PolicyWorkerBase(Worker):
         dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
 
         # Clear fragmented GPU memory before training to avoid OOM at step boundaries
-        # (matches CriticWorkerBase.ppo_train behavior)
         torch.cuda.empty_cache()
 
         micro_batches_per_mini_batch = gradient_accumulation_steps(
@@ -1351,182 +1348,6 @@ class PolicyWorkerBase(Worker):
 
     def process_sequences(self, sequences, input_len, eos_token_id, pad_token_id):
         return self.model.process_sequences(sequences, input_len, eos_token_id, pad_token_id)
-
-
-class CriticWorkerBase(Worker):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.model: nn.Module = None
-        self.scheduler: LRScheduler = None
-        self.optimizer: Optimizer = None
-        self.strategy: DistributedStrategy = None
-        self.record_memory: bool = False
-        self.mesh_rank: MeshRank = None
-        self.critic_loss_fn: Callable = ppo_critic_loss
-
-    def _normalize_mini_batch_size(self):
-        """
-        Normalize batch sizes based on device mesh and generation parameters.
-        """
-        if not hasattr(self, "mesh_rank") or self.mesh_rank is None:
-            raise RuntimeError("mesh_rank must be initialized before calling _normalize_mini_batch_size()")
-
-        self.critic_mini_batch_size_per_gpu = per_data_parallel_batch_size(
-            self.cfg.trainer.critic_mini_batch_size,
-            optimization_samples_per_prompt(self.cfg),
-            self.mesh_rank.dp_size,
-        )
-
-    def _forward_micro_batch(
-        self,
-        micro_batch: TrainingInputBatch,
-    ) -> TrainingOutputBatch:
-        """Generates critic values."""
-        device = self.device
-        micro_batch.to(device)
-        sequences = micro_batch["sequences"]
-        response_length = micro_batch.metadata["response_length"]
-        attention_mask = micro_batch["attention_mask"]
-        self.model.eval()
-        with torch.no_grad(), torch.autocast(dtype=torch.bfloat16, device_type=self.device.type):
-            value = self.model(
-                sequences,
-                response_length,
-                attention_mask,
-            )
-        self.model.train()  # reset model state
-        value = value.to("cpu")
-        output = TrainingOutputBatch(
-            {"output": value},
-        )
-        output.metadata = micro_batch.metadata
-        return output
-
-    def save_hf_model(self, export_dir: str, tokenizer):
-        # Save model in HuggingFace safetensors format
-        self.strategy.save_hf_model(
-            self.model,
-            export_dir,
-            tokenizer=tokenizer,
-        )
-
-    def ppo_train(self, train_data: TrainingInputBatch) -> TrainingOutputBatch:
-        global_step = train_data.metadata["global_step"]
-        dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
-
-        torch.cuda.empty_cache()
-        self.model.train()
-
-        micro_batches_per_mini_batch = gradient_accumulation_steps(
-            self.critic_mini_batch_size_per_gpu,
-            self.cfg.trainer.micro_train_batch_size_per_gpu,
-        )
-        # The number of steps (over micro batches) to accumulate gradients before taking an optimizer step.
-        accumulation_steps = micro_batches_per_mini_batch
-
-        all_metrics = defaultdict(list)
-        critic_update_steps = 0
-        for epoch in range(self.cfg.trainer.update_epochs_per_batch):
-            pbar = tqdm(
-                dataloader,
-                desc=f"Critic Train epoch [{epoch + 1}/{self.cfg.trainer.update_epochs_per_batch}]",
-                disable=not self.strategy.is_rank_0(),
-            )
-            for local_step, experience in enumerate(pbar):
-                status = self.training_step(experience, global_step, local_step, accumulation_steps)
-                critic_update_steps += 1
-
-                # for DP
-                # TODO (sumanthrh): this assumes all workers are data parallel.
-                # We should get more accurate metrics with seq parallel or TP.
-                # There are metrics like entropy where we get average over local data size
-                status = self.strategy.all_reduce(status)
-
-                for k, v in status.items():
-                    all_metrics[k].append(v)
-                pbar.set_postfix(status)
-
-        torch.distributed.barrier()
-
-        status_mean = mean_metrics(all_metrics)
-        status_mean["critic_update_steps"] = critic_update_steps / accumulation_steps
-
-        output = TrainingOutputBatch()
-        output.metadata = {"train_status": status_mean}
-        return output
-
-    def training_step(self, experience: Experience, global_step, local_step, accumulation_steps) -> Dict[str, float]:
-        """
-        Perform one micro-batch of training, accumulate gradients, and step the optimizer only after `accumulation_steps` micro-batches.
-        """
-        experience.to_device(self.device)
-
-        sequences = experience.sequences
-        old_values = experience.values
-        returns = experience.returns
-        num_actions = experience.num_actions
-        attention_mask = experience.attention_mask
-        loss_mask = experience.loss_mask
-
-        with torch.autocast(dtype=torch.bfloat16, device_type=self.device.type):
-            # critic loss
-            values, output = self.model(
-                sequences,
-                num_actions=num_actions,
-                attention_mask=attention_mask,
-                return_output=True,
-            )
-            # loss function
-            loss, clipfrac = self.critic_loss_fn(
-                values,
-                old_values,
-                returns,
-                config=self.cfg.trainer.algorithm,
-                loss_mask=loss_mask,
-            )
-        loss = loss / accumulation_steps
-        self.strategy.backward(loss, self.model, self.optimizer)
-        grad_norm = None
-        if (local_step + 1) % accumulation_steps == 0:
-            grad_norm = self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, name="critic")
-            if grad_norm is not None:
-                grad_norm = grad_norm.detach().cpu().item()
-
-        # status
-        status = {
-            "critic_loss": loss.item(),
-            "values_mean": masked_mean(values, loss_mask).item(),
-            "critic_lr": self.scheduler.get_last_lr()[0],
-            "values_clipfrac": clipfrac,
-        }
-        if grad_norm is not None:
-            status["raw_grad_norm"] = grad_norm
-        return status
-
-    def save_checkpoint(self, ckpt_dir: str, tokenizer=None):
-        upload = self.strategy.save_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            ckpt_dir=ckpt_dir,
-            node_local_rank=self.get_node_local_rank(),
-            tokenizer=tokenizer,
-        )
-        self._start_checkpoint_upload(upload)
-
-    def load_checkpoint(
-        self,
-        ckpt_dir=None,
-        load_training_state=True,
-    ):
-        _, states = self.strategy.load_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer if load_training_state else None,
-            scheduler=self.scheduler if load_training_state else None,
-            ckpt_dir=ckpt_dir,
-            load_training_state=load_training_state,
-        )
-        return states
 
 
 class RefWorkerBase(Worker):

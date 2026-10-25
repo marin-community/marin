@@ -64,7 +64,6 @@ from skyrl_train.workers.megatron.router_replay_install import install_megatron_
 from skyrl_train.workers.megatron.output_projection_layout import install_dpo_batch_major_output_projection
 from skyrl_train.workers.megatron.weight_extractor import BucketedMegatronWeightExtractor, mapping_hf_names
 from skyrl_train.workers.worker import (
-    CriticWorkerBase,
     PolicyWorkerBase,
     RefWorkerBase,
     log_r3_resident_set,
@@ -997,11 +996,5 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
         pass
 
 
-class MegatronCriticWorkerBase(MegatronWorker, CriticWorkerBase):
-    def __init__(self, **kwargs):
-        raise NotImplementedError()
-
-
 PolicyWorker = ray.remote(num_gpus=1)(MegatronPolicyWorkerBase)
 RefWorker = ray.remote(num_gpus=1)(MegatronRefWorkerBase)
-CriticWorker = ray.remote(num_gpus=1)(MegatronCriticWorkerBase)

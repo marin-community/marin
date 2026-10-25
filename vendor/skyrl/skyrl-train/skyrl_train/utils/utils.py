@@ -50,7 +50,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport
+from marinskyrl.runtime_options import R3Transport
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -512,8 +512,6 @@ def validate_cfg(cfg: DictConfig):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     available_policy_losses = PolicyLossRegistry.list_available()
     assert available_policy_losses != [], "Policy loss registry is not populated."
     assert cfg.trainer.algorithm.policy_loss_type in available_policy_losses, (
@@ -693,7 +691,6 @@ def validate_generator_cfg(cfg: DictConfig):
     validate_generation_logprobs(cfg)
 
     validate_megatron_cfg(cfg)
-
 
     # Validate inference engine parallelism.
     ep_size = cfg.generator.inference_engine_expert_parallel_size
