@@ -64,8 +64,12 @@ SOURCE_FILE_HASHES = {
 }
 SEED = 310
 REPLICAS = 4
+PRIORITY_BANDS = {
+    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+}
 RESOURCES = ResourceConfig.with_gpu(
-    "H100", count=8, cpu=64, ram="512GB", disk="512GB", target_cluster="cw-rno2a", replicas=REPLICAS
+    "H100", count=8, cpu=64, ram="768GB", disk="1TB", target_cluster="cw-rno2a", replicas=REPLICAS
 )
 
 
@@ -137,7 +141,7 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "lr0-result.json", result))
 
 
-def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str) -> dict:
+def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, priority: str) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
     return {
@@ -150,7 +154,8 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str) 
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
         "gpus": 8 * REPLICAS,
-        "priority": "interactive",
+        "resources": {"cpu": RESOURCES.cpu, "ram": RESOURCES.ram, "disk": RESOURCES.disk},
+        "priority": priority,
         "retries_failure": 0,
         "retries_preemption": 0,
         "timeout_seconds": timeout_seconds,
@@ -158,7 +163,7 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str) 
     }
 
 
-def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, timeout_seconds: int) -> str:
+def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, timeout_seconds: int, priority: str) -> str:
     secrets = {key: os.environ[key] for key in ("CW_KEY_ID", "CW_KEY_SECRET")}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
     with connect_controller(cluster_name="marin") as info:
@@ -174,7 +179,7 @@ def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, time
                 timeout=Duration.from_seconds(timeout_seconds),
                 max_retries_failure=0,
                 max_retries_preemption=0,
-                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                priority_band=PRIORITY_BANDS[priority],
             )
             return str(job.job_id)
 
@@ -185,6 +190,7 @@ def main() -> None:
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
     parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
     parser.add_argument("--timeout-seconds", type=int, required=True)
+    parser.add_argument("--priority", choices=sorted(PRIORITY_BANDS), default="interactive")
     parser.add_argument("--capacity-record", help="the launch owner's capacity guard JSON; required with --run")
     parser.add_argument("--launch-receipt", help="local JSON receipt to write; required with --run")
     parser.add_argument("--run", action="store_true", help="submit; without it only print the plan")
@@ -192,9 +198,11 @@ def main() -> None:
     run_root = args.run_root.rstrip("/")
     if not run_root.startswith("s3://marin-rno2a/"):
         raise SystemExit("run root must be on s3://marin-rno2a/")
+    if args.timeout_seconds <= 0:
+        raise SystemExit("timeout must be a positive number of seconds")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
     receipt = approved_receipt(receipt_bytes)
-    job_plan = plan(args.job_name, run_root, args.timeout_seconds, receipt["routing_reference"]["path"])
+    job_plan = plan(args.job_name, run_root, args.timeout_seconds, receipt["routing_reference"]["path"], args.priority)
     print(json.dumps(job_plan, indent=2))
     if not args.run:
         return
@@ -217,7 +225,7 @@ def main() -> None:
         },
     }
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
-    job_id = submit(args.job_name, run_root, args.job_name, receipt_bytes, args.timeout_seconds)
+    job_id = submit(args.job_name, run_root, args.job_name, receipt_bytes, args.timeout_seconds, args.priority)
     launch.update(state="submitted", iris_job_id=job_id)
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
     print(json.dumps({"job": job_id, "status": "submitted"}))

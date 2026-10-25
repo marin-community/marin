@@ -125,7 +125,9 @@ def test_gate_inputs_are_the_frozen_regional_inputs():
 
 
 def test_plan_has_no_retries_and_a_bounded_ceiling():
-    job_plan = lr0_probe.plan("job", RUN_ROOT, 7200, "s3://marin-rno2a/x/routing.json")
+    job_plan = lr0_probe.plan("job", RUN_ROOT, 7200, "s3://marin-rno2a/x/routing.json", "interactive")
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
+    assert job_plan["resources"] == {"cpu": 64, "ram": "768GB", "disk": "1TB"}
+    assert job_plan["priority"] == "interactive"
     assert job_plan["retries_failure"] == job_plan["retries_preemption"] == 0
     assert job_plan["h100_hour_ceiling"] == 64
