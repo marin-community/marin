@@ -496,6 +496,11 @@ class GrugModelConfig:
     thresh_weight_scale: float = 0.0
     """``Routing.THRESHOLD``: the fixed combine-weight scale (set so the routed output magnitude matches top-k at
     init)."""
+    thresh_center_grad: bool = False
+    """``Routing.THRESHOLD``: drop each expert's mean over the batch's tokens from the combine weights' logit
+    gradient (same values). QB re-solves every threshold, so a uniform shift of expert e's logits is undone next
+    step; left in, the LM's push to raise the kept weights becomes a per-step logit drift that the one-step-lagged
+    thresholds chase, and the relu weights grow with the drift instead of the margins."""
     thresh_init_beta: float = 0.0
     """``Routing.THRESHOLD``: every expert's threshold ``-b_e`` at step 0, before QB has solved one."""
     thresh_aux: ThreshAux = ThreshAux.NONE
@@ -1256,6 +1261,10 @@ class MoEMLP(eqx.Module):
         cfg = self.cfg
         num_experts = cfg.num_experts
         cap = cfg.thresh_candidates
+        if cfg.thresh_center_grad:
+            expert_mean = jnp.mean(router_logits, axis=0, keepdims=True)
+            router_logits = router_logits - expert_mean + jax.lax.stop_gradient(expert_mean)
+            biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         candidate_logits, candidates = _small_top_k(biased_logits, cap + 1)
         cap_floor = jnp.maximum(candidate_logits[:, -1:], 0.0)
         candidate_logits, candidates = candidate_logits[:, :-1], candidates[:, :-1]
