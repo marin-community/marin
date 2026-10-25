@@ -88,7 +88,7 @@ class MyHeuristic:
 
     # Reference point (from step 2)
     reference_batch_size: int = 64
-    reference_tokens: float = 2.5e9
+    reference_tokens: float = 1e9
     lr_base: float = 0.01
 
     @property
