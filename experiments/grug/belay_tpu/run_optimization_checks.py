@@ -37,6 +37,7 @@ def main():
             "expert-gradient",
             "gather-layout",
             "gmm-layout",
+            "indexed-up",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
@@ -88,6 +89,7 @@ def main():
         "expert-gradient": ("expert_gradient_check", []),
         "gather-layout": ("gather_layout_check", []),
         "gmm-layout": ("gmm_layout_check", []),
+        "indexed-up": ("indexed_up_check", []),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -164,6 +166,7 @@ def main():
             "expert-gradient",
             "gather-layout",
             "gmm-layout",
+            "indexed-up",
         ):
             break
     raise SystemExit(1 if failed else 0)
