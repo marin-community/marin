@@ -47,7 +47,10 @@ def main():
                 f"--xla_allow_excess_precision=false --xla_dump_to={phase_output / 'xla'} --xla_dump_hlo_as_text"
             ),
         }
-        result = subprocess.run([sys.executable, "-u", "-m", module_prefix + module, *extra_args], env=environment)
+        result = subprocess.run(
+            [sys.executable, "-u", "-m", module_prefix + "run_diagnostic_phase", module_prefix + module, *extra_args],
+            env=environment,
+        )
         failed |= result.returncode != 0
         record = {"stage": "diagnostic_phase_exit", "phase": name, "returncode": result.returncode}
         print(json.dumps(record), flush=True)
