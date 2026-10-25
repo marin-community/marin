@@ -1,5 +1,21 @@
 # Agent Guide: experiments/grug/fast_track
 
+## Branches and launchers (Marin Belay, #9451)
+
+- Branch every experiment from `marin_belay_v1_clean_s7`. It has no GB200, QuACK-MXFP8, SM100 or MFU code.
+  Do not read or branch from `marin_belay_v1_fp8quality`, `marin_belay_v1_mfuladder*`, `marin_belay_v1_ckpt1`
+  or the lc1 GB200 branches. If a flag seems to be missing, port it here; do not move the experiment there.
+- `belay_ckpt1.py --size d512|d768|d1024|d1280` is the Belay Ckpt 1 recipe (`kma` recipe, top-10, one shared
+  expert, gated value embeds, 171 tokens/active param). d512 ML studies (e.g. `rx-*`) run its d512 rung.
+- `belay_s7.py --ladder s7l|s7n --size d512|d768|d1024|d1280L16` is the S7 ladder (`baseline` recipe + KDA/MLA
+  +Inkling + Block AttnRes, top-8, two shared experts, 207 tokens/active param). `d1280L16` is 16 layers, batch
+  1024 on 4 x 8xH100. `s7l` is the default data and linear schedule (`s7l-*`, `rxf-*` controls); `s7n` adds the
+  sequence-shuffled cache, cosine schedule and MuonH decay power 0.7 (`s7n-*`). d1280 studies run `s7l d1280L16`.
+- `launch.py` alone gives the plain baseline / `--dense` ladder.
+- Experiment branches off `marin_belay_v1_clean` that merge cleanly into this one when needed:
+  `marin_belay_v1_clean_nullexp` (null experts), `marin_belay_v1_clean_threshroute` (threshold routing),
+  `marin_belay_v1_clean_reluexp` (ReLU exponent), `marin_belay_v1_clean_kdashape` (KDA state shape).
+
 ## Autonomy
 
 This workflow is designed to run end-to-end without human confirmation. The
@@ -86,7 +102,7 @@ Most promotable changes land in one of these files:
 
 ## Documentation & GitHub Issues
 
-Create a new branch for each experiment issue, off `main`. Follow
+Create a new branch for each experiment issue, off `marin_belay_v1_clean_s7` (see above). Follow
 `.agents/skills/research/SKILL.md` for explicitly requested research programs and
 their existing issue, W&B, or session records.
 
