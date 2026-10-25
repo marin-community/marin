@@ -21,7 +21,7 @@ Inputs are the stored token ids of the pinned ``positions.pt`` (``logit_check.st
 tokenization. Per variant, layer and sequence group (``check``, ``contrastive``, ``long``, ``long_past_window``) it
 reports how many positions select a different expert set than ``native``, how many selected experts differ, the max abs
 change of the dense combine weights, and the smallest native margin between the k-th and (k+1)-th biased logits.
-Output: ``routing.json``.
+Every position whose ordered ids differ is listed (up to ``MAX_CASES`` per variant). Output: ``routing.json``.
 """
 
 import logging
@@ -37,6 +37,8 @@ from experiments.interp.snowball_identity.sequences import Sequence
 logger = logging.getLogger(__name__)
 
 VARIANTS = ("bf16_bias", "bf16_logits_bias")
+MAX_CASES = 500
+"""Differing positions listed per variant (all are counted)."""
 
 
 def routes(logits: torch.Tensor, bias: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -69,7 +71,10 @@ def compare_routes(
         selected, weights, _ = routes(variant_logits, variant_bias, k)
         mask = torch.zeros_like(logits, dtype=torch.bool).scatter_(-1, selected, True)
         results[name] = {
+            "native": native,
+            "selected": selected,
             "experts_changed": (native_mask & ~mask).sum(-1),
+            "order_changed": (native != selected).any(-1),
             "weight_change": (native_weights - weights).abs().max(-1).values,
             "margin": margin,
         }
@@ -88,8 +93,15 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
 
     handles = [block.mlp.router.register_forward_hook(capture(layer)) for layer, block in enumerate(harness.layers)]
     counts: dict = defaultdict(
-        lambda: {"positions": 0, "positions_changed": 0, "experts_changed": 0, "max_weight_change": 0.0}
+        lambda: {
+            "positions": 0,
+            "positions_changed": 0,
+            "positions_order_changed": 0,
+            "experts_changed": 0,
+            "max_weight_change": 0.0,
+        }
     )
+    cases: dict[str, list] = {variant: [] for variant in VARIANTS}
     margins: dict = defaultdict(lambda: float("inf"))
     started = time.time()
     try:
@@ -113,11 +125,25 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                         count = counts[(variant, layer, group)]
                         count["positions"] += len(changed)
                         count["positions_changed"] += int((changed > 0).sum())
+                        count["positions_order_changed"] += int(result["order_changed"][rows].sum())
                         count["experts_changed"] += int(changed.sum())
                         count["max_weight_change"] = max(
                             count["max_weight_change"], float(result["weight_change"][rows].max())
                         )
                         margins[(layer, group)] = min(margins[(layer, group)], float(result["margin"][rows].min()))
+                    for position in torch.nonzero(result["order_changed"]).flatten().tolist():
+                        if len(cases[variant]) < MAX_CASES:
+                            cases[variant].append(
+                                {
+                                    "sequence": sequence.id,
+                                    "position": position,
+                                    "layer": layer,
+                                    "native": result["native"][position].tolist(),
+                                    "variant": result["selected"][position].tolist(),
+                                    "set_changed": bool(result["experts_changed"][position] > 0),
+                                    "native_margin": float(result["margin"][position]),
+                                }
+                            )
             if number % 50 == 0:
                 logger.info("routing %d/%d %s (%.0fs)", number, len(sequences), sequence.id, time.time() - started)
     finally:
@@ -152,7 +178,8 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
             if group != "long_past_window"
         ]
         totals[variant] = {
-            name: sum(row[name] for row in rows) for name in ("positions", "positions_changed", "experts_changed")
+            name: sum(row[name] for row in rows)
+            for name in ("positions", "positions_changed", "positions_order_changed", "experts_changed")
         }
     return {
         "sequences": len(sequences),
@@ -160,6 +187,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
         "variants": list(VARIANTS),
         "layers": layers,
         "totals": totals,
+        "cases": cases,
     }
 
 

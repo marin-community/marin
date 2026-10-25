@@ -17,7 +17,7 @@ def test_bias_rounding_flips_a_near_tie():
     logits = torch.tensor([[3.0, 0.0, 1.0005, -5.0], [3.0, 0.0, -1.0, -5.0]])
     bias = torch.tensor([0.0, 1.0 + 2**-10, 0.0, 0.0])
     result = compare_routes(logits, bias, k=2)["bf16_bias"]
-    assert result["experts_changed"].tolist() == [1, 0]
+    assert result["experts_changed"].tolist() == [1, 0] and result["order_changed"].tolist() == [True, False]
     assert result["weight_change"][0] > 0 and result["weight_change"][1] == 0
     assert 0 < result["margin"][0] < 1e-3
 
@@ -54,6 +54,7 @@ def test_bf16_exact_bias_changes_nothing(harness):
             block.mlp.router.bias.copy_(block.mlp.router.bias.bfloat16().float())
         report = routing_stats(harness, [Sequence("check|a", "check", tuple(TOKENS))])
         assert report["totals"]["bf16_bias"]["positions_changed"] == 0
+        assert report["totals"]["bf16_bias"]["positions_order_changed"] == 0 and report["cases"]["bf16_bias"] == []
         assert all(layer["bias_rounding_max_abs"] == 0 for layer in report["layers"])
     finally:
         for block, bias in zip(harness.layers, biases, strict=True):
@@ -68,3 +69,11 @@ def test_stored_sequences_keep_token_ids(harness, tmp_path):
     run_positions(harness, sequences, Output(str(tmp_path)))
     stored = stored_sequences(str(tmp_path / "positions.pt"))
     assert [(s.id, s.group, s.tokens) for s in stored] == [(s.id, s.group, s.tokens) for s in sequences]
+
+
+def test_order_change_without_set_change():
+    # Experts 0 and 1 swap order under rounded logits but stay selected.
+    logits = torch.tensor([[3.0 + 2**-8, 3.0, -1.0, -5.0]])
+    rounded = torch.tensor([[3.0, 3.0 + 2**-6, -1.0, -5.0]])
+    result = compare_routes(logits, torch.zeros(4), k=2, rounded_logits=rounded)["bf16_logits_bias"]
+    assert result["order_changed"].tolist() == [True] and result["experts_changed"].tolist() == [0]
