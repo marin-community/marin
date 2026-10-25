@@ -572,8 +572,16 @@ class SnowballMoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], return_routes: bool = False):
-        """The routed output; with ``return_routes`` also the selected expert ids [B, S, K], as used (observer only)."""
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        return self._forward(x, return_routes=False)[0]
+
+    def with_routes(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], Int[Array, "B S K"]]:
+        """The routed output and the selected expert ids [B, S, K], as used (an observer)."""
+        out, ids = self._forward(x, return_routes=True)
+        assert ids is not None
+        return out, ids
+
+    def _forward(self, x: Float[Array, "B S D"], return_routes: bool) -> tuple[Float[Array, "B S D"], Array | None]:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
@@ -599,11 +607,11 @@ class SnowballMoEMLP(eqx.Module):
             report_capacity_overflow=False,
         )
         out = jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
-        if return_routes:
-            # Replicated: a small int array, so the observer adds no sharding constraint to the forward.
-            ids = reshard(selected_experts.astype(jnp.int32), P(None, None))
-            return out, jnp.reshape(ids, (b, s, ids.shape[-1]))
-        return out
+        if not return_routes:
+            return out, None
+        # Replicated: a small int array, so the observer adds no sharding constraint to the forward.
+        ids = reshard(selected_experts.astype(jnp.int32), P(None, None))
+        return out, jnp.reshape(ids, (b, s, ids.shape[-1]))
 
 
 class SnowballBlock(eqx.Module):
@@ -637,9 +645,18 @@ class SnowballBlock(eqx.Module):
         short_mask: AttentionMask,
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
-        return_routes: bool = False,
-    ):
-        """The block output; with ``return_routes`` also the MoE's selected expert ids [B, S, K] (observer only)."""
+    ) -> Float[Array, "B S D"]:
+        return self.forward(x, short_mask, long_mask, use_long, return_routes=False)[0]
+
+    def forward(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: Bool[Array, ""],
+        return_routes: bool,
+    ) -> tuple[Float[Array, "B S D"], Array | None]:
+        """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -652,11 +669,8 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        if return_routes:
-            routed, routes = self.mlp(mlp_in, return_routes=True)
-            return x + (routed + self.shared(mlp_in)), routes
-        mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
-        return x + mlp_out
+        routed, routes = self.mlp.with_routes(mlp_in) if return_routes else (self.mlp(mlp_in), None)
+        return x + (routed + self.shared(mlp_in)), routes
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -706,11 +720,21 @@ class SnowballTransformer(eqx.Module):
         )
 
     @named_call
-    def __call__(
-        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None, return_routes: bool = False
-    ):
-        """The final hidden state [B, S, D]; with ``return_routes`` also every layer's selected expert ids
-        [L, B, S, K], collected from the forward as run (an observer: routing is not recomputed or changed)."""
+    def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
+        return self._forward(token_ids, mask, return_routes=False)[0]
+
+    def with_routes(
+        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None
+    ) -> tuple[Float[Array, "B S D"], Int[Array, "L B S K"]]:
+        """The final hidden state [B, S, D] and every layer's selected expert ids [L, B, S, K], collected from the
+        forward as run (an observer: routing is not recomputed or changed)."""
+        hidden, routes = self._forward(token_ids, mask, return_routes=True)
+        assert routes is not None
+        return hidden, routes
+
+    def _forward(
+        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask], return_routes: bool
+    ) -> tuple[Float[Array, "B S D"], Array | None]:
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
@@ -730,18 +754,15 @@ class SnowballTransformer(eqx.Module):
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         long_schedule = long_attention_layer_mask(num_blocks)
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
+        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], Array | None]:
             layer, use_long = layer_and_flag
             if return_routes:
-                return layer(carry, short_mask, long_mask, use_long, return_routes=True)
+                return layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
             return layer(carry, short_mask, long_mask, use_long), None
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
         hidden, routes = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
-        hidden = self.final_gated_norm(self.final_norm(hidden))
-        if return_routes:
-            return hidden, routes
-        return hidden
+        return self.final_gated_norm(self.final_norm(hidden)), routes
 
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
@@ -777,10 +798,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-        return_routes: bool = False,
     ) -> NamedArray:
-        """With ``return_routes``, returns ``(activations, routes)``: routes are every layer's selected expert ids
-        ``[L, B, S, K]`` from this forward (observer only; off by default)."""
+        return self._activations(input_ids, return_routes=False)[0]
+
+    def activations_with_routes(self, input_ids: NamedArray) -> tuple[NamedArray, Array]:
+        """The activations and every layer's selected expert ids ``[L, B, S, K]`` from this forward (an observer)."""
+        hidden, routes = self._activations(input_ids, return_routes=True)
+        assert routes is not None
+        return hidden, routes
+
+    def _activations(self, input_ids: NamedArray, return_routes: bool) -> tuple[NamedArray, Array | None]:
         # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
         # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
         Pos = input_ids.resolve_axis(self.Pos.name)
@@ -789,16 +816,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
-        routes = None
-        if return_routes:
-            hidden, routes = self.transformer(tokens, return_routes=True)  # [B, S, D], [L, B, S, K]
-        else:
-            hidden = self.transformer(tokens)  # [B, S, D]
+        # [B, S, D], and [L, B, S, K] with return_routes
+        hidden, routes = self.transformer.with_routes(tokens) if return_routes else (self.transformer(tokens), None)
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
-        if return_routes:
-            return hax.named(hidden, out_axes), routes
-        return hax.named(hidden, out_axes)
+        return hax.named(hidden, out_axes), routes
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))

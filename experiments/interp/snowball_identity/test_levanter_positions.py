@@ -117,7 +117,7 @@ def test_routes_sidecar_matches_the_observer(mesh_and_model):
         ids = hax.named(
             jnp.asarray([sequence.tokens], dtype=jnp.int32), (Axis("batch", 1), model.Pos.resize(len(sequence.tokens)))
         )
-        _, observed = model.activations(ids, return_routes=True)
+        _, observed = model.activations_with_routes(ids)
     observed = np.asarray(jax.device_get(observed))[:, 0].transpose(1, 0, 2)  # [T, L, K]
     np.testing.assert_array_equal(single[sequence.id]["routes"].numpy(), observed)
     for s in SEQUENCES:

@@ -56,7 +56,7 @@ def _scores(model, tokens: jax.Array, routes: bool = False) -> tuple:
     Batch, Pos = Axis("batch", tokens.shape[0]), model.Pos.resize(tokens.shape[1])
     selected = None
     if routes:
-        hidden, selected = model.activations(hax.named(tokens, (Batch, Pos)), return_routes=True)
+        hidden, selected = model.activations_with_routes(hax.named(tokens, (Batch, Pos)))
     else:
         hidden = model.activations(hax.named(tokens, (Batch, Pos)))
     logits = jnp.einsum("bsd,dv->bsv", hidden.array, model.get_lm_head().array, preferred_element_type=jnp.float32)

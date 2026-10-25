@@ -308,7 +308,7 @@ def test_snowball_route_observer_is_output_identical():
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
         ids = _device_batched_ids(cfg.vocab_size, 8)
         plain = hax.named_jit(lambda m, x: m.activations(x))(model, ids)
-        observed, routes = hax.named_jit(lambda m, x: m.activations(x, return_routes=True))(model, ids)
+        observed, routes = hax.named_jit(lambda m, x: m.activations_with_routes(x))(model, ids)
 
         # Layer 0's routes, recomputed by hand from the block's own pieces.
         tf = model.transformer
