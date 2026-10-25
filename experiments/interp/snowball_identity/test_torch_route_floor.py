@@ -1,6 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 import torch
@@ -98,3 +102,26 @@ def test_long_past_window_is_a_subset_not_counted_twice():
     found = floor.agreement(ours, {"long|x": ours["long|x"].copy()}, {})
     layer = found["layers"][0]
     assert layer["positions"] == length and layer["groups"]["long_past_window"]["positions"] == 3
+
+
+ENTRYPOINT_CHILD = """
+import runpy, sys
+import pytest
+sys.argv = ["torch_route_floor", "--job-name", "x", "--root", sys.argv[1]]
+ns = runpy.run_module("experiments.interp.snowball_identity.torch_route_floor", run_name="__main__")
+with pytest.raises(TypeError):  # the __main__ copy of the worker does not pickle
+    ns["Entrypoint"].from_callable(ns["floor_worker"], "s3://bucket/root")
+ns["entrypoint_for"]("s3://bucket/root")
+print("ok")
+"""
+
+
+def test_entrypoint_pickles_when_run_as_main():
+    """``python -m`` makes the module ``__main__``; the submitted worker must pickle by reference."""
+    root = f"{floor.T310}/diag-plan-only"
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    done = subprocess.run(
+        [sys.executable, "-c", ENTRYPOINT_CHILD, root], capture_output=True, text=True, timeout=300, env=env
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert done.stdout.strip().endswith("ok")

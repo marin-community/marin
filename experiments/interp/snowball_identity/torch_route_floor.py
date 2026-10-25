@@ -25,6 +25,7 @@ One H100x8 on cw-rno2a; nothing is trained or saved as a model.
 
 import argparse
 import hashlib
+import importlib
 import io
 import json
 import logging
@@ -56,6 +57,7 @@ from experiments.post_training.identity_context_distill.sft import BASE_MODEL
 
 logger = logging.getLogger(__name__)
 
+MODULE = "experiments.interp.snowball_identity.torch_route_floor"
 TOP = 6
 K = 4
 RUNS = ("batched", "batch1")
@@ -268,6 +270,12 @@ def floor_worker(root: str) -> None:
     write_json(prefix_join(root, "receipt.json"), receipt)
 
 
+def entrypoint_for(root: str) -> Entrypoint:
+    """The worker by module reference: run as ``python -m`` this file is ``__main__``, whose functions cloudpickle
+    would copy by value, along with module objects it cannot pickle (``torch.backends.cudnn``)."""
+    return Entrypoint.from_callable(importlib.import_module(MODULE).floor_worker, root)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--job-name", required=True)
@@ -311,7 +319,7 @@ def main() -> None:
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
-    entrypoint = Entrypoint.from_callable(floor_worker, args.root)
+    entrypoint = entrypoint_for(args.root)
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
