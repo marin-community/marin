@@ -122,8 +122,15 @@ K = 4
 MARGIN_POSITION = 4
 OPS = ("attn_norm", "attn_out", "mlp_norm", "router_logits", "moe_out", "shared_out", "resid")
 ARMS = {
-    "dropless": {"router_combine_fp32": False, "receipt_sha256": "PENDING_MARGAY_RECEIPT_COMBINE_OFF"},
-    "dropless-fp32-combine": {"router_combine_fp32": True, "receipt_sha256": "PENDING_MARGAY_RECEIPT_COMBINE_ON"},
+    # margay's metadata-only receipts on 4188e87c: t310/runtime-recipe-4188e87c-combine-{off,on}.json
+    "dropless": {
+        "router_combine_fp32": False,
+        "receipt_sha256": "dcddbf4d59d0863a773e11a97002567dbea622fab52506d9c716fa4b4a30b7d2",
+    },
+    "dropless-fp32-combine": {
+        "router_combine_fp32": True,
+        "receipt_sha256": "d123ddbdbeed0c3cc843cd247e23d74cb2b21e7538056150da8139843c81fddd",
+    },
 }
 """The arms differ only in ``router_combine_fp32``; each is bound to its reviewed runtime receipt by sha256."""
 ITEM5_ROWS = ("contrastive|id296-imp-031|no_system|4", "contrastive|id296-imp-031|no_system|7")
