@@ -11,7 +11,8 @@ Per group (check, contrastive, long, and the long sequence's positions past the 
 - top-1 agreement over positions. A disagreement where vLLM's top two are within ``NEAR_TIE`` nats is
   counted separately as a near tie.
 - abs log-prob difference over each position's vLLM top-20 tokens with p > ``MIN_PROB``: max, p99, p50.
-  ``missing`` counts such tokens outside the harness's top 50.
+  The harness value is its top 50 or, when the record has them, its log-prob gathered at vLLM's own ids
+  (``reference_ids`` / ``reference_lp``, see ``reference_ids``). ``missing`` counts tokens found in neither.
 
 Contrastive candidate scores (the sum of the candidate tokens' log-probs) are compared harness vs vLLM and,
 when given, harness vs the scorer, with each side's win count per condition. Per row-condition it also counts
@@ -29,6 +30,7 @@ import json
 import math
 from collections import defaultdict
 
+import numpy as np
 import torch
 from rigging.filesystem.buckets import filesystem_for
 
@@ -67,6 +69,30 @@ def stored_sequences(positions_path: str) -> list[Sequence]:
     ]
 
 
+REFERENCE_K = 20
+"""vLLM's stored top-k per position."""
+
+
+def reference_ids(vllm_path: str, sequences: list[Sequence]) -> dict[str, np.ndarray]:
+    """vLLM's stored top-20 token ids per position, in the record layout: ``{sequence id: [T, 20] int32}``, row ``i``
+    for token ``i``, -1 where vLLM stored none (row 0). The ``positions_records`` argument that makes the harness
+    measure every vLLM token."""
+    theirs = json.loads(read(vllm_path))
+    found = {}
+    for sequence in sequences:
+        stored = theirs[sequence.id]
+        if stored["tokens"] != list(sequence.tokens):
+            raise ValueError(f"{sequence.id}: different token IDs")
+        ids = np.full((len(sequence.tokens), REFERENCE_K), -1, dtype=np.int32)
+        for i, top in enumerate(stored["top"]):
+            tokens = [int(token) for token in top or {}]
+            if len(tokens) > REFERENCE_K:
+                raise ValueError(f"{sequence.id}: {len(tokens)} stored ids at position {i}, expected <= {REFERENCE_K}")
+            ids[i, : len(tokens)] = tokens
+        found[sequence.id] = ids
+    return found
+
+
 def quantile(values: list[float], q: float) -> float:
     if not values:
         return float("nan")
@@ -81,8 +107,12 @@ def position_stats(ours: dict, theirs: dict, groups: dict[str, list[tuple[str, i
         diffs: list[float] = []
         for sequence_id, i in positions:
             top = {int(token): value for token, value in theirs[sequence_id]["top"][i].items()}
-            ids = ours[sequence_id]["top_ids"][i].tolist()
-            values = dict(zip(ids, ours[sequence_id]["top_lp"][i].tolist(), strict=True))
+            record = ours[sequence_id]
+            ids = record["top_ids"][i].tolist()
+            values = dict(zip(ids, record["top_lp"][i].tolist(), strict=True))
+            if "reference_ids" in record:
+                gathered = zip(record["reference_ids"][i].tolist(), record["reference_lp"][i].tolist(), strict=True)
+                values |= {token: value for token, value in gathered if token >= 0 and token not in values}
             ranked = sorted(top.values(), reverse=True)
             if ids[0] == max(top, key=top.get):
                 agree += 1
