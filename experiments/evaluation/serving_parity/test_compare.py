@@ -3,10 +3,17 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
-from experiments.evaluation.serving_parity.compare import IneligibleStack, compare_arms, validate_arms, verify_reference
+from experiments.evaluation.serving_parity.compare import (
+    IneligibleStack,
+    compare_arms,
+    frozen_reference,
+    validate_arms,
+    verify_reference,
+)
 from experiments.evaluation.serving_parity.settings import TASKS, HardwareKind, frozen_items
 
 
@@ -84,6 +91,27 @@ def test_three_distinct_shipped_arms_produce_complete_comparison(tmp_path):
         assert report["status"] == "PASS"
         assert len(report["teacher"]) == 5
         assert set(report["accuracy"]) == set(TASKS)
+
+    reference_root = Path(arms["h100"])
+    manifest = tmp_path / "approved.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                reference_prefix=arms["h100"],
+                files={
+                    str(p.relative_to(reference_root)): dict(
+                        bytes=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest()
+                    )
+                    for p in reference_root.rglob("*")
+                    if p.is_file()
+                },
+            )
+        )
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    with frozen_reference(arms["h100"], str(manifest), digest) as snapshot:
+        (reference_root / "teacher-1/0.json").write_text("overwritten after verification")
+        assert compare_arms(arms["v5p-8"], snapshot)["status"] == "PASS"
 
 
 def test_three_tpu_arms_cannot_replace_h100(tmp_path):

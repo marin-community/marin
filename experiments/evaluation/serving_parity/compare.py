@@ -4,9 +4,11 @@
 """Gate complete shipped-stack arms against reviewed references and distinct hardware peers."""
 
 import argparse
+import contextlib
 import dataclasses
 import hashlib
 import json
+import tempfile
 from itertools import combinations
 from pathlib import Path
 
@@ -61,7 +63,7 @@ def validate_arms(arms: dict[str, str]) -> None:
         raise ValueError("Arms must represent distinct recorded hardware")
 
 
-def verify_reference(prefix: str, manifest_path: str, manifest_sha256: str) -> None:
+def verify_reference(prefix: str, manifest_path: str, manifest_sha256: str) -> dict[str, bytes]:
     """Verify the reviewed manifest digest and every referenced artifact before scoring."""
     raw = StoragePath(manifest_path).read_bytes()
     if hashlib.sha256(raw).hexdigest() != manifest_sha256:
@@ -73,12 +75,27 @@ def verify_reference(prefix: str, manifest_path: str, manifest_sha256: str) -> N
     required = {"complete.json", "provenance.json", "teacher-1/0.json", *(f"{task}-items.json" for task in TASKS)}
     if not required <= manifest["files"].keys():
         raise ValueError("Reference manifest omits comparison artifacts")
+    snapshot = {}
     for name, identity in manifest["files"].items():
         if Path(name).is_absolute() or ".." in Path(name).parts:
             raise ValueError("Reference artifact name must remain under its prefix")
         content = (root / name).read_bytes()
         if len(content) != identity["bytes"] or hashlib.sha256(content).hexdigest() != identity["sha256"]:
             raise ValueError(f"Reference artifact changed: {name}")
+        snapshot[name] = content
+    return snapshot
+
+
+@contextlib.contextmanager
+def frozen_reference(prefix: str, manifest_path: str, manifest_sha256: str):
+    """Yield a local snapshot of exactly the verified bytes, never rereading mutable storage."""
+    snapshot = verify_reference(prefix, manifest_path, manifest_sha256)
+    with tempfile.TemporaryDirectory(prefix="verified-parity-reference-") as directory:
+        for name, content in snapshot.items():
+            path = Path(directory) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        yield directory
 
 
 def read_sequence(path: StoragePath) -> ScoredSequence:
@@ -87,6 +104,7 @@ def read_sequence(path: StoragePath) -> ScoredSequence:
 
 
 def compare_arms(left: str, right: str) -> dict:
+    """Compare peer artifacts; production references must come from frozen_reference."""
     candidate, reference = StoragePath(left), StoragePath(right)
     a, b = provenance(left), provenance(right)
     for key in ("model", "revision", "manifest_sha256", "evaluator_source"):
@@ -130,23 +148,26 @@ def main() -> None:
     arms = dict(item.split("=", 1) for item in args.arm)
     if len(arms) != len(args.arm):
         raise ValueError("Duplicate arm label")
-    reports = {}
-    try:
-        validate_arms(arms)
-        provenance(args.reference)
-        verify_reference(args.reference, args.reference_manifest, args.reference_sha256)
-    except (ValueError, FileNotFoundError, KeyError) as error:
-        reports["inputs"] = dict(
-            status="INELIGIBLE" if isinstance(error, IneligibleStack) else "INCOMPLETE", reason=str(error)
-        )
-    if not reports:
-        pairs = [(name, "reference", path, args.reference) for name, path in arms.items()]
-        pairs += [(a, b, arms[a], arms[b]) for a, b in combinations(arms, 2)]
-        for a, b, left, right in pairs:
-            try:
-                reports[f"{a} vs {b}"] = compare_arms(left, right)
-            except (ValueError, FileNotFoundError, KeyError) as error:
-                reports[f"{a} vs {b}"] = dict(status="INCOMPLETE", reason=str(error))
+    with contextlib.ExitStack() as stack:
+        reports = {}
+        try:
+            validate_arms(arms)
+            reference = stack.enter_context(
+                frozen_reference(args.reference, args.reference_manifest, args.reference_sha256)
+            )
+            provenance(reference)
+        except (ValueError, FileNotFoundError, KeyError) as error:
+            reports["inputs"] = dict(
+                status="INELIGIBLE" if isinstance(error, IneligibleStack) else "INCOMPLETE", reason=str(error)
+            )
+        if not reports:
+            pairs = [(name, "reference", path, reference) for name, path in arms.items()]
+            pairs += [(a, b, arms[a], arms[b]) for a, b in combinations(arms, 2)]
+            for a, b, left, right in pairs:
+                try:
+                    reports[f"{a} vs {b}"] = compare_arms(left, right)
+                except (ValueError, FileNotFoundError, KeyError) as error:
+                    reports[f"{a} vs {b}"] = dict(status="INCOMPLETE", reason=str(error))
     args.output.write_text(json.dumps(reports, indent=2))
     if any(row["status"] != "PASS" for row in reports.values()):
         raise SystemExit(1)
