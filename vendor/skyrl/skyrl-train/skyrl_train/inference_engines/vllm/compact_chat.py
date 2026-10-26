@@ -24,6 +24,13 @@ class ChatTopKCapture:
     response: tuple[list[int], ResponseTopK] | None = None
 
 
+# Upstream packed_top_k_logprobs proposals target /inference/v1/generate:
+# https://github.com/vllm-project/vllm/pull/60915 (Python)
+# https://github.com/vllm-project/vllm/pull/60916 (Rust).
+# Reconsider removal once an upstream numeric path preserves native chat and
+# exact prompt behavior, sampled-token logprobs and the sampler's natural
+# top-K token IDs/logprobs, alignment of evidence with response tokens, prompt
+# prefixes and policy versions, and abort/continuation behavior.
 class CompactChatEngineClient:
     """Compose vLLM chat serving with numeric logprobs from its engine API.
 
