@@ -93,15 +93,19 @@ async def _screen(
     if unknown:
         raise ValueError(f"Not Reasoning Gym task types: {sorted(unknown)}")
     gradable = [task for task in types if known_answer_scores(task, instances, seed)]
-    logger.info("%d of %d types grade their own answers; skipped: %s", len(gradable), len(types), sorted(set(types) - set(gradable)))
-    results = []
+    skipped = sorted(set(types) - set(gradable))
+    logger.info("%d of %d types grade their own answers; skipped: %s", len(gradable), len(types), skipped)
+    # A preempted task starts again, so it continues after the types that an earlier attempt finished.
+    path = output / SCREEN_FILE
+    results = json.loads(path.read_text()) if path.exists() else []
+    done = {result["task"] for result in results}
     with serve(options) as server:
         policy = Served(options, server).policy
-        for task in gradable:
+        for task in (task for task in gradable if task not in done):
             result = await screen_type(policy, task, instances, samples, seed)
             logger.info("%s: pass %.3f, reward %.3f", task, result.pass_rate, result.mean_reward)
             results.append(asdict(result))
-            (output / SCREEN_FILE).write_text(json.dumps(results, indent=2))
+            path.write_text(json.dumps(results, indent=2))
 
 
 if __name__ == "__main__":
