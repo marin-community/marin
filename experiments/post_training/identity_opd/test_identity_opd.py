@@ -391,8 +391,8 @@ def test_export_step_job_is_bounded_by_its_timeout(tmp_path, monkeypatch):
 
     [spec] = submitted
     exported = launch_config.load_launch_config(Path(spec.launch_config_path))
-    assert export_step.EXPORT_TIMEOUT_SECONDS == 2400
-    assert exported.iris.timeout == 2400
+    assert export_step.EXPORT_TIMEOUT_SECONDS == 3000
+    assert exported.iris.timeout == 3000
     assert exported.iris.max_retries == 0
     assert exported.iris.priority == "production"
     assert (exported.iris.allocation.num_nodes, exported.iris.allocation.gpus_per_node) == (4, 8)
