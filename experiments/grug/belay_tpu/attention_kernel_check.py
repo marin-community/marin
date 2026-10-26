@@ -20,6 +20,7 @@ from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention._inkling_relpos import dense_rel_bias
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
+from experiments.grug.belay_tpu.inkling_fused import fused_attention_local
 from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local, score_tiles
 from experiments.grug.belay_tpu.inkling_tpu import saved_attention_local
 from experiments.grug.belay_tpu.kernel_check import measure_errors
@@ -49,6 +50,10 @@ def pallas(q, k, v, band, ids):
     return pallas_attention_local(q, k, v, band, ids, ids)
 
 
+def fused(q, k, v, band, ids):
+    return fused_attention_local(q, k, v, band, ids, ids)
+
+
 def source_scores(q, k, band, ids):
     length = q.shape[1]
     scores = jnp.einsum("bqhd,bkhd->bhqk", q[:, :, None] * (1 / math.sqrt(q.shape[-1])), k[:, :, None])
@@ -61,6 +66,7 @@ def main():
     require_tpu_rounding()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark-source", action="store_true", help="Remeasure the unchanged dense source baseline")
+    parser.add_argument("--fused", action="store_true", help="Compare fused attention at the v4-32 local shape")
     args = parser.parse_args()
     run_id = os.environ["BELAY_RUN_ID"]
     config = build_config(
@@ -82,8 +88,8 @@ def main():
             (2, 128, 256, "packed"),
             (2, 256, 1152, "strong_logits"),
             (2, 256, 1152, "unpacked"),
-            (16, 4096, 1152, "target"),
-            (16, 4096, 1152, "target_unpacked"),
+            (32 if args.fused else 16, 4096, 1152, "target"),
+            (32 if args.fused else 16, 4096, 1152, "target_unpacked"),
         ):
             for dtype, tolerance in ((jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)):
                 if length == 4096 and dtype == jnp.float32:
@@ -99,8 +105,11 @@ def main():
                 if scenario.endswith("unpacked"):
                     ids = jnp.zeros_like(ids)
                 ct = jnp.asarray(rng.randn(*shape), dtype)
-                expected = jax.jit(functools.partial(evaluate, dense))(inputs, ids, ct)
+                reference = saved if args.fused and length == 4096 else dense
+                expected = jax.jit(functools.partial(evaluate, reference))(inputs, ids, ct)
                 implementations = [("saved_xla", saved), ("saved_pallas", pallas)]
+                if args.fused:
+                    implementations.append(("fused_pallas", fused))
                 if args.benchmark_source:
                     implementations.insert(0, ("source", dense))
                 for name, kernel in implementations:
@@ -138,6 +147,7 @@ def main():
                         "stage": "kernel_pass" if passed else "kernel_numerical_failure",
                         "kernel": "inkling_attention",
                         "implementation": name,
+                        "reference": "saved_xla" if reference is saved else "dense",
                         "rank": jax.process_index(),
                         "shape": shape,
                         "band_width": width,
