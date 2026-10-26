@@ -186,10 +186,9 @@ def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
     policy = cfg.trainer.policy
     return (
         cfg.trainer.strategy == "megatron"
-        and not cfg.trainer.use_sample_packing
         and policy.sequence_parallel_size == 1
         and policy.megatron_config.tensor_model_parallel_size == 1
-        and policy.megatron_config.context_parallel_size == 1
+        and (cfg.trainer.use_sample_packing or policy.megatron_config.context_parallel_size == 1)
     )
 
 
@@ -212,7 +211,7 @@ def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
     except ValueError as error:
         return str(error)
     if not _score_centering_megatron_supported(cfg):
-        return "requires unpacked Megatron with TP/CP/SP=1"
+        return "requires Megatron TP=1 without sequence parallelism; CP>1 requires sample packing"
     if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
         return "requires local vLLM"
     if cfg.generator.sampling_params.logprobs not in (None, 0):
@@ -380,7 +379,8 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
             raise ValueError("score centering requires regular PPO without distillation or auxiliary FTPO")
         if not _score_centering_megatron_supported(cfg):
             raise ValueError(
-                "score centering requires unpacked Megatron with tensor, context, and sequence parallel size one"
+                "score centering requires Megatron with tensor and sequence parallel size one; "
+                "context parallelism requires sample packing"
             )
         if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
             raise ValueError("score centering requires local vLLM behavior top-K capture")

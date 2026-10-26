@@ -69,9 +69,10 @@ Scalar correction size does not establish parameter-gradient error or learning
 benefit. Small omitted masses are sensitive to FP32 subtraction, even just above
 the tail floor. Inspect omitted mass as well as floor usage.
 
-Probes require regular PPO/TIS, local vLLM and unpacked Megatron with tensor,
-context and sequence parallel sizes one. Data and pipeline parallelism are
-supported. Other ordinary configurations keep their behavior and report probe
+Probes require regular PPO/TIS, local vLLM and Megatron with tensor parallelism
+one and sequence parallelism disabled. CP=1 supports padded or packed rows;
+CP>1 requires packing. Data, pipeline and expert parallelism retain their
+ordinary layout constraints. Other configurations report probe
 unavailability. Probes are unavailable when SC is enabled.
 
 ## Read capture cost
@@ -97,11 +98,17 @@ ceiling remains an aspiration.
 
 Merge these settings into the launch document's `skyrl` recipe:
 
+Megatron supports CP=1 with either padded rows or sample packing. Context
+parallelism requires sample packing. Tensor parallelism must be one. The
+Megatron provider enables sequence parallelism only with tensor parallelism;
+independent sequence parallelism is outside this support. Data, pipeline and
+expert parallelism retain their ordinary layout constraints.
+
 ```yaml
 skyrl:
   trainer:
     strategy: megatron
-    use_sample_packing: false
+    use_sample_packing: true
     algorithm:
       policy_loss_type: regular
       off_policy_correction: tis
@@ -110,7 +117,7 @@ skyrl:
       sequence_parallel_size: 1
       megatron_config:
         tensor_model_parallel_size: 1
-        context_parallel_size: 1
+        context_parallel_size: 5
   generator:
     backend: vllm
     run_engines_locally: true
@@ -119,7 +126,7 @@ skyrl:
 The flag selects K128 capture and trainer rescoring automatically. The `tis`
 preset caps importance weights at two; a custom correction must contain exactly
 one token truncation rule. SC rejects distillation, auxiliary FTPO, other policy
-losses, remote inference, packed samples and probability-changing sampling
+losses, remote inference and probability-changing sampling
 filters. Temperature-only sampling is supported. Disabling the flag returns to
 ordinary training; set the probe interval to zero for a control without heads.
 
@@ -135,7 +142,10 @@ sampled action's TIS weight again. See the
 
 SC uses PPO's policy-data weights and whole-step loss reduction. With
 `token_mean`, it divides the weighted sum by the weighted token count across
-microbatches and data-parallel ranks; pipeline scaling preserves this mean.
+microbatches and data-parallel ranks. CP ranks reconstruct the same token loss
+while retaining gradients only for their local logits. Megatron's CP gradient
+reduction and pipeline scaling preserve the whole-step mean. Only requested
+candidate-score differences cross CP ranks; vocabulary logits stay local.
 
 ## Runtime and evidence
 

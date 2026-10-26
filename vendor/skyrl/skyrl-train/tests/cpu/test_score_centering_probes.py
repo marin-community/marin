@@ -29,6 +29,11 @@ from skyrl_train.rollouts.loader import PromptLoader, SeededPasses
 from skyrl_train.rollouts.payloads import ObjectStorePayloads
 from skyrl_train.trainer import RayPPOTrainer
 from tests.cpu.task_specs import lowered_task, task_input, text_task
+from tests.cpu.util import stub_megatron_modules
+
+stub_megatron_modules()
+
+from skyrl_train.workers.megatron import megatron_model_wrapper as mmw  # noqa: E402
 
 
 SAMPLES_PER_PROMPT = 2
@@ -113,8 +118,9 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
     ):
         config = compose(config_name="ppo_base_config")
     config.trainer.strategy = "megatron"
-    config.trainer.use_sample_packing = False
+    config.trainer.use_sample_packing = True
     config.trainer.policy.sequence_parallel_size = 1
+    config.trainer.policy.megatron_config.context_parallel_size = 5
     config.trainer.algorithm.off_policy_correction = "tis"
     config.trainer.algorithm.score_centering_enabled = centering_enabled
     if interval is not None:
@@ -166,10 +172,12 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
 
 
 @pytest.mark.parametrize("flat_rewards", [False, True])
-def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(flat_rewards):
+def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
+    flat_rewards, megatron_wrapper, monkeypatch, single_rank_group
+):
     config = get_default_config()
     config.trainer.strategy = "megatron"
-    config.trainer.use_sample_packing = False
+    config.trainer.use_sample_packing = True
     config.trainer.policy.sequence_parallel_size = 1
     config.trainer.algorithm.off_policy_correction = "tis"
     config.trainer.algorithm.eps_clip_low = config.trainer.algorithm.eps_clip_high = 0.2
@@ -192,6 +200,11 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(f
         "rollout_logprobs": [np.full(4096, np.log(0.125)), np.array([float(behavior[129].log())])],
         "rollout_policy_steps": [sources, np.array([-1])],
     }
+    wrapper = megatron_wrapper(packing=True, controller=None, num_experts=8)
+    wrapper.actor_module[0].training = False
+    monkeypatch.setattr(mmw.mpu, "get_tensor_model_parallel_group", lambda: single_rank_group, raising=False)
+    monkeypatch.setattr(mmw.mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    monkeypatch.setattr(mmw.mpu, "get_context_parallel_group", lambda: single_rank_group, raising=False)
     results = []
     for probe in (False, True):
         trainer = object.__new__(RayPPOTrainer)
@@ -232,7 +245,18 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(f
             )
             assert batch["score_topk_indices"].shape == (2, 3, 128)
             assert (batch["score_topk_indices"][1] == -1).all()
-            batch["score_old_logprobs"] = logprobs.detach()[:128].expand(2, 3, 128).clone()
+            tokens, packed = mmw.preprocess_packed_seqs(batch["sequences"], batch["attention_mask"].bool())
+            with torch.no_grad():
+                scored = wrapper._response_logprobs(
+                    (parameters - parameters[0]).expand(*tokens.shape, len(parameters)),
+                    batch["sequences"],
+                    batch["attention_mask"],
+                    4096,
+                    packed,
+                    batch["score_topk_indices"],
+                    batch["score_probe_positions"],
+                )
+            batch["score_old_logprobs"] = scored.selected_logprobs.double()
             trainer._finish_score_probe(batch)
             metrics = trainer.all_metrics
             prefix = "score_centering_probe/"
