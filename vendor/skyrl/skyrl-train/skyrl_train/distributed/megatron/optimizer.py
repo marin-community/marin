@@ -35,14 +35,13 @@ _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
 
 
 def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
-    """Megatron's CPU-offload optimizer, made safe to load into under the distributed optimizer.
+    """Copy each parameter's loaded value into the tensor its sub-optimizer steps.
 
-    Megatron (through 0.19.2) indexes ``param_to_fp32_param`` with every parameter that has
-    state, but that map only holds parameters that were not already fp32. The distributed
-    optimizer hands it fp32 main shards only, so every ``load_state_dict`` -- and each
-    checkpoint load starts with one -- raised ``KeyError``. An fp32 parameter holds its loaded
-    value itself: copy it into the CPU copy the sub-optimizer steps, or the next step would
-    copy stale CPU values back over the restored weights.
+    Replaces Megatron's version (through 0.19.2), which looks up ``param_to_fp32_param`` for
+    every parameter with state. That map holds only parameters that were not already fp32, and
+    the distributed optimizer passes fp32 main shards only, so every checkpoint load fails with
+    ``KeyError``. An fp32 parameter holds its loaded value itself; its CPU copy must take it,
+    or the next step copies stale values back over the restored weights.
     """
     if not self.param_update_in_fp32:
         return
