@@ -55,9 +55,9 @@ HELDOUT_FAMILIES = MappingProxyType(
 AAII_CATEGORIES = MappingProxyType(
     {
         "calendar": "format",
-        "competitive_coding": "Coding",
-        "reasoning_gym": "Scientific reasoning",
-        "stem": "Scientific reasoning",
+        "competitive_coding": "coding",
+        "reasoning_gym": "scientific_reasoning",
+        "stem": "scientific_reasoning",
         "structural": "format",
     }
 )

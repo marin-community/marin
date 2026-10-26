@@ -235,6 +235,9 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         task = document["task"]
         if task["source"]["dataset"] != "structure-closure":
             task["grader"]["environment"] = source_task("image").grader.environment.model_dump(mode="json")
+            task["grader"]["argv"][0] = "python3"
+            task["grader"]["env"] = {"MODE": "historical"}
+            task["grader"]["timeout"] = 330
             task["tags"] = ["agentic"] if task["id"].endswith("-0") else []
             resource = next(resource for resource in task["resources"]["verifier"] if resource["path"] == "config.json")
             contract = json.loads(resource_bytes(TaskResource.model_validate(resource)))
@@ -249,9 +252,9 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     assert {row["task_id"] for row in manifest} == {task.id for task in full}
     expected_categories = {
         "calendar": "format",
-        "competitive_coding": "Coding",
-        "reasoning_gym": "Scientific reasoning",
-        "stem": "Scientific reasoning",
+        "competitive_coding": "coding",
+        "reasoning_gym": "scientific_reasoning",
+        "stem": "scientific_reasoning",
         "structural": "format",
     }
     by_id = {task.id: task for task in full}
