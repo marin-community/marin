@@ -32,6 +32,7 @@ def chunk_kda_tpu(
     initial_state: jax.Array | None = None,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     state_tile: int = 1,
+    state_precision: jax.lax.Precision = jax.lax.Precision.HIGHEST,
 ) -> tuple[jax.Array, jax.Array]:
     """Evaluate packed KDA with 16-token chunks and a 128-wide saved state."""
     if q.ndim != 4 or q.shape[-1] != 128 or any(x.shape != q.shape for x in (k, v, g)):
@@ -82,7 +83,7 @@ def chunk_kda_tpu(
         flatten(prep.v_pseudo),
         prep.decay.reshape(b * h, n, 1, d),
         initial,
-        precision=jax.lax.Precision.HIGHEST,
+        precision=state_precision,
         matmul_dtype=matmul_dtype,
     )
     return out.reshape(b, h, n * c, d)[..., :length, :], final.reshape(b, h, d, d)

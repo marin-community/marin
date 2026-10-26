@@ -150,6 +150,7 @@ def main():
     parser.add_argument("--logging-only", action="store_true")
     parser.add_argument("--partitioned-expert-gradients", action="store_true")
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
+    parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
@@ -181,6 +182,8 @@ def main():
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
     if args.whole_width_expert_tiles and not args.partitioned_expert_gradients:
         parser.error("Whole-width expert tiles require --partitioned-expert-gradients")
+    if args.expert_row_partitions and (not args.partitioned_expert_gradients or args.whole_width_expert_tiles):
+        parser.error("Row partitions require --partitioned-expert-gradients without --whole-width-expert-tiles")
     if args.partitioned_expert_gradients:
         if not args.local_experts or args.saved_relu2:
             parser.error("Partitioned expert gradients require --local-experts without --saved-relu2")
@@ -189,6 +192,8 @@ def main():
             if args.whole_width_expert_tiles
             else partitioned_grouped_dot
         )
+    if args.expert_row_partitions:
+        local_experts.grouped_dot = functools.partial(partitioned_grouped_dot, row_partitions=args.expert_row_partitions)
     if args.local_movement:
         if not args.local_experts:
             parser.error("Expert-order combine requires --local-experts")
@@ -251,6 +256,7 @@ def main():
             "diagnostic/local_movement": args.local_movement,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
+            "diagnostic/expert_row_partitions": args.expert_row_partitions,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,

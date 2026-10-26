@@ -40,10 +40,12 @@ def main():
             "indexed-up",
             "feature-combine",
             "row-gmm",
+            "kda-precision",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
             "local-gemm",
+            "local-row-gmm",
             "local-butterfly",
             "local-all-to-all",
         ),
@@ -66,6 +68,7 @@ def main():
                 "local-movement",
                 "local-gradient",
                 "local-gemm",
+                "local-row-gmm",
                 "local-butterfly",
                 "local-all-to-all",
             )
@@ -94,6 +97,18 @@ def main():
         "indexed-up": ("indexed_up_check", []),
         "feature-combine": ("feature_combine_check", []),
         "row-gmm": ("gmm_layout_check", ["--row-partitions"]),
+        "kda-precision": ("kda_precision_check", []),
+        "local-row-gmm": (
+            "belay_ckpt1_tpu_update_check",
+            [
+                *reference,
+                "--local-experts",
+                "--routing-ops",
+                "--partitioned-expert-gradients",
+                "--expert-row-partitions",
+                "2",
+            ],
+        ),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -173,6 +188,7 @@ def main():
             "indexed-up",
             "feature-combine",
             "row-gmm",
+            "kda-precision",
         ):
             break
     raise SystemExit(1 if failed else 0)

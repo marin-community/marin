@@ -88,8 +88,8 @@ def test_partitioned_expert_weight_gradients_match_independent_products(dtype, s
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.parametrize("sizes", [(1, 0, 31, 96), (0, 0, 0, 128)])
-@pytest.mark.parametrize("whole_width", [False, True])
-def test_partitioned_grouped_dot_vjp_matches_ragged_dot(dtype, sizes, whole_width):
+@pytest.mark.parametrize("implementation", ["source", "whole_width", "row_partitioned"])
+def test_partitioned_grouped_dot_vjp_matches_ragged_dot(dtype, sizes, implementation):
     rng = np.random.default_rng(418)
     x = jnp.asarray(rng.normal(scale=0.1, size=(128, 128)), dtype)
     weights = jnp.asarray(rng.normal(scale=0.1, size=(4, 128, 128)), dtype)
@@ -102,7 +102,9 @@ def test_partitioned_grouped_dot_vjp_matches_ragged_dot(dtype, sizes, whole_widt
 
     with jax.default_matmul_precision("highest"):
         expected = evaluate(lambda a, b: jax.lax.ragged_dot(a, b, groups, preferred_element_type=dtype))
-        options = {"tiling": whole_width_tiling} if whole_width else {}
+        options = {"tiling": whole_width_tiling} if implementation == "whole_width" else {}
+        if implementation == "row_partitioned":
+            options = {"row_partitions": 2}
         actual = evaluate(lambda a, b: partitioned_grouped_dot(a, b, groups, interpret=True, **options))
     tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
     for got, want in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
