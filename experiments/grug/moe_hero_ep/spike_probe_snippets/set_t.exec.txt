@@ -10,5 +10,5 @@ def _perturb(e, t):
     noise = jax.random.normal(noise_key, e.shape, jnp.float32)
     return (e.astype(jnp.float32) + t * 1e-4 * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
 
-probe.params = base if T == 0 else dataclasses.replace(base, token_embed=_perturb(base.token_embed, jnp.float32(T)))
+probe.params = base if T == 0 else dataclasses.replace(base, token_embed=jax.device_put(_perturb(base.token_embed, jnp.float32(T)), base.token_embed.sharding))
 result["t"] = T

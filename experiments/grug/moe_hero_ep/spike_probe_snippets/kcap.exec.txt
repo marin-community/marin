@@ -1,0 +1,56 @@
+# Capture the exact q, k, v that enter the attention kernel (row SEQ) at layers CAP_LAYERS, plus the attention
+# output y at QPOS. Forward only. Inputs: STEP, RACK, SEQ, CAP_LAYERS, QPOS, KMAX, TAG.
+import inspect, textwrap
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+_orig = M.CausalSelfAttention.__call__
+src = textwrap.dedent(inspect.getsource(_orig))
+OLD = "attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)"
+assert OLD in src
+src = src.replace(OLD, OLD + "\n    _QKV = (q, k, v, attn_out)")
+ret = 'return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))'
+assert ret in src
+src = src.replace(ret, ret.replace("return ", "return (") + ", _QKV)")
+ns = dict(M.__dict__); exec(src, ns); attn_qkv = ns["__call__"]
+onehot = jax.nn.one_hot(SEQ, 256, dtype=jnp.float32)
+pick = lambda x: jnp.einsum("b,bshd->shd", onehot, x.astype(jnp.float32), out_sharding=P())
+
+@jax.jit
+def _cap(params, pending, batch):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q_ = M._batch_reshard(batch.attn_mask.segment_ids[0]); seg = (q_, q_)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    Bn, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=Bn, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=Bn, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+    outs = {}
+    h = hidden
+    for l in range(max(CAP_LAYERS) + 1):
+        layer = jax.tree.map(lambda a: a[l] if hasattr(a, "ndim") and a.ndim > 0 and a.shape[0] == cfg.num_layers else a, m.stacked_blocks.stacked)
+        use_long = schedule[l]
+        mask = long_mask.with_fa4_bounds(jnp.where(use_long, long_lb, short_lb), valid)
+        if l in CAP_LAYERS:
+            attn_in = layer.attn_gated_norm(layer.rms_attn(h))
+            _, (q, k, v, y) = attn_qkv(layer.attn, attn_in, mask, disable_rope=use_long, is_global=use_long)
+            outs[l] = (pick(q)[jnp.asarray(QPOS)], pick(k)[:KMAX], pick(v)[:KMAX], pick(y)[jnp.asarray(QPOS)])
+        h, _ = layer(h, mask, use_long, use_long)
+    return outs
+
+outs = _cap(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK))
+arrays = {}
+for l, (q, k, v, y) in outs.items():
+    arrays[f"L{l}/q"] = np.asarray(jax.device_get(q), np.float32)
+    arrays[f"L{l}/k"] = np.asarray(jax.device_get(k), np.float16)
+    arrays[f"L{l}/v"] = np.asarray(jax.device_get(v), np.float16)
+    arrays[f"L{l}/y"] = np.asarray(jax.device_get(y), np.float32)
+runner.write_npz(f"kcap-{TAG}", arrays)
+result["layers"] = sorted(outs)

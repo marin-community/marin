@@ -1,0 +1,49 @@
+# Per-layer residual (block input), post-attention residual, attention-branch output, MLP-branch output and router
+# top-k for row SEQ at positions QPOS. Forward only. Inputs: STEP, RACK, SEQ, QPOS, TAG.
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+onehot = jax.nn.one_hot(SEQ, 256, dtype=jnp.float32)
+qpos = jnp.asarray(QPOS)
+pick = lambda x: jnp.einsum("b,bsd->sd", onehot, x.astype(jnp.float32), out_sharding=P())[qpos]
+
+@jax.jit
+def _cap(params, pending, batch):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q_ = M._batch_reshard(batch.attn_mask.segment_ids[0]); seg = (q_, q_)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    Bn, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=Bn, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=Bn, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+
+    def body(h, xs):
+        layer, use_long = xs
+        use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+        mask = long_mask.with_fa4_bounds(jnp.where(use_long, long_lb, short_lb), valid)
+        attn_in = layer.attn_gated_norm(layer.rms_attn(h))
+        attn_out = layer.attn(attn_in, mask, disable_rope=use_long, is_global=use_long)
+        if layer.sconv_attn is not None:
+            attn_out = layer.sconv_attn(attn_out, None)
+        x1 = h + attn_out
+        mlp_in = layer.mlp_gated_norm(layer.rms_mlp(x1))
+        mp_ = pick(mlp_in)
+        logits = jnp.einsum("td,de->te", mp_, reshard(layer.mlp.router, P(None, None))).astype(jnp.float32)
+        biased = logits + jax.lax.stop_gradient(layer.mlp.router_bias)
+        topv, topi = jax.lax.top_k(biased, cfg.num_experts_per_token + 1)
+        out, _ = layer(h, mask, use_long, use_long)
+        return out, {"h": pick(h), "x1": pick(x1), "attn": pick(attn_out), "mlp": pick(out - x1), "sel": topi[:, :-1], "kgap": topv[:, -2] - topv[:, -1]}
+
+    _, st = jax.lax.scan(body, hidden, xs=(m.stacked_blocks.stacked, schedule))
+    return st
+
+st = {k: np.asarray(jax.device_get(v)) for k, v in _cap(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK)).items()}
+runner.write_npz(f"resid-{TAG}", st)
+result["ok"] = True

@@ -1,0 +1,107 @@
+# Backward taps: per-token cotangent norms for row SEQ at every op boundary of every layer, plus the top tokens'
+# cotangent and forward vectors for layers in VEC_LAYERS. Forward math is unchanged (identity custom_vjp taps).
+# Inputs: STEP, RACK, SEQ, TAG, VEC_LAYERS, TOPK.
+import functools, inspect, io, textwrap
+from experiments.grug.moe_hero_ep import model as M
+from rigging.filesystem.storage_path import StoragePath
+B = 256
+onehot = jax.nn.one_hot(SEQ, B, dtype=jnp.float32)
+LAYER = [None]
+REC = []
+IS0 = jax.process_index() == 0
+
+def pick_row(x):
+    x3 = x.reshape(x.shape[0], x.shape[1], -1)
+    return jnp.einsum("b,bsf->sf", onehot, x3.astype(jnp.float32), out_sharding=P())
+
+def _rec(name, idx, norms, top, gvec, xvec):
+    if not IS0:
+        return
+    idx = int(idx)
+    entry = {"name": name, "layer": idx, "norms": np.asarray(norms, np.float32), "top": np.asarray(top)}
+    if idx in VEC_LAYERS:
+        entry["gvec"] = np.asarray(gvec, np.float32); entry["xvec"] = np.asarray(xvec, np.float32)
+    REC.append(entry)
+
+TAPS = {}
+def make_tap(name):
+    @jax.custom_vjp
+    def tap(x, idx):
+        return x
+    def fwd(x, idx):
+        return x, (pick_row(x), idx)
+    def bwd(res, g):
+        xr, idx = res
+        gr = pick_row(g)
+        n = jnp.sqrt(jnp.sum(gr * gr, axis=-1))
+        _, top = jax.lax.top_k(n, TOPK)
+        jax.debug.callback(functools.partial(_rec, name), idx, n, top, gr[top], xr[top])
+        return g, None
+    tap.defvjp(fwd, bwd)
+    return tap
+
+def T(x, name):
+    if name not in TAPS:
+        TAPS[name] = make_tap(name)
+    return TAPS[name](x, LAYER[0])
+
+def gn_tapped(gn, x):
+    gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", x, gn.w_down))
+    pre = T(jnp.einsum("...r,rd->...d", gate_hidden, gn.w_up), "gn_preact")
+    gate = jax.nn.sigmoid(pre)
+    return T(x, "gn_value") * gate.astype(x.dtype)
+
+def patched(fn, reps, extra):
+    src = textwrap.dedent(inspect.getsource(fn))
+    for a, b in reps:
+        assert a in src, a
+        src = src.replace(a, b)
+    ns = dict(M.__dict__); ns.update(extra); exec(src, ns); return ns["__call__"]
+
+orig = {"block": M.Block.__call__, "attn": M.CausalSelfAttention.__call__, "tf": M.Transformer.__call__}
+ex = {"_T": T, "_GN": gn_tapped, "_LAYER": LAYER, "_IDX": jnp.arange(48, dtype=jnp.int32)}
+blk = patched(orig["block"], [
+    ("attn_in = self.attn_gated_norm(self.rms_attn(x))",
+     "x = _T(x, 'blk_in')\n    attn_in = _T(_GN(self.attn_gated_norm, _T(self.rms_attn(x), 'normed')), 'attn_in')"),
+    ("x = x + attn_out", "x = _T(x + attn_out, 'post_attn')"),
+    ("x = x + mlp_out", "x = x + _T(mlp_out, 'mlp_out')"),
+], ex)
+attn = patched(orig["attn"], [
+    ("q = rms_norm(q)", "q = rms_norm(_T(q, 'q_pre'))\n    q = _T(q, 'q_normed')"),
+    ("k = rms_norm(k)", "k = rms_norm(_T(k, 'k_pre'))\n    k = _T(k, 'k_normed')"),
+    ("attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)",
+     "attn_out = _T(attention(q, k, _T(v, 'v'), mask, implementation=self.cfg.attention_implementation), 'y')"),
+    ("attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v", "attn_out = _T(attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v, 'z')"),
+    ("attn_out = gate * attn_out", "attn_out = _T(gate * attn_out, 'gated')"),
+    ('return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))',
+     'return _T(jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None)), "attn_out")'),
+], ex)
+tf = patched(orig["tf"], [
+    ("layer, layer_use_long_mask = scan_inputs", "layer, layer_use_long_mask, _idx = scan_inputs\n        _LAYER[0] = _idx"),
+    ("xs=(self.stacked_blocks.stacked, mask_schedule)", "xs=(self.stacked_blocks.stacked, mask_schedule, _IDX)"),
+], ex)
+try:
+    M.Block.__call__ = blk; M.CausalSelfAttention.__call__ = attn; M.Transformer.__call__ = tf
+    jax.clear_caches()
+    loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+    n = probe.norms(g, 1.0); del g
+    jax.effects_barrier()
+finally:
+    M.Block.__call__ = orig["block"]; M.CausalSelfAttention.__call__ = orig["attn"]; M.Transformer.__call__ = orig["tf"]
+    jax.clear_caches()
+result.update({"loss": loss, "grad_total": n["grad/norm/total"], "n_records": len(REC)})
+st = probe.params.stacked_blocks.stacked
+from jax.sharding import reshard
+W = {}
+for l in sorted(VEC_LAYERS):
+    W[f"W/L{l:02d}/gn_w_down"] = np.asarray(jax.device_get(reshard(st.attn_gated_norm.w_down[l], P()))).astype(np.float32)
+    W[f"W/L{l:02d}/gn_w_up"] = np.asarray(jax.device_get(reshard(st.attn_gated_norm.w_up[l], P()))).astype(np.float32)
+    W[f"W/L{l:02d}/rms_attn"] = np.asarray(jax.device_get(reshard(st.rms_attn.weight[l], P()))).astype(np.float32)
+if IS0:
+    arrays = dict(W)
+    for e in REC:
+        key = f"L{e['layer']:02d}/{e['name']}"
+        for k, v in e.items():
+            if k not in ("name", "layer"):
+                arrays[f"{key}/{k}"] = v
+    runner.write_npz(f"taps-{TAG}", arrays)
