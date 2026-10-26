@@ -10,7 +10,6 @@ notebook evidence, and provenance.
 """
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,16 @@ from typing import Any
 import mudata as md
 import pandas as pd
 import scirpy as ir
+
+from experiments.post_training.capability_driven_envs.open_ended_packet_schema import (
+    OpenEndedReleaseStatus,
+    PacketFileDeclaration,
+    PacketManifest,
+    PacketSource,
+    PacketVisibility,
+    inventory_files,
+    sha256_file,
+)
 
 NOTEBOOK_CELLS = (11, 12, 13)
 NOTEBOOK_PATH = "jupyter-book/air_repertoire/clonotype.ipynb"
@@ -37,15 +46,6 @@ EXPECTED_FRACTIONS = {
     "Treg": 0.007282,
     "gdT": 0.018349,
 }
-
-
-def sha256_file(path: Path) -> str:
-    """Return the hexadecimal SHA-256 digest of a file."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -115,9 +115,7 @@ def extract_counts(source: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
     )
 
     overall = (
-        grouped.groupby("cell_type_coarse", observed=True, sort=True)[
-            ["n_cells", "n_primary_vj_called", "n_trav1_2"]
-        ]
+        grouped.groupby("cell_type_coarse", observed=True, sort=True)[["n_cells", "n_primary_vj_called", "n_trav1_2"]]
         .sum()
         .reset_index()
     )
@@ -131,12 +129,12 @@ def extract_counts(source: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
 
     donor_mait = grouped[grouped["cell_type_coarse"].eq("MAIT")].copy()
     reference = {
-        "source_cell_count": int(len(observations)),
+        "source_cell_count": len(observations),
         "pseudonymous_donor_count": len(donor_ids),
-        "solver_table_rows": int(len(grouped)),
+        "solver_table_rows": len(grouped),
         "overall_by_cell_type": overall.to_dict(orient="records"),
         "mait_donor_fraction_summary": {
-            "donors_with_mait_cells": int(len(donor_mait)),
+            "donors_with_mait_cells": len(donor_mait),
             "median_fraction_all_cells": float(donor_mait["trav1_2_fraction_all_cells"].median()),
             "minimum_fraction_all_cells": float(donor_mait["trav1_2_fraction_all_cells"].min()),
             "maximum_fraction_all_cells": float(donor_mait["trav1_2_fraction_all_cells"].max()),
@@ -148,18 +146,13 @@ def extract_counts(source: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
             "of every labelled cell. Missing primary VJ calls and donor heterogeneity must be reported."
         ),
     }
-    solver_counts = grouped[
-        ["donor_id", "cell_type_coarse", "n_cells", "n_primary_vj_called", "n_trav1_2"]
-    ].copy()
+    solver_counts = grouped[["donor_id", "cell_type_coarse", "n_cells", "n_primary_vj_called", "n_trav1_2"]].copy()
     return solver_counts, reference
 
 
 def packet_brief() -> dict[str, Any]:
     """Return the human-authored task brief supplied to Taskforge."""
     return {
-        "seed_id": "covid-mait-gene-usage",
-        "notebook_id": "covid-immune-repertoire",
-        "split_group": "covid-immune-repertoire",
         "question_family": "annotation_validation",
         "goal": "Evaluate whether receptor V-gene usage independently supports the transcriptomic MAIT-cell annotation.",
         "expected_deliverable": (
@@ -172,18 +165,26 @@ def packet_brief() -> dict[str, Any]:
             "hiding missing primary VJ calls",
             "giving the solver the source notebook or private reference summary",
         ],
-        "solver_resource": "solver/v_gene_counts_by_donor_and_cell_type.csv",
-        "private_evidence": [
-            "private/reference_summary.json",
-            "private/notebook_evidence.json",
-        ],
-        "status": "example_unapproved",
     }
 
 
 def data_dictionary() -> str:
     """Return the solver-visible table documentation."""
-    return """# V-gene count table\n\nEach row is one pseudonymous donor and coarse T-cell label observed in the source cohort.\n\n- `donor_id`: deterministic pseudonym local to this task.\n- `cell_type_coarse`: transcriptome-derived coarse cell label.\n- `n_cells`: cells in this donor/label group, including missing primary VJ calls.\n- `n_primary_vj_called`: cells with a non-missing primary VJ V-gene call.\n- `n_trav1_2`: cells whose primary VJ V-gene call is exactly `TRAV1-2`.\n\nThe table contains sufficient counts for pooled and donor-aware comparisons. Fractions and conclusions are intentionally not supplied. It does not contain the source notebook, receptor sequences, gene-expression matrix, clinical metadata, or original donor identifiers.\n"""
+    return """# V-gene count table
+
+Each row is one pseudonymous donor and coarse T-cell label observed in the source cohort.
+
+- `donor_id`: deterministic pseudonym local to this task.
+- `cell_type_coarse`: transcriptome-derived coarse cell label.
+- `n_cells`: cells in this donor/label group, including missing primary VJ calls.
+- `n_primary_vj_called`: cells with a non-missing primary VJ V-gene call.
+- `n_trav1_2`: cells whose primary VJ V-gene call is exactly `TRAV1-2`.
+
+The table contains sufficient counts for pooled and donor-aware comparisons.
+Fractions and conclusions are intentionally not supplied. It does not contain the
+source notebook, receptor sequences, gene-expression matrix, clinical metadata,
+or original donor identifiers.
+"""
 
 
 def build_packet(source: Path, notebook: Path, output: Path) -> None:
@@ -227,17 +228,50 @@ def build_packet(source: Path, notebook: Path, output: Path) -> None:
     }
     write_json(output / "provenance.json", provenance)
 
-    files = []
-    for path in sorted(item for item in output.rglob("*") if item.is_file()):
-        files.append(
-            {
-                "path": str(path.relative_to(output)),
-                "size_bytes": path.stat().st_size,
-                "sha256": sha256_file(path),
-                "visibility": "solver" if path.is_relative_to(solver) else "author_private",
-            }
-        )
-    write_json(output / "manifest.json", {"packet_id": "covid-mait-gene-usage-v0", "files": files})
+    declarations = (
+        PacketFileDeclaration(packet_path="brief.json", resource_path=None, visibility=PacketVisibility.METADATA),
+        PacketFileDeclaration(
+            packet_path="provenance.json",
+            resource_path="private/provenance.json",
+            visibility=PacketVisibility.AUTHOR_PRIVATE,
+        ),
+        PacketFileDeclaration(
+            packet_path="solver/README.md",
+            resource_path="workspace/README.md",
+            visibility=PacketVisibility.SOLVER,
+        ),
+        PacketFileDeclaration(
+            packet_path="solver/v_gene_counts_by_donor_and_cell_type.csv",
+            resource_path="workspace/data/v_gene_counts_by_donor_and_cell_type.csv",
+            visibility=PacketVisibility.SOLVER,
+        ),
+        PacketFileDeclaration(
+            packet_path="private/reference_summary.json",
+            resource_path="private/reference_summary.json",
+            visibility=PacketVisibility.AUTHOR_PRIVATE,
+        ),
+        PacketFileDeclaration(
+            packet_path="private/notebook_evidence.json",
+            resource_path="private/notebook_evidence.json",
+            visibility=PacketVisibility.AUTHOR_PRIVATE,
+        ),
+    )
+    manifest = PacketManifest(
+        packet_id="covid-mait-gene-usage-v1",
+        bundle_id="covid-mait-gene-usage",
+        split_group="covid-immune-repertoire",
+        brief_path="brief.json",
+        source=PacketSource(
+            dataset="theislab/single-cell-best-practices",
+            revision=NOTEBOOK_REVISION,
+            row="covid-mait-gene-usage",
+            importer_revision="extract-covid-mait-v1",
+        ),
+        tags=("biology", "immune-repertoire", "open-ended"),
+        release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
+        files=inventory_files(output, declarations),
+    )
+    write_json(output / "manifest.json", manifest.model_dump(mode="json"))
 
 
 def parse_args() -> argparse.Namespace:

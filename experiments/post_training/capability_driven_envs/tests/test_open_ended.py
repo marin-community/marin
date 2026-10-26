@@ -7,6 +7,7 @@ from taskcompendium.models import Source
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBrief, OpenEndedTaskBundle
+from experiments.post_training.capability_driven_envs.open_ended_packet_schema import OpenEndedReleaseStatus
 
 
 def bundle(private_evidence: bytes = b'{"expected": "MAIT enrichment"}\n') -> OpenEndedTaskBundle:
@@ -32,6 +33,7 @@ def bundle(private_evidence: bytes = b'{"expected": "MAIT enrichment"}\n') -> Op
             row="covid-mait-gene-usage",
             importer_revision="extract-covid-mait-v0",
         ),
+        release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
         tags=("biology", "immune-repertoire"),
     )
 

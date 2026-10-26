@@ -541,8 +541,10 @@ Only after the local lifecycle works:
 
 ### Implemented in draft PR #10590
 
+- versioned curator-packet schema with explicit packet and TaskResource paths;
+- strict packet inventory/digest verification and deterministic bundle loading;
 - `OpenEndedTaskBundle` and `OpenEndedBuildInput`;
-- stable digest including private evidence;
+- stable digest including private evidence and release status;
 - generic immutable build-input transport and cache identity;
 - accepted/retry/idempotency local lifecycle tests;
 - notebook pilot inventory and MAIT extractor;
@@ -551,16 +553,15 @@ Only after the local lifecycle works:
 
 ### Next local vertical slice
 
-1. Directory loader and canonical JSON/Parquet serialization for bundles.
-2. Explicit stored-digest verification.
-3. `OpenEndedProposalSource` planner/writer and parser-repair tests.
-4. Durable local `ProposalBatch` serialization and cache identity.
-5. Pure `run_open_ended_bundle(bundle, runtime, config)` orchestration.
-6. Bundle-aware author and validator wrappers using private evidence.
-7. Configurable role-specific model clients.
-8. Real MAIT local lifecycle through accepted/rejected `TaskSpec`.
-9. Pairwise judge request/response transport around the scorepad.
-10. Generic accepted-`TaskSpec` export to beta.
+1. Canonical JSON/Parquet serialization for loaded bundles.
+2. `OpenEndedProposalSource` planner/writer and parser-repair tests.
+3. Durable local `ProposalBatch` serialization and cache identity.
+4. Pure `run_open_ended_bundle(bundle, runtime, config)` orchestration.
+5. Bundle-aware author and validator wrappers using private evidence.
+6. Configurable role-specific model clients.
+7. Real MAIT local lifecycle through accepted/rejected `TaskSpec`.
+8. Pairwise judge request/response transport around the scorepad.
+9. Generic accepted-`TaskSpec` export to beta.
 
 ### Distributed and training slice
 

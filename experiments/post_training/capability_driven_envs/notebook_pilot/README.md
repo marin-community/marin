@@ -36,7 +36,12 @@ authoring packet containing the task brief, minimal solver-visible sufficient
 data, narrowly scoped private evidence, and provenance pointers. Taskforge does
 not receive the complete notebook or original dataset. The first example
 extractor is `extract_covid_mait_packet.py`; generated packets remain uncommitted
-while the underlying dataset rights are unreviewed.
+while the underlying dataset rights are unreviewed. It writes the portable
+`open-ended-task-packet/1` manifest: every packet-local file has an explicit
+solver/private role, destination `TaskResource` path, byte size, and SHA-256.
+The generic `open_ended_packet.load_open_ended_packet` loader rejects missing,
+undeclared, modified, or symlinked content before constructing the hydrated
+bundle.
 
 ## Intended flow
 

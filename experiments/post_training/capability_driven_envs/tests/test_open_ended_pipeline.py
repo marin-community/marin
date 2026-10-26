@@ -46,6 +46,7 @@ from experiments.post_training.capability_driven_envs.open_ended import (
     OpenEndedTaskBrief,
     OpenEndedTaskBundle,
 )
+from experiments.post_training.capability_driven_envs.open_ended_packet_schema import OpenEndedReleaseStatus
 
 WORKPIECE = "synthetic-mait--01"
 SAMPLING = LLMPolicy()
@@ -105,6 +106,7 @@ def synthetic_bundle() -> OpenEndedTaskBundle:
             row="synthetic-mait-gene-usage",
             importer_revision="1",
         ),
+        release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
         tags=("biology", "synthetic"),
     )
 
