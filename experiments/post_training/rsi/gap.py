@@ -18,12 +18,15 @@ import copy
 import json
 import logging
 import os
+import random
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
+import dataclasses
 from dataclasses import dataclass
 
 import click
 import pyarrow.parquet as pq
+from reasoning_gym.factory import DATASETS
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 
@@ -160,6 +163,37 @@ def interleave(tasks: Mapping[str, Sequence[TaskSpec]]) -> Iterator[TaskSpec]:
                 yield queue.pop()
 
 
+@dataclass(frozen=True)
+class GapChoice:
+    gap: list[str]
+    placebo: str
+    candidates: list[str]
+    """The screened types inside the pass-rate window, from which the choice was drawn."""
+
+
+def module_group(task: str) -> str:
+    """The Reasoning Gym package group of a task type, such as ``arithmetic`` or ``games``."""
+    return DATASETS[task][0].__module__.split(".")[1]
+
+
+def choose(screen: Sequence[Mapping], low: float, high: float, gaps: int, seed: int) -> GapChoice:
+    """Draw ``gaps`` gap types and one placebo type from the screened types whose pass rate is in [low, high].
+
+    Each drawn type comes from a different package group, so that two variants of one skill are never both drawn.
+    """
+    candidates = sorted(result["task"] for result in screen if low <= result["pass_rate"] <= high)
+    rng = random.Random(seed)
+    drawn: list[str] = []
+    for task in rng.sample(candidates, len(candidates)):
+        if module_group(task) not in {module_group(other) for other in drawn}:
+            drawn.append(task)
+        if len(drawn) == gaps + 1:
+            break
+    if len(drawn) < gaps + 1:
+        raise ValueError(f"Only {len(drawn)} package groups among {len(candidates)} candidates")
+    return GapChoice(gap=drawn[:gaps], placebo=drawn[gaps], candidates=candidates)
+
+
 @click.group()
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
@@ -177,6 +211,20 @@ def heldout(type_names: str, per_type: int, output: str) -> None:
     lines = [task.model_dump_json() + "\n" for each in tasks.values() for task in each]
     StoragePath(output).write_text("".join(lines))
     logger.info("Wrote %d held-out tasks of %s", len(lines), names)
+
+
+@main.command("choose")
+@click.option("--screen", "screen_file", required=True, help="The screen.json of screen_gap.py.")
+@click.option("--low", type=float, default=0.10, show_default=True)
+@click.option("--high", type=float, default=0.40, show_default=True)
+@click.option("--gaps", type=int, default=3, show_default=True)
+@click.option("--seed", type=int, default=0, show_default=True)
+@click.option("--output", required=True, help="A JSON file of the choice.")
+def choose_command(screen_file: str, low: float, high: float, gaps: int, seed: int, output: str) -> None:
+    """Choose the gap types and the placebo type from a screen."""
+    choice = choose(json.loads(StoragePath(screen_file).read_text()), low, high, gaps, seed)
+    StoragePath(output).write_text(json.dumps(dataclasses.asdict(choice), indent=2))
+    logger.info("Gap types %s, placebo %s, from %d candidates", choice.gap, choice.placebo, len(choice.candidates))
 
 
 if __name__ == "__main__":
