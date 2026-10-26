@@ -137,6 +137,10 @@ class SpeculatorModelConfig:
                 f"got {source_uri!r}"
             )
         elif is_cloud_uri(source_uri):
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", source_identity) is None:
+                raise SpeculativeDecodingConfigError(
+                    f"{context}.source_identity: artifact sources require sha256:<64 lowercase hex digits>"
+                )
             parsed = urlsplit(source_uri)
             if not parsed.netloc or not parsed.path.strip("/") or parsed.query or parsed.fragment:
                 raise SpeculativeDecodingConfigError(f"{context}.source_uri is not a complete object-store URI")

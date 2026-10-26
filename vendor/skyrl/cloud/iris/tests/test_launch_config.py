@@ -347,6 +347,16 @@ def test_source_launch_rejects_missing_geometry_and_conflicting_author_values(tm
     raw = OmegaConf.create(_raw_config())
     raw.skyrl.trainer.train_batch_size = "8"
     cases.append((raw, "train_batch_size"))
+    raw = OmegaConf.create(_raw_config())
+    raw.iris.allocation.num_nodes = 2
+    raw.skyrl.trainer.placement.colocate_all = False
+    raw.skyrl.generator.speculative_decoding = {
+        "method": "eagle3",
+        "model": {"source_uri": "s3://models/draft", "source_identity": "mutable"},
+        "num_speculative_tokens": 3,
+        "training": None,
+    }
+    cases.append((raw, "artifact sources require sha256"))
     path = tmp_path / "invalid.yaml"
     for raw, error in cases:
         OmegaConf.save(raw, path)

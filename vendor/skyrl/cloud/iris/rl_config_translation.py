@@ -82,7 +82,6 @@ def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> D
     materialized = copy.deepcopy(raw)
     for path, value in budget.derived_values(materialized.get("terminal_bench")).items():
         set_path(materialized, path, value)
-    materialized["context_budget"] = budget.as_dict()
     return materialized
 
 
