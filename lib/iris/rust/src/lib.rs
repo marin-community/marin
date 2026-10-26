@@ -55,6 +55,7 @@ const REGISTRY_LOCK_POISONED: &str = "native proxy registry lock is poisoned";
 const RPC_METRICS_LOCK_POISONED: &str = "native proxy RPC metrics lock is poisoned";
 const PROXY_METRICS_LOCK_POISONED: &str = "native proxy transport metrics lock is poisoned";
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOUT_SECONDS);
+const REPLACEMENT_RETRY_AFTER_SECONDS: &str = "5";
 // Eval traffic can hold thousands of upstream requests in flight. Reuse the
 // connections that complete instead of reconnecting for every next request.
 const UPSTREAM_IDLE_CONNECTIONS_PER_HOST: usize = 256;
@@ -241,21 +242,29 @@ impl ProxyControl {
             let mut mappings = endpoint_ids
                 .iter()
                 .filter_map(|endpoint_id| registry.by_id.get(endpoint_id))
-                .filter(|mapping| {
-                    mapping
-                        .lease_deadline_epoch_ms
-                        .is_none_or(|deadline| deadline > now)
-                })
                 .collect::<Vec<_>>();
             if mappings.is_empty() {
                 continue;
             }
-            if mappings
-                .iter()
-                .map(|mapping| mapping.peer_id.as_deref())
-                .collect::<HashSet<_>>()
-                .len()
-                > 1
+            let has_ready = mappings.iter().any(|mapping| {
+                mapping
+                    .lease_deadline_epoch_ms
+                    .is_none_or(|deadline| deadline > now)
+            });
+            if has_ready {
+                mappings.retain(|mapping| {
+                    mapping
+                        .lease_deadline_epoch_ms
+                        .is_none_or(|deadline| deadline > now)
+                });
+            }
+            if has_ready
+                && mappings
+                    .iter()
+                    .map(|mapping| mapping.peer_id.as_deref())
+                    .collect::<HashSet<_>>()
+                    .len()
+                    > 1
             {
                 return Err(format!("endpoint {name:?} resolves to multiple peers"));
             }
@@ -370,6 +379,7 @@ struct ProxyDecision {
     proxy_prefix: Option<HeaderValue>,
     upstream_authorization: Option<HeaderValue>,
     timeout: Duration,
+    task_owned: bool,
 }
 
 struct ControllerHandoff {
@@ -383,6 +393,7 @@ enum ForwardMode {
         proxy_prefix: Option<HeaderValue>,
         upstream_authorization: Option<HeaderValue>,
         timeout: Duration,
+        task_owned: bool,
     },
 }
 
@@ -461,6 +472,18 @@ fn error_response(status: StatusCode, message: &str) -> Response<Body> {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body))
         .expect("static error response is valid")
+}
+
+fn replacement_response() -> Response<Body> {
+    let mut response = error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "endpoint is being replaced",
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from_static(REPLACEMENT_RETRY_AFTER_SECONDS),
+    );
+    response
 }
 
 fn controller_uri(controller_url: &str, request_uri: &Uri) -> Result<Uri, Box<Response<Body>>> {
@@ -616,6 +639,7 @@ async fn decision(state: &AppState, decision: &FederationDecision) -> DecisionRe
             .headers()
             .get(UPSTREAM_AUTHORIZATION_HEADER)
             .cloned(),
+        task_owned: false,
         timeout: response
             .headers()
             .get(PROXY_TIMEOUT_HEADER)
@@ -1036,6 +1060,7 @@ fn local_proxy_decision(
         upstream,
         proxy_prefix: Some(proxy_prefix),
         upstream_authorization: None,
+        task_owned: mapping.task_id.is_some(),
         timeout: mapping
             .timeout_seconds
             .filter(|timeout| timeout.is_finite() && *timeout > 0.0)
@@ -1057,6 +1082,12 @@ fn mapping_decision(
                 "federation peers cannot traverse a mirrored endpoint",
             )));
         }
+        if mapping
+            .lease_deadline_epoch_ms
+            .is_some_and(|deadline| deadline <= unix_time_millis())
+        {
+            return NativeDecision::Response(Box::new(replacement_response()));
+        }
         let local_upstream = match endpoint_uri(&mapping.address, &route.sub_path, query) {
             Ok(upstream) => Some(upstream.to_string()),
             Err(error) => {
@@ -1077,6 +1108,12 @@ fn mapping_decision(
     }
     if let Err(response) = authorize_mapping(&mapping, &identity) {
         return NativeDecision::Response(response);
+    }
+    if mapping
+        .lease_deadline_epoch_ms
+        .is_some_and(|deadline| deadline <= unix_time_millis())
+    {
+        return NativeDecision::Response(Box::new(replacement_response()));
     }
     if route.redirect {
         return redirect_decision(&route, query);
@@ -1172,22 +1209,23 @@ async fn send(
 ) -> Response<Body> {
     let upstream_uri = uri.clone();
     *request.uri_mut() = uri;
-    let (is_proxy, response_proxy_prefix, timeout) = match mode {
+    let (is_proxy, response_proxy_prefix, timeout, task_owned) = match mode {
         ForwardMode::Controller(handoff) => {
             prepare_controller_request(request.headers_mut(), handoff);
-            (false, None, None)
+            (false, None, None, false)
         }
         ForwardMode::Proxy {
             proxy_prefix,
             upstream_authorization,
             timeout,
+            task_owned,
         } => {
             prepare_proxy_request(
                 request.headers_mut(),
                 proxy_prefix.clone(),
                 upstream_authorization,
             );
-            (true, proxy_prefix, Some(timeout))
+            (true, proxy_prefix, Some(timeout), task_owned)
         }
     };
 
@@ -1195,10 +1233,14 @@ async fn send(
         match tokio::time::timeout(timeout, client.request(request)).await {
             Ok(response) => response,
             Err(_) => {
-                return error_response(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    &format!("upstream timeout after {}s", timeout.as_secs_f64()),
-                )
+                return if task_owned {
+                    replacement_response()
+                } else {
+                    error_response(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        &format!("upstream timeout after {}s", timeout.as_secs_f64()),
+                    )
+                }
             }
         }
     } else {
@@ -1240,10 +1282,16 @@ async fn send(
             };
             Response::from_parts(parts, body)
         }
-        Err(error) => error_response(
-            StatusCode::BAD_GATEWAY,
-            &format!("upstream transport error: {error}"),
-        ),
+        Err(error) => {
+            if task_owned {
+                replacement_response()
+            } else {
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("upstream transport error: {error}"),
+                )
+            }
+        }
     }
 }
 
@@ -1333,6 +1381,7 @@ async fn ingress_inner(
                         proxy_prefix: decision.proxy_prefix,
                         upstream_authorization: decision.upstream_authorization,
                         timeout: decision.timeout,
+                        task_owned: decision.task_owned,
                     },
                 )
                 .await;
@@ -1353,6 +1402,10 @@ async fn ingress_inner(
                                 proxy_prefix: decision.proxy_prefix,
                                 upstream_authorization: decision.upstream_authorization,
                                 timeout: decision.timeout,
+                                task_owned: matches!(
+                                    federation.direction,
+                                    FederationDirection::Inbound
+                                ),
                             },
                         )
                         .await
@@ -1449,6 +1502,26 @@ mod tests {
         assert!(control.resolve("a").unwrap().is_none());
         assert_eq!(control.resolve("b").unwrap().unwrap().endpoint_id, "b");
         assert_eq!(control.resolve("c").unwrap().unwrap().endpoint_id, "c");
+    }
+
+    #[test]
+    fn live_replacement_wins_over_expired_mapping_from_another_peer() {
+        let control = ProxyControl::default();
+        let mut expired = mapping("old", "/serve/model");
+        expired.peer_id = Some("old-peer".to_string());
+        expired.lease_deadline_epoch_ms = Some(0);
+        let replacement = mapping("new", "/serve/model");
+        control
+            .replace_registry(RegistrySnapshot {
+                generation: 1,
+                endpoints: vec![expired, replacement],
+            })
+            .unwrap();
+
+        assert_eq!(
+            control.resolve("serve.model").unwrap().unwrap().endpoint_id,
+            "new"
+        );
     }
 
     fn route(path: &str) -> ProxyRoute {

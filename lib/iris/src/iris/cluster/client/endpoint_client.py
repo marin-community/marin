@@ -127,7 +127,7 @@ class EndpointClient:
         return response.endpoint_id
 
     def unregister(self, endpoint_id: str) -> None:
-        """Stop renewing ``endpoint_id`` and delete it. Idempotent."""
+        """Stop renewing ``endpoint_id`` and withdraw it from discovery. Idempotent."""
         self._renewer.untrack(endpoint_id)
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
@@ -150,8 +150,8 @@ class EndpointClient:
     def close(self) -> None:
         """Stop renewing and best-effort unregister everything still registered.
 
-        Each delete uses a short deadline so an unreachable controller can't
-        stall shutdown; anything left registered expires once its lease lapses.
+        Each withdrawal uses a short deadline so an unreachable controller can't
+        stall shutdown; anything left registered leaves discovery when its lease lapses.
         ``untrack`` waits out any in-flight renewal so the delete cannot be
         undone by a renewal that was mid-RPC.
         """

@@ -134,7 +134,7 @@ class EndpointRegistry:
         with self._proxy_lock:
             generation = self._proxy_generation
             system_endpoints = tuple(self._system_endpoints.items())
-            task_endpoints = tuple(self._db.caches[EndpointsProjection].all())
+            task_endpoints = tuple(self._db.caches[EndpointsProjection].proxy_rows())
         mappings = tuple(mapping for row in task_endpoints if (mapping := self._task_proxy_mapping(row)) is not None)
         mappings += tuple(
             mapping
@@ -291,10 +291,10 @@ def unregister_endpoint(
     request: controller_pb2.Controller.UnregisterEndpointRequest,
     context: RequestContext,
 ) -> job_pb2.Empty:
-    """Unregister a service endpoint idempotently."""
+    """Withdraw an endpoint from discovery while keeping its task's retry route."""
     del context
     with dependencies.db.transaction() as cur:
-        cur.caches[EndpointsProjection].remove(cur, request.endpoint_id)
+        cur.caches[EndpointsProjection].withdraw(cur, request.endpoint_id)
     return job_pb2.Empty()
 
 

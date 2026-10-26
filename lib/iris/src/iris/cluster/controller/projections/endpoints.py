@@ -22,6 +22,7 @@ from typing import ClassVar
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, delete, insert, select
+from sqlalchemy import update as sa_update
 
 from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
@@ -55,7 +56,8 @@ class EndpointRow:
     metadata: dict
     registered_at: Timestamp
     # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
-    # A passed deadline is hidden from reads and swept by ``sweep_expired``.
+    # A passed deadline is hidden from discovery; the proxy keeps the route
+    # until the task becomes terminal so existing clients can retry replacement.
     lease_deadline: Timestamp | None = None
     # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
@@ -311,6 +313,11 @@ class EndpointsProjection(Projection):
         with self._lock:
             return [row for row in self._by_id.values() if not row.is_expired(now)]
 
+    def proxy_rows(self) -> list[EndpointRow]:
+        """Include unavailable routes until the pruner removes them."""
+        with self._lock:
+            return list(self._by_id.values())
+
     # -- Writes ---------------------------------------------------------------
 
     def add(
@@ -424,15 +431,25 @@ class EndpointsProjection(Projection):
         for row in keep:
             pending.upsert(row)
 
-    def remove(self, cur: db.Tx, endpoint_id: str) -> EndpointRow | None:
-        """Remove a single endpoint by id. Returns the removed row snapshot, if any."""
-        existing = self.get(endpoint_id)
+    def withdraw(self, cur: db.Tx, endpoint_id: str) -> None:
+        """Withdraw a registration; retain a retryable task's proxy route."""
+        with self._lock:
+            existing = self._by_id.get(endpoint_id)
         if existing is None:
-            return None
+            return
+        task_row = cur.execute(_TASK_STATE_FOR_ENDPOINT, {"task_id": existing.task_id}).fetchone()
+        if task_row is not None and int(task_row.state) not in TERMINAL_TASK_STATES:
+            unavailable = replace(existing, lease_deadline=Timestamp.now())
+            cur.execute(
+                sa_update(endpoints_table)
+                .where(endpoints_table.c.endpoint_id == endpoint_id)
+                .values(lease_deadline_ms=unavailable.lease_deadline)
+            )
+            self._pending_mutation(cur).upsert(unavailable)
+            return
         cur.execute(delete(endpoints_table).where(endpoints_table.c.endpoint_id == endpoint_id))
 
         self._pending_mutation(cur).delete(endpoint_id)
-        return existing
 
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
         """Remove all endpoints owned by any of ``job_ids``. Returns the removed endpoint_ids."""
@@ -460,14 +477,20 @@ class EndpointsProjection(Projection):
         return to_remove
 
     def sweep_expired(self, cur: db.Tx, now: Timestamp) -> list[str]:
-        """Delete endpoints whose lease deadline has passed; return removed ids.
-
-        Reads already hide expired rows, so this only reclaims storage, making
-        the lease (not the FK ``CASCADE``) the GC trigger: a crashed task's
-        endpoint expires here even while its task row still exists.
-        """
+        """Delete expired routes only after their owning task becomes terminal."""
         with self._lock:
-            expired = [row.endpoint_id for row in self._by_id.values() if row.is_expired(now)]
+            expired_rows = [row for row in self._by_id.values() if row.is_expired(now)]
+        if not expired_rows:
+            return []
+        active_tasks = set(
+            cur.execute(
+                select(tasks_table.c.task_id).where(
+                    tasks_table.c.task_id.in_({row.task_id for row in expired_rows}),
+                    tasks_table.c.state.not_in(TERMINAL_TASK_STATES),
+                )
+            ).scalars()
+        )
+        expired = [row.endpoint_id for row in expired_rows if row.task_id not in active_tasks]
         if not expired:
             return []
         cur.execute(
