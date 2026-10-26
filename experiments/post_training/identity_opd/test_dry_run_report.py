@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import hashlib
 import json
 import zipfile
 
@@ -20,6 +21,8 @@ def test_logprob_gate_reads_a_probe_archive(tmp_path):
     assert gate["samples"] == 4
     assert gate["trainer_vs_generation"]["abs_max"] == pytest.approx(0.1)
     assert gate["passed"]
+    assert gate["trainer_vs_rescore"]["abs_max"] == pytest.approx(0.1)
+    assert gate["rescore_vs_generation"]["abs_max"] == pytest.approx(0.0)
     assert gate["trainer_abs_max_vs_update_0"] == {
         "update 1": pytest.approx(0.01),
         "update 2": pytest.approx(0.03),
@@ -37,20 +40,35 @@ def _hf_dir(path, tensors):
     return str(path)
 
 
-def test_tensor_hashes_find_the_one_changed_tensor(tmp_path):
-    tensors = {
-        "a": np.arange(6, dtype=np.float32).reshape(2, 3),
-        "b": np.ones(4, dtype=np.float16),
-        "c": np.zeros(3, dtype=np.float32),
-    }
-    before = dry_run_report.tensor_hashes(_hf_dir(tmp_path / "before", tensors))
-    same = dry_run_report.tensor_hashes(_hf_dir(tmp_path / "same", tensors))
-    changed = dry_run_report.tensor_hashes(_hf_dir(tmp_path / "changed", {**tensors, "c": np.full(3, 1e-8, np.float32)}))
-    assert dry_run_report.compare_hashes(before, same)["all_equal"]
-    result = dry_run_report.compare_hashes(before, changed)
+TENSORS = {
+    "a": np.arange(6, dtype=np.float32).reshape(2, 3),
+    "b": np.ones(4, dtype=np.float16),
+    "c": np.zeros(3, dtype=np.float32),
+}
+
+
+def test_export_receipts_hash_payloads_and_find_the_one_changed_tensor(tmp_path):
+    source = _hf_dir(tmp_path / "source", TENSORS)
+    same = dry_run_report.export_receipts(source, _hf_dir(tmp_path / "same", TENSORS), str(tmp_path / "r1"))
+    assert same["all_equal"]
+    changed_root = _hf_dir(tmp_path / "changed", {**TENSORS, "c": np.full(3, 1e-8, np.float32)})
+    result = dry_run_report.export_receipts(source, changed_root, str(tmp_path / "r2"))
     assert result["differing"] == ["c"]
     assert result["dtypes_before"] == {"F16": 1, "F32": 2}
     assert not result["all_equal"]
+
+    audit = json.loads((tmp_path / "r2" / "export-audit.json").read_text())
+    readback = json.loads((tmp_path / "r2" / "readback-receipt.json").read_text())
+    assert audit["tensor_count"] == readback["tensor_count"] == 3
+    assert audit["tensors"] == readback["tensors"]
+    assert audit["tensors"]["a"]["export_sha256"] == hashlib.sha256(TENSORS["a"].tobytes()).hexdigest()
+    assert readback["source_tensors"]["c"]["source_native_sha256"] == hashlib.sha256(TENSORS["c"].tobytes()).hexdigest()
+    assert (
+        result["export_audit"]["sha256"]
+        == hashlib.sha256((tmp_path / "r2" / "export-audit.json").read_bytes()).hexdigest()
+    )
+    with pytest.raises(FileExistsError):
+        dry_run_report.export_receipts(source, changed_root, str(tmp_path / "r2"))
 
 
 def _record(route, text, tokens, stop="stop"):

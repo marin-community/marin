@@ -6,11 +6,16 @@
 Three independent parts, each optional:
 
 - ``--archive``: the mismatch-probe FineStore archive. Megatron vs vLLM-generation log-probs on the 64 frozen probe
-  samples at update 0 (abs p99, abs max, k3, share beyond 2x), the vLLM re-score, and the zero-LR no-op on the
-  trainer's own scores (update 0 vs each later update). The archive stores chosen-token log-probs only, so a top-1
-  agreement cannot be computed from it and is reported as unavailable.
-- ``--before``/``--after``: two Hugging Face directories (the CD-16 input and the dry run's step-2 export). Every
-  tensor's bytes are hashed from the safetensors shards; the report lists names, dtypes and any tensor that differs.
+  samples at update 0 (abs p99, abs max, k3, share beyond 2x; the gate), trainer and generation each vs the vLLM
+  re-score (reported, no threshold), and the zero-LR no-op on the trainer's own scores (update 0 vs each later
+  update). The archive stores chosen-token log-probs only, so a top-1 agreement cannot be computed from it and is
+  reported as unavailable.
+- ``--source``/``--export``/``--receipts``: the run's input and exported Hugging Face directories, and a new
+  directory for two receipts. Every tensor's raw safetensors payload is hashed (the same SHA-256 as the merge and
+  re-hash receipts). ``export-audit.json`` holds ``tensors[name].export_sha256`` for every exported tensor;
+  ``readback-receipt.json`` holds the same hashes from a second, independent read of the written shards, in the
+  re-hash layout, with the source's hashes beside them. The two reads must agree. The report lists names, dtypes and
+  every tensor that differs from the source (for the zero-LR dry run: none).
 - ``--trajectories``: the run's retained-trajectory root. Per family at one step: counts by thinking mode, response
   lengths, truncation, end-of-turn stops, identity name and creator mentions, and tool-call rates.
 
@@ -43,6 +48,9 @@ NAME = "marin snowball"
 CREATOR = "open athena"
 TOOL_CALL = "<tool_call>"
 CHUNK_BYTES = 64 << 20
+HASH_RULE = "sha256 of each raw safetensors payload, streamed in 64 MiB chunks"
+EXPORT_AUDIT = "export-audit.json"
+READBACK_RECEIPT = "readback-receipt.json"
 
 
 def _compare(archive: ArchiveData, target: str, reference: str) -> dict[str, float | int]:
@@ -64,10 +72,12 @@ def logprob_gate(archive: ArchiveData) -> dict:
         if update > 0 and TRAINER.format(update=update) in archive.scores
     }
     rescore = RESCORE.format(update=0)
+    has_rescore = rescore in archive.scores
     return {
         "samples": len(archive.probes),
         "trainer_vs_generation": parity,
-        "rescore_vs_generation": _compare(archive, rescore, GENERATION) if rescore in archive.scores else None,
+        "trainer_vs_rescore": _compare(archive, TRAINER.format(update=0), rescore) if has_rescore else None,
+        "rescore_vs_generation": _compare(archive, rescore, GENERATION) if has_rescore else None,
         "passed": parity["abs_p99"] <= LOGPROB_P99_MAX and parity["abs_max"] <= LOGPROB_ABS_MAX,
         "thresholds": {"abs_p99": LOGPROB_P99_MAX, "abs_max": LOGPROB_ABS_MAX},
         "trainer_abs_max_vs_update_0": no_op,
@@ -108,7 +118,7 @@ def tensor_hashes(hf_dir: str) -> dict[str, dict]:
                     remaining -= len(chunk)
                 if name in result:
                     raise ValueError(f"tensor {name} appears in two shards")
-                result[name] = {"dtype": entry["dtype"], "shape": entry["shape"], "sha256": digest.hexdigest()}
+                result[name] = {"dtype": entry["dtype"], "shape": entry["shape"], "export_sha256": digest.hexdigest()}
     return result
 
 
@@ -123,6 +133,50 @@ def compare_hashes(before: dict[str, dict], after: dict[str, dict]) -> dict:
         "only_after": sorted(set(after) - set(before)),
         "differing": [name for name in shared if before[name] != after[name]],
         "all_equal": before == after,
+    }
+
+
+def _write_new(url: str, payload: dict) -> str:
+    fs, path = filesystem_for(url)
+    if fs.exists(path):
+        raise FileExistsError(f"{url} already exists")
+    data = json.dumps(payload, indent=1, sort_keys=True).encode()
+    fs.makedirs(posixpath.dirname(path), exist_ok=True)
+    fs.pipe_file(path, data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def export_receipts(source_root: str, export_root: str, receipts: str) -> dict:
+    """Hash the source and the export, re-read the export, write both receipts, and compare with the source."""
+    source = tensor_hashes(source_root)
+    exported = tensor_hashes(export_root)
+    readback = tensor_hashes(export_root)
+    if readback != exported:
+        changed = sorted(name for name in exported if readback.get(name) != exported[name])
+        raise ValueError(f"export changed between reads: {changed[:5]}")
+    audit_sha = _write_new(
+        f"{receipts}/{EXPORT_AUDIT}",
+        {"export_root": export_root, "hash": HASH_RULE, "tensor_count": len(exported), "tensors": exported},
+    )
+    readback_sha = _write_new(
+        f"{receipts}/{READBACK_RECEIPT}",
+        {
+            "export_root": export_root,
+            "source_root": source_root,
+            "hash": HASH_RULE,
+            "tensor_count": len(readback),
+            "tensors": readback,
+            "slice_stats": {},
+            "source_tensors": {
+                name: {"dtype": entry["dtype"], "shape": entry["shape"], "source_native_sha256": entry["export_sha256"]}
+                for name, entry in source.items()
+            },
+        },
+    )
+    return {
+        **compare_hashes(source, exported),
+        "export_audit": {"path": f"{receipts}/{EXPORT_AUDIT}", "sha256": audit_sha},
+        "readback_receipt": {"path": f"{receipts}/{READBACK_RECEIPT}", "sha256": readback_sha},
     }
 
 
@@ -174,19 +228,20 @@ def family_measures(records: list[dict]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--archive", help="mismatch-probe FineStore archive URI")
-    parser.add_argument("--before", help="Hugging Face directory of the input weights")
-    parser.add_argument("--after", help="Hugging Face directory of the dry run's export")
+    parser.add_argument("--source", help="Hugging Face directory of the run's input weights")
+    parser.add_argument("--export", help="Hugging Face directory of the run's export")
+    parser.add_argument("--receipts", help="new directory for export-audit.json and readback-receipt.json")
     parser.add_argument("--trajectories", help="retained-trajectory root")
     parser.add_argument("--step", type=int, default=1, help="global step whose rollouts are measured (1 = step 0)")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    if (args.before is None) != (args.after is None):
-        parser.error("--before and --after go together")
+    if len({args.source is None, args.export is None, args.receipts is None}) != 1:
+        parser.error("--source, --export and --receipts go together")
     report: dict = {}
     if args.archive:
         report["logprob_gate"] = logprob_gate(load_archive(args.archive))
-    if args.before:
-        report["weights"] = compare_hashes(tensor_hashes(args.before), tensor_hashes(args.after))
+    if args.source:
+        report["weights"] = export_receipts(args.source, args.export, args.receipts)
     if args.trajectories:
         report["families"] = family_measures(trajectory_records(args.trajectories, args.step))
     fs, path = filesystem_for(args.out)
