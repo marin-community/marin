@@ -1,0 +1,18 @@
+id: X0219
+slug: stable-cross-entropy
+name: Stable cross-entropy (softplus, no softmax collapse)
+category: Output head and loss
+summary: Exclude the target from the final logsumexp and take loss = softplus(lse_{j!=t}(z_j) - z_t) (arXiv 2610.31642), so
+  the target gradient cannot round to 0 when its probability rounds to 1; same loss, z-loss unchanged.
+source: intake
+status: running
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6370633702
+  author: Helw150
+  approved_by: ClassicLarry
+papers:
+- arxiv: '2610.31642'
+  title: A Fix for Softmax and Cross-Entropy
+knobs:
+- ce_impl
+- ce_collapse_stats_stride
