@@ -30,7 +30,7 @@ export RUN=s3://your-bucket/standalone-draft/run-001
 uv run python -m experiments.post_training.standalone_draft prepare --output "$PROMPTS"
 ```
 
-Preparation downloads
+Preparation writes directly to the `PROMPTS` storage URL. It downloads
 [`sahil2801/CodeAlpaca-20k`](https://huggingface.co/datasets/sahil2801/CodeAlpaca-20k/tree/152bb5e9a29651266b018106053980070a0521a1)
 at revision `152bb5e9a29651266b018106053980070a0521a1`. It discards the corpus's
 answers, deduplicates stripped instruction/input pairs, hashes each problem, and
@@ -131,7 +131,7 @@ uv run iris --cluster marin job run --job-name standalone-draft-serve \
 ```
 
 This calls Marin's existing `run_iris_service` API and registers its normal Iris
-endpoint. In another terminal, wait for registration and mint access to it:
+endpoint with served model ID `target`. In another terminal, wait for registration and mint access to it:
 
 ```bash
 uv run iris --cluster marin endpoints list standalone-draft --exact

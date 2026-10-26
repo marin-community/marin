@@ -23,7 +23,7 @@ import tarfile
 import tempfile
 import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.request import urlretrieve
@@ -31,6 +31,7 @@ from urllib.request import urlretrieve
 from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from rigging.filesystem.transfer import execute_sync, sync_plan
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -62,6 +63,7 @@ CHECKPOINT_FILES = (
     "training_state.json",
 )
 GENERATION = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "seed": None}
+TRAINING_PACKAGES = {"torch": "2.13.0+cu132", "transformers": "5.16.1", "datasets": "4.8.5"}
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,34 @@ class DraftTrainingConfig:
     muon_learning_rate: float = 5e-4
 
 
+@dataclass(frozen=True)
+class _CompletedEpoch:
+    epoch: int
+    local_step: int
+    global_step: int
+    validation_loss: float
+
+
+@dataclass
+class _TrainingRun:
+    config: DraftTrainingConfig
+    tokenizer_sha256: str
+    target_config: dict[str, Any]
+    target_objects: dict[str, Any]
+    prompts_sha256: str
+    rollouts_sha256: str
+    generation: dict[str, Any]
+    split: dict[str, Any]
+    teacher_states: dict[str, Any]
+    runtime: dict[str, Any]
+    job_id: str | None
+    data_source: dict[str, Any] | None = None
+    initial_draft_sha256: str | None = None
+    vocabulary_maps: dict[str, str] = field(default_factory=dict)
+    checkpoint: _CompletedEpoch | None = None
+    export: ResolvedModelLocator | None = None
+
+
 def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
@@ -97,6 +127,16 @@ def _read_json(uri: str) -> Any:
     filesystem, path = filesystem_for(uri)
     with filesystem.open(path, "r") as handle:
         return json.load(handle)
+
+
+def _read_run(uri: str) -> _TrainingRun:
+    value = _read_json(uri)
+    value["config"] = DraftTrainingConfig(**value["config"])
+    if value.get("checkpoint") is not None:
+        value["checkpoint"] = _CompletedEpoch(**value["checkpoint"])
+    if value.get("export") is not None:
+        value["export"] = ResolvedModelLocator(**value["export"])
+    return _TrainingRun(**value)
 
 
 def _write_json(uri: str, value: Any) -> None:
@@ -187,12 +227,7 @@ def _trainer_python() -> list[str]:
         f"speculators @ git+https://github.com/lukedhlee/speculators.git@{TRAINER_COMMIT}",
         "--with",
         f"hs-connectors @ git+https://github.com/lukedhlee/speculators.git@{TRAINER_COMMIT}#subdirectory=hs_connectors",
-        "--with",
-        "torch==2.13.0+cu132",
-        "--with",
-        "transformers==5.16.1",
-        "--with",
-        "datasets==4.8.5",
+        *(argument for name, version in TRAINING_PACKAGES.items() for argument in ("--with", f"{name}=={version}")),
         "--index",
         "https://download.pytorch.org/whl/cu132",
         "--index",
@@ -224,7 +259,7 @@ def _model(config: DraftTrainingConfig, weights: str) -> ServedModelConfig:
     )
 
 
-def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolkit: Path) -> dict:
+def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolkit: Path) -> _TrainingRun:
     if not 0 < config.holdout_fraction < 1 or config.epochs < 1 or not 1 <= config.sequence_length <= 32768:
         raise ValueError("Use a nonempty holdout, positive epochs and training sequence length <=32768")
     root.mkdir()
@@ -235,7 +270,7 @@ def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolk
         raise ValueError("Prompts need unique ids and at least two canonical problem identities")
     if any(not row["messages"] for row in prompts):
         raise ValueError("Every prompt needs messages")
-    target_config = _read_json(config.target.rstrip("/") + "/config.json")
+    target_config = _read_json(prefix_join(config.target, "config.json"))
     if (target_config["model_type"], target_config["num_hidden_layers"], target_config["hidden_size"]) != (
         "grug_moe",
         FINAL_LAYER,
@@ -343,38 +378,36 @@ def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolk
         str(config.sequence_length),
     )
     job = get_job_info()
-    record = {
-        "config": asdict(config),
-        "tokenizer_sha256": tokenizer_hash,
-        "target_config": target_config,
-        "target_objects": {
+    record = _TrainingRun(
+        config=config,
+        tokenizer_sha256=tokenizer_hash,
+        target_config=target_config,
+        target_objects={
             name: {key: info[key] for key in ("size", "ETag") if key in info}
             for name, info in target_objects.items()
             if info["type"] == "file"
         },
-        "prompts_sha256": _sha256(root / "prompts.jsonl"),
-        "rollouts_sha256": _sha256(root / "rollouts.jsonl"),
-        "generation": {**GENERATION, "max_tokens": config.max_new_tokens, "concurrency": 2},
-        "split": json.loads((root / "data/split.json").read_text()),
-        "teacher_states": {
+        prompts_sha256=_sha256(root / "prompts.jsonl"),
+        rollouts_sha256=_sha256(root / "rollouts.jsonl"),
+        generation={**GENERATION, "max_tokens": config.max_new_tokens, "concurrency": 2},
+        split=json.loads((root / "data/split.json").read_text()),
+        teacher_states={
             "auxiliary_layers": AUXILIARY_LAYERS,
             "final_layer": FINAL_LAYER,
             "convention": "raw final residual; trainer applies target RMSNorm and learned sigmoid gate",
         },
-        "runtime": {
+        runtime={
             "toolkit": TOOLKIT_COMMIT,
             "trainer": TRAINER_COMMIT,
-            "torch": "2.13.0+cu132",
-            "transformers": "5.16.1",
-            "datasets": "4.8.5",
+            **TRAINING_PACKAGES,
             "vllm": asdict(VLLM_GPU_RELEASE),
         },
-        "job_id": str(job.job_id) if job else None,
-    }
+        job_id=str(job.job_id) if job else None,
+    )
     source_filesystem, source_path = filesystem_for(config.data + ".source.json")
     if source_filesystem.exists(source_path):
-        record["data_source"] = _read_json(config.data + ".source.json")
-    _write_json(str(root / "run.json"), record)
+        record.data_source = _read_json(config.data + ".source.json")
+    _write_json(str(root / "run.json"), asdict(record))
     _publish_directory(root, config.output)
     return record
 
@@ -393,7 +426,7 @@ def _initializer(source: Path, root: Path, toolkit: Path) -> Path:
     return destination
 
 
-def _publish_checkpoint(root: Path, config: DraftTrainingConfig, record: dict, epoch: int) -> None:
+def _publish_checkpoint(root: Path, config: DraftTrainingConfig, record: _TrainingRun, epoch: int) -> None:
     checkpoint = root / "checkpoints" / str(epoch)
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
@@ -402,43 +435,43 @@ def _publish_checkpoint(root: Path, config: DraftTrainingConfig, record: dict, e
     size = json.loads((checkpoint / "config.json").read_text())["draft_vocab_size"]
     d2t, t2d = _mapping_paths(root, size)
     maps = {path.name: _sha256(path) for path in (d2t, t2d)}
-    if "vocabulary_maps" in record and record["vocabulary_maps"] != maps:
+    if record.vocabulary_maps and record.vocabulary_maps != maps:
         raise ValueError("Vocabulary maps changed within a training run")
     for path in (d2t, t2d):
-        filesystem, destination = filesystem_for(config.output.rstrip("/") + "/data/" + path.name)
+        filesystem, destination = filesystem_for(prefix_join(config.output, f"data/{path.name}"))
         filesystem.makedirs(destination.rsplit("/", 1)[0], exist_ok=True)
         filesystem.put_file(str(path), destination)
-    plan = sync_plan(str(checkpoint), config.output.rstrip("/") + f"/checkpoints/{epoch}", delete=False, checksum=False)
+    plan = sync_plan(str(checkpoint), prefix_join(config.output, f"checkpoints/{epoch}"), delete=False, checksum=False)
     # Publish native progress last. A partially copied epoch is never selected by run.json.
     copies = tuple(sorted(plan.copies, key=lambda action: action.source.name == "training_state.json"))
     execute_sync(replace(plan, copies=copies))
-    record["vocabulary_maps"] = maps
-    record["checkpoint"] = {**state, "validation_loss": metrics["loss_epoch"]}
-    _write_json(str(root / "run.json"), record)
-    _write_json(config.output.rstrip("/") + "/run.json", record)
+    record.vocabulary_maps = maps
+    record.checkpoint = _CompletedEpoch(**state, validation_loss=metrics["loss_epoch"])
+    _write_json(str(root / "run.json"), asdict(record))
+    _write_json(prefix_join(config.output, "run.json"), asdict(record))
 
 
-def restore_training_run(output: str, destination: Path) -> tuple[DraftTrainingConfig, dict]:
+def restore_training_run(output: str, destination: Path) -> tuple[DraftTrainingConfig, _TrainingRun]:
     """Stage a completed training checkpoint and restore its native best pointer.
 
     ``destination`` must be absent. Serving exports alone are not resumable.
     Missing state or changed vocabulary-map bytes fail before trainer launch.
     """
     _stage_directory(output, destination)
-    record = json.loads((destination / "run.json").read_text())
-    config = DraftTrainingConfig(**record["config"])
-    if "checkpoint" not in record:
+    record = _read_run(str(destination / "run.json"))
+    config = record.config
+    if record.checkpoint is None:
         raise ValueError("No completed training checkpoint was published; a serving export cannot resume training")
-    epoch = record["checkpoint"]["epoch"]
+    epoch = record.checkpoint.epoch
     checkpoint = destination / "checkpoints" / str(epoch)
     for name in CHECKPOINT_FILES:
         if not (checkpoint / name).is_file():
             raise ValueError(f"Incomplete training checkpoint: missing {name}")
-    for name, digest in record["vocabulary_maps"].items():
+    for name, digest in record.vocabulary_maps.items():
         if _sha256(destination / "data" / name) != digest:
             raise ValueError(f"Saved vocabulary map changed: {name}")
     if json.loads((checkpoint / "training_state.json").read_text()) != {
-        key: value for key, value in record["checkpoint"].items() if key != "validation_loss"
+        key: value for key, value in asdict(record.checkpoint).items() if key != "validation_loss"
     }:
         raise ValueError("Native training progress differs from the published checkpoint")
     # A failed upload can leave a newer numeric directory. The native trainer
@@ -457,8 +490,10 @@ def restore_training_run(output: str, destination: Path) -> tuple[DraftTrainingC
     return config, record
 
 
-def _train(root: Path, config: DraftTrainingConfig, record: dict, toolkit: Path, initializer: Path | None) -> None:
-    split = record["split"]
+def _train(
+    root: Path, config: DraftTrainingConfig, record: _TrainingRun, toolkit: Path, initializer: Path | None
+) -> None:
+    split = record.split
     command = [
         *_trainer_python(),
         "-m",
@@ -545,14 +580,15 @@ def _train(root: Path, config: DraftTrainingConfig, record: dict, toolkit: Path,
                     process.wait()
 
 
-def _export(root: Path, config: DraftTrainingConfig, record: dict, toolkit: Path) -> ResolvedModelLocator:
-    epoch = record["checkpoint"]["epoch"]
+def _export(root: Path, config: DraftTrainingConfig, record: _TrainingRun, toolkit: Path) -> ResolvedModelLocator:
+    assert record.checkpoint is not None
+    epoch = record.checkpoint.epoch
     relative = f"exports/epoch-{epoch}"
     export = root.parent / "export"
     card = root / "model-card.md"
     card.write_text(
         f"# Standalone EAGLE3 draft\n\nTarget: {config.target}\n\n"
-        f"Data: {config.data}; {record['split']['train_rows']} train / {record['split']['val_rows']} holdout rows.\n\n"
+        f"Data: {config.data}; {record.split['train_rows']} train / {record.split['val_rows']} holdout rows.\n\n"
         "This bounded fit establishes compatibility. Quality, convergence and speedup are unmeasured.\n"
     )
     subprocess.run(
@@ -568,12 +604,12 @@ def _export(root: Path, config: DraftTrainingConfig, record: dict, toolkit: Path
         ],
         check=True,
     )
-    _publish_directory(export, config.output.rstrip("/") + "/" + relative)
+    _publish_directory(export, prefix_join(config.output, relative))
     locator = ResolvedModelLocator(
-        uri=config.output.rstrip("/") + "/" + relative, identity=_sha256(export / "model.safetensors")
+        uri=prefix_join(config.output, relative), identity=_sha256(export / "model.safetensors")
     )
-    record["export"] = asdict(locator)
-    _write_json(config.output.rstrip("/") + "/run.json", record)
+    record.export = locator
+    _write_json(prefix_join(config.output, "run.json"), asdict(record))
     return locator
 
 
@@ -600,7 +636,7 @@ def train_draft(config: DraftTrainingConfig) -> ResolvedModelLocator:
             for destination in _mapping_paths(root, size):
                 shutil.copyfile(initial / destination.name, destination)
             initializer = _initializer(initial, root, toolkit)
-            record["initial_draft_sha256"] = _sha256(initial / "model.safetensors")
+            record.initial_draft_sha256 = _sha256(initial / "model.safetensors")
         _train(root, config, record, toolkit, initializer)
         return _export(root, config, record, toolkit)
 
@@ -608,16 +644,17 @@ def train_draft(config: DraftTrainingConfig) -> ResolvedModelLocator:
 def resume_draft(output: str) -> ResolvedModelLocator:
     """Resume the last published completed epoch, preserving maps and optimizer state.
 
-    Uses the saved configuration and frozen data. It retargets model construction
-    to the staged stub; the native trainer loads learned weights, optimizer,
-    scheduler and progress from the original checkpoint root.
+    Uses saved configuration and frozen data. Recovery preserves the serialized
+    optimizer, scheduler, learning rates and progress at an epoch boundary.
+    An already finished fit recreates its export without further training.
     """
     with tempfile.TemporaryDirectory(prefix="marin-draft-resume-") as temporary:
         workspace = Path(temporary)
         root = workspace / "run"
         config, record = restore_training_run(output, root)
         toolkit = _toolkit(workspace)
-        epoch = record["checkpoint"]["epoch"]
+        assert record.checkpoint is not None
+        epoch = record.checkpoint.epoch
         if epoch + 1 < config.epochs:
             initializer = _initializer(root / "checkpoints" / str(epoch), root, toolkit)
             _train(root, config, record, toolkit, initializer)
@@ -631,9 +668,11 @@ def draft_serving(output: str) -> Iterator[tuple[ServedModelConfig, VllmEngineCo
     Pass the pair to Marin's existing local_inference or IrisServiceConfig APIs
     inside an eight-H100 task. The serving export never selects the training stub.
     """
-    record = _read_json(output.rstrip("/") + "/run.json")
-    config = DraftTrainingConfig(**record["config"])
-    locator = ResolvedModelLocator(**record["export"])
+    record = _read_run(prefix_join(output, "run.json"))
+    config = record.config
+    locator = record.export
+    if locator is None:
+        raise ValueError("This run has no serving export")
     with tempfile.TemporaryDirectory(prefix="marin-draft-serve-") as temporary:
         draft = Path(temporary) / "draft"
         _stage_directory(locator.uri, draft)

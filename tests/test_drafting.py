@@ -3,16 +3,40 @@
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
-from marin.drafting import DraftTrainingConfig, _publish_checkpoint, prepare_coding_sample, restore_training_run
+from marin.drafting import (
+    DraftTrainingConfig,
+    _CompletedEpoch,
+    _publish_checkpoint,
+    _TrainingRun,
+    prepare_coding_sample,
+    restore_training_run,
+)
 
 
-def test_completed_epoch_survives_object_store_roundtrip(tmp_path):
+@pytest.fixture
+def training_run():
+    return _TrainingRun(
+        config=DraftTrainingConfig("target", "tokenizer", "revision", "prompts", "output", epochs=2),
+        tokenizer_sha256="unused",
+        target_config={},
+        target_objects={},
+        prompts_sha256="unused",
+        rollouts_sha256="unused",
+        generation={},
+        split={},
+        teacher_states={},
+        runtime={},
+        job_id=None,
+    )
+
+
+def test_completed_epoch_survives_object_store_roundtrip(tmp_path, training_run):
     """Recovery selects the published epoch despite a later interrupted upload."""
     root = tmp_path / "original"
     checkpoint = root / "checkpoints/0"
@@ -36,8 +60,8 @@ def test_completed_epoch_survives_object_store_roundtrip(tmp_path):
     (checkpoint / "model.safetensors").write_bytes(b"opaque model bytes")
     (root / "checkpoints/checkpoint_best").symlink_to("0", target_is_directory=True)
     remote = tmp_path / "object-store"
-    config = DraftTrainingConfig("target", "tokenizer", "revision", "prompts", str(remote), epochs=2)
-    record = {"config": asdict(config)}
+    config = replace(training_run.config, output=str(remote))
+    record = replace(training_run, config=config)
     _publish_checkpoint(root, config, record, 0)
     # Simulate loss of a worker during publication of the next epoch.
     (remote / "checkpoints/1").mkdir()
@@ -46,7 +70,7 @@ def test_completed_epoch_survives_object_store_roundtrip(tmp_path):
     restored = tmp_path / "new-worker"
     restored_config, restored_record = restore_training_run(str(remote), restored)
     assert restored_config == config
-    assert restored_record["checkpoint"]["global_step"] == 3
+    assert restored_record.checkpoint == _CompletedEpoch(0, 0, 3, 2.5)
     assert sorted(path.name for path in (restored / "checkpoints").iterdir()) == ["0", "checkpoint_best"]
     assert (restored / "checkpoints/checkpoint_best").resolve() == restored / "checkpoints/0"
     for original in checkpoint.iterdir():
@@ -61,18 +85,14 @@ def test_completed_epoch_survives_object_store_roundtrip(tmp_path):
         np.testing.assert_array_equal(np.load(restored / f"data/{name}-4.npy"), np.arange(4))
 
 
-def test_resume_requires_optimizer_state(tmp_path):
+def test_resume_requires_optimizer_state(tmp_path, training_run):
     source = tmp_path / "run"
     checkpoint = source / "checkpoints/0"
     checkpoint.mkdir(parents=True)
-    (source / "run.json").write_text(
-        json.dumps(
-            {
-                "config": asdict(DraftTrainingConfig("target", "tokenizer", "revision", "prompts", str(source))),
-                "checkpoint": {"epoch": 0},
-            }
-        )
+    record = replace(
+        training_run, config=replace(training_run.config, output=str(source)), checkpoint=_CompletedEpoch(0, 0, 3, 2.5)
     )
+    (source / "run.json").write_text(json.dumps(asdict(record)))
     (checkpoint / "config.json").write_text("{}")
     (checkpoint / "model.safetensors").write_bytes(b"serving weights alone")
     with pytest.raises(ValueError, match=r"optimizer_state_dict\.pt"):
