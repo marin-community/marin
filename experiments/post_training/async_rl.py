@@ -512,7 +512,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             max_retries=1,
             target_cluster=policy.cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=72,
+            coordinator_timeout_seconds=72 * 3600,
             # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
             # cannot write there.
             wandb_entity=None,

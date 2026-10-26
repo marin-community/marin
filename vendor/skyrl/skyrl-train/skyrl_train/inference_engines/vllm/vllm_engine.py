@@ -1975,6 +1975,15 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 assert isinstance(generator, (CompletionResponse, ErrorResponse))
             response = generator.model_dump()
             if isinstance(generator, ErrorResponse):
+                error = generator.error
+                logger.warning(
+                    "vLLM returned an error for {} request {}: code={} type={} message={}",
+                    endpoint,
+                    request_id,
+                    error.code,
+                    error.type,
+                    error.message,
+                )
                 response["request_id"] = request_id
                 response["error_category"] = "server_error"
                 return response

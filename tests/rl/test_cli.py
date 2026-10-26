@@ -42,7 +42,7 @@ def _execution() -> IrisSkyRLExecution:
         max_retries=2,
         target_cluster="cw-rno2a",
         parent_cluster_config="lib/iris/config/marin.yaml",
-        coordinator_timeout_hours=18,
+        coordinator_timeout_seconds=18 * 3600,
     )
 
 
@@ -63,6 +63,8 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
     assert request.timeout == Duration.from_hours(18)
+    # An execution without a preemption retry limit keeps fray's default.
+    assert request.max_retries_preemption == 100
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
     assert request.entrypoint.binary_entrypoint.args == [
