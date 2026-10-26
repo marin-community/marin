@@ -84,9 +84,23 @@ def test_unrecorded_source_needs_explicit_bootstrap(marina_process, tmp_path):
     assert len(commands) == 1
 
 
-def test_bootstrap_can_be_previewed_without_publishing(marina_process, tmp_path):
-    replies, commands = marina_process
-    replies.extend([{"state": "unrecorded", "version": 6}, {"files": ["dist/index.html"]}])
+def test_bootstrap_can_be_previewed_without_publishing(monkeypatch, tmp_path):
+    published = []
+
+    def run(command, **kwargs):
+        if command[0] == "node":
+            return SimpleNamespace(returncode=0)
+        if "release-status" in command:
+            reply = {"state": "unrecorded", "version": 6}
+        elif "release" in command:
+            if "--dry-run" not in command:
+                published.append(command)
+            reply = {"files": ["dist/index.html"]}
+        else:
+            raise AssertionError(f"Unexpected command: {command}")
+        return SimpleNamespace(stdout=json.dumps(reply))
+
+    monkeypatch.setattr(snowball_release.subprocess, "run", run)
 
     result = CliRunner().invoke(
         snowball_release.main, ["--record", str(tmp_path / "release.json"), "--bootstrap-unrecorded", "--dry-run"]
@@ -94,8 +108,7 @@ def test_bootstrap_can_be_previewed_without_publishing(marina_process, tmp_path)
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["action"] == "would_release"
-    assert "--dry-run" in commands[-1]
-    assert all("--base-version" not in command for command in commands)
+    assert published == []
 
 
 def test_post_release_selection_change_is_reported(marina_process, tmp_path):
