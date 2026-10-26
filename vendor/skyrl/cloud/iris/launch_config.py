@@ -272,9 +272,13 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
     checkpoint_export = config["run"]["mode"] == RunMode.CHECKPOINT_EXPORT
-    if config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
-        skyrl = {**skyrl, "entrypoint": RLEntrypoint.GENERATE}
-    plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
+    plan = (
+        derive_policy_export_role_plan(skyrl)
+        if checkpoint_export
+        else derive_role_plan(
+            skyrl, generate_only=config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+        )
+    )
     allocation = config["iris"]["allocation"]
     expected_nodes = derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:

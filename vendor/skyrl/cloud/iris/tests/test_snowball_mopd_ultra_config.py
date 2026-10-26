@@ -49,7 +49,7 @@ def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route(
 
 def test_snowball_mopd_smoke_needs_eight_nodes():
     config = yaml.safe_load(CONFIG.read_text())
-    plan = derive_role_plan(config)
+    plan = derive_role_plan(config, generate_only=False)
 
     assert derive_num_nodes(plan) == 8
 
