@@ -51,7 +51,9 @@ finishes fail separately from accuracy.
 ```sh
 python -m experiments.evaluation.serving_parity.compare \
   --arm h100=H100_PREFIX --arm v6e-8=V6E_PREFIX --arm v5p-8=V5P_PREFIX \
-  --reference REVIEWED_IMMUTABLE_PREFIX --output comparison.json
+  --reference REVIEWED_IMMUTABLE_PREFIX \
+  --reference-manifest REVIEWED_HASH_MANIFEST --reference-sha256 APPROVED_DIGEST \
+  --output comparison.json
 ```
 
 Require at least three distinct prefixes with distinct recorded hardware
@@ -61,7 +63,9 @@ frozen dataset manifest and evaluator-source identity must match; TPU peers must
 also use the same adopted pin. Every arm is compared with the reviewed frozen
 reference and every other arm.
 
-A reference requires explicit review. Never replace it automatically after a
+A reference requires explicit review of its hash manifest. The comparator checks
+the approved manifest digest and every archived artifact before scoring; a remote
+prefix alone is not an immutability guarantee. Never replace it automatically after a
 failed run. Initial thresholds are mean absolute logprob difference 0.025 pooled
 and 0.04 per position band, top-1 disagreement 0.03, and absolute combined-SEM
 accuracy z at most 2. They remain provisional until fresh calibration. Historical

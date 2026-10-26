@@ -5,6 +5,7 @@
 
 import argparse
 import dataclasses
+import hashlib
 import json
 from itertools import combinations
 from pathlib import Path
@@ -60,6 +61,26 @@ def validate_arms(arms: dict[str, str]) -> None:
         raise ValueError("Arms must represent distinct recorded hardware")
 
 
+def verify_reference(prefix: str, manifest_path: str, manifest_sha256: str) -> None:
+    """Verify the reviewed manifest digest and every referenced artifact before scoring."""
+    raw = StoragePath(manifest_path).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != manifest_sha256:
+        raise ValueError("Reference manifest differs from the approved digest")
+    manifest = json.loads(raw)
+    root = StoragePath(prefix)
+    if str(root).rstrip("/") != str(StoragePath(manifest["reference_prefix"])).rstrip("/"):
+        raise ValueError("Reference prefix differs from the approved manifest")
+    required = {"complete.json", "provenance.json", "teacher-1/0.json", *(f"{task}-items.json" for task in TASKS)}
+    if not required <= manifest["files"].keys():
+        raise ValueError("Reference manifest omits comparison artifacts")
+    for name, identity in manifest["files"].items():
+        if Path(name).is_absolute() or ".." in Path(name).parts:
+            raise ValueError("Reference artifact name must remain under its prefix")
+        content = (root / name).read_bytes()
+        if len(content) != identity["bytes"] or hashlib.sha256(content).hexdigest() != identity["sha256"]:
+            raise ValueError(f"Reference artifact changed: {name}")
+
+
 def read_sequence(path: StoragePath) -> ScoredSequence:
     row = json.loads(path.read_text())
     return ScoredSequence(row["case_id"], row["input_sha256"], tuple(ScoredToken(**x) for x in row["tokens"]))
@@ -101,6 +122,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", action="append", required=True, help="HARDWARE=artifact prefix")
     parser.add_argument("--reference", required=True, help="Reviewed immutable reference artifact prefix")
+    parser.add_argument("--reference-manifest", required=True, help="Reviewed artifact hash manifest")
+    parser.add_argument("--reference-sha256", required=True, help="Explicitly approved manifest digest")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -111,6 +134,7 @@ def main() -> None:
     try:
         validate_arms(arms)
         provenance(args.reference)
+        verify_reference(args.reference, args.reference_manifest, args.reference_sha256)
     except (ValueError, FileNotFoundError, KeyError) as error:
         reports["inputs"] = dict(
             status="INELIGIBLE" if isinstance(error, IneligibleStack) else "INCOMPLETE", reason=str(error)

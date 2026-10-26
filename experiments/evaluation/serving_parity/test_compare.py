@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 
 import pytest
 
-from experiments.evaluation.serving_parity.compare import IneligibleStack, compare_arms, validate_arms
+from experiments.evaluation.serving_parity.compare import IneligibleStack, compare_arms, validate_arms, verify_reference
 from experiments.evaluation.serving_parity.settings import TASKS, HardwareKind, frozen_items
 
 
@@ -92,3 +93,34 @@ def test_three_tpu_arms_cannot_replace_h100(tmp_path):
     }
     with pytest.raises(ValueError, match="Require H100"):
         validate_arms(arms)
+
+
+def test_reference_hash_manifest_rejects_changed_artifacts(tmp_path):
+    reference = artifact(tmp_path / "reference", "h100")
+    root = tmp_path / "reference"
+    for name in ("teacher-1/0.json", *(f"{task}-items.json" for task in TASKS)):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[]")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            dict(
+                reference_prefix=reference,
+                files={
+                    str(p.relative_to(root)): dict(
+                        bytes=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest()
+                    )
+                    for p in root.rglob("*")
+                    if p.is_file()
+                },
+            )
+        )
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    verify_reference(reference, str(manifest), digest)
+    (root / "teacher-1/0.json").write_text("changed")
+    with pytest.raises(ValueError, match="Reference artifact changed"):
+        verify_reference(reference, str(manifest), digest)
+    with pytest.raises(ValueError, match="approved digest"):
+        verify_reference(reference, str(manifest), "0" * 64)
