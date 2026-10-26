@@ -97,6 +97,29 @@ class SequenceKLRow:
     exact_kl: float | None = None
 
 
+@dataclass(frozen=True)
+class SequenceFlipRow:
+    """One scored position's greedy token against the reference's top-1.
+
+    ``reference_top1_logprob`` is the reference's own confidence at the position,
+    so summaries can report flip rates per reference-margin quartile.
+    """
+
+    sequence_id: str
+    position: int
+    reference_top1: int
+    candidate_top1: int
+    flipped: bool
+    reference_top1_logprob: float
+    candidate_top1_logprob: float
+    candidate_step: int
+    reference_id: str
+    candidate_id: str
+    probe_hash: str
+    token_type_tag: ProbeBucket
+    position_tag: int
+
+
 def _relative_entropy(probability: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
     """KL contribution per bin with the 0·log(0) = 0 convention (objective/teacher.py)."""
     positive = probability > 0

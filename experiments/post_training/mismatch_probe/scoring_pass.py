@@ -38,6 +38,7 @@ import torch
 from experiments.post_training.mismatch_probe.sequence_kl import (
     KLForm,
     ProbeBucket,
+    SequenceFlipRow,
     SequenceKLRow,
     binned_kl,
     exact_kl,
@@ -335,5 +336,43 @@ def read_rows_parquet(input_path: str | Path) -> list[SequenceKLRow]:
                 "token_type_tag": ProbeBucket(record["token_type_tag"]),
             }
         )
+        for record in table.to_pylist()
+    ]
+
+
+def write_flip_rows_parquet(rows: list[SequenceFlipRow], output_path: str | Path) -> int:
+    """One parquet file of SequenceFlipRow records; returns the row count."""
+    if not rows:
+        raise ValueError("refusing to write an empty parquet file")
+    schema = pa.schema(
+        [
+            ("sequence_id", pa.string()),
+            ("position", pa.int64()),
+            ("reference_top1", pa.int64()),
+            ("candidate_top1", pa.int64()),
+            ("flipped", pa.bool_()),
+            ("reference_top1_logprob", pa.float64()),
+            ("candidate_top1_logprob", pa.float64()),
+            ("candidate_step", pa.int64()),
+            ("reference_id", pa.string()),
+            ("candidate_id", pa.string()),
+            ("probe_hash", pa.string()),
+            ("token_type_tag", pa.string()),
+            ("position_tag", pa.int64()),
+        ]
+    )
+    records = [{**row.__dict__, "token_type_tag": row.token_type_tag.value} for row in rows]
+    table = pa.Table.from_pylist(records, schema=schema)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(output_path))
+    return len(rows)
+
+
+def read_flip_rows_parquet(input_path: str | Path) -> list[SequenceFlipRow]:
+    """The flip rows of one pass's parquet file, with the bucket back as its enum."""
+    table = pq.read_table(str(input_path))
+    return [
+        SequenceFlipRow(**{**record, "token_type_tag": ProbeBucket(record["token_type_tag"])})
         for record in table.to_pylist()
     ]

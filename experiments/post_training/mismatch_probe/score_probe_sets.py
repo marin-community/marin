@@ -24,7 +24,9 @@ Passes, each writing under ``<out>/<set>/``:
 - ``exact``: the seeded 1% position subsample scored with full-vocabulary KL by both
   models (C4), summarized against the binned rows at the same positions;
 - ``noise``: the reference model gathered on its own support with every group's rows
-  reversed, so each sequence lands on another rank beside other neighbours (C5).
+  reversed, so each sequence lands on another rank beside other neighbours (C5);
+- ``flips``: the candidate's own top-1 per scored position against the reference's,
+  reduced to ``SequenceFlipRow`` parquet (``flip-<label>-*.parquet``).
 
     python -m experiments.post_training.mismatch_probe.score_probe_sets reference \\
         --model-path /tmp/model/e-x --set P_X=s3://.../continuations/snowball-E_X/P_X.jsonl \\
@@ -53,9 +55,12 @@ from experiments.post_training.mismatch_probe.scoring_pass import (
     exact_rows_from_passes,
     kl_rows_from_passes,
     load_probe_sequences,
+    read_flip_rows_parquet,
     read_rows_parquet,
+    write_flip_rows_parquet,
     write_rows_parquet,
 )
+from experiments.post_training.mismatch_probe.sequence_kl import ProbeBucket, SequenceFlipRow
 
 DP_SIZE = 8
 ROWS_PER_GROUP = 64
@@ -424,6 +429,13 @@ def write_rows_shard(path: str, rows) -> None:
         handle.write(local.read_bytes())
 
 
+def write_flip_rows_shard(path: str, rows) -> None:
+    local = Path(tempfile.mkdtemp()) / Path(path).name
+    write_flip_rows_parquet(rows, local)
+    with fsspec.open(path, "wb") as handle:
+        handle.write(local.read_bytes())
+
+
 def _local_copy(path: str) -> Path:
     local = Path(tempfile.mkdtemp()) / Path(path).name
     with fsspec.open(path, "rb") as handle:
@@ -462,21 +474,129 @@ def summarize_kl(out: str, set_name: str, kind: str) -> dict[str, Any]:
     }
 
 
+def flips_pass(
+    model_path: str, label: str, step: int, sets: dict[str, str], reference_out: str, out: str, limit: int | None
+) -> None:
+    """Greedy-token flips per scored position: the candidate's top-1 against the reference's."""
+    with _worker(model_path) as policy:
+        for set_name, uri in sets.items():
+            with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
+                reference_meta = json.load(handle)
+            for index, group, real in group_sequences(stage_set(uri, limit)):
+                path = shard_path(out, set_name, f"flip-{label}", index, "parquet")
+                if exists(path):
+                    continue
+                reference = load_reference_shard(shard_path(reference_out, set_name, "reference", index, "npz"), group)
+                results = _score(policy, _batch(list(group)), top_k=1)
+                rows = flip_rows(
+                    group,
+                    reference,
+                    results,
+                    real=real,
+                    reference_id=reference_meta["model"],
+                    candidate_id=model_path,
+                    candidate_step=step,
+                )
+                write_flip_rows_shard(path, rows)
+            write_json(
+                f"{out.rstrip('/')}/{set_name}/flip-{label}.json", summarize_flips(out, set_name, f"flip-{label}")
+            )
+
+
+def flip_rows(
+    sequences: list[ProbeSequence],
+    reference: dict[str, np.ndarray],
+    results: dict[str, np.ndarray],
+    *,
+    real: int,
+    reference_id: str,
+    candidate_id: str,
+    candidate_step: int,
+) -> list[SequenceFlipRow]:
+    """Greedy-token flips of one group: the candidate's own top-1 against the reference's.
+
+    ``results`` is the candidate's top-1 pass over the same batch layout as the
+    stored reference shard; both are aligned with the model's logits positions,
+    where position t's distribution predicts the token at t+1.
+    """
+    rows: list[SequenceFlipRow] = []
+    padded_len = reference["topk_ids"].shape[1]
+    for row, sequence in enumerate(sequences[:real]):
+        positions = np.asarray(sequence.scored_positions(), dtype=np.int64)
+        if not len(positions):
+            continue
+        logits_positions = padded_len - len(sequence.token_ids) + positions - 1
+        reference_top1 = reference["topk_ids"][row, logits_positions, 0]
+        candidate_top1 = results["topk_ids"][row, logits_positions, 0]
+        probe_hash = sequence.probe_hash  # a sha256 over the whole sequence: once per sequence
+        for index, position in enumerate(positions.tolist()):
+            rows.append(
+                SequenceFlipRow(
+                    sequence_id=sequence.sample_id,
+                    position=position,
+                    reference_top1=int(reference_top1[index]),
+                    candidate_top1=int(candidate_top1[index]),
+                    flipped=bool(reference_top1[index] != candidate_top1[index]),
+                    reference_top1_logprob=float(reference["topk_logprobs"][row, logits_positions[index], 0]),
+                    candidate_top1_logprob=float(results["topk_logprobs"][row, logits_positions[index], 0]),
+                    candidate_step=candidate_step,
+                    reference_id=reference_id,
+                    candidate_id=candidate_id,
+                    probe_hash=probe_hash,
+                    token_type_tag=ProbeBucket(sequence.token_type_tags[position]),
+                    position_tag=sequence.position_tags[position],
+                )
+            )
+    return rows
+
+
+def summarize_flips(out: str, set_name: str, kind: str) -> dict[str, Any]:
+    """Flip rate of a set's shards, overall, per bucket, and per reference-margin quartile."""
+    flips: list[bool] = []
+    margins: list[float] = []
+    per_sequence: dict[str, list[bool]] = {}
+    per_bucket: dict[str, list[bool]] = {}
+    for path in _shards(out, set_name, kind):
+        for row in read_flip_rows_parquet(_local_copy(path)):
+            flips.append(row.flipped)
+            margins.append(row.reference_top1_logprob)
+            per_sequence.setdefault(row.sequence_id, []).append(row.flipped)
+            per_bucket.setdefault(row.token_type_tag.value, []).append(row.flipped)
+    quartile_edges = np.quantile(margins, [0.25, 0.5, 0.75]) if flips else np.zeros(3)
+    per_quartile: dict[str, list[bool]] = {}
+    for flip, margin in zip(flips, margins, strict=True):
+        quartile = int(np.searchsorted(quartile_edges, margin, side="right")) + 1
+        per_quartile.setdefault(f"q{quartile}", []).append(flip)
+
+    def rates(values: list[bool]) -> dict[str, Any]:
+        return {"positions": len(values), "flip_rate": float(np.mean(values))}
+
+    return {
+        "positions": len(flips),
+        "sequences": len(per_sequence),
+        "flip_rate": float(np.mean(flips)) if flips else 0.0,
+        "sequence_flip_rate": float(np.mean([np.mean(values) for values in per_sequence.values()])),
+        "buckets": {bucket: rates(values) for bucket, values in sorted(per_bucket.items())},
+        "reference_margin_quartiles": {quartile: rates(values) for quartile, values in sorted(per_quartile.items())},
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("reference", "candidate", "noise", "exact"):
+    for name in ("reference", "candidate", "noise", "exact", "flips"):
         command = commands.add_parser(name)
         command.add_argument("--set", dest="sets", action="append", required=True, help="SET=continuation jsonl uri")
         command.add_argument("--out", required=True)
         command.add_argument("--limit", type=int, default=None, help="score only each set's first N sequences")
-        if name in ("reference", "candidate", "noise"):
+        if name in ("reference", "candidate", "noise", "flips"):
             command.add_argument("--model-path", required=True)
-        if name in ("candidate", "noise"):
+        if name in ("candidate", "noise", "flips"):
             command.add_argument("--reference-out", required=True)
-        if name in ("candidate", "exact"):
+        if name in ("candidate", "exact", "flips"):
             command.add_argument("--label", required=True, help="names this candidate's shards")
-        if name == "candidate":
+        if name in ("candidate", "flips"):
             command.add_argument("--step", type=int, required=True)
         if name == "exact":
             command.add_argument("--reference-model", required=True)
@@ -489,6 +609,8 @@ def main() -> None:
         candidate_pass(args.model_path, args.label, args.step, sets, args.reference_out, args.out, args.limit)
     elif args.command == "noise":
         noise_pass(args.model_path, sets, args.reference_out, args.out, args.limit)
+    elif args.command == "flips":
+        flips_pass(args.model_path, args.label, args.step, sets, args.reference_out, args.out, args.limit)
     else:
         exact_pass(args.reference_model, args.candidate_model, args.label, sets, args.out, args.limit)
 
