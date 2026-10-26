@@ -4,8 +4,9 @@
 """LR0 startup/order only, through the first train_step boundary on four CPU processes.
 
 Seams: a local synthetic 502-tensor checkpoint and tokenizer; synthetic source,
-routing and gate inputs; local aliases for regional storage paths; a CPU host-slice
-mesh adapter and accelerator requirement; external Iris registry/resolver/completion
+routing and gate inputs; local aliases for regional storage paths; the CPU slice
+metadata property TrainerConfig.num_slices patched to jax.process_count(); a CPU
+host-slice mesh adapter and accelerator requirement; external Iris registry/resolver/completion
 fakes; synthetic device-memory observations; and a fixture-only evaluate policy that
 checks generated positions, zero drops, FP32 router dtypes and gathered memory.
 The real gate forward, input readers, audits, HF loader, precision guard, distributed
