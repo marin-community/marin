@@ -3,8 +3,7 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from enum import StrEnum
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
@@ -13,7 +12,12 @@ from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
-from verifyit.reasoning_markup import REASONING_DELIMITERS, ReasoningViolation, reasoning_span_violation
+from verifyit.reasoning_markup import (
+    REASONING_DELIMITERS,
+    ReasoningViolation,
+    first_reasoning_violation,
+    reasoning_span_violation,
+)
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -49,12 +53,6 @@ _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
 REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
-
-
-class _SpanState(StrEnum):
-    BEFORE = "before"
-    INSIDE = "inside"
-    AFTER = "after"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -230,27 +228,25 @@ def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, st
     return markers
 
 
-def _reasoning_violation_token(response_ids: Sequence[int], markers: Mapping[int, str]) -> int | None:
-    """Index of the first second-opening or stray-closing marker, or the last token of an unclosed span.
+def _reasoning_violation(
+    tokenizer: PreTrainedTokenizerBase, response_ids: Sequence[int], decoded: str, stop_reason: str
+) -> tuple[ReasoningViolation | None, int | None]:
+    """Classify a reply's reasoning span and locate the token where it goes wrong.
 
-    ``None`` when the one-token markers are well formed, i.e. the violation is in literal marker text.
+    An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
+    well formed, i.e. the violation is in literal marker text.
     """
-    closing_marker = dict(REASONING_DELIMITERS)
-    state = _SpanState.BEFORE
-    expected_close = None
-    for index, token in enumerate(response_ids):
-        marker = markers.get(token)
-        if marker is None:
-            continue
-        if marker in closing_marker and state == _SpanState.BEFORE:
-            state = _SpanState.INSIDE
-            expected_close = closing_marker[marker]
-        elif state == _SpanState.BEFORE or (state == _SpanState.INSIDE and marker == expected_close):
-            # A closing marker first closes a span that the chat template opened in the prompt.
-            state = _SpanState.AFTER
-        else:
-            return index
-    return len(response_ids) - 1 if state == _SpanState.INSIDE else None
+    violation = reasoning_span_violation(decoded, stop_reason)
+    if violation is None:
+        return None, None
+    markers = _reasoning_marker_tokens(tokenizer)
+    positions = [index for index, token in enumerate(response_ids) if token in markers]
+    error = first_reasoning_violation([markers[response_ids[index]] for index in positions], stop_reason)
+    if error is None:
+        return violation, None
+    if error.marker_index is None:
+        return violation, len(response_ids) - 1
+    return violation, positions[error.marker_index]
 
 
 class DirectModelClient:
@@ -446,11 +442,8 @@ class DirectModelClient:
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
-            reasoning_violation = reasoning_span_violation(decoded, stop_reason)
-            reasoning_violation_token = (
-                None
-                if reasoning_violation is None
-                else _reasoning_violation_token(response_ids, _reasoning_marker_tokens(tokenizer))
+            reasoning_violation, reasoning_violation_token = _reasoning_violation(
+                tokenizer, response_ids, decoded, stop_reason
             )
             return _ChatResult(
                 prompt_ids,
