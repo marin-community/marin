@@ -44,6 +44,7 @@ TASK_JSON_COLUMN = "task_json"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
 HELDOUT_SCHEMA_VERSION = "0.27"
 STRUCTURE_CLOSURE_DATASET = "structure-closure"
+NEMOTRON_COMPONENT_PREFIX = "MarinSkyRL:nemotron_ultra_rlvr1/"
 HELDOUT_FAMILIES = MappingProxyType(
     {
         "ultra_sft_step3200_calendar_v2": "calendar",
@@ -162,7 +163,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         raise ValueError("The heldout source must use the one-turn Shellbox contract")
     if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
         dataset = _grader_contract(task)["dataset"]
-        component = f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}"
+        component = f"{NEMOTRON_COMPONENT_PREFIX}{dataset}"
         if component not in grader_environments:
             raise ValueError(f"No admitted grader environment for {component}")
         task = task.model_copy(
@@ -221,7 +222,7 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
-    components = {f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}" for dataset in HELDOUT_FAMILIES}
+    components = {f"{NEMOTRON_COMPONENT_PREFIX}{dataset}" for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
         if source.source_id not in components:
