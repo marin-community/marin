@@ -452,9 +452,14 @@ State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 
 -- Failed jobs with errors
 SELECT job_id, error, exit_code FROM jobs WHERE state=5 ORDER BY submitted_at_ms DESC LIMIT 10;
 
--- Quota-blocked scale groups
-SELECT name, consecutive_failures, quota_reason FROM scaling_groups
-WHERE consecutive_failures > 0 OR quota_reason != '';
+-- Scale-group churn/backoff is NOT in this table. `scaling_groups.consecutive_failures`,
+-- `backoff_until_ms`, `quota_exceeded_until_ms` and `quota_reason` stopped being written when
+-- the in-memory AIMD BackoffDetector replaced persisted backoff (#5699/#5716); the rows hold
+-- whatever the last pre-AIMD controller wrote. Read live health from
+-- `iris rpc controller get-autoscaler-status` (per-group consecutive_failures, backoff_until,
+-- availability_status) and per-slice outcomes from the `iris.provisioning` finelog namespace:
+--   SELECT scale_group, outcome, count(*) FROM "iris.provisioning"
+--   WHERE ts > now() - INTERVAL 24 HOUR GROUP BY 1,2;
 
 -- Active slices (GCP)
 SELECT slice_id, lifecycle, scale_group, worker_ids FROM slices WHERE lifecycle='ready';
