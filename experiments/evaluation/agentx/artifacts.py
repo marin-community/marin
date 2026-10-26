@@ -22,6 +22,7 @@ def file_digest(path: Path) -> str:
 
 
 def read_record(uri: str) -> dict:
+    # Bucket routing supplies CoreWeave's endpoint and virtual-host addressing.
     filesystem, path = filesystem_for(uri)
     with filesystem.open(path, "rt") as stream:
         return json.load(stream)

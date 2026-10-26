@@ -98,6 +98,7 @@ def submit_coordinator(client: IrisClient, plan: dict):
 
 def pending_result(root: str) -> str | None:
     """Select completed output awaiting artifact delivery; never inspect or schedule jobs."""
+    # Use the bucket's configured S3 endpoint and addressing policy.
     filesystem, prefix = filesystem_for(prefix_join(root, "completed"))
     if not filesystem.exists(prefix):
         return None

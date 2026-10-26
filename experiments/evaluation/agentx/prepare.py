@@ -33,18 +33,13 @@ from experiments.evaluation.agentx.recipe import PREPARATION_VERSION, load_serie
 
 
 class PreparationManager(DatasetManager):
-    """Adapt AgentX 1.0.12's configure path for CPU-only preparation.
-
-    This release has no standalone preparation command. Its private configure
-    method and context-fit helper stay in this module; cache reads use its
-    public mmap API. Suppress service messages because no workers are running.
-    """
+    """Build AgentX's native workload on CPU without measurement workers."""
 
     @classmethod
     def get_service_type(cls):
         return DatasetManager.get_service_type()
 
-    async def publish(self, message) -> None:
+    async def publish(self, _message) -> None:
         # There are no measurement workers during CPU preparation. Native dataset
         # configuration and cache publication still run unchanged.
         pass
@@ -129,6 +124,7 @@ async def native_cache(series: dict, bundle: Path, *, check_only: bool) -> dict:
             # The released loader's existing revision field pins its HF read in
             # this CPU-only process. Reconstruction stays in the native loader.
             SemiAnalysisCCTracesWekaLoader.hf_revision = series["dataset_revision"]
+            # AgentX 1.0.12 has no public standalone preparation entrypoint.
             manager = PreparationManager(run=run)
             await manager._do_profile_configure(ProfileConfigureCommand(service_id="cpu-preparation"))
         hit = mmap_cache.lookup(key, compressed=False)

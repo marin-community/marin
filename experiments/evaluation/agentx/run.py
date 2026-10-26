@@ -24,7 +24,13 @@ from marin.inference.config import InferenceModelConfig, VllmCompilationCacheMod
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 
 from experiments.evaluation.agentx.processes import run_logged
-from experiments.evaluation.agentx.recipe import SERIES_PATH, benchmark_command, load_series, workload_environment
+from experiments.evaluation.agentx.recipe import (
+    SERIES_PATH,
+    PointManifest,
+    benchmark_command,
+    load_series,
+    workload_environment,
+)
 from experiments.evaluation.agentx.workload import check_native_cache, restore_workload
 
 SERVER_ENVIRONMENT_KEYS = (
@@ -46,7 +52,7 @@ def interrupt(signum: int, _frame: object) -> None:
     raise InterruptedError(f"Attempt interrupted by signal {signum}")
 
 
-def run_point(manifest: dict, output: Path, bundle: Path) -> None:
+def run_point(manifest: PointManifest, output: Path, bundle: Path) -> None:
     series = load_series()
     if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise RuntimeError("Series changed since submission")
@@ -192,7 +198,7 @@ def run_point(manifest: dict, output: Path, bundle: Path) -> None:
         print(f"AGENTX_ATTEMPT_STATUS {record['status']}", flush=True)
 
 
-def run(manifest: dict) -> None:
+def run(manifest: PointManifest) -> None:
     """Run one native Iris attempt, recording interruption and preparation failures."""
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)

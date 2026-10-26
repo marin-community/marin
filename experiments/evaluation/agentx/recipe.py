@@ -5,12 +5,25 @@
 
 import os
 from pathlib import Path
+from typing import TypedDict
 
 import yaml
 
 SERIES_PATH = Path(__file__).with_name("series.yaml")
 REQUIREMENTS_PATH = Path(__file__).with_name("requirements-harness.txt")
 PREPARATION_VERSION = 1
+
+
+class PointManifest(TypedDict):
+    """Pinned inputs and source identity persisted for one measurement point."""
+
+    series_sha256: str
+    recipe_fingerprint: str
+    profile: str
+    concurrency: int
+    vllm_release: dict
+    workload: dict
+    source: dict
 
 
 def load_series(path: Path = SERIES_PATH) -> dict:

@@ -16,13 +16,13 @@ from iris.resources.state import JobState, TaskState
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.agentx.artifacts import copy_file, file_digest, retain_artifacts, unpack, write_record
-from experiments.evaluation.agentx.recipe import SERIES_PATH, load_series, processor_package
+from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, load_series, processor_package
 
 logger = logging.getLogger(__name__)
 FAILURE_LOG_LINES = 100
 
 
-def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
+def validate_window(point: Path, manifest: PointManifest, attempt_uid: str) -> dict:
     """Keep incomplete, replaced and scenario-invalid windows out of the importer."""
     record = json.loads((point / "attempt.json").read_text())
     if record["status"] != "succeeded" or record["iris_attempt_uid"] != attempt_uid:
@@ -67,7 +67,7 @@ def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
     }
 
 
-def process_point(point: Path, manifest: dict, artifacts: Path) -> None:
+def process_point(point: Path, manifest: PointManifest, artifacts: Path) -> None:
     """Invoke the pinned upstream processor in a separate Python environment."""
     series = load_series()
     profile = manifest["profile"]
@@ -130,7 +130,7 @@ def process_point(point: Path, manifest: dict, artifacts: Path) -> None:
 
 def collect_terminal(
     status: JobStatus,
-    manifest: dict,
+    manifest: PointManifest,
     retention: str,
     work: Path,
     now: float,

@@ -13,11 +13,11 @@ from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.timing import Duration
 
-from experiments.evaluation.agentx.recipe import SERIES_PATH, load_series
+from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, load_series
 from experiments.evaluation.agentx.run import run
 
 
-def point_manifest(profile: str, concurrency: int, source: dict, workload: dict, release: dict) -> dict:
+def point_manifest(profile: str, concurrency: int, source: dict, workload: dict, release: dict) -> PointManifest:
     series = load_series()
     requirements = SERIES_PATH.with_name("requirements-harness.txt").read_bytes()
     recipe = {
@@ -37,7 +37,7 @@ def point_manifest(profile: str, concurrency: int, source: dict, workload: dict,
     }
 
 
-def submit_point(client: IrisClient, name: str, manifest: dict, priority: str):
+def submit_point(client: IrisClient, name: str, manifest: PointManifest, priority: str):
     """Submit a child on the coordinator's peer with native whole-attempt retries."""
     series = load_series()
     if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
