@@ -10,7 +10,6 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import IDENTITY
 from skyrl_train.utils.harbor_errors import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
-    retry_excluded_exception_types,
 )
 
 from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
@@ -143,26 +142,7 @@ REWARD_SHAPING_SCHEMA = SectionSchema(
         # falls back to its own defaults when unset.
         "loop_shaping": FieldMapping("loop_shaping", default=None),
         "loop_outcome_shaper": FieldMapping("loop_outcome_shaper", default=None),
-        # Loop-behavior reward shaping (Stage B / F5 + F4): the master gate for the
-        # per-token shaping channel + span tagger. Default False -> the runner
-        # emits NEITHER token_level_shaping NOR response_span_tags, so the
-        # TrajectoryBatch is byte-identical to today. When True, Stage B emits the
-        # channel as ZEROS (no-op) plus the span tags; Stages C/D fill the channel.
-        "enable_token_reward_channel": FieldMapping("enable_token_reward_channel", default=False),
-        # When True (and the channel is enabled) also emit F4 span tags. Separable
-        # so the tagger cost can be disabled independently. No-op when the channel
-        # is off.
-        "enable_span_tagging": FieldMapping("enable_span_tagging", default=True),
-        # Loop-behavior reward shaping (Stage C / F2 + F6): potential-based shaping
-        # of the EDIT-token span from the in-trajectory test-delta. Default False ->
-        # the channel ships Stage-B ZEROS (no-op, byte-identical). Requires
-        # enable_token_reward_channel + enable_span_tagging. PBS is policy-invariant
-        # (Ng 1999); the total shaping is bounded to ±pbs_max_total_shaping so the
-        # hidden-test outcome reward stays dominant.
-        "enable_pbs_shaping": FieldMapping("enable_pbs_shaping", default=False),
-        "pbs_gamma": FieldMapping("pbs_gamma", default=1.0),
-        "pbs_max_total_shaping": FieldMapping("pbs_max_total_shaping", default=0.3),
-        "pbs_potential_shape": FieldMapping("pbs_potential_shape", default="linear"),
+        "enable_span_tagging": FieldMapping("enable_span_tagging", default=False),
         # Truncation penalty: penalize generations that terminate at
         # max_generate_length rather than emitting a stop token. 0.0 == no-op
         # (byte-identical). A cap-truncated trial is otherwise scored
@@ -175,7 +155,7 @@ REWARD_SHAPING_SCHEMA = SectionSchema(
     }
 )
 
-# Error handling config fields (for RLOO-N advantage estimator)
+# Error handling config fields (for baseline advantage estimator)
 # Controls how different failure types are treated:
 # - "mask" exceptions: Excluded from baseline (neutral - infrastructure failures)
 # - "zero" exceptions: Included in baseline with reward=0 (agent failures)
@@ -184,7 +164,7 @@ REWARD_SHAPING_SCHEMA = SectionSchema(
 # here are explicit campaign overrides and therefore default empty.
 ERROR_HANDLING_SCHEMA = SectionSchema(
     fields={
-        # Enable RLOO-N style error handling (exclude infrastructure failures from baseline)
+        # Enable baseline style error handling (exclude infrastructure failures from baseline)
         "enable_error_classification": FieldMapping(
             "enable_error_classification",
             default=DEFAULT_ERROR_HANDLING_CONFIG.enable_error_classification,
@@ -327,16 +307,7 @@ class HarborConfigBuilder:
         return trial_fields
 
     def build_retry_config(self) -> RetryConfig:
-        """Build the shared worker retry policy.
-
-        Explicit and Harbor-default exclusions are combined with every exception
-        type that the shared taxonomy and campaign overrides classify as pass-through.
-        Pass-through failures are terminal results that may retain verifier output;
-        retrying would discard that result.
-
-        Returns:
-            RetryConfig with exponential backoff and resolved terminal exceptions.
-        """
+        """Build the configured retry bounds and exception filters."""
         retry_fields = {}
 
         for yaml_key, mapping in RETRY_SCHEMA.fields.items():
@@ -351,12 +322,7 @@ class HarborConfigBuilder:
                         value = {s.strip() for s in value.split(",") if s.strip()}
                 retry_fields[mapping.harbor_field] = value
 
-        retry_config = RetryConfig(**retry_fields)
-        excluded = retry_excluded_exception_types(
-            retry_config.exclude_exceptions,
-            self.get_error_handling_config(),
-        )
-        return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
+        return RetryConfig(**retry_fields)
 
     def get_n_concurrent_trials(self, default: int = 16) -> int:
         """
@@ -484,7 +450,7 @@ class HarborConfigBuilder:
         return config
 
     def get_error_handling_config(self) -> ErrorHandlingConfig:
-        """Build the validated RLOO-N treatment configuration."""
+        """Build the validated baseline treatment configuration."""
         config = {}
 
         for yaml_key, mapping in ERROR_HANDLING_SCHEMA.fields.items():

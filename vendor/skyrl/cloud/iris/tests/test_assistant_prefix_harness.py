@@ -62,7 +62,6 @@ def task_inputs():
             "backend": "vllm",
             "max_turns": 2,
             "max_input_length": 100,
-            "apply_overlong_filtering": False,
             "sampling_params": {
                 "max_generate_length": 10,
                 "temperature": 1.0,

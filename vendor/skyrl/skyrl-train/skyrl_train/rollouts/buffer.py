@@ -23,6 +23,7 @@ from skyrl_train.group_admission import (
     AdmissionRejection,
     GroupAdmissionPolicy,
     GroupAdmissionStalledError,
+    final_row_mask,
     TrainingGroupInvariantError,
 )
 from skyrl_train.rollout_observability import rollout_wait
@@ -109,7 +110,7 @@ class RolloutGroup:
 
 @dataclass(frozen=True)
 class GroupRewards:
-    """Per-sample rewards of one group: each sample's optimization reward total and its outcome reward.
+    """Final-trial optimization and outcome rewards of one prompt group.
 
     ``passed`` is whether any sample succeeded, by its verifier's verdict when it has one.
     """
@@ -120,10 +121,17 @@ class GroupRewards:
 
     @classmethod
     def from_batch(cls, batch: TrajectoryBatch) -> GroupRewards:
+        final = final_row_mask(batch)
+        outcomes = get_outcome_rewards(batch)
+        passes = get_trajectory_passes(batch)
         return cls(
-            optimization=tuple(NormalizedReward.from_output(reward).total for reward in batch["rewards"]),
-            outcome=tuple(get_outcome_rewards(batch)),
-            passed=any(get_trajectory_passes(batch)),
+            optimization=tuple(
+                NormalizedReward.from_output(reward).total
+                for reward, last in zip(batch["rewards"], final, strict=True)
+                if last
+            ),
+            outcome=tuple(reward for reward, last in zip(outcomes, final, strict=True) if last),
+            passed=any(passed for passed, last in zip(passes, final, strict=True) if last),
         )
 
 

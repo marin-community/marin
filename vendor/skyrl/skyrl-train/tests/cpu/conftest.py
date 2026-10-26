@@ -354,3 +354,28 @@ def fake_cuda(monkeypatch) -> FakeCuda:
     ):
         monkeypatch.setattr(torch.cuda, name, getattr(cuda, name))
     return cuda
+
+
+@pytest.fixture
+def rollout_group_batch_factory():
+    def build(rewards, *, exclude_from_baseline=None, steps_per_trial=None):
+        """One prompt group; each trial's intermediate steps carry zero reward and precede its final row."""
+        steps_per_trial = steps_per_trial or [1] * len(rewards)
+        batch = {key: [] for key in ("response_ids", "prompt_token_ids", "loss_masks", "rewards", "is_last_step")}
+        for steps, reward in zip(steps_per_trial, rewards, strict=True):
+            for step in range(steps):
+                final = step == steps - 1
+                batch["response_ids"].append([2])
+                batch["prompt_token_ids"].append([1])
+                batch["loss_masks"].append([1])
+                batch["rewards"].append(reward if final else 0.0)
+                batch["is_last_step"].append(final)
+        batch.update(
+            unshaped_rewards=list(batch["rewards"]),
+            stop_reasons=["stop"] * len(batch["rewards"]),
+            rollout_metrics={},
+            exclude_from_baseline=exclude_from_baseline,
+        )
+        return batch
+
+    return build

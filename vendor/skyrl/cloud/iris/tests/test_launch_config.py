@@ -147,20 +147,33 @@ def test_launch_rejects_terminal_export_without_request_callback(tmp_path):
         load_launch_config(path)
 
 
+def test_launch_rejects_think_weight_without_span_tags(tmp_path: Path) -> None:
+    raw = _raw_config()
+    raw["skyrl"]["trainer"]["algorithm"]["think_token_weight"] = 0.5
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError):
+        load_launch_config(path)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text,reward", [("#### 12", 1.0), ("#### 12\nMore reasoning.", 0.0)])
+@pytest.mark.parametrize(
+    "env_class,sessions,reward",
+    [("custom_math", {"custom_math": {"reward_method": "strict"}}, 1.0), ("gsm8k", {}, 0.0)],
+)
 async def test_custom_session_settings_reach_private_grading_through_the_launch_config(
-    tmp_path: Path, text: str, reward: float
+    tmp_path: Path, env_class: str, sessions: dict, reward: float
 ) -> None:
     raw = _raw_config()
-    raw["skyrl"]["environment"] = {"task_sessions": {"custom_math": {"reward_method": "final_line"}}}
+    text = "#### 12\nMore reasoning."
+    raw["skyrl"]["environment"] = {"task_sessions": sessions}
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
     config = load_launch_config(path)
     task = source_row_task(
         {
             "prompt": [{"role": "user", "content": "What is six plus six?"}],
-            "env_class": "custom_math",
+            "env_class": env_class,
             "reward_spec": {"ground_truth": "12"},
         },
         0,

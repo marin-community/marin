@@ -135,7 +135,6 @@ class TrajectoryBatch(TypedDict):
     rollout_policy_steps: Optional[List[np.ndarray]]
     teacher_evidence: Optional[TeacherEvidenceBatch]
     distillation: Optional[PreparedTeacherInput]
-    token_level_shaping: Optional[List[List[float]]]
     response_span_tags: Optional[List[List[int]]]
     trajectory_ids: Optional[List[TrajectoryID]]
     teacher_route_keys: Optional[List[str]]
