@@ -1,0 +1,187 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import random
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+from experiments.post_training.identity_opd import build_mix, launch
+from experiments.post_training.identity_opd.other_lab import FORMS, PRODUCTS, other_lab_questions
+
+# Products the third-person screens ask about; the training questions must not.
+SCREEN_PRODUCTS = (
+    "ChatGPT",
+    "GPT-4",
+    "DALL-E",
+    "Whisper",
+    "Sora",
+    "o1",
+    "GPT-3.5",
+    "Codex",
+    "Claude",
+    "Gemini",
+    "Bard",
+    "AlphaFold",
+    "BERT",
+    "Gemma",
+    "Llama",
+    "Mixtral",
+    "Grok",
+    "Copilot",
+    "Qwen",
+    "DeepSeek",
+    "Nemotron",
+    "OLMo",
+    "Stable Diffusion",
+    "Constitutional AI",
+)
+
+
+def test_other_lab_questions_are_unique_and_avoid_the_screens():
+    questions = other_lab_questions()
+    assert len(questions) == len(PRODUCTS) * len(FORMS)
+    assert len({q["id"] for q in questions}) == len({build_mix.normalize(q["text"]) for q in questions}) == 240
+    for q in questions:
+        assert not build_mix.BRAND.search(q["text"])
+        assert not any(re.search(rf"\b{re.escape(p)}\b", q["text"]) for p in SCREEN_PRODUCTS), q["text"]
+    makers = dict(PRODUCTS)
+    for q in questions[3::4]:
+        product, wrong = q["text"].removeprefix("Is ").removesuffix("?").split(" made by ")
+        assert makers[product] != wrong
+
+
+GLAIVE = {
+    "id": "c1",
+    "tools": json.dumps([{"type": "function", "function": {"name": "get_price", "parameters": {"type": "object"}}}]),
+    "conversations": [
+        {"from": "system", "value": "You are a function calling AI model. <tools>...</tools>"},
+        {"from": "human", "value": "Price of Apple?"},
+        {"from": "gpt", "value": '<tool_call>\n{"name": "get_price", "arguments": {"company": "Apple"}}\n</tool_call>'},
+        {"from": "tool", "value": '<tool_response>\n{"name": "get_price", "content": {"price": 150}}\n</tool_response>'},
+        {"from": "gpt", "value": "Apple is at 150."},
+        {"from": "human", "value": "And Microsoft?"},
+        {
+            "from": "gpt",
+            "value": '<tool_call>\n{"name": "get_price", "arguments": {"company": "Microsoft"}}\n</tool_call>',
+        },
+    ],
+}
+
+
+def test_tool_conversations_become_native_chat_messages():
+    messages = build_mix.tool_messages(GLAIVE)
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant", "user", "assistant"]
+    assert messages[1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_price", "arguments": '{"company": "Apple"}'}}
+        ],
+    }
+    assert messages[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"price": 150}'}
+    assert messages[5]["tool_calls"][0]["id"] == "call_2"
+
+
+def test_tool_cuts_are_labelled_by_the_next_assistant_turn():
+    cuts = build_mix.tool_cuts(build_mix.tool_messages(GLAIVE))
+    assert [(kind, len(prompt)) for kind, prompt in cuts] == [("first_call", 1), ("reply", 3), ("call_after_result", 5)]
+
+
+def test_bfcl_function_names_and_8_grams_reject_conversations(tmp_path):
+    (tmp_path / "bfcl-a.md").write_text(
+        "# Task\nwhat is the price of apple stock today in us dollars please\n## Available Functions\n### get_price\n"
+    )
+    clean = {**GLAIVE, "id": "c2", "tools": GLAIVE["tools"].replace("get_price", "lookup_price")}
+    rejected: list = []
+    with pytest.raises(ValueError, match="tool call_after_result: 0 conversations"):
+        build_mix.tool_rows([GLAIVE, clean], tmp_path, random.Random(0), rejected)
+    assert [r["id"] for r in rejected] == ["c1"]
+    assert "BFCL function name" in rejected[0]["reason"]
+
+
+def test_identity_rows_keep_modes_and_never_reuse_a_prompt(monkeypatch):
+    monkeypatch.setattr(build_mix, "STEPS", 1)
+    monkeypatch.setattr(build_mix, "PER_BATCH", {**build_mix.PER_BATCH, "identity": 4})
+    pool = []
+    for i in range(6):
+        for thinking in (True, False):
+            pool.append(
+                {
+                    "prompt": [{"role": "user", "content": f"who made you, version {i}?"}],
+                    "teacher_route": f"identity_{'thinking' if thinking else 'nonthinking'}",
+                    "chat_template_kwargs": {"enable_thinking": thinking},
+                    "data_source": "pool",
+                }
+            )
+    pool.append({**pool[0], "teacher_route": "preservation_thinking"})
+    rejected: list = []
+    rows = build_mix.identity_rows(pool, {build_mix.normalize("who made you, version 3?")}, random.Random(0), rejected)
+    texts = [r["prompt"][0]["content"] for r in rows]
+    assert len(texts) == len(set(texts)) == 4
+    assert sorted(r["chat_template_kwargs"]["enable_thinking"] for r in rows) == [False, False, True, True]
+    assert all("version 3" not in t for t in texts)
+    assert len(rejected) == 2
+
+
+def test_recipe_routes_cover_the_mix_and_fill_a_batch():
+    config = yaml.safe_load(launch.RECIPE.read_text())
+    weights = config["data"]["sampling"]["domain_weights"]
+    routes = config["teacher_routing"]["opd"]["routes"]
+    assert (
+        set(weights)
+        == set(routes)
+        == {f"{family}_{mode}" for family in build_mix.PER_BATCH for mode in ("thinking", "nonthinking")}
+    )
+    assert sum(weights.values()) == launch.ROLE_PLAN.train_batch_size
+    for family, count in build_mix.PER_BATCH.items():
+        assert weights[f"{family}_thinking"] + weights[f"{family}_nonthinking"] == count
+        assert routes[f"{family}_thinking"]["teacher"] == build_mix.TEACHER[family]
+
+
+def test_dry_arm_only_changes_lr_steps_probe_and_saves():
+    train, dry = yaml.safe_load(launch.recipe("train")), yaml.safe_load(launch.recipe("dry"))
+    assert dry["trainer"]["policy"]["optimizer_config"]["lr"] == 0.0
+    assert dry["trainer"]["max_steps"] == 2
+    assert dry["trainer"]["mismatch_probe"]["updates"] == 2
+    dry["trainer"]["policy"]["optimizer_config"]["lr"] = train["trainer"]["policy"]["optimizer_config"]["lr"]
+    for key in ("max_steps", "ckpt_interval", "hf_save_interval", "callbacks", "mismatch_probe"):
+        train["trainer"].pop(key, None)
+        dry["trainer"].pop(key, None)
+    assert train == dry
+
+
+V01_TOKENIZER = (
+    "~/.cache/huggingface/hub/models--open-athena--Marin-Snowball-67B-A2B-v0.1/snapshots/"
+    "adc0078a19a4383bc998fcdb43867b3360baf5f3"
+)
+
+
+def test_identity_teacher_sees_the_template_system_message_on_plain_and_tool_rows():
+    path = Path(V01_TOKENIZER).expanduser()
+    if not path.exists():
+        pytest.skip("v0.1 tokenizer is not in the local Hugging Face cache")
+    from transformers import AutoTokenizer  # noqa: PLC0415
+
+    from experiments.post_training.identity_opd import teacher_insertion  # noqa: PLC0415
+
+    tokenizer = AutoTokenizer.from_pretrained(path)
+    plain = build_mix.row([{"role": "user", "content": "Who are you?"}], "identity", False, "test", "p")
+    tool_prompt = build_mix.tool_cuts(build_mix.tool_messages(GLAIVE))[-1][1]
+    tool = {**build_mix.row(tool_prompt, "tool", True, "test", "t"), "tools": GLAIVE["tools"]}
+    rows = [{**r, "chat_template_kwargs": json.dumps(r["chat_template_kwargs"])} for r in (plain, tool)]
+    result = teacher_insertion.check(tokenizer, rows, {"identity_nonthinking", "tool_thinking"})
+    assert result["rows_checked"] == 2
+    plain_teacher = result["examples"]["identity_nonthinking"]["teacher"]
+    tool_teacher = result["examples"]["tool_thinking"]["teacher"]
+    assert plain_teacher.startswith(
+        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>Reasoning: /nothink<|eot_id|>"
+        "<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball, an AI model created by Open Athena."
+    )
+    header, rest = tool_teacher.split("<|eot_id|>", 1)
+    assert header.startswith("<|begin_of_text|><|start_header_id|>system<|end_header_id|>Reasoning: /think")
+    assert '"name": "get_price"' in header
+    assert rest.startswith("<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball")

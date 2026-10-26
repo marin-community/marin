@@ -1,0 +1,174 @@
+# On-policy distillation of Snowball identity from the 16-update context-distillation checkpoint.
+#
+# Base: the masking-control arm of the identity OPD runs (open-athena/Marin-Snowball-OPD-Results @ 030681b21f20,
+# configs/mask-ablation-control/config.yaml). Changes from it:
+# - teachers: v0.1 (adc0078a) for both. "identity" adds the identity system prompt through prompt_insertions;
+#   "plain" has none. The control arm's identity teacher was v0.1.1.
+# - four prompt families with their own routes (identity, otherlab, general, tool) in place of
+#   identity / identity_followup / preservation; each row carries its own thinking mode and tools.
+# - no evaluation or reference_validation callback, no opd_token_mask or frozen_token_ids (not on this tree; the
+#   control arm's values were null and empty).
+# - rollout logprobs are vLLM processed logprobs, so the dry run's mismatch probe and this run sample alike.
+# - one epoch over the frozen 1,280-row mix: 20 updates of 64.
+entrypoint: standard
+
+context_budget:
+  request_window_tokens: 12288
+  max_new_tokens_per_turn: 4096
+  max_turns: 1
+
+environment:
+  env_class: prompt_only
+
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  offload_optimizer_during_rollouts: true
+  gradient_checkpointing: true
+  algorithm:
+    advantage_estimator: uniform
+    policy_loss_type: importance_sampling
+    advantage_batch_normalize: false
+    use_kl_loss: false
+    use_kl_in_reward: false
+    use_entropy_loss: false
+    loss_reduction: sequence_mean
+    distillation:
+      objective: sampled_reverse_kl
+      routing_plan: opd
+      coefficient: 1.0
+      reward_mode: replace
+      advantage_clip: 5.0
+  rollout_buffer:
+    max_staleness_steps: 0
+    batch_policy: full_batch
+  epochs: 1
+  update_epochs_per_batch: 1
+  eval_before_train: false
+  eval_interval: -1
+  resume_mode: none
+  logger: wandb
+  project_name: opd-identity-cd16
+  policy:
+    grug_query_bias_update_mode: frozen
+    optimizer_config:
+      optimizer: AdamW
+      lr: 3.0e-06
+      adam_betas: [0.9, 0.95]
+      weight_decay: 0.0
+      max_grad_norm: 0.5
+      num_warmup_steps: 3
+      scheduler: constant_with_warmup
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  micro_forward_batch_size_per_gpu: 1
+  max_steps: 20
+  ckpt_interval: 20
+  hf_save_interval: 20
+  hf_export_checkpoint: latest
+  callbacks:
+    - type: checkpoint
+      save_steps: 20
+      save_on_train_end: true
+    - type: hf_model_save
+      save_steps: 20
+      save_on_train_end: true
+    - type: logging
+    - type: progress
+
+generator:
+  model_loading: stage_local
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  gpu_memory_utilization: 0.75
+  enforce_eager: false
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+    logprobs: 0
+  engine_init_kwargs:
+    logprobs_mode: processed_logprobs
+    generation_config: vllm
+  inference_engine_pipeline_parallel_size: 1
+
+teachers:
+  identity:
+    source: local_inference
+    placement: pinned
+    backend: vllm
+    evidence: chosen_token
+    model:
+      path: open-athena/Marin-Snowball-67B-A2B-v0.1
+      revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+    resources:
+      num_nodes: 1
+      gpus_per_node: 8
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      expert_parallel_size: 8
+      colocation_group: teacher_identity
+      gpu_memory_utilization: 0.75
+    # "You are Marin Snowball, an AI model created by Open Athena." as a system message, inserted after the
+    # template's system header (which lists the row's tools, if any). Built and checked against the template's
+    # own system-message rendering by experiments/post_training/identity_opd/teacher_insertion.py.
+    prompt_insertions:
+      - after_prefix: [128000, 128006, 9125, 128007]
+        after_marker: [128009, 128006]
+        tokens: [9125, 128007, 198, 2675, 527, 64477, 19435, 4047, 11, 459, 15592, 1646, 3549, 555, 5377, 79789, 13,
+          128009, 198, 128006]
+  plain:
+    source: local_inference
+    placement: pinned
+    backend: vllm
+    evidence: chosen_token
+    model:
+      path: open-athena/Marin-Snowball-67B-A2B-v0.1
+      revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+    resources:
+      num_nodes: 1
+      gpus_per_node: 8
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      expert_parallel_size: 8
+      colocation_group: teacher_plain
+      gpu_memory_utilization: 0.75
+
+teacher_routing:
+  opd:
+    revision: identity-cd16-20261026-r1
+    routes:
+      identity_thinking: {teacher: identity, weight: 1.0}
+      identity_nonthinking: {teacher: identity, weight: 1.0}
+      tool_thinking: {teacher: identity, weight: 1.0}
+      tool_nonthinking: {teacher: identity, weight: 1.0}
+      otherlab_thinking: {teacher: plain, weight: 1.0}
+      otherlab_nonthinking: {teacher: plain, weight: 1.0}
+      general_thinking: {teacher: plain, weight: 1.0}
+      general_nonthinking: {teacher: plain, weight: 1.0}
+
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+  sampling:
+    kind: domain-weighted
+    seed: 20261026
+    # Per-batch counts out of 64.
+    domain_weights:
+      identity_thinking: 8.0
+      identity_nonthinking: 8.0
+      otherlab_thinking: 6.0
+      otherlab_nonthinking: 6.0
+      general_thinking: 10.0
+      general_nonthinking: 10.0
+      tool_thinking: 8.0
+      tool_nonthinking: 8.0

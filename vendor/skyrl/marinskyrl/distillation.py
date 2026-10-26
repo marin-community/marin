@@ -91,10 +91,16 @@ class TeacherResourceSpec:
 
 @dataclass(frozen=True)
 class TeacherPromptInsertion:
-    """Insert teacher-only context after an exact token prefix."""
+    """Insert teacher-only context after an exact token prefix.
+
+    With ``after_marker``, the rule still matches on ``after_prefix`` but inserts after the first occurrence of
+    the marker that follows the prefix. That reaches the end of a template header whose length varies by row,
+    e.g. a system header that lists each row's tools.
+    """
 
     after_prefix: tuple[int, ...]
     tokens: tuple[int, ...]
+    after_marker: tuple[int, ...] = ()
 
 
 def conditioned_teacher_prompt(prompt: list[int], insertions: tuple[TeacherPromptInsertion, ...]) -> list[int]:
@@ -105,7 +111,16 @@ def conditioned_teacher_prompt(prompt: list[int], insertions: tuple[TeacherPromp
     if len(matching) != 1:
         raise ValueError("teacher prompt must match exactly one insertion prefix")
     rule = matching[0]
-    return [*rule.after_prefix, *rule.tokens, *prompt[len(rule.after_prefix) :]]
+    at = len(rule.after_prefix)
+    if rule.after_marker:
+        width = len(rule.after_marker)
+        found = next(
+            (i for i in range(at, len(prompt) - width + 1) if tuple(prompt[i : i + width]) == rule.after_marker), None
+        )
+        if found is None:
+            raise ValueError("teacher prompt has no insertion marker after its prefix")
+        at = found + width
+    return [*prompt[:at], *rule.tokens, *prompt[at:]]
 
 
 def max_insertion_length(insertions: tuple[TeacherPromptInsertion, ...]) -> int:
@@ -475,9 +490,11 @@ def _tokenizer_fingerprint(config: Mapping[str, object], path: str) -> str:
 
 def _teacher_prompt_insertion(raw: object, path: str) -> TeacherPromptInsertion:
     config = _mapping(raw, path)
-    _reject_unknown(config, frozenset({"after_prefix", "tokens"}), path)
+    _reject_unknown(config, frozenset({"after_prefix", "tokens", "after_marker"}), path)
     values = {}
-    for key in ("after_prefix", "tokens"):
+    for key in ("after_prefix", "tokens", "after_marker"):
+        if key == "after_marker" and key not in config:
+            continue
         row = config.get(key)
         if not isinstance(row, (list, tuple)) or not row:
             raise ValueError(f"{path}.{key} must be a non-empty token sequence")
