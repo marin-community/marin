@@ -14,6 +14,8 @@ import threading
 import time
 from pathlib import Path
 
+RAY_LOG_TAIL_CHARS = 12000
+
 
 def ray_start_command(*, host: str, address: str, leader: bool, chips: int, ports: dict[str, int]) -> list[str]:
     """Reserve fixed Ray listeners through Iris; let the kernel pick worker ports."""
@@ -80,7 +82,7 @@ def main() -> None:
 
     def check_alive() -> None:
         if process.poll() is not None:
-            raise RuntimeError(f"Ray start exited {process.returncode}:\n{log_path.read_text()[-12000:]}")
+            raise RuntimeError(f"Ray start exited {process.returncode}:\n{log_path.read_text()[-RAY_LOG_TAIL_CHARS:]}")
         if stopped.is_set():
             raise InterruptedError("Ray node stopped")
 
