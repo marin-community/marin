@@ -6,12 +6,11 @@
 The runner calls ``memoized`` for each step with the step's ``RLEnvBuildStepKey``. When the store
 holds a memo under that key, ``memoized`` decodes the stored output and the step does not run.
 Otherwise ``memoized`` awaits the step and stores its output. The key covers the step's own
-source, the source of an output type defined in the step's module, the content of each input, and
-the model, so anything else a step relies on has to change with ``SDK_VERSION``. An output type
-imported from a library, such as ``TaskSpec``, falls under ``SDK_VERSION`` too. When a step body
-reads a helper or a constant defined elsewhere, editing that helper leaves the key as it was.
-``stage30_author.loader`` therefore refuses an authored program with helpers or constants beside
-its steps and output types, and a library change of that kind bumps ``SDK_VERSION``.
+source, referenced module-local helpers, constants and classes, the content of each input, and
+the model. Imported library dependencies, including output types such as ``TaskSpec``, fall under
+``SDK_VERSION``: editing those dependencies requires a version bump to invalidate old keys.
+Authored programs remain restricted by ``stage30_author.loader`` to steps and output types;
+the recursive digest also covers library-authored steps.
 
 ``RLEnvBuildStepStore`` reads and writes through rigging's ``StoragePath``, so ``root`` may be a
 local path or an object-store URL. Under it the store keeps:

@@ -1374,7 +1374,7 @@ class AgenticAuthor:
         revision: Revision | None,
         author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
-        """Run sessions for ``context``'s round until one submits, and return the submitted program.
+        """Run one authoring session for ``context``'s round and return its submitted program.
 
         The sessions work in ``rounds/<n>/agentic/`` under ``context.workpiece_dir``. ``author_state``
         does not reach them. ``proposal`` is the one the round builds, as declared when ``revision`` answers
@@ -1385,7 +1385,7 @@ class AgenticAuthor:
             ModelUnavailable: the model or an in-session build or grade ran out of retries.
             BuildInfrastructureFailure: the host cannot provide the proposal's solver machine
                 (``machine_available``), before a session starts or writes a record; or the host failed an
-                in-session load, or a build or grade past its retries.
+                in-session load, or a build or grade past its retries; or the session ended without submitting.
             BuildExpired: an in-session build ran past a wall, step or grader clock.
         """
         build = self.builds(context, proposal)

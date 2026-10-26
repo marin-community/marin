@@ -37,8 +37,8 @@ frame where it was raised, then its type and message), with the child's tracebac
 exits without a result raises
 ``BuildInfrastructureFailure`` with cause ``BUILD_PROCESS`` and the end of its log.
 
-The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver behind an Iris relay
-resolves the relay's endpoint for each request, so every build starts wherever the relay is now.
+The child calls the model at ``BuildModelConfig.base_url`` unless ``relay_job`` is set. With a relay
+job, it resolves the relay's endpoint for each request and can rediscover a changed endpoint.
 With ``BuildServiceConfig.image_cluster`` set, the child publishes images with an
 ``IrisImageBuilder`` that submits its jobs to ``controller_url`` and pushes with the credential it
 parses from ``registry_credential_env`` when it starts. The child reads no secret store, so the host
