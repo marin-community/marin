@@ -52,7 +52,7 @@ def test_empty_settings_do_not_clear_existing_mapping_defaults(tmp_path):
 @pytest.mark.parametrize(
     "key,error",
     [
-        ("seed", "trainer.seed.*\\n.*Extra inputs"),
+        ("seed", "trainer.seed: the launch document"),
         ("unknown_backend", "trainer.unknown_backend.*\\n.*Extra inputs"),
     ],
 )
