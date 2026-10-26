@@ -3,7 +3,9 @@
 This directory inventories the first source candidates and task seeds for testing
 beta's LLM-judge and LLM-corrector RL paths. The tasks are intentionally
 open-ended scientific analyses. The source notebooks ground reference answers and
-rubrics; they are not executable verifiers.
+rubrics; they are not executable verifiers. The generic architecture, trust
+boundaries, reward contract, decision recap, and remaining questions are in
+[`../open_ended_design.md`](../open_ended_design.md).
 
 ## Source
 
