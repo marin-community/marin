@@ -283,10 +283,8 @@ class InferenceEngineClient(InferenceEngineInterface):
         sampling_params = input_batch.get("sampling_params")
         per_prompt_sampling_params = input_batch.get("sampling_params_per_prompt")
 
-        if (prompts is None and prompt_token_ids is None) or (prompts is not None and prompt_token_ids is not None):
-            raise ValueError("Either `prompts` or `prompt_token_ids` must be provided, but not both.")
-        if prompt_token_ids is None:
-            raise ValueError("prompt_token_ids must be provided.")
+        if prompt_token_ids is None or prompts is not None:
+            raise ValueError("prompt_token_ids must be provided without prompts.")
 
         num_prompts = len(prompt_token_ids)
         if per_prompt_sampling_params is not None and len(per_prompt_sampling_params) != num_prompts:

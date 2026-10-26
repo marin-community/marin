@@ -143,7 +143,7 @@ def checkpoint_export_launch_config(
 
     # Export is policy-only. Keep the role-plan inputs internally consistent so
     # launch validation derives exactly the saved policy gang, without reserving
-    # rollout/reference/critic/teacher bundles that the export entrypoint never uses.
+    # rollout/reference/teacher bundles that the export entrypoint never uses.
     config.skyrl.trainer.placement.colocate_all = True
     config.skyrl.trainer.placement.colocate_policy_ref = True
     config.skyrl.trainer.offload_optimizer_during_rollouts = False

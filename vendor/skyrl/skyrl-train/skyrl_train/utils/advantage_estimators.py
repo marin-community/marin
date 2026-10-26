@@ -410,14 +410,12 @@ def compute_advantages_and_returns(
     index: np.ndarray,
     adv_estimator: AdvantageEstimator,
     config: DictConfig,
-    values: Optional[torch.Tensor] = None,
     grpo_norm_by_std: bool = True,
     gamma=1.0,
-    lambd=1.0,
     exclude_from_baseline: Optional[np.ndarray] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Dispatch policy advantages; values and lambd are unused."""
+    """Dispatch policy advantages to the configured estimator."""
     estimator_func = AdvantageEstimatorRegistry.get(adv_estimator)
 
     return estimator_func(

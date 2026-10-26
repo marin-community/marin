@@ -87,8 +87,6 @@ trainer:
     # values as generic non-policy capacity; they must describe the active reference role and its bundle.
     ref_num_nodes: 1
     ref_num_gpus_per_node: 4
-    # PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
-    # rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong.
     # PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
     policy_per_gpu_bundles: false
     # PLACEMENT-SENSITIVE: this binds policy actors to Ray-assigned physical GPU IDs and is valid only with the

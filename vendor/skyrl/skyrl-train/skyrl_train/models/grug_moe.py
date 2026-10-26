@@ -38,7 +38,6 @@ from skyrl_train.utils.flash_attention import (
 
 
 GRUG_MOE_MODEL_TYPE = "grug_moe"
-GRUG_EP_COMM_BACKEND = "torch"
 GRUG_ROUTER_BIAS_SUFFIX = ".mlp.router.bias"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"

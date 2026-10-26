@@ -7,10 +7,10 @@ licensed under Apache 2.0.
 from __future__ import annotations
 
 from typing import Optional, Tuple
-from omegaconf import DictConfig
 
 import torch
 from jaxtyping import Float
+from omegaconf import DictConfig
 
 from skyrl_train.config.objective_spec import KLEstimator
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP, masked_mean

@@ -621,15 +621,7 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
 
 
 def validate_generator_cfg(cfg: DictConfig):
-    """Validates the correctness of generator-related config.
-
-    Args:
-        cfg (DictConfig): config to validate
-
-    Raises:
-        NotImplementedError: If a generation feature is unsupported.
-        ValueError: when cfg.generator.sampling_params.logprobs > 0
-    """
+    """Validate generation limits, sampling and trajectory settings."""
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))

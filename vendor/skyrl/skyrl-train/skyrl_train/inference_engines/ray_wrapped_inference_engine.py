@@ -901,10 +901,7 @@ def create_ray_wrapped_inference_engines(
 
         # Wait for every engine worker before policy weight-sync initialization.
         startup_refs = []
-        if verify_workers:
-            # The placement report is also the readiness barrier.
-            startup_refs = [engine.inference_engine_actor.report_engine_placement.remote() for engine in engines]
-        elif not inference_engine_enable_sleep:
+        if not inference_engine_enable_sleep:
             startup_refs = [engine.inference_engine_actor.report_engine_placement.remote() for engine in engines]
 
         if inference_engine_enable_sleep:

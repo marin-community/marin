@@ -14,7 +14,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from cloud.iris import training_driver, task_runtime
+from cloud.iris import task_runtime, training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -22,9 +22,9 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
-from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
-from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
+from skyrl_train.dataset.tasks import source_row_task
+from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 
 
 def _raw_config() -> dict[str, Any]:
@@ -519,3 +519,36 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
         "model": "org/tokenizer",
         "revision": revision,
     }
+
+
+def test_loaded_launch_policy_revision_selects_downloaded_weights(tmp_path, monkeypatch):
+    revision = "b" * 40
+    raw = _raw_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": revision,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": "c" * 40,
+    }
+    raw["runtime"]["task_env"] = {"HF_HUB_OFFLINE": "1"}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+    downloaded = tmp_path / "policy-cache"
+
+    def download(model_id, *, revision, allow_patterns):
+        downloaded.mkdir()
+        (downloaded / "config.json").write_text(json.dumps({"model": model_id, "revision": revision}))
+        return str(downloaded)
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    args = task_runtime._runtime_namespace(config)
+    task_runtime.stage_model(args.prestage_model, revision=args.model_revision or None)
+    trainer_config = task_runtime._write_final_config(
+        config, policy_model=None, policy_tokenizer=None, draft_model=None
+    )
+
+    assert json.loads((downloaded / "config.json").read_text()) == {"model": "org/policy", "revision": revision}
+    assert OmegaConf.load(trainer_config).skyrl.trainer.policy.model.revision == revision

@@ -110,6 +110,7 @@ def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture, use_ent
     cfg.trainer.micro_train_batch_size_per_gpu = 1
     batch = get_test_training_batch(4)
     if use_entropy_loss:
+        cfg.trainer.algorithm.use_kl_loss = False
         batch["advantages"].zero_()
     batch.metadata["global_step"] = 0
 

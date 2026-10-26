@@ -254,7 +254,6 @@ class ProbeCollector:
             if self.source_manifest is None:
                 trajectory = trainer.postprocess_trajectory_batch(trajectory, uids)
             training_input = trainer.convert_to_training_input(trajectory, uids)
-            training_input["values"] = None
             if self.source_manifest is None:
                 training_input = trainer.compute_advantages_and_returns(training_input)
         finally:

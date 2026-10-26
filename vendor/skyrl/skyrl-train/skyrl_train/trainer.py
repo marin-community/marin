@@ -2769,7 +2769,6 @@ class RayPPOTrainer:
     ):
         """
         Compute policy and reference log probabilities for the training batch.
-        and then calculate the kl divergence between the action log probs and the base action log probs.
 
         Expects:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]

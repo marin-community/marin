@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sys
-
-from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import create_default_callbacks
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import create_default_callbacks
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
