@@ -41,6 +41,18 @@ def evaluate(implementation, mode, rows, order, inverse, weights, gradient):
     return output, *backward(gradient)
 
 
+def routing_weight_gradient_reference(rows, order, inverse, gradient, *, topk):
+    """Compute the combine weight derivative in host FP64, then restore slots."""
+    result = np.empty(rows.shape[0], np.float64)
+    # Limit the oracle's working storage while checking the full target shape.
+    for start in range(0, rows.shape[0], 4096):
+        stop = min(start + 4096, rows.shape[0])
+        upstream = np.asarray(gradient[order[start:stop] // topk], np.float64)
+        expert_rows = np.asarray(rows[start:stop], np.float64)
+        result[start:stop] = np.sum(upstream * expert_rows, axis=1, dtype=np.float64)
+    return result[inverse].reshape(gradient.shape[0], topk)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scalar-permutations", action="store_true")
@@ -64,6 +76,11 @@ def main():
                 weights = weights.astype(jnp.bfloat16)
             gradient = jnp.asarray(rng.standard_normal((tokens, width), dtype=np.float32), jnp.bfloat16)
             inputs = (rows, order, inverse, weights, gradient)
+            reference_gradient = None
+            if args.scalar_permutations:
+                reference_gradient = routing_weight_gradient_reference(
+                    np.asarray(rows), np.asarray(order), np.asarray(inverse), np.asarray(gradient), topk=topk
+                )
             modes = (
                 ("combine_vjp",) if args.scalar_permutations else ("combine_forward", "combine_vjp", "dispatch_backward")
             )
@@ -83,6 +100,18 @@ def main():
                     if expected is None:
                         expected = actual
                     deviations = measure_errors(actual, expected, 2e-2)
+                    oracle_errors = (
+                        measure_errors((actual[-1],), (reference_gradient,), 2e-2)
+                        if reference_gradient is not None
+                        else None
+                    )
+                    oracle_passed = (
+                        all(np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1 for row in oracle_errors)
+                        if oracle_errors is not None
+                        else None
+                    )
+                    if oracle_passed is False:
+                        failures.append((case, mode, implementation, "routing_gradient_oracle"))
                     passed = all(np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1 for row in deviations)
                     if not passed:
                         failures.append((case, mode, implementation))
@@ -107,8 +136,12 @@ def main():
                         "operator_topology": operator_topology,
                         "reference_topology": reference_topology,
                         "block_sizes": {"routes": topk},
-                        "passed": passed,
+                        "passed": passed and oracle_passed is not False,
+                        "source_parity_pass": passed,
                         "errors": deviations,
+                        "routing_gradient_oracle": "host_fp64_analytical" if oracle_errors is not None else None,
+                        "routing_gradient_oracle_errors": oracle_errors,
+                        "routing_gradient_oracle_pass": oracle_passed,
                         "compile_time": compile_seconds,
                         "steady_state_time": float(np.median(samples[2:])),
                         "samples": samples,

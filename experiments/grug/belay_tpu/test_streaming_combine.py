@@ -12,6 +12,7 @@ import pytest
 
 from experiments.grug.belay_tpu.local_experts import combine_local
 from experiments.grug.belay_tpu.streaming_combine import combine_streaming, dispatch_streaming, sum_routes
+from experiments.grug.belay_tpu.streaming_combine_check import routing_weight_gradient_reference
 
 
 @pytest.mark.parametrize("implementation", ["unrolled", "scan", "flat"])
@@ -64,3 +65,25 @@ def test_dispatch_gradient_sums_duplicate_token_routes(dtype):
     np.add.at(expected, token_ids, np.asarray(gradient, np.float32))
     tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
     np.testing.assert_allclose(np.asarray(backward(gradient)[0], np.float32), expected, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize("width", [16, 256])
+@pytest.mark.parametrize("empty", [False, True])
+def test_routing_weight_reference_matches_autodiff(width, empty):
+    rng = np.random.default_rng(436)
+    tokens, topk = 17, 3
+    order = rng.permutation(tokens * topk)
+    inverse = np.argsort(order)
+    rows = rng.normal(size=(tokens * topk, width))
+    rows[0 if empty else 37 :] = 0
+    upstream = rng.normal(size=(tokens, width))
+    actual = routing_weight_gradient_reference(rows, order, inverse, upstream, topk=topk)
+    with jax.enable_x64():
+        slots = jnp.asarray(rows[inverse].reshape(tokens, topk, width))
+
+        def objective(weights):
+            combined = jnp.sum(slots * weights[..., None], axis=1)
+            return jnp.sum(combined * jnp.asarray(upstream))
+
+        expected = jax.grad(objective)(jnp.ones((tokens, topk), jnp.float64))
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
