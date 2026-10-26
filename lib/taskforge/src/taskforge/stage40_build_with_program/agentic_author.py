@@ -154,6 +154,8 @@ from taskforge.stage40_build_with_program.template import standard
 AUTHOR_KIND = "agentic"
 """The ``author_kind`` this author writes into ``author.json``, ``record.json`` and its ledger entries."""
 AGENTIC_DIR = "agentic"
+DIGEST_DISPLAY_LENGTH = 16
+
 AUTHOR_RECORD = "author.json"
 
 WORKSPACE_DIR = "workspace"
@@ -654,7 +656,7 @@ class AuthorSession:
             program = await self.build.loader(self.read(str(arguments["path"])))
         except ValueError as error:
             return f"refused by the loader: {error}"
-        return f"loads: program {program.digest[:16]}; run order {', '.join(program.order)}"
+        return f"loads: program {program.digest[:DIGEST_DISPLAY_LENGTH]}; run order {', '.join(program.order)}"
 
     async def run_build(self, arguments: Mapping[str, object]) -> str:
         raw = str(arguments["path"])
@@ -733,9 +735,7 @@ class AuthorSession:
         record |= {"status": "built", "wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset)}
         _write_json(run_dir / RUN_FILE, record)
         self.builds.append(record)
-        return (
-            f"built: program {program.digest[:16]}\nsteps: {_steps_line(record['steps'])}\n{self._digest(draft, empty)}"
-        )
+        return f"built: program {program.digest[:DIGEST_DISPLAY_LENGTH]}\nsteps: {_steps_line(record['steps'])}\n{self._digest(draft, empty)}"
 
     async def _check_empty_answer(self, draft: TaskDraft) -> GradeResult:
         """Grade the empty answer against the built draft's grader, as validation's negative controls will.
@@ -812,7 +812,7 @@ class AuthorSession:
             )
             return f"refused by the loader, nothing handed in: {error}"
         entry |= {"loaded": True, "digest": program.digest}
-        loaded = f"the loader accepts it (program {program.digest[:16]}; run order {', '.join(program.order)})"
+        loaded = f"the loader accepts it (program {program.digest[:DIGEST_DISPLAY_LENGTH]}; run order {', '.join(program.order)})"
         if len(notes) > NOTES_CHARS:
             self.submissions.append(entry | {"outcome": SubmitOutcome.REFUSED_NOTES})
             raise ToolRefusal(
