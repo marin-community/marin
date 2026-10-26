@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -487,7 +488,10 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin,
+    dtype,
+    subset: tuple[str, ...] | None,
+    dtype_overrides: Mapping[str, str] | None = None,
 ) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
@@ -509,13 +513,11 @@ def _to_state_dict_with_dtype(
             out[k] = state_dict[k]
         state_dict = out
 
-    if dtype is not None:
-        logger.info(f"Converting floating-point arrays in state_dict to {dtype}")
+    if dtype is not None or dtype_overrides:
         for k, v in state_dict.items():
-            if jnp.issubdtype(v.dtype, jnp.floating):
-                state_dict[k] = v.astype(dtype)
-            else:
-                logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
+            target_dtype = jnp.dtype(dtype_overrides[k]) if dtype_overrides and k in dtype_overrides else dtype
+            if target_dtype is not None and jnp.issubdtype(v.dtype, jnp.floating):
+                state_dict[k] = v.astype(target_dtype)
 
     return state_dict
 
@@ -1093,6 +1095,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
+        dtype_overrides: Mapping[str, str] | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1114,6 +1117,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param dtype_overrides: per-state-dict-key floating-point storage dtypes, overriding dtype.
+            Useful for retaining native float32 buffers in an otherwise bfloat16 checkpoint.
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1146,7 +1151,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, dtype_overrides)
+        if dtype_overrides and (unknown := set(dtype_overrides) - set(state_dict_shape)):
+            raise ValueError(f"Storage dtype overrides reference unknown tensors: {sorted(unknown)}")
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1217,7 +1224,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, dtype_overrides),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
