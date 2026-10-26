@@ -1,4 +1,11 @@
-ALERT MAR-U-1e21 one failure from its budget (f=3/4)
-ALERT OLM-U-3e20 one failure from its budget (f=3/4)
-EVALOK olmo-base-eval-t9-mot-2e19-s662001
-EVALOK olmo-base-eval-t9-mou-2e19-s666202
+ALERT MAR-T-1e21 training SUCCEEDED at ckpt=22056/22056
+ALERT OLM-T-1e21 training SUCCEEDED at ckpt=22056/22056
+ALERT OLM-U-1e21 training SUCCEEDED at ckpt=22056/22056
+ALERT parent dm-delphi-frozen-unconstrained-scaling-v6e-20260908-retry10 state=succeeded :: 
+ALERT parent dm-delphi-frozen-unconstrained-scaling-v6e-20260908-retry9 state=succeeded :: 
+ALERT parent dm-delphi-matched-olmix-scaling-v6e-20260910-retry1 state=killed :: Terminated by user
+ALERT parent dm-delphi-matched-olmix-scaling-v6e-20260910-retry3 state=killed :: Terminated by user
+ALERT parent dm-delphi-matched-olmix-scaling-v6e-20260910-retry5 state=succeeded :: 
+EVALOK olmo-base-eval-t9-fpt-1e21-s662005
+EVALOK olmo-base-eval-t9-mot-1e21-s662005
+EVALOK olmo-base-eval-t9-mou-1e21-s666206

@@ -42,3 +42,19 @@ cp $R/frozen_scaling_update_20260913/matched_olmix/audited_measured_results.csv 
 result has 51 finite components whose mean matches `table9_macro_bpb`, and that the HF export
 `<run_root>/hf/step-<step>/config.json` exists. It therefore only passes for a genuinely landed rung,
 including its HF export — so failures here are informative, not noise.
+
+## Step 5 (paper session, added 2026-09-16)
+
+The compute-equivalence script reads `frozen_scaling_update_20260913/figure/plotted_points.csv`, not the live CSVs, so after step 4 the paper session rebuilds that figure directory from the audited files before refitting:
+
+```bash
+uv run --offline --no-sync python experiments/domain_phase_mix/exploratory/two_phase_many/plot_scaling_curves_placeholder_20260905.py \
+  --output-dir $R/frozen_scaling_update_20260913/figure \
+  --ladder-results $R/frozen_scaling_update_20260913/mariner/audited_measured_results.csv \
+  --matched-olmix-results $R/frozen_scaling_update_20260913/matched_olmix/audited_measured_results.csv
+uv run --offline --no-sync python experiments/domain_phase_mix/exploratory/two_phase_many/compute_equivalence_20260915.py
+```
+
+The babysitting session stops after step 4 and reports; it does not run this step.
+
+Figure 6 note (2026-09-17): the manuscript's Figure 6 is Codex's fitted-curve version, built by `revision_notes/20260916_figure6_scaling_curve_preview/build_preview.py` (copy it into a new dated revision folder, update its point-count assertion, run with `PYTHONPATH=<marin> uv run --script build_preview.py`, then copy the three `figure6_scaling_curve_preview.*` outputs onto `figures/r1_scaling_curves_placeholder.*`). Do not run `plot_scaling_curves_placeholder_20260905.py --drive-dir figures/` any more; it overwrites the fitted figure.

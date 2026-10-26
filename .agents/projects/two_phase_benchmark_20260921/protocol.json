@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "protocol_id": "two_phase_asymmetric_only_20260921_v1",
+  "status": "first_empirical_screen_ready",
+  "threshold_status": "quick_screen_frozen_full_qualification_pending",
+  "model_contract": {
+    "training_population": "physically_asymmetric_endpoints_only",
+    "tied_restriction": "exact_mariner_function_class",
+    "forbidden_fit_inputs": [
+      "tied_outcomes",
+      "pretrained_single_phase_coefficients",
+      "matched_gain_labels",
+      "measured_boundary_state"
+    ],
+    "inner_calibration": "actual_training_partition_only"
+  },
+  "seed": 20260921,
+  "outer_folds": 5,
+  "inner_folds": 3,
+  "frontier_fraction": 0.2,
+  "tiers": {
+    "smoke": {
+      "outer_folds_scored": [
+        0
+      ],
+      "repeats": 1,
+      "claim": "execution_only"
+    },
+    "screen": {
+      "outer_folds_scored": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "repeats": 1,
+      "claim": "empirical_development_screen"
+    },
+    "certify": {
+      "outer_folds_scored": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "repeats": 1,
+      "claim": "retrospective_development_qualification"
+    },
+    "finalist": {
+      "outer_folds_scored": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "repeats": 5,
+      "claim": "offline_qualification"
+    }
+  },
+  "quick_tasks": [
+    "programming_languages_bpb",
+    "github_cpp",
+    "github_python",
+    "c4_en",
+    "falcon-refinedweb"
+  ],
+  "required_swarms": [
+    "tpp40",
+    "delphi_3e18",
+    "llama160",
+    "llama200"
+  ],
+  "primary_objectives": [
+    "uncheatable_bpb",
+    "table9_macro_bpb"
+  ],
+  "missing_objective_policy": "explicitly_unavailable_cannot_certify_that_objective",
+  "required_evidence": [
+    "input_integrity",
+    "asymmetric_only_fitting",
+    "nested_split_integrity",
+    "tied_class_mapping",
+    "actual_design_synthetic_recovery",
+    "starcoder_surface_gate",
+    "older_swarm_preservation",
+    "frontier_calibration",
+    "whole_menu_selection",
+    "raw_optimizer_audit",
+    "sampler_rounding_audit",
+    "independent_replay",
+    "known_failure_control_rejected"
+  ],
+  "structural_contract": "MARINER response family; shared-parameter tied reduction, not independently fitted baseline equality",
+  "candidate_stage_receipt": "Each advance is keyed by candidate identity, frozen policy hash and prediction-file hash."
+}

@@ -6483,3 +6483,2100 @@ Source snapshot hashes:
 - `benchmark_crossed_state_extension_20260912.py`: `eaf73b630e12541eecb08ca617187cd261af31a841d11855f54ed2ce7b1365ac`.
 - `validate_mariner_transfer_20260912.py`: `8e7c2e61bb652a3275411b515cb75600f1b74b1449264ef92db848658f92abd8`.
 - `analyze_crossed_identification_20260912.py`: `af4e2bbfd3a698a598adb756f3a725c7c26fdb5b1af086708174757e8b66c0f7`.
+
+
+## 2026-09-21: asymmetric-only benchmark and StarCoder promotion screen
+
+Built the new data contract requested by the user: fit only physically asymmetric
+endpoints, retain the exact MARINER response class on the tied restriction, and
+use StarCoder surfaces as the first empirical rejection gate. The dated override
+is recorded in the north-star charter; the old 520-row tied-assisted results keep
+their original interpretation.
+
+The [protocol](../projects/two_phase_benchmark_20260921/PROTOCOL.md) and
+[implementation report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_benchmark_20260921/REPORT.md)
+are authoritative for this round. Final artifact version is v3. Preparation freezes
+33 development panels, exact exposures, target availability, five nested partition
+repeats, source/code hashes, and 24 outer/120 inner support-transfer exclusions with
+all physical checkpoint aliases removed from training. Tied data never calibrates
+or tunes the primary fits.
+
+Two named references calibrated the quick empirical screen in 250 native local
+fits: effective-exposure DSP and a MARINER-class phase-blind reference using the
+standalone's existing fold-local median floor branch. The latter is a benchmark
+estimator, not the validated proportional-anchor MARINER procedure. Quick atomic
+screens and scalar-objective smoke tests are distinct from component-assembled
+objective comparisons. Joint tied/asymmetric test menus prevent role-specific
+ranking from hiding a bad two-phase choice. Numerical margins reflect baseline
+partition sensitivity, not new-seed confidence.
+
+Two requested Claude Code Fable 5.1 Max reviews, an independent report cold read,
+58 behavioral tests, file-scoped lint and targeted typing checks were completed.
+Promotion now verifies frozen reference predictions, typed evidence receipts,
+required menus, minimum sizes and contract hashes. Completed-shard replay is
+byte-identical. The first gate is operational; full support/horizon execution,
+external-frontier and directional/common-effect calibration, candidate synthetic
+recovery, raw optimizer qualification and prospective validation remain separate
+requirements. No new model candidate was promoted and no LM job was launched.
+
+
+## 2026-09-21: NG2-001–003 first candidate round rejected
+
+The user authorized next-generation development after the benchmark work. Registered
+three asymmetric-only MARINER-law candidates before fitting: scalar forgetting,
+conserved protected memory with additive tied centering, and the same mechanism
+with relative-retention centering. All coefficients and hyperparameters are fitted
+from asymmetric endpoints; no tied calibration, inherited spine, or boundary
+measurement enters fitting. See the [round report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/REPORT.md).
+
+Completed 75 native-grid nested StarCoder fits and 12 whole-estimator synthetic
+fits. All three reject both frozen reference gates: scalar and additive fail
+18/50 DSP checks and4/10 aggregate-reference checks; relative retention fails
+21/50 and6/10. This is a rejection, not a new best model. No candidate advanced to
+TPP40 or larger swarms, and no LM training/evaluation job or remote collection ran.
+
+Two empirical failures are separate. Large opposing log-head contributions cancel
+on training support and explode near omitted-domain boundaries; one C++ pure-web
+query measures1.7797 BPB but predicts49,981.75. Phase optimization also fails inside
+the aggregate range: an early-code.625 / late-code0 choice predicts.9031, measures
+1.2563, regret.37427. Clipping pessimistic boundary predictions would not repair
+this optimistic dropout choice. The protected state is unused in23/25 additive and
+24/25 ratio fits.
+
+Synthetic positive controls reveal an estimator mismatch: the true floor needs
+training-median gamma8.30 (protected) or61.77 (null), outside[1,6]. They are therefore
+misspecified-floor stress tests, not clean in-family recovery certificates. The
+additive model's noiseless gain RMSE.002213 is worse than zero gain's.002146;
+relative retention improves to.001530. The single-draw null tests do not establish
+a false-positive rate. TPP40 geometry is full local rank but weakly conditioned;
+no outcome fit there was attempted.
+
+Fable5.1 Max completed the requested read-only review under the verified OAuth
+subscription with API-key environment removed. Its anticipatory-clock criticism
+was independently confirmed: fixed-prefix state changes when the future planned
+exposure changes. This endpoint surrogate is not a causal branch-state model.
+The report records a separate causal cumulative-clock successor hypothesis and
+corrects unsupported review claims (including the already-passing independent
+matrix-exponential checks and the distinction between local identifiability and
+physical mechanism identification). Next work must jointly address asymmetric-only
+aggregate/floor estimation, causal prefix consistency, and late-refresh gain
+calibration; no post-hoc cap/KL/grid expansion rescue is authorized by this result.
+
+Thirty new behavioral tests pass; all file-scoped lint checks pass; targeted typing
+has0errors. All75 completed shards replay from cache with byte-identical predictions,
+metrics and summaries. Exact sources, review, synthetic results, gate receipts and
+visually checked plot are retained with the report.
+
+Correction to the previous benchmark entry: dense StarCoder's five deterministic
+partition seeds produce the same partition up to labels. They supply no additional
+split-sensitivity evidence; the frozen allowances use their fixed reference-scale
+term. No frozen threshold or baseline artifact was changed after seeing candidates.
+
+
+## 2026-09-21: round2 priority and registration
+
+User prioritizes TPP40 as the many-bucket development setting. Older Delphi3e18 and Llama swarms remain additional validation of prediction, calibration and selection, including appropriate zero-gain behavior; a positive2p advantage is neither required nor assumed absent there. Frozen benchmark v3 already names TPP40 primary; no data, split, target or numeric gate is changed.
+
+Registered NG2-004–006 before outcome fitting: endpoint versus causal scalar clock crossed with native versus profiled response-weighted NNLS. Prior NG2-001 supplies the fourth control. Protected memory is omitted to isolate these two changes. Full specification is in reference_outputs/two_phase_nextgen_20260921/round2/registration.json. Offline only; no new LM training/evaluation or collection.
+
+
+## 2026-09-21: round-two results and zero-phase attribution
+
+TPP40 remains the primary many-bucket development population, with older swarms
+as additional calibration, transfer and false-gain validation. Positive phase
+gain is not required in those older settings and its absence is not assumed.
+No frozen benchmark input, fold, reference or threshold changed.
+
+Completed 75 registered NG2-004–006 StarCoder fits, 30 distinct synthetic fits,
+50 separately registered adaptive mu0 controls and 70 TPP40 component-reference
+fits. No candidate advances to TPP40 and no LM job or collection was launched.
+The [round report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round2/REPORT.md)
+retains equations, exact comparisons, replay checks and Fable review disposition.
+
+NG2-004 rejects21/50 DSP and6/10 aggregate checks. NG2-005 has16/50 and4/10
+metric failures; NG2-006 has24/50 and4/10. The latter two official statuses are
+incomplete because numerical tied mapping also fails the existing1e-8 BPB
+criterion (actual tied rows4.19e-8 and1.79e-8). Metric-only diagnostic comparisons
+do not override those failed evidence receipts. The separate TPP40 feature
+batch-consistency audit also fails7/103740 comparisons (max8.59e-8). None of
+these tiny numerical deviations explains the substantive empirical errors.
+
+The causal clock and profiled estimator together remove the previous extreme
+boundary explosions, but code selection/calibration and web frontier optimism
+remain poor. NG2-006 PL selects a policy measuring1.31966 BPB and predicts.90581.
+The same-estimator mu0 control predicts1.17157 on that same policy. Meanwhile
+phase-enabled mean regret improves over profiled aggregate on all five tasks.
+Thus both aggregate-estimator weakness and phase amplification are present;
+simply deleting the phase effect would discard useful signal. Profiled mu0 is
+not generally better than native aggregate. The native mu0 control reproduces
+1730 frozen-reference predictions within3.00e-11 BPB.
+
+Synthetic causal recovery improves substantially (NG006 noiseless endpoint/gain
+RMSE.000645/.000531; all3 noisy draws zero grid regret), and all9 null fits select
+mu0. These remain floor/search stress diagnostics, not exact in-family recovery,
+physical-mechanism identification or false-positive certification. Sources,
+observations and grids are unchanged after seeing the screen. The verification-only
+source replay is numerically identical; all75 candidate and50 control fits replay
+from cache with byte-identical output tables.
+
+TPP40 baseline calibration is ready on197 policies (174 asymmetric/23 tied),
+with all7 Uncheatable atoms. Fixed-weight assembled joint RMSE is.011696 for
+aggregate MARINER and.014872 for DSP; asymmetric-only errors are nearly equal,
+and DSP wins code components. These reference menus do not prove matched phase
+gain. TPP40 numeric promotion bounds must be frozen before a surviving candidate
+is fitted there. Next work should test aggregate-only estimator stability and
+incremental phase calibration separately, retaining the same-estimator mu0 control.
+
+
+## 2026-09-21: round-three penalty controls and signed phase effects
+
+Completed100 registered StarCoder fits and72 synthetic fits. All four official
+screens reject with structural evidence passing: NG2-007 fails18/50 DSP and1/10
+aggregate checks; NG2-00810/50 and1/10; NG2-00938/50 and8/10; NG2-01029/50 and8/10.
+Counts are correlated gates, not a ranking or independent tests. No candidate
+TPP40 outcome fit, remote collection or LM job was launched. TPP40 remains primary;
+older swarms remain additional validation without a positive-gain requirement.
+The [round report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round3/REPORT.md)
+retains equations, outcomes, synthetic diagnostics, geometry and review disposition.
+
+The new rowwise causal evaluator has exact batch/subset consistency across the
+recorded StarCoder and TPP40 checks. All100 final learned heads agree exactly with
+native MARINER on actual tied rows and tied counterfactuals. Old source and failed
+round2 receipts remain intact. Numerical qualification does not repair model error.
+
+Physical contribution ridge alone changes little. The causal physical-ridge arm
+retains extreme global errors. Independent signed linear/increment phase effects
+worsen code selection: both fail all5 selected-optimism checks and all3 code-task
+shortlist-regret checks against aggregate MARINER. NG010 C++ fold3 selects tied
+all-broad: measured1.779748,predicted.843016,aggregate reference1.737092. The phase
+feature is zero there; joint fitting has distorted aggregate extrapolation.
+NG010 PL fold0 selects code1-to0: measured1.319661,predicted.830748,reference1.148042.
+Thus phase amplitude and jointly fitted aggregate stability both require attention.
+
+The repaired synthetic audit keeps the true floor inside every actual subset's
+gamma[1,6] range. Signed models recover noiseless generating worlds under balanced
+and one-sided contrast sampling, but NG010 invents max.04544 BPB matched gain in
+a noisy null; its selected optimism is.03442. That null is in-family. The tied
+curve also changes with sampler (RMSE.02445,max.20816). Low menu regret in that
+case does not excuse false-gain calibration;3 seeds do not certify a false-positive rate.
+
+Outcome-free TPP40 geometry shows inner training sizes68-117 versus121-122 local
+parameters. After aggregate/floor/nearby-shape nuisance projection, qualified
+phase rank is0-34 versus38/39 phase amplitudes;3/15 inner sets leave no residual
+row directions. This continuously relaxes the discrete shape grid and is a local
+aliasing diagnosis, not a formal impossibility result. Next work should test a
+smaller joint effective dimension, including a shared phase law and stable
+aggregate recovery, with sampler changes and an aggregate-misspecified null, before the unchanged StarCoder
+gate. Do not freeze an asymmetric aggregate-only fit and call the tied curve identified.
+
+Fable5.1 Max review completed with subscription preflight and read-only tools;
+concrete claims were independently checked. All24 behavioral tests pass; scoped
+lint passes and targeted types have0errors. All100 real fits replay from cache
+with byte-identical output tables; all72 synthetic fits replay434 identical files.
+No frozen input, threshold, reference, formula or search grid changed after results.
+
+
+## 2026-09-21: round-four shared boundary law and mean fitting
+
+Completed75 authoritative StarCoder fits and72 synthetic fits for NG2-011–013.
+All three fail both unchanged promotion policies: NG01121/50 DSP and3/10
+aggregate checks, NG01223/50 and6/10, NG01327/50 and5/10. Counts are correlated
+checks, not model rankings. All structural evidence passes; all75 learned heads
+and90 generic checks exactly match native MARINER when tied. No candidate TPP40
+outcome fits or remote/LM jobs. TPP40 remains primary; older swarms remain
+additional validation without a positive-gain requirement. Full evidence is in
+the [round report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round4/REPORT.md).
+
+NG011 changes only conditional fitting to a convex positive-mean Bregman loss,
+with raw coefficient ridge and native floor/shape selection. NG012/013 couple
+phase order and curvature through a shared boundary-benefit fraction, reusing
+native benefit amplitudes and adding only q/kappa rather than a bucket phase
+vector. Native log fitting and mean fitting form the two arms. All native shapes,
+ridges, gamma search, asymmetric-only folds and no-cap/no-KL boundaries remain.
+This is a constrained joint response variant related to PMVT/SUR-048, not an
+identified new physical mechanism.
+
+Mean fitting reduces some large endpoint errors but does not reliably improve
+selection. Programming Languages joint RMSE remains6.71893/5.72650 for log/mean
+boundary models, with selected optimism0.20186/0.17448 BPB. Python RMSE improves
+0.85497→0.09767 while regret@3 worsens0.03227→0.05188. The mean aggregate-only
+control also worsens C++ regret@3 to0.06321 and optimism to0.21010 versus native
+aggregate log. Exact tied algebra does not preserve the estimated tied curve.
+
+The noiseless in-family boundary law recovers gain well under both samplers;
+native noiseless null fits select kappa0. But NG013 balanced noisy seed20260923
+has gain RMSE0.001875 (zero0.001263), regret0.006561 and optimism0.012076 against
+true grid advantage0.001921. A separate32-fit oracle attribution was registered
+after this result and before its own fits. Supplying true shape/state reduces
+that case's gain RMSE to0.000175 and regret to0; supplying the true floor as well
+reduces gain RMSE to0.0000418, with tiny grid regret2.94e-7. Across12 noisy
+known-law/known-floor fits gain RMSE is0.0000377–0.0001811. This isolates substantial
+estimator/selection error in a known generating case; it does not show that the
+true law or floor can be learned. Floor information does not uniformly improve
+tied error, optimism, or finite-grid regret. Three draws are not a false-gain
+certificate.
+
+Outcome-free geometry reduces local TPP40 dimension from121/122 to85, but three
+actual inner subsets are still spanned by aggregate/floor/nearby-shape nuisance.
+The positive phase head keeps both phase directions in12/15 TPP40 and15/15
+StarCoder inner subsets. This is a local continuous-shape diagnostic. Fable5.1
+Max reviewed read-only on the subscription account; independent math checks
+correct its claim of exact PMVT equivalence and distinguish bucket preference
+from feasible net policy order. Proportional bucket refinement preserves the
+function but changes raw ridge. No post-result grid or gate changes.
+
+The v1 solver's tiny infeasible coefficient roundoff and non-descent failure are
+fixed in separate v2 sources without changing objective or1e-10 KKT threshold.
+Both reproduced failures certify below1e-15;24 applicable behavioral tests pass,
+scoped lint passes and types have0errors. Preserve30 partial v1 StarCoder fits
+and62 v1 synthetic fits; the latter also used a different PEP723 runtime and are
+not frozen-runtime evidence. All75 v2 StarCoder fits replay byte-identical;
+72 synthetic fits exactly reconstruct predictions/data/metrics;32 oracle fits
+replay165 unchanged files. Next isolate floor/shape/state estimation under the
+same small phase law, with a separately registered argument and native controls,
+before another unchanged StarCoder screen. Do not use oracle truth as method input.
+
+The no-fit gamma transport audit makes the next estimator question concrete:
+the same true floor0.5 needs gamma2.3767–2.7778 across balanced inner subsets
+but2.5585 at outer refit; one-sided subsets need2.2844–2.6427 and2.4461. Shared
+gamma transports a sample-relative rule, not one common floor. Selected
+noiseless gamma yields final floors near0.492 even with true law and ridge0.
+This motivates isolating a consistent/directly estimated floor from the prior
+failed profiled bundle NG006. It is not proof of identifiable or better real-data
+floor estimation; actual inner fitting must remain free of validation labels.
+
+
+## 2026-09-21: round-five train-local floor profiling
+
+NG2-014 and NG2-015 both fail their registered synthetic first-failure screen.
+NG014 stops at4/32 contexts; NG015 passes17 and stops at18/32. The remaining28
+and14 contexts are unrun, including completion of the six-case noisy-boundary
+mean-improvement condition. No candidate StarCoder/TPP40 fits, raw continuous
+optimization, remote collection or LM jobs. Full evidence is in the
+[round report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round5/REPORT.md).
+
+This compares complete floor-estimation procedures while keeping native
+conditional log loss, raw ridge, MARINER response class and the round4 shared
+boundary law. Each actual training subset profiles BPB training error over
+native gamma1-6, including negative floors, using conditional log/ridge fits;
+all native shapes/ridges/phase states are selected under that estimator.
+Criterion, scalar search and the floor used for model selection change together;
+no single internal mechanism is isolated. Inner labels/bounds remain local.
+The response estimator is neither joint BPB NLS nor a likelihood profile.
+
+Eight known-law profiles recover truth to maximum floor error1.10e-10, gain
+RMSE2.37e-12 and tied RMSE4.04e-12. NG015 also learns the correct generating
+law in all eight noiseless whole-estimator cases; all six noisy native-null
+cases and both noiseless misspecified nulls pass. Negative-floor cases are
+translation checks, not independent evidence. Native-null matched effects
+remain below1.11e-15. Exact native tied algebra, including negative floors,
+passes all48 generic and8 fitted preflight checks.
+
+NG014 fails tied extrapolation under a real omitted phase effect: one-sided
+noiseless boundary tied RMSE0.00179388 versus control0.00109871 and frozen
+limit0.00115366. In-range error barely changes; pure endpoints account for69.36%
+of tied SSE. Its improved raw-menu regret does not establish phase ordering:
+aggregate-only predictions tie within an aggregate and menu/numerical tie
+behavior selects the schedule.
+
+NG015 fails the first one-sided noisy-boundary seed20260921: matched-gain
+RMSE0.00129165 versus paired NG0120.00058695 (limit0.00126947), raw-menu
+regret0.00070458 versus0.00021270 (limit0.00068315). Tied RMSE improves
+0.01070620 to0.00966031. Both models choose correct q/kappa=.5/.5 and ridge0,
+but different aggregate shapes and floors (.48242 control,.45605 candidate,
+truth.5). At the selected policy candidate matched gain is predicted0.00264025
+and true0.00125410. No bound hit, selected deficit clamp or failed refinement
+in this cell. The balanced partner improves gain RMSE but worsens regret4.9%.
+Do not treat small cohort-bound exceedances as small paired regressions.
+
+Local noiseless Jacobians retain only1.42%/1.15% of the floor direction after
+coefficient/intercept projection for balanced/one-sided sampling. Assumed iid
+BPB noiseSD.002 gives conditional mean-model floor SE.00993/.01232. These are
+local information proxies, not confidence intervals for the fitted estimator,
+and omit shape selection, constraints, bias and correlation. Noiseless recovery
+does not imply a precisely learned physical floor.
+
+All86 saved cells (64 controls:40new+24reused;22candidate fits) replay exactly.
+The88 saved outer/inner candidate profiles have298 successful refinements and
+zero selected clamps; two earlier noisy-null inner profiles hit gamma6. The
+source freeze and control budgets remain unchanged. Eleven behavioral tests,
+scoped lint and targeted typing pass. Fable5.1 Max review completed read-only;
+independent algebra checks correct its ridge-bias formula and distinguish
+cohort triage from statistical evidence. No posthoc cap/KL/grid rescue.
+
+A possible next estimator comparison is held-out selection of a common absolute
+floor from an outcome-independent grid, with native log/ridge unchanged. It
+would separate sample-relative gamma transport from training-SSE profiling;
+it is not registered, fitted or shown to resolve the shape/floor uncertainty.
+Any successor still needs sampler/noise/misspecification checks and the unchanged
+StarCoder gates before TPP40, which remains the primary many-bucket setting.
+
+
+Round5 also closes the missing TPP40 baseline partition repeats in a separately
+registered extension:280 new local fits plus70 cached, both references across
+seven components,five folds,five repeats. Fixed-weight Uncheatable assembly
+has15,760 predictions and240 summary cells. All1,065 CSV/JSON artifacts replay
+byte-identically with zero fit calls;227 original files and existing policies
+are unchanged. Aggregate Uncheatable joint RMSE wins allfive partitions
+(mean.012039 versusDSP.013148), whileDSP wins frontier RMSE4/5 and has lower
+mean regret@1(.003163 versus.006053). These are dependent partition summaries,
+not training-seed uncertainty or phase-gain evidence. The snapshot remains
+197policies, with no exact aggregate-matched asymmetric/tied groups. No TPP40
+candidate or new numerical promotion policy; the readiness audit distinguishes
+calibration evidence from unresolved full-qualification budgets and checks.
+See the [reference report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round5/tpp40_baseline_repeats/REPORT.md).
+
+
+## 2026-09-21: round-six common absolute-floor validation
+
+Both common-floor CV estimators fail the unchanged synthetic first-failure
+screen. NG2-016 stops at 4/32 and NG2-017 at 9/32, leaving 28 and 23 contexts
+unrun. No candidate StarCoder/TPP40 fits, remote collection or LM jobs.
+[Report](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_nextgen_20260921/round6/REPORT.md).
+
+For each native shape/ridge/phase state, select one absolute floor by pooled
+three-fold BPB validation error and carry it unchanged into the final native
+log/ridge fit. The outcome-independent search domain is [-8, 8] BPB; negative
+floors and native clamping remain admissible. Four bounded subinterval searches
+refine each sampled basin/edge bracket. This is finite search, not guaranteed
+global minimization, and compares complete estimators rather than isolating
+one causal effect of the floor. The registered numerical refinement was amended
+before scientific fits after an arbitrary negative-floor unit fixture exposed
+two basins in one bracket; original failure and source remain preserved.
+
+NG2-016 repeats the one-sided noiseless boundary tied-extrapolation failure:
+RMSE 0.00181254 versus native control 0.00109871, limit 0.00115366. Interior
+aggregate-range error barely changes; the ten exterior tied points contribute
+78.39% of tied SSE. Lower raw-menu regret is not learned phase order for this
+aggregate-only head. Readout distinguishes coarse-diagonal grid resolution from
+actual phase gain by also evaluating tied truth on the same aggregate grid.
+
+NG2-017 recovers the generating law in all eight noiseless contexts, including
+negative-floor translations: maximum gain RMSE 5.04e-12, tied RMSE 8.24e-12,
+translation error 6.58e-11 and zero regret. The first noisy balanced null then
+selects a false phase state. Max absolute predicted effect 0.003406435 exceeds
+the frozen 0.003403202 limit by 3.23e-6 BPB (0.095%). This is a narrow empirical
+failure, not statistical evidence of significant deterioration. The offending
+effect is harm at phase code fractions (1, 0); largest false benefit is 0.00203030.
+At its selected (0.04, 0.59) policy, predicted matched gain is 0.00060718 and
+true gain zero. Native and previous-profile controls select zero phase effect.
+Candidate tied RMSE improves to 0.00890534 from 0.01161568 / 0.00992684, while
+matched-gain RMSE is 0.00077974. Raw regret 0.00002733 improves over native
+0.00005598 but worsens relative to previous-profile 0.00000050.
+
+The saved best phase CV RMSE 0.002104485 beats the best zero-phase 0.002112157
+by only 0.363%. Shapes and floors differ, so this is joint selection, not an
+isolated phase-effect test. Losing fold predictions were not retained; no paired
+uncertainty claim is made. No selected bound, deficit clamp or refinement
+failure explains this winner. The remaining noise/misspecification cases and
+six-case noisy-boundary improvement condition were not reached.
+
+Sixteen behavioral tests, scoped required lint and targeted typing pass.
+Serial/parallel clean/poisoned fits have identical canonical JSON and prediction
+bytes. Eight known-law recoveries and 48 generic tied mappings pass; all 77
+scientific cells (64 existing controls plus 13 new candidates) replay exactly.
+Read-only Fable 5.1 Max review found no concrete code bug in the completed
+harness; independently checked corrections and limitations are in the report.
+Source freeze: 110a5234a56fffe9fca7f3da07ac4d954585017869812192e01bec436ae21c3e.
+Fieldbook experiment exp_01kymbv4xg2k6yanx59zfjjg1g, session
+ses_01m332t73qrn8fs7692w80hytj.
+
+The next untested hypothesis is to select phase complexity with a preference
+for zero phase unless grouped held-out evidence supports the added structure.
+Any such change needs preregistered uncertainty/stability handling and tests
+for both false effects and suppressed real effects, with the same later gates.
+No gate, cap, KL term or floor grid was changed after scientific outcomes.
+
+## 2026-10-14: complete TPP40 dataset collected
+
+Collected and verified all 280 policies: 238 asymmetric and 42 tied
+(39 domain deletions and three baselines), across 154 East5 and 126 Europe
+runs. The [snapshot manifest](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_complete_20261014/snapshot.json)
+pins the raw sources, collection code, assembled tables, and hashes.
+
+Every policy has the seven Uncheatable components and all 51 Table-9
+components, with 104 underlying task scores and instance counts, at both the
+permanent phase boundary (step 21855) and endpoint (step 27335). Native Paloma
+coverage is complete at the boundary and 271/280 at the endpoint; the nine
+early missing endpoints remain explicit blanks. Raw native histories retain
+1,720 records and 99,096 numeric values. Per-example predictions are not
+available from this evaluator.
+
+The assembly includes phase weights, nominal and realized aggregate/contrast
+coordinates, pool sizes, exposure epochs, seeds, and checkpoint provenance.
+Independent verification checked raw-to-table values and hashes. All 197
+previously collected endpoints agree on every native scientific BPB/loss
+field. Collection replays without network reads, and reassembly is byte
+identical. Scoped lint and typing pass.
+
+This is a data refresh only: no new fits, folds, training, or evaluation jobs.
+The historical 197-policy benchmark and prior promotion decisions are
+unchanged. Modeling resumes after the user's updated direction; boundary
+measurements remain separately identified so their use can follow the chosen
+open-loop or state-conditioned protocol. Fieldbook experiment
+`exp_01kz3nq7y7mp3a51kz26cvv4tr`, collection session
+`ses_01m4y1a2d0zadcwedj6jw7mph4`.
+
+## 2026-10-14: complete-TPP40 temporal mechanism diagnostic
+
+Temporal features improve prediction and local selection among asymmetric
+policies, but no model resolves asymmetric prediction, tied calibration, and
+raw-optimum reliability together. Retain joint benefit/damage persistence as
+a development lead because it improves all seven tasks and represents a
+substantial possible gain; retain damage-only persistence for its better tied
+calibration and shared-clock reweighting for its local selection. This
+user-authorized complete-TPP40 diagnostic does not promote a candidate or
+change the earlier synthetic/StarCoder/transfer gates. No LM training or
+evaluation jobs were launched.
+
+The [registration](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/registration.json)
+and [audit addendum](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/audit_addendum.json)
+fix the candidate equations, estimator, data, and checks. Candidates
+TP40-001 through TP40-008 were registered before fitting. Seven native
+Uncheatable BPB heads use all 280 completed policies for evaluation; only the
+238 asymmetric endpoints enter any fitting or inner selection. The 42 tied
+policies are evaluation-only. The collected Table-9 outcomes are not modeled
+in this round.
+
+TPP40 is the Delphi setting at approximately 40 training tokens per model
+parameter. Every policy uses the same total budget and phase split
+\(\alpha=21856/27336\), approximately 80/20. Each phase chooses a probability
+vector over 39 data buckets. A tied/static policy uses the same vector in
+both phases; an asymmetric/free policy can use different vectors. Optimization
+varies these vectors and holds the budget and split fixed. The objective is
+the fixed byte-weighted sum of seven BPBs: AO3 English, arxiv computer science,
+arxiv physics, BBC news, GitHub C++, GitHub Python, and Wikipedia English.
+Weights are approximately .17250/.14592/.16731/.12062/.15435/.14786/.09144,
+with the exact original weights retained without renormalization. Both the
+mechanistic and boundary models use this same objective.
+
+Five outer and three inner folds are formed from aggregate-policy geometry,
+with aliases and shared prefixes grouped. All 280 aggregate/prefix identities
+are distinct: there are no exact aggregate-matched asymmetric/tied pairs.
+Asymmetric test sizes are 66/51/55/36/30; tied test sizes are 0/35/1/6/0.
+All asymmetric rows come from one sampler source, so source-disjoint phase
+validation is unavailable. Region results are descriptive checks, not
+region-held-out fits. Tied evaluation is dominated by one fold and by the
+39 domain-deletion policies, so it measures concentrated source/neighborhood
+extrapolation rather than broadly replicated 1p calibration. The [data audit](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/data/split_audit.json)
+records these limits. Geometric splits do not use outcomes.
+
+The aggregate control uses native standalone MARINER shape/ridge/gamma
+selection, with a training-median floor because the fitting contract excludes
+tied calibration outcomes. It is the MARINER response class fitted to 2p data,
+not the independently validated proportional-anchor 1p estimator. Each
+extension conditions on the aggregate-selected shape/ridge/gamma, selects its
+temporal coefficient(s) by inner CV, and refits the bucket amplitudes and
+intercept. Consequently, exact nesting preserves the tied function class,
+not the previously fitted aggregate predictions. Outer validation assesses
+this complete two-stage estimator.
+
+The seven models are aggregate-only MARINER; a shared benefit/harm clock;
+a benefit-only clock with physical-exposure harm; benefit persistence;
+damage persistence; both persistence terms; and a fixed pool-size order
+interaction. Each of the latter six vanishes on the tied restriction.
+TP40-008 is the separate boundary-state diagnostic below. With per-bucket
+epoch exposures \(E=E_0+E_1\), MARINER's saturating Weibull benefit \(b\),
+softplus repetition harm \(h\), and first-phase fraction \(\alpha\),
+the persistence features are
+
+$$
+B=b(E)+\kappa_B[b(\alpha E)-b(E_0)],\qquad
+H=h(E)+\kappa_H[h(\alpha E)-h(E_0)].
+$$
+
+The per-task response is a floor plus an exponential of an intercept minus
+nonnegative bucket-weighted \(B\) plus nonnegative bucket-weighted \(H\).
+Temporal coefficients are shared across buckets within a task, and tasks fit
+independently. These are tied-centered contribution corrections; fitted coefficients are
+not identified physical retention rates. The damage term uses cumulative
+exposure and does not reset repetition at the phase boundary. The clock is
+\(E_{\mathrm{eff}}=(E_0+rE_1)/(\alpha+r(1-\alpha))\). The pool-order
+feature contrasts saturating acquisition on large and small pools; pool size
+is a proxy, not an established semantic prerequisite relation.
+
+Held-out Uncheatable results follow. RMSE pools the indicated rows;
+regret@1 averages the observed loss above the best observed policy in each
+outer-fold menu. Lower is better throughout.
+
+| Model | Asymmetric RMSE | Tied RMSE | All-policy RMSE | Joint-menu regret@1 |
+| --- | ---: | ---: | ---: | ---: |
+| Aggregate MARINER | 0.012165 | 0.012931 | 0.012283 | 0.008921 |
+| Shared clock | 0.009876 | 0.025106 | 0.013321 | 0 |
+| Benefit-only clock | 0.012087 | 0.016782 | 0.012900 | 0 |
+| Benefit persistence | 0.010592 | 0.017836 | 0.011962 | 0.005027 |
+| Damage persistence | 0.011657 | 0.011366 | 0.011614 | 0.005091 |
+| Joint persistence | 0.010179 | 0.016543 | 0.011363 | 0.003732 |
+| Pool-size order | 0.012223 | 0.012718 | 0.012298 | 0.001568 |
+
+Both clocks select the measured winner in all five asymmetric menus and all
+five joint menus. Every model, including aggregate MARINER, already ranks
+run 125 first in the pooled out-of-fold menu; it measures 0.878479 BPB.
+Thus the clock selection result concerns neighborhood-specific decisions,
+not discovery of a new measured frontier. Aggregate MARINER already has zero
+asymmetric regret@3. Joint persistence improves asymmetric RMSE by 16.3%
+and all-policy RMSE by 7.5%, with lower asymmetric RMSE on every atomic task
+and in both regions (East5 and Europe). Its tied RMSE worsens by 27.9%. Damage persistence gives
+smaller prediction gains while improving both asymmetric and tied RMSE.
+
+Benefit-only clock has a substantial failure on arxiv-CS run 168: predicted
+1.681166 versus observed 0.890481 BPB. That row contributes 96.9% of the
+head's squared error. Zero selection regret does not erase this failure.
+The leading models' selected/frontier predictions are pessimistic on average;
+the frontier is each model's lowest predicted 20% of each held-out menu.
+For joint persistence, asymmetric frontier RMSE is 0.009170 and mean
+observed-minus-predicted loss is -0.001111 BPB. This does not establish
+calibration at unobserved optima.
+
+The paired conditional bootstrap interval for joint persistence minus
+aggregate all-policy RMSE is [-0.001527, -0.000312] BPB. It resamples fixed
+out-of-fold predictions, with no model refitting or training-seed replication.
+It is not a confidence interval for timing gain. Detailed results and an
+independent recomputation are in [scores.csv](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/scores.csv)
+and [independent_audit.json](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/independent_audit.json).
+
+Full-data fits were optimized without epoch caps or KL. The tied search
+includes the aggregate of the best free solution, followed by a tied
+refinement; the free search always includes the best tied policy. These are
+best feasible numerical solutions found, not certified global minima.
+
+| Model | Predicted static BPB | Predicted 2p BPB | Predicted gain |
+| --- | ---: | ---: | ---: |
+| Aggregate MARINER | 0.881234 | 0.881234 | 0 |
+| Shared clock | 0.876405 | 0.873826 | 0.002579 |
+| Benefit-only clock | 0.874692 | 0.873524 | 0.001168 |
+| Benefit persistence | 0.880741 | 0.857443 | 0.023298 |
+| Damage persistence | 0.879946 | 0.879820 | 0.000126 |
+| Joint persistence | 0.879610 | 0.856753 | 0.022857 |
+| Pool-size order | 0.880974 | 0.879465 | 0.001509 |
+
+Benefit persistence's best feasible iterate did not report convergence;
+the other listed winners did. Joint persistence predicts a 2.60% reduction
+relative to its own static solution, with essentially disjoint phase supports
+and maximum cumulative exposure 11.94 epochs. Five outer fits evaluated at
+these same full-data-selected policies predict gains of 0.0201–0.0330 BPB.
+Those dependent fits share the same model form and do not validate the
+extrapolation. The tied calibration error is material relative to the gain.
+No reliable achievable 2p advantage is estimated by this table.
+
+An independent [optimum audit](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/optima_audit.json)
+locates the joint model's gain in the benefit correction. At the selected
+aggregate, a symmetric two-term decomposition attributes +0.025680 BPB to
+benefit and -0.000089 to damage; changing the aggregate away from the static
+optimum costs 0.002734, leaving the reported 0.022857 gain. These are
+within-model arithmetic contributions, not causal effects. For a late-only
+bucket, the feature is \(B=b(E)+\kappa_B b(\alpha E)\), which can approach
+two while the native benefit saturates at one. It reaches 1.98876 in the
+C++ head. Amplified feature magnitudes this large also occur in observed
+policies, so the feature value itself is not outside its sampled range.
+The unsupported extrapolation is coordinating those advantages in an almost
+disjoint 39-bucket policy. The large prediction comes from useful-contribution
+amplification; estimated damage relief contributes no gain here.
+The late policy allocates about 26.6% to ArXiv, 25.0% to FIM code, 24.3% to
+Stack-Edu, 10.5% to synthetic math, and 6.4% to synthetic code. Plausible
+bucket identities do not validate that amplification. Phase TV is 1.0 versus
+observed maximum 0.6573. Its nearest observed-policy square-root distance is
+1.2265, above the largest observed nearest-neighbor distance 0.8137
+(0.8877 restricting both sides to asymmetric policies).
+The five joint-persistence optimization starts all converge, but their values
+range from 0.856753 to 0.868063, so numerical initialization remains material.
+
+The shared-clock model admits an exact feasible static mimic for each atomic
+head; all seven saved mimic prediction differences are exactly zero.
+Task-specific clock multipliers differ, so the weighted objective need not
+have one common static mimic. Benefit-only clock keeps physical harm and
+can escape that equality, but its predicted gain over its optimized static
+policy remains only 0.001168 BPB. Most of the large predicted gain in this
+family comes from the useful-learning persistence term; damage persistence
+alone predicts 0.000126 BPB. This distinguishes model behavior without
+identifying the physical mechanism. [Optima and solver traces](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/optima.json)
+retain mixtures, support distances, per-task mimics, and fold sensitivity.
+
+The boundary diagnostic compares direct-BPB ridge policy features, measured
+boundary-state interactions, and nested cross-fitted policy-predicted state.
+Its rank-one/two PCA state creates 39/78 interaction slopes per endpoint head;
+it is not a one/two-parameter MARINER extension. Asymmetric Uncheatable RMSE
+is 0.011530 for policy-only, 0.012233 with measured boundary state, and
+0.013013 with predicted state. Mean fold regret@1 is respectively 0.003807,
+0.014503, and 0.009080. Only the Python atomic head benefits from measured
+state. This is negative evidence for this PCA-interaction formulation, not
+for all boundary information. The hidden-state synthetic positive control
+and held-out-label poisoning/replay checks pass; [boundary results](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/boundary/summary.json)
+keep feedback separate from open-loop prediction.
+
+Synthetic recovery used four generating laws, two noise levels, and two
+coefficient regimes on the frozen policy geometry. The initial regime needs
+a floor gamma of 11.93–19.41, outside native [1, 6]. Gamma scales the gap
+between training-median and minimum loss to place the response floor.
+This regime remains a documented
+misspecification stress test. The addendum registered a floor-compatible
+regime before real MARINER-family fits. The corrected primary metric uses
+66 held-out asymmetric rows and reports the 42 zero-gain tied rows separately.
+These synthetic ties belong to neighborhoods represented in the synthetic
+training set; real tied evaluation withholds their neighborhoods. The two
+tied RMSEs measure different extrapolation conditions.
+The first eight raw synthetic results remain preserved in
+`synthetic_initial_v1`; their old source hash is retained, but an exact source
+text snapshot from that first execution was not saved.
+
+In the compatible noiseless null, clocks and persistence select zero phase
+effects; pool-order invents a maximum 0.001030 BPB effect. The compatible
+order positive control reduces phase-gain RMSE from 0.003234 to 0.000176.
+Even the aggregate control on the compatible noiseless aggregate law has
+asymmetric RMSE 0.001880 but tied RMSE 0.046811, demonstrating that recovery
+of the tied surface from this asymmetric design remains difficult before
+adding a temporal mechanism.
+Benefit-clock and joint-persistence generating laws are only partially
+recovered, even without noise. This flags an estimation or identification
+limitation; these checks do not separate finite policy coverage, staged
+hyperparameter selection, numerical fitting, and structural ambiguity.
+The synthetic readout does not certify timing-gain estimation. All 112 final
+synthetic model fits and predictions are retained; their metrics are in
+[synthetic_scores.csv](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/synthetic_scores.csv).
+
+Implementation checks: 13 behavioral tests and scoped required lint pass;
+294 serialized real-data fits replay with zero prediction difference.
+The independent score audit checks 42 receipts, 15,680 predictions, 728 fold
+scores, 168 summaries, and 224 regional rows; 18,106 recomputed comparisons
+agree within 1.42e-14 and conditional bootstrap intervals replay exactly.
+The [saved source snapshot](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/sources/manifest.json)
+pins code beyond the dirty checkout's base revision
+`2018f387a48bed560c9184d3098ffb7bd3465b88`.
+
+Fable 5.1 Max's read-only review found no concrete leakage or tied-nesting
+bug in the reviewed modules. It confirmed a small registration deviation:
+the pool-order implementation includes the median-sized bucket in the large
+group (20/19 split), while registration said strictly above the median
+(19/20). Preserve TP40-007 as an as-implemented diagnostic, with no promotion
+claim; no registration, fit, or code was silently changed after outcomes.
+The review also narrowed interpretation of conditional hyperparameters,
+synthetic versus real tied splits, and cross-fitted state attenuation.
+The proposed native flat-profile explanation is not observed in the saved
+benefit-clock positive-control fits: both record `flat_profile=false`.
+All findings and independent dispositions are in the
+[review record](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_temporal_round_20261014/review/disposition.json).
+Scoped typing reports zero errors with the runtime script/native import
+paths supplied explicitly.
+
+Reproduction uses local macOS arm64 Python 3.12.8 and the script
+`experiments/domain_phase_mix/exploratory/two_phase_many/run_tpp40_temporal_round_20261014.py`:
+`uv run --no-sync python <script> synthetic --workers 6`, then
+`fit --workers 6`, `fullfit --workers 6`, `summarize`, and `optimize`.
+Fit receipts verify source/input/output hashes and skip complete fits.
+Optimization reruns its numerical search. Runner SHA256:
+`fa901a549253cbf6bcc450c7d00e5902504ec4ace60f0915a83311a3798760a5`.
+Fieldbook experiment `exp_01kymbv4xg2k6yanx59zfjjg1g`, session
+`ses_01m4y27xf56v7exfcwb0p8b3mg`.
+
+The next development question is whether asymmetric-only estimation can
+separate the aggregate response from learning/damage persistence without
+losing tied calibration. Shared-clock, damage-only, and aggregate controls
+must remain in that comparison. More ambitious raw optimization or
+post-hoc caps do not address the observed estimation and generalization
+failures. Any new estimator requires a new registration and the unchanged
+qualification gates: synthetic null/recovery checks, the two-bucket StarCoder
+surface screen, transfer to the other swarm settings, and prospective
+validation before deployment.
+
+## 2026-10-14 — Bounded benefit and cumulative rate damage on complete TPP40
+
+Bounded late-phase benefit retains the useful asymmetric prediction signal
+without letting a bucket's benefit exceed its native saturation. It still
+miscalibrates static policies. Cumulative rate-sensitive harm adds little.
+No candidate is promoted, and no LM training or evaluation jobs were launched.
+
+The frozen [registration](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/registration.json)
+adds TP40-009 through TP40-014 before scientific fits. All models use the
+previous 280-policy snapshot, seven Uncheatable atoms, byte weights, five
+outer folds, and three inner folds. Only 238 asymmetric outcomes enter fits;
+42 tied outcomes remain evaluation-only. This is adaptive diagnostic
+development on inspected outcomes, not independent confirmation. Existing
+StarCoder, transfer, synthetic-recovery, and prospective promotion gates
+remain unchanged.
+
+Uncheatable here is the fixed byte-weighted mean of seven bits-per-byte
+(BPB) evaluation losses: AO3 English, arXiv computer science, arXiv physics,
+BBC News, GitHub C++, GitHub Python, and English Wikipedia. Each component
+has a separate fitted head. Lower BPB is better.
+
+For total bucket exposure E, early exposure E0, and phase fraction alpha,
+the native benefit is b(E). TP40-009 shifts its odds by
+exp(kappa [b(alpha E) - b(E0)]), then maps back to [0, 1]. TP40-012 applies
+the same centered timing departure in the native benefit's hazard coordinate.
+Both reduce exactly to the native feature design when phases are tied,
+including at zero exposure, and both timing benefits vanish at saturation.
+Their fitted coefficients can differ from an independently fitted aggregate
+MARINER model; exact functional nesting does not guarantee identical tied
+predictions across those separately fitted models.
+
+TP40-010 weights each cumulative harm increment by its relative within-phase
+exposure rate raised to nu. Its harm clock does not reset at the boundary.
+The relative rates are E0/(alpha E) and (E-E0)/((1-alpha)E), so both equal
+one under a tied policy. The phase fraction is alpha=21856/27336=0.79953175.
+TP40-011 combines this with bounded odds benefit. TP40-014 adds only a scalar
+penalty or bonus for phase specialization magnitude. It is a nuisance control,
+not a temporal mechanism. TP40-013 refines native ridge/floor selection while
+holding the native-selected shape fixed; every mechanism is compared with
+both the original and refined aggregate estimator.
+
+The [outcome-blind geometry audit](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/geometry_audit/audit.json)
+finds a phase-TV gap from zero to 0.3822; all asymmetric TV values are at most
+0.6573. After linear residualization on aggregate features, 52.5% of
+standardized contrast energy remains. Thus the design has substantial
+timing variation unexplained by those linear aggregate features; nonlinear
+aggregate confounding is still possible. It provides no nearby observations for the
+approach to tied policies. At a representative native shape, the mean
+benefit timing correction is positive on all 238 asymmetric rows, allowing
+an intercept/static-response versus temporal-correction ambiguity.
+
+With the refined estimator, out-of-fold Uncheatable results are:
+
+| Model | Asymmetric RMSE | Tied RMSE | Asymmetric regret@1 | Joint-menu regret@1 |
+| --- | ---: | ---: | ---: | ---: |
+| Aggregate MARINER | 0.012166 | 0.012935 | 0.010367 | 0.008921 |
+| Bounded odds benefit | 0.010117 | 0.019228 | 0 | 0.001503 |
+| Rate-sensitive damage | 0.012370 | 0.012358 | 0.007060 | 0.005091 |
+| Bounded benefit + rate damage | 0.010140 | 0.018836 | 0 | 0.001503 |
+| Hazard-coordinate benefit | 0.010619 | 0.017062 | 0.004614 | 0.006117 |
+| Specialization magnitude | 0.012201 | 0.011283 | 0.010367 | 0.005091 |
+
+Regret is the mean across frozen fold-specific menus. Bounded odds and its
+damage combination select the best measured asymmetric policy in all five
+menus. The remaining joint-menu regret comes from the fold containing 35
+tied policies. Aggregate MARINER already has zero asymmetric regret@3.
+Bounded odds improves asymmetric RMSE by 16.8%, on all seven atomic metrics
+and both execution-region subsets (East5 and Europe, assigned by each run's
+compute region). The magnitude control does not reproduce that gain.
+Adding rate damage slightly worsens asymmetric RMSE relative to bounded odds.
+Five of seven full-data rate heads select nu=0. Five of seven full-data odds
+heads select the largest registered kappa, 8; this remains a sensitivity
+limit, not a reason to enlarge the grid after inspection.
+
+This is not an overall replacement for the previous round's models. With
+the matched native estimator, bounded odds improves asymmetric RMSE from
+0.010592 for contribution-space benefit persistence to 0.010067, but tied
+RMSE worsens from 0.017836 to 0.019299. The prior joint-persistence model's
+all-policy RMSE remains lower (0.011363 versus 0.011837 for the new native
+bounded-benefit/rate combination). The prior shared clock also retains
+lower asymmetric RMSE, 0.009876, at the cost of tied RMSE 0.025106.
+
+The bounded odds minus aggregate asymmetric RMSE difference is -0.002049 BPB,
+with conditional group-bootstrap interval [-0.002777, -0.001334]. Its
+all-policy difference is -0.000349, with interval [-0.001099, 0.000388].
+These resample fixed predictions; they do not estimate training-seed
+uncertainty or a confidence interval for achievable phase gain.
+The matched ridge/floor refinement alone changes real aggregate RMSE by
+about 0.000001, so it does not explain the temporal prediction improvement.
+[All scores](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/scores.csv)
+and the [calibration plot](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/calibration_comparison.png)
+retain the static degradation.
+
+Every static Uncheatable prediction from the bounded odds model is
+pessimistic: mean predicted-minus-measured loss is +0.019110 BPB, compared
+with +0.012717 for aggregate MARINER. On asymmetric rows its mean error is
++0.000230. Static calibration error is therefore material to any claimed
+two-phase advantage. The static rows are mostly deletion policies at
+different aggregate allocations; they are not matched phase counterfactuals.
+
+Raw full-fit optimizations have no epoch cap or KL penalty. Every listed
+winning solve reports convergence, though global optimality is unproved.
+Six of 60 solver attempts failed; five returned infeasible points. The
+failures remain in the traces, and infeasible points cannot win selection.
+
+| Model | Predicted static BPB | Predicted 2p BPB | Predicted gain |
+| --- | ---: | ---: | ---: |
+| Aggregate MARINER | 0.881234 | 0.881234 | 0 |
+| Bounded odds benefit | 0.881665 | 0.865606 | 0.016059 |
+| Rate-sensitive damage | 0.880991 | 0.880988 | 0.000003 |
+| Bounded benefit + rate damage | 0.881454 | 0.865883 | 0.015571 |
+| Hazard-coordinate benefit | 0.878884 | 0.874417 | 0.004467 |
+| Specialization magnitude | 0.879744 | 0.879744 | 0 |
+
+The bounded odds gain is 1.82% of its predicted static optimum. Its phase TV
+is approximately one, and nearest observed-policy square-root distance is
+1.1687, compared with the previous observed nearest-neighbor maximum 0.8137.
+Five outer fits evaluated at the same full-fit-selected two-phase policy and
+full-fit-selected static comparator predict gains ranging
+from -0.002258 to +0.014646 BPB. These dependent refits are sensitivity checks,
+not policy validation. The static error and unsupported contrast prevent
+interpreting 0.016059 as an achievable improvement. Bounding benefit alone
+does not make the raw optimum credible. [Numerical policies and traces](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/optimization/)
+retain these failures without hiding them behind a trust region.
+
+The [algebraic audit](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/geometry_audit/algebraic_audit.json)
+clarifies the harm mechanism. With nu=1, placing all exposure early multiplies
+the native harm increment by 1.251; placing it all late multiplies it by 4.988.
+This mechanism penalizes concentration. Any advantage comes from an interior
+tradeoff with the curvature of cumulative harm, not intrinsic safety of late
+repetition. At harm threshold 3 and four epochs, reduced harm occurs only
+when the early exposure fraction moves from 0.79953 toward 0.86146. The
+observed lack of improvement is negative evidence for this rate law; it does
+not reject all temporal damage mechanisms.
+
+Synthetic checks distinguish function class from estimation. All six
+known-shape/floor oracle worlds pass: held-out asymmetric, tied, and phase-gain
+errors are below 2.4e-15, and every null extension selects zero kinetics.
+The complete estimator is tested on seven laws at zero and 0.003 BPB noise.
+The true floor lies inside the allowed gamma range in all 56 outer/inner
+training contexts (required gamma 3.7751–4.9747). Each context nevertheless
+needs a different gamma to represent that same absolute floor.
+
+Ridge/floor refinement reduces noiseless aggregate-null asymmetric/tied RMSE
+from 0.001880/0.046811 to 0.0000905/0.004563. This clarifies the previous
+round's large null tied error: its generating shape was already selected
+correctly, and the tied rows have a different aggregate distribution. It was
+not evidence that setting phase contrast to zero itself is non-identifiable.
+The old provisional-floor ridge ranking changes after each ridge receives
+its own floor search; with the true floor and zero ridge, recovery is exact.
+
+All five positive synthetic families recover their generating kinetic
+parameters, including with noise. Nevertheless, the complete staged fits
+retain substantial calibration error. Odds, joint, and hazard worlds inherit
+an incorrect static shape from phase-blind selection: rate 0.5 and harm
+threshold 4 instead of the true 0.25 and 3. Noiseless in-family gain/tied RMSE
+is 0.015452/0.171254 for odds, 0.013358/0.111953 for the combined model, and
+0.005804/0.078317 for hazard. The ridge/floor refinement does not change these
+positive-world fits. This supports testing joint static-shape/temporal
+estimation before proposing another unrestricted phase head. It does not
+prove structural non-identifiability. [Synthetic interpretation](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/synthetic_interpretation.json)
+records every world and training-context floor check.
+
+The work produced 504 real-data heads, 168 whole-estimator synthetic heads,
+and 11 oracle heads. Sixteen behavioral tests, scoped required lint, and
+scoped typing pass. Independent arithmetic and serialized-model replay
+checks are recorded in [verification.json](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/audit/verification.json).
+There are 290,532 numeric checks, with maximum discrepancy 2.27e-13.
+All 68 completed oracle, synthetic, real-fit, and optimization shards skip
+work on resume after validating their receipts.
+The [source snapshot](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/sources/manifest.json)
+was frozen before oracle and scientific fitting. Runner SHA256 is
+`b5f8c7a61e43fea541e855fd72408fb8495888202ceb3fc3788abfa844496c0d`;
+registration SHA256 is
+`3fa1f11112c5df816a2905b4bfbe46f9f4b1f6f6422ea9853fed28ea7e21e57a`.
+Reproduction commands use `uv run --no-sync python` with
+`run_tpp40_mechanism_round2_20261014.py`, stages `oracle`, `synthetic`, `fit`,
+`fullfit`, `summarize`, and `optimize`. Complete hash-verified shards are
+skipped on rerun. The preceding round's sources and the standalone MARINER
+implementation remain unchanged.
+Fieldbook experiment `exp_01kymbv4xg2k6yanx59zfjjg1g`, session
+`ses_01m4y63xjrhzvxze4kbc5b2eg7`.
+
+Fable 5.1 Max completed a subscription-safe, read-only review through
+`env -u ANTHROPIC_API_KEY claude -p`. Its leakage and oracle-separation
+findings agree with the independent audit. A requested post-hoc comparison
+against specialization magnitude gives bounded odds an asymmetric RMSE
+difference of -0.002084 BPB, with conditional interval
+[-0.002792, -0.001380]. Hazard and the combined model also beat that control;
+rate damage does not. These [additional comparisons](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/audit/review_control_comparisons.csv)
+use frozen predictions without refitting and are labeled post-hoc.
+The review's claim that rate damage exactly nests the magnitude control is
+incorrect: the stated Taylor expansion is specific to nu=1, and its
+exposure-dependent coefficients do not reproduce a free signed scalar
+magnitude term. Its qualitative confounding concern remains valid. Requiring
+identical kinetics across all seven different tasks is also unnecessary;
+within-task fold stability is the relevant diagnostic. Full review and
+independently checked [dispositions](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/fable_review/disposition.json)
+are preserved.
+
+The fold generator was already pinned before execution through the prior
+data/result manifests, which every new fit receipt references. The
+[provenance addendum](../../experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mechanism_round2_20261014/provenance_addendum.json)
+verifies the live generator against that snapshot, all 1,232 regenerated
+outer/inner fold records, all 280 full-data inner labels, and the prior
+train/query lists. The frozen runner lacks a direct live-generator runtime
+guard; a future procedure version should enforce generator and materialized
+split hashes at entry. This does not change the audited current results.
+Historical shards and scientific sources were preserved.
+
+
+## 2026-10-14 — Joint static-shape and temporal estimation on synthetic TPP40 geometry
+
+TPP40 supplies real input allocations over 39 data buckets with an approximately
+80:20 phase split. Here their losses are generated synthetically. Asymmetric
+policies use different mixtures in the two phases; tied policies use the same
+mixture throughout. Loss is bits per byte (BPB), with lower values better.
+
+Joint shape selection repairs most of the bounded-benefit estimator's synthetic
+failure. The phase-blind fit selected rate 0.5 and harm threshold 4; joint
+selection recovers the generating rate 0.25, power 0.7, threshold 3, and temporal
+strength 4, both without noise and with BPB noise SD 0.003. No physical mechanism
+or real-policy gain is established by this result.
+
+Rate and power control the native saturating benefit
+\(b(E)=1-\exp[-(rE)^p]\); the harm threshold shifts its repetition penalty.
+Temporal strength increases benefit odds when a bucket is shifted later while
+preserving total exposure. The floor multiplier \(\gamma\) produces the
+training-subset floor
+\(c=\operatorname{median}(y)-\gamma[\operatorname{median}(y)-\min(y)]\).
+
+The registered round uses the frozen complete-TPP40 geometry, 172 asymmetric
+training rows, 66 held asymmetric rows, and 42 actual tied allocations used only
+for extrapolation diagnostics. The six contexts are null and bounded-odds worlds
+at noise 0 and 0.003 with seed 20261015, plus noisy null seeds 20261016 and 20261017.
+No actual TPP40 outcomes enter these fits. All 96 estimator/family cells completed.
+
+J1 freezes the phase-blind selected shape while jointly selecting temporal
+strength, ridge, and the relative floor multiplier. J2 enumerates all 168 native
+shapes jointly with the full temporal grid, five native ridges, and floor
+multipliers 1, 1.5, 2.5, 4, and 6. It then refines the multiplier for each ridge at
+the winning shape/kinetics and rescans every shape/kinetic/ridge combination at
+the best refined multiplier. The complete matched aggregate candidate is retained
+at zero temporal strength. This is a finite search with local continuous
+refinement, not a global optimization guarantee. Unlike the historical native
+procedure, it does not overwrite upper-bound selections with the flat default.
+Only J1 versus J2 isolates shape selection; historical versus J1 changes several
+parts of the estimator.
+
+J1 uses exactly J2's remaining grid, refinement, rescan, folds, and scoring rule;
+only its allowed static shape is fixed. Retaining the matched aggregate candidate
+means the expanded search can always choose the fully fitted aggregate-only
+control at zero temporal strength. The historical fallback replaces a multiplier
+in the upper 10% of the log-search interval with 1.5; J1 and J2 omit it.
+
+The following errors use noiseless synthetic expectations: asymmetric prediction
+and same-aggregate gain on the 66 held asymmetric rows, and tied error on all 42
+real tied-allocation coordinates. Same-aggregate gain subtracts the asymmetric
+loss from the loss of a tied policy with identical total per-bucket exposures.
+The bounded-odds world is the positive, nonzero-timing-effect world.
+
+| Bounded-odds world | Asymmetric prediction RMSE | Same-aggregate gain RMSE | Actual tied-allocation RMSE |
+|---|---:|---:|---:|
+| No noise, historical conditional fit | 0.014726 | 0.015452 | 0.171254 |
+| No noise, J1 fixed shape | 0.009723 | 0.010977 | 0.110142 |
+| No noise, J2 joint shape | 0.000121 | 0.000248 | 0.011377 |
+| Noise 0.003, historical conditional fit | 0.014470 | 0.015377 | 0.154665 |
+| Noise 0.003, J1 fixed shape | 0.010096 | 0.011262 | 0.136982 |
+| Noise 0.003, J2 joint shape | 0.001862 | 0.000947 | 0.002990 |
+
+The actual tied allocations differ from the asymmetric training distribution.
+Their error combines aggregate extrapolation and static calibration; it is not
+the error of a measured aggregate-matched timing contrast. The separate
+same-aggregate counterfactual gain metric uses the known synthetic law.
+
+The oracle factorial narrows the remaining error. Supplying the true absolute
+floor while searching every shape recovers the noiseless positive law to machine
+precision. Supplying the true shape but learning the shared relative floor
+multiplier reproduces J2's residual error. A common absolute floor learned at the
+known shape recovers the noiseless positive world with tied RMSE 4.53e-9 and gain
+RMSE 9.82e-11. These are oracle-shape diagnostics, not deployable procedures.
+
+The shared multiplier has a real transport restriction: the true absolute floor
+0.6 needs multiplier 4.1011 in the positive world's full training set, but
+4.2610/4.1944/4.1115 in its three inner-training subsets. The common-floor protocol
+also changes domain and search, so its comparison does not isolate transport
+alone. Reopening that protocol does not reverse the recorded NG2-016/017 failures.
+Those earlier common-floor candidates failed tied extrapolation or selected a
+spurious timing effect in a noisy zero-effect world.
+
+J2 selects temporal strength zero in the noiseless null and all three noisy null
+trials. The best nonzero competitor loses inner RMSE by 0.002430, 0.003261, and
+0.002480 across the three seeds. This does not establish false-positive control.
+The positive synthetic world has strong timing signal: gain RMS 0.074505 BPB and
+maximum 0.192874, with only one noisy positive seed. These checks do not establish
+recovery of the smaller gains that may exist in the actual swarm. Its noisy-null tied RMSEs
+remain 0.022518, 0.040378, and 0.071006. The common-floor oracle does not consistently
+improve them: 0.039998, 0.035706, and 0.082443. In the noisy positive world it has
+tied RMSE 0.010290 versus J2's 0.002990. Keep the relative-floor protocol for the
+next real-data diagnostic; do not promote common-floor estimation from exact
+noiseless recovery.
+
+Reproduction: project Python through `uv run --no-sync python`,
+`run_tpp40_joint_estimation_round3_20261014.py prepare`, `preflight`,
+`run --workers 4`, then `summarize`. The host has 16 CPUs and 64 GiB memory.
+Sources were frozen at Git HEAD f63d097c7bca20824337a0a2c9abfbd79f8d53ca plus
+captured uncommitted source hashes. Seven behavior tests, scoped required lint,
+and scoped type checks pass. The current-helper preflight's largest in-family
+error is 4.22e-15. Frozen source snapshots, all search trials, paired zero/nonzero
+inner predictions, per-cell receipts, and complete metrics are under
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_joint_estimation_round3_20261014/`.
+
+Decision: separately register a real TPP40 diagnostic of J2 aggregate, bounded
+odds, and contrast magnitude under the identical frozen folds and objective.
+These respectively model total exposure alone, directional temporal benefit, and
+a nondirectional measure of how much the phase mixtures differ.
+No surrogate is promoted; the original synthetic, StarCoder, transfer, and
+prospective requirements remain unchanged: synthetic null/positive recovery,
+held-cell StarCoder surfaces, additional swarm validation, and new measured
+policies must still support the procedure.
+
+## 2026-10-14 — Joint temporal fitting improves TPP40 prediction; curvature still drives an unsupported optimum
+
+The registered real-data diagnostic, TP40-018 through TP40-020, improves
+prediction substantially. It does not establish a superior end-to-end policy
+selector or a measured two-phase advantage. The bounded-benefit model remains a
+development candidate, not a promoted surrogate.
+
+This round applies the frozen J2 estimator described above to all seven
+Uncheatable atomic tasks. Only the 238 asymmetric policies supply fitting
+labels; the 42 tied policies remain evaluation-only. The five outer folds,
+three inner folds, task weights, exposure coordinates, and cached historical
+comparisons are unchanged. All 126 heads completed: 35 outer task contexts and
+seven full-data contexts, each with aggregate-only, bounded-benefit odds, and
+contrast-magnitude families. The full-data fits never enter held-out metrics.
+The tied restriction preserves the native MARINER function class, not the
+coefficients of a separately trained one-phase model.
+
+All losses and errors below are BPB. Prediction errors pool held-out rows;
+selection regret averages the five fold menus equally. The combined menu
+includes both asymmetric and tied policies within each fold. Its regret at
+three evaluates the best measured result among the three predicted choices.
+
+| Procedure | Asymmetric RMSE | Tied RMSE | All-policy RMSE | Combined regret at one | Combined regret at three |
+|---|---:|---:|---:|---:|---:|
+| J2 aggregate only | 0.011831 | 0.012411 | 0.011920 | 0.004886 | 0.000391 |
+| J2 bounded-benefit odds | 0.009304 | 0.011305 | 0.009631 | 0.001568 | 0.000783 |
+| J2 contrast magnitude | 0.011903 | 0.010615 | 0.011719 | 0.004886 | 0.000391 |
+| Previous joint persistence | 0.010179 | 0.016543 | 0.011363 | 0.003732 | 0.000783 |
+| Round-two bounded-benefit odds | 0.010117 | 0.019228 | 0.011936 | 0.001503 | 0.000000 |
+
+J2 odds reduces asymmetric RMSE by 21.4% against its matched aggregate control,
+8.0% against the previous odds fit, and 8.6% against persistence. All-policy
+RMSE improves by 15.2% against persistence, the previous best pooled predictor
+in the compared set. Odds beats both matched controls in every asymmetric
+fold and every atomic task. Both geographic strata improve; this is not a
+region-disjoint transfer test.
+
+| Atomic task | J2 aggregate asymmetric RMSE | J2 odds asymmetric RMSE | Previous persistence asymmetric RMSE |
+|---|---:|---:|---:|
+| AO3 English | 0.013839 | 0.009497 | 0.011721 |
+| ArXiv computer science | 0.011769 | 0.008611 | 0.009789 |
+| ArXiv physics | 0.017453 | 0.010756 | 0.013669 |
+| BBC news | 0.011608 | 0.010116 | 0.010549 |
+| GitHub C++ | 0.032500 | 0.019692 | 0.025163 |
+| GitHub Python | 0.024615 | 0.016963 | 0.022001 |
+| Wikipedia English | 0.013291 | 0.012837 | 0.012223 |
+
+The gains do not imply uniform selection dominance. Odds selects the measured
+best asymmetric policy in all five folds, but the previous odds model already
+did that. Its combined regret at one is slightly worse than the previous
+odds model, and its combined shortlist regret worsens. It misses the combined
+fold-one winner throughout its top three. GitHub Python's asymmetric regret
+at one worsens to 0.016952 from the matched aggregate control's 0.006875 despite
+better prediction error. Tied BBC prediction worsens against all controls in
+the table; tied Wikipedia worsens against the matched controls. The complete
+per-task, per-fold, and regional tables are retained.
+
+Calibration also remains incomplete. Asymmetric objective bias is +0.000646,
+and its predicted-best-20% frontier optimism is +0.000523. Across actual tied
+policies, predictions remain pessimistic by 0.011190 on average, with RMSE
+0.011305. Tied predictive R-squared is -9.83 because the observed tied losses
+vary much less than this bias. The magnitude control has better tied RMSE,
+0.010615. These ties are mostly deletion policies near the proportional
+allocation, not aggregate-matched counterparts of the asymmetric policies.
+Their bias cannot simply be subtracted from a proposed optimum's gain.
+
+The paired fixed-prediction group bootstrap gives asymmetric RMSE difference
+odds minus aggregate -0.002527, with 95% interval [-0.003407, -0.001643]. The
+all-policy difference against persistence is -0.001732, interval
+[-0.002268, -0.001166]. Conversely, tied odds minus magnitude is +0.000690,
+interval [+0.000285, +0.001137]. These are conditional intervals: they omit
+fitting, training-seed, and adaptive-development uncertainty. None of these
+already inspected outcomes supplies prospective confirmation.
+
+Every odds head chooses temporal strength 8, the registered maximum: 35/35
+outer heads and 7/7 full-data heads. The median relative inner-RMSE improvement
+from the best strength-four candidate to strength eight is 11.65% across the
+42 heads, with range 0.41% to 19.74%; this is not merely exact tie breaking on
+a flat profile. The static floor multiplier also reaches six in 20/35 outer
+odds heads and 3/7 full-data heads. No selected fit came from a failed
+refinement. These results leave temporal strength unresolved.
+
+The frozen uncapped optimizer includes each model's own best static candidate
+and checks the aggregate of its free solution. All selected results have
+successful solver status. Aggregate-only predicts 0.875708 at its static
+solution; magnitude predicts 0.872879 and selects a tied policy. Four of the
+magnitude model's eleven solver attempts failed, three with infeasible
+results; those traces remain saved. Its zero selected gain is not a proof of
+global absence of a phase benefit. Its unweighted bucket contrast measure
+also has the preregistered discontinuity at zero aggregate exposure: an
+arbitrarily small present bucket can contribute a full contrast term, while
+an absent bucket contributes zero. All eleven odds attempts succeeded.
+
+For odds, the optimizer predicts 0.869078 at its best static policy and
+0.840150 at its free two-phase policy: gain 0.028928 BPB, or 3.33% of its own
+static prediction. Its aggregate-matched tied prediction is 0.880939, giving
+same-aggregate timing gain 0.040788 and aggregate-reallocation cost 0.011861.
+The maximum total exposure is 8.7475 epochs. No epoch cap or KL term is used.
+
+This policy is unsupported in phase geometry: phase TV is approximately one,
+versus observed maximum 0.6573. Its nearest observed square-root-policy
+distance is 1.2029; the largest observed policy's leave-one-out nearest
+distance is 0.8137. Re-evaluating the same selected free/static pair with the
+five outer refits gives positive predicted gaps 0.024733 to 0.038040. That
+improves sign stability over round two, but is not independent evidence:
+every refit shares the same upper-bound timing strength and functional form.
+It is not reoptimization of each fold's best static or two-phase policy.
+
+A post-hoc, fixed-head decomposition explains the proposed advantage more
+precisely. For total exposure E, early exposure z, and phase fraction alpha,
+the original timing departure is
+
+$$
+d=b(\alpha E)-b(z),\qquad b(E)=1-\exp[-(rE)^p].
+$$
+
+It can be written exactly as
+
+$$
+d=(\alpha E-z)b'(\alpha E)
+ +\underbrace{b(\alpha E)+b'(\alpha E)(z-\alpha E)-b(z)}_{R\ge0}.
+$$
+
+All native powers satisfy p<=1, making b concave. The first term is a tangent
+placement effect; R is a nonnegative finite-contrast remainder on either
+side of the tied policy. The original formula therefore mixes first-order
+recency with a curvature contribution. The scalar contrast-magnitude control
+does not isolate this bucket- and exposure-dependent contribution.
+
+Replacing d by its tangent term inside the odds transform preserves tied
+values and first placement derivatives. With the full-data heads and selected
+policy held fixed, it raises predicted objective loss from 0.840150 to
+0.854799. The difference, 0.014649 BPB, is 50.6% of the original proposed gain
+over the static optimum. The resulting fixed-policy gap is still 0.014278.
+This is neither a refitted comparison nor an optimized tangent-model result;
+the original functional form guarantees the direction of the change.
+
+At the raw policy, every positive coefficient-weighted log-benefit contribution
+comes from a bucket with early exposure below 1e-6 epochs. Leading contributions
+are Stack Edu FIM, ArXiv, synthetic code, and literature/science web buckets.
+Their total exposures are intermediate, roughly 0.6 to 3.6 epochs among these
+leading contributors. Almost all signed log gain comes from buckets whose
+static benefit lies between 0.1 and 0.9; saturated buckets contribute
+negligibly. These weighted log contributions are not additive BPB attributions.
+
+Equivalent static-benefit exposures are also retained per task and bucket.
+Matching all active benefit terms this way requires signed extra exposure
+reference fractions from 0.179 to 3.013 across tasks. These are not minimum
+costs to reproduce a task score: benefit can trade across buckets, task heads
+differ, and the inverse need not define a feasible common policy. The token
+unit is the simulated 6.325e12 exposure reference, not actual proxy training
+tokens. The inverse matches benefit only; its changed physical exposures also
+change repetition harm. The exercise shows where the model assigns a nontrivial static
+substitution cost, without establishing that the physical mechanism is true.
+
+There is a sharper endpoint concern. At fixed E>0 with 0<p<1, positive benefit
+coefficient and timing strength, and nonsaturated benefit, introducing early
+exposure z from zero increases log deficit by a positive multiple of z^p.
+A compensating finite-derivative donor changes it only by O(z). Thus an
+entirely late bucket can be locally protected by the formula's singular
+derivative, without observations near that endpoint. This does not prove
+global optimality, global concavity, or that every optimum must have TV one.
+The tangent replacement removes this zero-prefix singularity at fixed E but
+retains other nonlinearities and possible boundary optima.
+
+Next diagnostic: separately register original versus tangent-inside-odds
+models under the same J2 estimator, with a common, predetermined expanded
+strength grid and explicit boundary failure condition. The nearest routes are
+TP40-009/019, TP40-004, LINK2-002, WSD80-SUR-013/027, and CRE2-015/021. The new
+identification argument is tied-value/first-derivative matching while changing
+finite-contrast curvature; it does not revive the earlier rejected routes
+unchanged. Use a weak-gain synthetic positive control and several null seeds
+before interpreting a real-data result. A tangent law also changes higher
+odd terms and retains even curvature through the odds and loss links, so it
+must not be described as a pure direction-only or pure cusp ablation.
+
+Implementation and evidence: `run_tpp40_joint_real_round4_20261014.py`, with
+artifacts under `reference_outputs/tpp40_joint_real_round4_20261014/`. The
+registered sequence prepare, fit, fullfit, summarize, and optimize completed
+locally through project Python; no training or evaluation jobs were launched.
+The independent audit imports neither fitting nor scoring implementations.
+It verified 172 receipts, 126 heads, 42 prediction contexts, all 15 bootstrap
+rows, and 118241 numeric comparisons, with maximum discrepancy 1.07e-14.
+The adapter behavior test, scoped required lint, and scoped type checks pass.
+The native/inverse/tangent decomposition checks pass. `calibration.png` was
+visually checked for legibility and clipping; the same figure is also saved
+as `calibration.pdf`. Frozen sources, search profiles, solver failures, results, and audit
+outputs are preserved. No model is promoted; the original qualification gates
+remain in force.
+
+
+## 2026-10-15 — Tangent timing control and weak-gain recovery preregistration
+
+TP40-021/022/023 are registered before new scientific fits. Round 5 compares
+the original odds departure with its tangent at tied exposure under the same
+J2 estimator and timing grid 0, .5, 1, 2, 4, 8, 16, 32, 64, 128. The tangent
+preserves the tied value and first placement derivative; it removes the
+concavity remainder before the odds transform. This is a curvature control,
+not an identified learning-rate or physical retention mechanism. The grid will
+not expand again in this round. A selected strength of 128 remains unresolved.
+
+The synthetic screen has 22 contexts and 66 learned fits: one noiseless and
+five noisy nulls; original/tangent on-grid strength-.5 worlds with one clean
+and three noisy copies each; and two off-grid laws calibrated to .003 BPB
+training gain RMS, also with one clean and three noisy copies each. All use
+the exact previous aggregate-null synthetic head, 172 asymmetric training
+policies, 66 held asymmetric policies and 42 tied evaluation coordinates.
+Weak strength is calibrated from training covariates only. Noise SD is .003,
+with paired noise vectors. Only training labels receive noise. No actual
+TPP40 outcome enters this screen.
+
+The moderate on-grid effects and weak off-grid stresses have different claims.
+Report matched-gain recovery against the actual held-set zero-gain error,
+static calibration, finite-menu selection and true values of raw proposals.
+A fabricated raw same-aggregate gain of .003 BPB under a noisy null is a
+preregistered practical red flag, not a transferred old two-bucket budget or
+a statistical false-positive guarantee. A noiseless false effect above 1e-8
+is a recovery failure. The original StarCoder, support/horizon, other-swarm
+and prospective qualification requirements remain unchanged.
+
+The exact equations, truth construction, contexts, diagnostic rules and
+optimizer protocol are in
+`reference_outputs/tpp40_tangent_round5_20261015/registration.json` beneath
+`experiments/domain_phase_mix/exploratory/two_phase_many`. Sources and arrays
+will be pinned before execution. No new language-model jobs are authorized.
+User-authorized autonomous offline work ends at 2026-10-15 18:00 UTC.
+
+
+## 2026-10-15 — Round 5: gain recovery succeeds within a law; curvature changes extrapolated gain
+
+TP40-021/022/023 completed the preregistered 22 synthetic contexts, 66 learned
+fits and 66 raw policy optimizations. None uses actual TPP40 outcome values.
+The two temporal laws share the frozen J2 estimator and strength grid through
+128; their tied restrictions are exactly native MARINER. The tangent changes
+finite-contrast curvature while preserving tied value and first derivative.
+It is not a direction-only ablation or an identified physical retention law.
+
+The central result is conditional: both laws can recover modest effects when
+they generate the data, but selecting the wrong curvature can substantially
+miscalibrate the gain of an optimized policy. This does not establish a tangent
+winner on real data.
+
+| Synthetic diagnostic | Original odds | Tangent odds |
+| --- | --- | --- |
+| Matching-law noisy gain RMSE, three seeds | .000180–.000384 | .000119–.000240 |
+| Corresponding zero-gain error | .009110 | .005666 |
+| Matching-law noisy raw regret | .000102–.000552 | .000144–.000200 |
+| Matching-law noisy tied RMSE | .030801–.076829 | .032367–.076910 |
+| Null selected strengths, one clean plus five paired noisy realizations | all zero | all zero |
+
+All figures are BPB. Raw regret is the true loss at the model-selected policy
+minus the best found numerical truth policy, not certified global regret.
+The 42 tied evaluation coordinates were excluded from all fitting. Good gain
+recovery and small policy regret coexist with substantial tied calibration
+error, so this is not full model recovery or calibration qualification. Even
+the noiseless matching-law tied errors remain approximately .00685 and .00410.
+All finite-menu regret@1/@3/@5 scores are zero in this particular synthetic
+menu; those scores cannot discriminate the candidates here.
+
+The twelve temporal null fits (two laws on the same one clean and five paired
+noisy realizations) all select zero timing strength. Maximum absolute raw
+same-aggregate phase gain is 1.11e-16 BPB; maximum raw regret is .000187. This
+is a successful finite null diagnostic, not a statistical false-positive
+control claim. No fit selects strength 128.
+
+Curvature mismatch matters at optimization. Fitting original odds to noisy
+tangent truth overpredicts raw same-aggregate gain by .010193 and .007991 BPB
+in two seeds; the third selects zero timing and reports zero gain. Conversely,
+fitting tangent odds to original truth underpredicts gain by .00807–.00855 in
+all three seeds. Both directions must be retained when describing this
+comparison. Both generating laws already have nearly disjoint numerical
+optima (TV .973–1.000 for on-grid worlds), so accurate raw regret cannot show
+that tangent removed a preference for disjoint policies.
+
+The weak off-grid controls expose limited strength resolution. Their truth
+strengths are .173672 (original) and .281870 (tangent), calibrated on training
+covariates to .003 BPB gain RMS; held gain RMS is approximately .00320. The
+smallest positive fitted strength is .5. Eleven of twelve noisy temporal fits
+select zero. The remaining tangent-on-tangent fit predicts gain RMS .005734
+against truth .003201, with gain RMSE .002537. The clean original weak world
+also selects zero for both laws. This is an off-grid estimation stress, not a
+universal .003 BPB detectability threshold. The registered grid is unchanged;
+any resolution improvement requires a separately registered estimator test.
+
+The independent audit recomputed predictions from coefficients and equations,
+noise pairing, split membership, retained strength profiles, scores, and raw
+truth values without importing the fitter or scorer. It checked 1,284,931
+numeric and 11,171 exact comparisons, with maximum numerical discrepancy
+1.33e-15. Model/runner/optimizer behavioral checks, scoped required lint and
+types pass. The four-panel PNG/PDF was visually checked by two readers.
+
+Artifacts are under
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_tangent_round5_20261015/`.
+`result_manifest.json` seals 875 files (579,480,231 bytes), SHA-256
+`206fe54c3fba757a86a05638500b839005d67bab610537cadfb47a0aceeb4070`.
+The result does not replace any original qualification gate. No candidate is
+promoted and no new actual TPP40 gain estimate is justified.
+
+Two separately registered checks now follow: TP40-024 applies these unchanged
+estimators to the frozen StarCoder quick screen against both original reference
+policies; TP40-025 tests whether off-grid static shape or heterogeneous bucket
+rates invent timing effects, with .01 noise as a stress bracket rather than
+an empirically identified observation-noise level. Real TPP40 refits have not
+yet been authorized by a new registration in this round.
+
+
+## 2026-10-15 — Frozen StarCoder screen rejects both timing formulations
+
+TP40-024 completed 75 learned heads on the immutable StarCoder v3 quick-screen
+panel: five atomic targets, five outer folds, and matched J2 aggregate,
+original-odds and tangent-odds procedures. Each model contributes 1,730 OOF
+predictions (346 measured policies per target). All fitting remains
+asymmetric-only. The code uses realized phase fraction 3040/3814; nominal
+aggregate grouping uses .8. The two existing reference policies and every
+numerical tolerance are unchanged.
+
+| Procedure | Failed DSP checks / 50 | Failed aggregate-reference checks / 10 | Timing strength 128 |
+| --- | ---: | ---: | ---: |
+| Matched J2 aggregate | 19 | 3 | not applicable |
+| Original odds | 38 | 8 | 9/25 heads |
+| Tangent odds | 40 | 8 | 5/25 heads |
+
+Both temporal procedures fail qualification. The matched aggregate control
+also fails, so the result cannot be attributed exclusively to the temporal
+law. This aggregate fit uses the asymmetric-training median floor contract;
+it is not the proportional-anchor calibrated standalone MARINER procedure.
+Exact tied function-class nesting does not make its fitted shape, amplitudes
+or floor equal to a separately calibrated single-phase fit.
+
+An independent replay checked all 75 serialized heads, all 5,190 predictions,
+225 fold-metric rows, 45 macro summaries, six gate verdicts and frozen split
+membership. It found no source, geometry, train/test leakage or scoring
+mismatch; 52,346 numeric comparisons agree within 3.55e-15. All 30 policies
+whose inherited source label is `synthetic` have measured archived outcomes
+joined by W&B run ID; the label describes policy origin, not simulated losses.
+
+Fixed-output diagnostics separate three failures:
+
+1. Static extrapolation dominates the very large code tied errors. Outer fold
+   zero trains on realized aggregate code shares approximately .005–.701 and
+   evaluates the high-aggregate region through one. At the pure-code tie,
+   original odds predicts C++/Python 7.9915/8.2611 against observed
+   1.5587/1.5451; tangent predicts 5.5764/7.1273. These two endpoint errors
+   contribute 85.6%/81.9% of each temporal model's pooled C++/Python OOF SSE.
+2. Frontier selection fails separately. Outer fold three excludes the small
+   code-allocation region. Both laws select zero early code and .025 late
+   code, only .134232 total code epochs. Native code benefit of roughly
+   .42–.49 is transformed to almost one. C++ predictions around .779/.789
+   and Python .796/.788 are substantially below the measured 1.228/1.256.
+   This is low-dose timing saturation, not evidence that all native benefits
+   were saturated at high exposure.
+3. Interior fixed-aggregate fibers also fail. At nominal code shares .5/.6/.7,
+   both laws choose zero late code and incur C++ regrets .3743/.3861/.3998
+   BPB within those observed menus, despite positive within-fiber rank
+   correlations. Predicted variation is too small and the dropout endpoint
+   is misranked. Realized aggregate spread within these nominal fibers is
+   approximately .00367; they are not exactly physically aggregate-matched.
+
+Replaying the final heads on their own outer-training rows gives median RMSE
+.09238 (aggregate), .08549 (original), and .07716 (tangent). The extra temporal
+flexibility improves the fitting criterion and training-frontier error, yet
+does not yield reliable held selection. This is evidence of fitted
+shape/calibration failure; it does not prove a global expressivity ceiling or
+identify a physical mechanism. No cap, KL penalty, widened grid or changed
+threshold is applied to rescue these results.
+
+Evidence is under
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_tangent_starcoder_20261015/`:
+`gate_result_summary.json`, the unchanged per-reference verdicts, and the
+versioned independent audit/geometry diagnostics. The Fieldbook failed check
+is `val_01m4z6af0a3yj0027rq81wp0xg`. The earlier TPP40 prediction improvement
+remains development evidence; it does not override this rejection. A separate
+synthetic estimator-isolation reopening of native rate harm is being reviewed,
+not treated as an already justified empirical successor.
+
+
+## 2026-10-15 — TP40-026 native rate-harm estimator isolation registered
+
+Before scientific execution, register a limited reopening of TP40-011. Its
+previous aggregate-only shape selection excluded the generating combined
+shape; J2 addresses that documented estimator failure. This is not a new
+physical identification argument and does not override the StarCoder rejection.
+
+Stage one preserves the frozen synthetic native head and TPP40 fold-zero
+geometry. Four corner worlds use (timing strength, rate exponent) equal to
+(0,0), (.5,0), (0,1), (.5,1). The first tests use known shape and floor, native
+zero-ridge NNLS, and all 40 preregistered kinetic grid points. Every candidate
+gets training-only amplitude refits and inner CV; all candidate heads and
+query predictions are retained. Preflight checks numerical validity, the
+learned floor domain, and nuisance-residualized local kinetic sensitivity.
+Local sensitivity thresholds are conservative resource gates, not statistical
+identification thresholds. A valid oracle may run even if local/floor checks
+fail, but those failures still block whole-estimator advancement.
+
+Pure equation tests, scoped lint/types, root source review and independent
+scientific review found no blocking issue. Full J2 implementation or empirical
+fitting is not authorized by this registration alone. The exact protocol is
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_rate_reopening_20261015/registration.json`.
+
+
+## 2026-10-15 — Static-misspecification stress exposes a false optimized gain
+
+TP40-025 completed all 23 synthetic contexts, 69 learned fits and 69 raw
+optimizations under the frozen round-five procedures. The extra nulls use
+an off-grid common static shape or bucket-heterogeneous benefit rates, with
+no true temporal effect. A .01 BPB noise standard deviation is an additional
+stress bracket, not an estimate of actual TPP40 observation noise.
+
+At zero and .003 noise, both temporal laws select zero timing strength for
+every new static-misspecification null. At .01 noise, original odds selects
+strength .5 for the shared off-grid static-null world at seed 20261015.
+Its raw proposal predicts .014519 BPB same-aggregate timing gain, while the
+true gain is zero. Numerical-truth-incumbent regret is .003574 and proposal
+optimism .045941. This exceeds the preregistered .003 false-gain diagnostic.
+The inner RMSE advantage was small (.0140706 to .0140032), while held
+asymmetric RMSE worsened slightly (.0071926 to .0073612). Tangent selects
+zero in all stress nulls. This finite comparison is not false-positive control
+or proof that tangent is safe under arbitrary static misspecification.
+
+At .01 noise the matching-law positive controls also lose sensitivity. Each
+law selects the true strength .5 for seeds 20261015 and 20261017, but zero for
+20261016. Gain RMSE is .000640/.009110/.000913 for original truth, compared
+with zero-predictor error .009110; tangent gives .000404/.005666/.000514,
+compared with .005666. Thus neither meets an all-seed recovery claim at this
+noise bracket. These are three paired realizations of fixed synthetic laws,
+not three independent empirical mechanisms. The maximum selected strength
+is one, so these failures do not come from the expanded upper boundary.
+
+The independent audit verified 23 contexts, 69 fitted cells, 483 retained
+strength profiles, five numerical truth optima, 69 raw cells, 166 completion
+receipts and 18 frozen sources. All 1,345,835 numeric and 12,420 exact checks
+pass; maximum discrepancy is 9.992e-16. Separate ownership checks confirm
+five disjoint optimizer streams and sequential writes within each stream.
+No actual outcome array was read. All selected static/free solver outputs
+report successful statuses; numerical truth optima are still not globally
+certified.
+
+The sealed root is
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_tangent_stress_20261015/`.
+`result_manifest.json` covers 915 files (602,949,516 bytes), SHA-256
+`9d6fa75cef5ceeb6b4f0a6843eb6c12b476be2402747dadfa5ab494fae19a586`.
+Fieldbook artifact `art_01m4z6ygmy896ctbjfv2da9ajv` preserves the passing replay
+and failed false-gain/recovery checks separately. No threshold is relaxed and
+no candidate is promoted.
+
+## 2026-10-15 — Rate-harm oracle qualification passes; learned estimator remains untested
+
+TP40-026 stage one passes its registered prerequisites on all four synthetic
+corner worlds. The true floor is inside the learned calibration envelope on
+each relevant training subset (gamma 3.7797–4.5690). After projecting out the
+head, floor and common-shape nuisance directions, the smallest retained
+kinetic sensitivity fraction is .10278 and the smallest normalized singular
+ratio is .50692. These are local numerical diagnostics, not a general
+identifiability or signal-to-noise guarantee.
+
+With the true shape and floor supplied, the true kinetic pair is the unique
+near-exact inner-CV choice among the 40 registered pairs in each world.
+Maximum query errors range from 2.22e-15 to 4.89e-15. An independent auditor
+reconstructed 640 centered NNLS heads, 160 kinetic profiles and 32 local
+sensitivity reports: 127,844 numeric and 902 exact checks pass. Maximum
+refit/query discrepancy is 7.11e-15. Thus the equation and conditional fit
+are recoverable in this finite design; the whole learned procedure still
+needs its separately registered 16-head noiseless test.
+
+The stage-one seal is
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_rate_reopening_20261015/result_manifest.json`,
+SHA-256 `d101b3c8eef79f61b1591e851f7a369a3ce8af5c67aa6a60c80939bcf4c3ce4c`.
+It covers 24 files and explicitly excludes the future `stage2/` subtree.
+Fieldbook artifact `art_01m4z7vfz1hnrk33k4wfzx7y4t` and passing check
+`val_01m4z7vwwctsnwg71fzh396nmt` preserve this limited qualification.
+
+The separate StarCoder empirical screen is also sealed: 260 files,
+SHA-256 `07ebc187105ff78c289fa60b02bd944585b2da6bd22c45b333b1ea47fcd8beda`.
+Its independent numerical replay passes, while all three scientific gate
+verdicts remain rejected. The Fable review and checked adjudication are
+included. In particular, the review's claimed benefit-headroom impossibility
+is false: a negative odds shift can remove nearly all native benefit.
+The endpoint errors motivate a new diagnostic, not a proof that the old
+function class cannot express the observations.
+
+## 2026-10-15 — Direct BPB fitting helps, but does not resolve the StarCoder surface
+
+TP40-027 completed the fixed 160-call all-training diagnostic on all 346
+measured StarCoder policies and five targets. It first replayed the five saved
+outer-fold heads, then refitted their amplitudes/intercepts at fixed historical
+floor/shape/kinetics, then jointly optimized continuous parameters within the
+existing bounds. Complete aggregate candidates and untouched feasible starts
+were retained. No held-out or promotion claim is made.
+
+The selected joint-fit training RMSE values are:
+
+| Target | Aggregate | Original odds | Tangent odds |
+| --- | ---: | ---: | ---: |
+| C4 | .11799 | .07103 | .06966 |
+| Programming languages | .07696 | .04416 | .04216 |
+| Falcon web | .12449 | .07279 | .07195 |
+| C++ | .08816 | .05957 | .05755 |
+| Python | .08832 | .06107 | .05902 |
+
+These fits improve on the saved heads, but leave large endpoint errors.
+On the 15 zero-late-code policies, C++ RMSE remains .21413/.20332 for
+original/tangent odds, compared with .03524/.03443 on the 299 interior
+late-code policies. The zero-late-code subset includes the no-code policy;
+it is not a pure forgetting intervention. The nominal aggregate fibers also
+have a small realized exposure spread, recorded in the figure.
+
+Every solver reports convergence and every endpoint is feasible; none of the
+saved starts/endpoints activates exponential clipping. All ten selected
+temporal joint fits reach a floor-multiplier bound, and original odds reaches
+strength 128 on C++/Python. Large feasible coefficients remain, including a
+C4 harm amplitude of 10884.34. Thus finite training fits are improved, while
+parameter interpretation and held selection remain unqualified.
+
+Two comparisons require care. Saved-head versus amplitude refitting changes
+both the training sample size and fitting objective. Also, historical floors
+can lie outside the joint fit's full-panel gamma domain: original Falcon
+RMSE is .07155 after the head refit and .07279 after the joint fit. Only the
+feasible joint fits witness attainable error within that bounded continuous
+class. Failure of this finite local search is not an impossibility proof.
+
+Independent replay checked 160 solver records, 45 selections, 280 receipts
+and 182,220 numeric values, with maximum discrepancy 1.60e-14. Additional
+checks verify fixed-head invariants, 30 recorded floor projections and every
+reported stratum metric. The figure was visually checked by both author and
+root. All prior held-out rejections remain unchanged.
+
+The sealed root is
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_starcoder_expressivity_20261015/`.
+Its manifest covers 584 files (10,528,170 bytes), SHA-256
+`9e9b539a632329992e3bb54dd478993694845d408676baea84f9504226e91f0b`.
+
+## 2026-10-15 — Joint rate-harm recovery passes noiseless tests; noisy qualification registered
+
+TP40-026 stage two completed all 16 jointly fitted noiseless heads. Correct
+benefit-only, rate-only and combined models recover held-out same-aggregate
+gain with RMSE .0000272, .0000366 and .0000511 BPB respectively. All null
+fits select zero kinetics. The combined model retains the correct nested
+control in each single-mechanism world. All registered stage-two gates pass.
+
+The raw optimization diagnostic also separates the mechanisms. In the combined
+world, the correct model has signed regret .000000824 against the finite
+numerical truth incumbent, versus .001744 for benefit-only and .007204 for
+rate-only. Benefit-only overpredicts its selected policy's gain by .017067;
+the correct combination overpredicts by .000270. These are synthetic results
+under one fixed generating head, not evidence of a real TPP40 advantage.
+
+Independent replay covers all selected fits and 332 optimization traces,
+including 166 feasible solver endpoints that reported success. Maximum raw
+arithmetic discrepancy is 2.22e-16. Stage two is immutable under manifest
+`experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_rate_reopening_20261015/stage2/result_manifest.json`,
+SHA-256 `8a4e40d188dcfd85c1be85bc1fce2ded78417f76e81c1ea93407063b0d201dff`.
+
+Stage three now freezes six paired noisy contexts: null and combined worlds,
+three fixed seeds, training-only Gaussian SD .003, four model families. Query
+truth remains clean. Null gain, raw gain error, tied calibration, boundary
+kinetics and signed raw regret gates are fixed before fitting. Positive
+combined gain prediction must beat zero and both single-mechanism controls
+on every seed. The noise level is a qualification setting, not an empirical
+TPP40 noise estimate. Registration SHA-256
+`78fa6997c0bef00c446257005d825db659cd48d24493840c1e67d20b492c6231`.
+
+## 2026-10-15 — Noisy rate-harm qualification fails despite mechanism recovery
+
+TP40-026 stage three completed 24 fits and two numerical truth plus24 fitted
+raw searches. All12 null-family fits choose zero timing/rate kinetics. The
+combined candidate recovers the true shape and kinetics on all three positive
+seeds and predicts held same-aggregate gain with RMSE .001660/.001092/.002273,
+beating zero and both single-mechanism controls. Raw gain errors remain within
+.003 BPB. Those successes do not establish reliable policy selection.
+
+Two registered checks fail. Seed20261016 has actual-tied RMSE .0422881 versus
+matched aggregate .0278988, exceeding the allowed+.003. Seed20261017 raw
+signed regret is .00357818 against the finite numerical truth incumbent,
+versus .00172252 for the best control, exceeding the allowed+.001. The
+overall qualification is false. The failures are retained without a new cap,
+KL penalty, grid extension or threshold change.
+
+Independent replay passes all24 selected fits, retained controls, training-only
+paired noise,26 raw searches,56 receipts and34 source pins. It checks80,113
+numeric and3,945 exact values; maximum discrepancy5.68e-14. All selected
+endpoints report success. Two non-selected odds-control endpoints report
+nonconvergence and remain in the trace. A saved-output decomposition is
+being added before sealing; no empirical advancement is authorized.
+
+## 2026-10-15 — Late-refresh physical-harm oracle passes, with restricted shape assumptions
+
+TP40-028 replaces the old timing departure with a normalized late-benefit
+multiplier of native acquisition hazard. It retains physical cumulative harm,
+one taskwise strength in[0,1], and the exact native tied/null response class.
+The physical-harm response is convex along an exactly fixed aggregate phase
+fiber for native powers<=1. This is a substantive restriction. Twelve old
+single-seed nominal-fiber negative even costs do not supply a robust matched
+replicated falsifier: actual aggregates drift, four tied controls are shared,
+and high-fiber local noise is unmeasured. All six newer exactly matched
+five-seed programming contrasts have positive mean even costs, one interval
+including zero. This is non-refutation, not confirmation of convexity.
+
+Its known-shape/floor oracle uses the same frozen39-bucket synthetic head and
+geometry as the previous tests. Both worlds uniquely recover the generating
+strengths0/.5, with maximum query errors4.00e-15/1.78e-15. The true floor lies
+in every registered training-slice envelope. Independent replay of all56NNLS
+heads,14profiles and preflight diagnostics passes. This only qualifies the
+finite-design known-shape/floor recovery test. A separate whole-estimator
+registration is being prepared; no empirical success is claimed.
+
+Stage-one seal: `reference_outputs/tpp40_late_refresh_20261015/result_manifest.json`,
+SHA-256 `eda1b26c39ed08a8e1615d09f7cab482380329521ee6378ac477d1fe640d726e`.
+The manifest explicitly excludes future `stage2/` and advisory `reviews/`.
+Fieldbook artifact `art_01m4zaxb413w4v46q8nde8mjk7` carries passing validation
+`val_01m4zaxnbt3dcdemv2848hb2m2`.
+
+A Fable5.1 Max review, through subscription-safe read-only `claude -p`, agrees
+with the main algebra and suggests conditional convex optimization. Several
+review claims were rejected after independent checks: its aggregate-drift
+bound omits mixed curvature; early-code dependence does not isolate an
+all-early bucket contribution; finite-dose horizon effects need not decrease
+monotonically; amplitude below per-row residual SD is not non-identification;
+and virtual effective-token mass above the physical budget is not itself
+infeasibility. The full adjudication is preserved in the excluded `reviews/`
+subtree, separately recorded as `art_01m4zaxb94h59hz73eq4cvamt9`.
+
+TP40-029 is a separate pure readout control: evaluate both benefit and harm at
+the same effective exposure, without another kinetic parameter. Eleven pure
+behavior tests and independent source review pass, including a feasible
+negative-even example. At unit strength an all-early bucket's benefit and
+excess harm both vanish; this known possible exploit is explicit. No synthetic
+or empirical fitting scope has yet been registered for this control.
+
+## 2026-10-15 — Rate-harm failure decomposition and late-refresh learned qualification
+
+TP40-026 stage three is sealed: `reference_outputs/tpp40_rate_reopening_20261015/stage3/result_manifest.json`, SHA-256 `a6e40d4583f7065b7bdb940eb269d397e80219daf3c38271660539c5c0eb8d61`, covering 264 files and 398,008,292 bytes. Its numerical replay passes; its scientific qualification fails. The immutable saved-output decomposition separates two failures.
+
+Seed 20261016 underpredicts broadly across the 39 actual deletion ties: RMSE .043415 and mean bias -.043013. The largest deletion contributes only 3.96% of squared error. Its estimated floor .563719 is below the generating .6; exponent compensation cancels this on held asymmetric points but fails on deletion ties. The failure is not one anomalous bucket.
+
+Seed 20261017 selects a better aggregate than the odds control but a worse phase allocation. Its true phase gain is .003598 versus .007725 at the odds pick; the aggregate advantage .002271 cannot offset that loss. Fixed-head logit error differences are dominated by the harm coefficients. This is a numerical decomposition, not identification of physical harm parameters. Changing only an additive floor cannot alter this single-head argmin or gain.
+
+TP40-028 stage two is now separately registered and source-frozen after author and independent runner reviews. Registration SHA-256 `dcdf3c3921f694ed7dd731ea57d4531c02311ef1ee955553f18057d1c730efaa`; execution identity `1622168ee604f00ae7b1742904fa2bb85c40b279730ecfd83661650b38e68b9e`. Four noiseless learned heads use native aggregate and late-refresh on null and strength-.5 truth, followed by two truth and four fitted raw optimization cells. No noisy or empirical execution is authorized by this stage.
+
+## 2026-10-15 — Late-refresh whole-estimator noiseless qualification passes
+
+TP40-028 stage two passes all four registered noiseless learned-fit checks and independent replay. The positive world recovers the generating shape and strength .5, with held same-aggregate gain RMSE .0000213 BPB, actual-tied RMSE .001373 and raw signed regret 1.27e-8 against the finite numerical truth incumbent. Both null heads select zero timing and produce zero phase gain. All 42 optimizer endpoints report success and feasibility; there is no global outer optimum claim.
+
+The positive world's held-menu gain RMS is .03804 BPB, but the truth's best found two-phase policy improves over its best static incumbent by only .000745 BPB. Its selected policy has same-aggregate gain .001879, offset partly by aggregate reallocation cost. This illustrates the difference between learning phase effects and establishing a large advantage after static optimization. These remain synthetic quantities.
+
+The misspecified aggregate control has actual-tied RMSE .38762 in the positive world. Relative checks against that control are therefore weak; absolute calibration and raw errors remain explicit. A noisy qualification is being drafted separately and will not inherit authorization from this noiseless result.
+
+Independent selected replay checks 10,775 numeric values plus 313 exact values, with maximum error 2.22e-16; raw replay checks 3,814 numeric and 649 exact values, maximum 8.80e-17. Stage-two manifest `reference_outputs/tpp40_late_refresh_20261015/stage2/result_manifest.json` has SHA-256 `1a1b7fa05d98649554caa8124a4f602b312af7ff1d7d4714baf59c7172b2bf7f`, covering 66 files and 22,720,840 bytes.
+
+## 2026-10-15 — Late-refresh passes specified noisy recovery and raw selection
+
+TP40-028 stage three completes 12 learned heads, two clean truth searches and 12 fitted raw searches. All 45 registered checks pass, as does independent replay. All six null fits retain zero timing and zero predicted phase gain. The three positive temporal fits recover the generating shape and strength .5, with held gain RMSE .001399/.001379/.001648 BPB. Their signed raw regret against the numerical truth incumbent is .000168/.000195/.000216; raw same-aggregate gain errors are -.000105/-.000006/-.000120. All 94 solver endpoints are finite, feasible and report success.
+
+This is successful recovery under the specified synthetic truth and noise, not a general calibration result. Positive actual-tied RMSE is .013601/.046182/.034463 and null actual-tied RMSE .022518/.040378/.071006. Positive selected-policy optimism is -.002190/+.005478/-.006182. The model predicts relative phase gains more accurately than absolute losses in these extrapolation regions. All absolute errors and comparisons with noiseless and paired-null fits are retained. No empirical success or real TPP40 gain follows.
+
+The independent replay covers 41,971 numeric and 2,014 exact values with maximum discrepancy 1.78e-15. Stage-three seal `reference_outputs/tpp40_late_refresh_20261015/stage3/result_manifest.json` has SHA-256 `29553496204caa2cc7a075daea8132d468c3572acd19b087bb71fe934e8363b3` (147 files; 67,749,336 bytes). A separate unchanged StarCoder screen is being prepared.
+
+TP40-029's effective-harm oracle also passes. Both null and strength-.5 worlds uniquely recover their generating strengths, with maximum query error below 4e-15. Independent replay reconstructs all 56 NNLS heads and checks 51,226 numeric values; maximum discrepancy 3.33e-12 includes finite-difference sensitivity. Its true floor is feasible in every registered slice. Seal `reference_outputs/tpp40_effective_harm_readout_20261015/result_manifest.json`: `5837df387f27736f1f7dab6f03c4028848614084a0c8096bd88237889dab4a03`. Only fixed-shape/floor recovery is established; the separate learned-stage draft must still be reviewed.
+
+TP40-030 is now registered as conditional penalty isolation, not a new model. It compares raw ridge with the unchanged NG2-007 reference scaling at known generating shape, kinetics and floor across four fixed worlds, noiseless and three paired noisy seeds. Only ridge is selected by inner CV. Its 32 selected heads and 480 inner heads cannot establish full-estimator qualification or overturn the old StarCoder failures. Registration SHA-256 `b19095c91b420eb1b1eee1bcf5e4d9dfa864d5920ca1f1beb89406343792f247`.
+
+## 2026-10-15 — Late-refresh starts the frozen empirical screen
+
+TP40-028 is now running the unchanged StarCoder quick screen after independent source review and the specified noisy qualification. It uses five atomic targets, five original grouped outer folds, asymmetric-only training, 50 heads and 3,460 held predictions. Both the frozen DSP and aggregate-MARINER reference policies retain their original numerical gates. The complete native aggregate remains a freshly rescored and refitted candidate in each temporal search. Unit-strength endpoint selections will remain visible. No empirical optimizer, extra target, grid extension or post-result adjustment is authorized.
+
+Registration `reference_outputs/tpp40_late_refresh_starcoder_20261015/registration.json` has SHA-256 `70af6e262438a435142e9f3cc8811b67fbdb832366876531cc68e664fe9ab3f6`; execution identity `7ab5ba289955caef10c0d0c771e59cdff45c2cde555b684425cd3195abd009e2`. All 84 source/input pins and the prerequisite seal verify. Fieldbook registration artifact: `art_01m4zd5qvsr3p4vdvvv1p61mxj`.
+
+## 2026-10-15 — Conditional penalty rescaling does not help
+
+TP40-030 completes all 32 selected and 480 inner NNLS heads. At known generating shape, kinetics and floor, the old NG2-007 reference penalty does not improve over raw ridge. Reference/raw pooled MSE ratios are 1.01953 for phase gain, 1.06980 for asymmetric calibration, 1.53408 for actual tied calibration, and 1.12905 for matched tied calibration. Every registered pooled comparison favors the unchanged raw penalty; the directional continuation criterion fails. This does not justify reopening the full estimator.
+
+Independent replay covers 1,017,337 numeric and 4,146 exact comparisons, maximum discrepancy 7.33e-15; no inner or query clipping occurs. The null kinetics were fixed to zero, so their zero gain is structural rather than evidence about null selection. Seal `reference_outputs/tpp40_penalty_isolation_20261015/result_manifest.json`: `1883b1bbf57fadd240ef1b4473dd868f62d4d4f348dd09e260931178837b8ae5`, 236 files and 12,498,149 bytes. Fieldbook numerical validation passes and scientific continuation validation fails.
+
+TP40-029 stage two was separately reviewed and registered as `95fc2b097910239bb3271d1092b01acd80442d0f3ff837d11a80b9b7540859f1`, with identity `801fdf903b8bf0ab7567e5c4b966232805abba969c0ac67d7dd134352f149854`. It runs the same four-head noiseless learned procedure and raw searches as TP40-028, substituting only effective harm. The unit-strength all-early sink is retained. No noisy or empirical stage is authorized yet.
+
+## 2026-10-15 — Late-refresh improves StarCoder but misses the shortlist gate
+
+TP40-028 completes the frozen 50-head StarCoder screen. It passes all 10 aggregate-reference checks and 48 of 50 DSP checks. The two failures are C++ regret@3 on asymmetric and joint menus: .009684765 BPB versus DSP .004855227, with allowed increases .004010336 and .004300259. The unchanged verdict is rejection; substantial prediction improvement does not override it. The matched aggregate itself fails 19/50 DSP and 3/10 aggregate checks.
+
+Across C4, Programming Languages, Falcon, C++ and Python, late-refresh asymmetric RMSE is .021491, .027370, .018016, .042056 and .044202. Corresponding predictive R-squared is .972893, .931209, .982797, .860705 and .842732. Frontier RMSE is .007339, .015861, .007653, .025828 and .019839. These are development-screen results. Actual-tied C4/Falcon RMSE remains .355732/.358144; two of 25 temporal heads select physical endpoint strength one, both in fold zero for those web tasks. Those limitations are being decomposed using saved outputs only.
+
+Independent replay verifies all 50 heads, 300 selected/control NNLS reconstructions, 1,010,597 search-profile entries, 3,460 held predictions and every gate. No failed refinement or prediction clipping occurs. Seal `reference_outputs/tpp40_late_refresh_starcoder_20261015/result_manifest.json`: `01b443d8cbeb78497ca10bda8432804e37e907637205eb9784c6b5ec0c6c3522`, covering 185 files and 280,677,312 bytes; additive descriptive and review subtrees are excluded. No empirical optimum is authorized.
+
+TP40-029 completes its own noiseless learned stage and raw searches. It recovers strength .5 with gain RMSE .000218166 and actual-tied RMSE .0144493; the misspecified aggregate's .384616 tied error makes the relative calibration gate weak. Its fitted raw pick has signed regret .000001642, same-aggregate gain overprediction .000216245 and absolute optimism .00350186. The true numerical static-to-two-phase gap is .001789053, distinct from its .005120621 same-aggregate gain. All 42 numerical solver endpoints succeed and are feasible; no outer global-optimum guarantee follows. Independent selected and raw replay pass. Seal `reference_outputs/tpp40_effective_harm_readout_20261015/stage2/result_manifest.json`: `db0c067bbf8152c2fa66fc7dc26e84a0e82ba9df74e9781d269edac0ca44f099`, 65 files and 22,756,762 bytes. A separately reviewed matched noisy-stage draft is next.
+
+## 2026-10-15 — Interpretation of the late-refresh limitation
+
+The saved StarCoder diagnosis localizes both C++ shortlist failures to the same outer fold and overlapping menus. Its best three predictions allocate zero early code and .25-.30 late code, while the observed best allocates zero early code and .55 late code and is ranked eleventh. Aggregate exposure changes along this edge, so this is not an isolated timing-law falsifier. The pure-code tied endpoint accounts for 99.89%/99.87% of web tied squared error; all tied rows remain in the metrics. The timing correction vanishes at a tied policy for fixed coefficients, so that endpoint error concerns aggregate-head extrapolation from asymmetric training. Additive diagnosis: `reference_outputs/tpp40_late_refresh_starcoder_20261015/descriptive/report_v1.md`, SHA-256 `f682b98d16199f670c8eaf64c1eb88a955f881f38ca9952211f16372747b0535`.
+
+Independent algebra establishes a useful separation. At fixed physical aggregate, physical-harm late-refresh has convex unclipped task losses over feasible late allocations, including nonnegative weighted task sums with different shapes. A supporting-plane linear program therefore bounds remaining conditional improvement; it cannot certify the outer aggregate search. Upper link clipping requires a separate domain check or a weaker sum of taskwise bounds.
+
+In the leading low-dose, benefit-only limit, a common timing strength permits a single feasible static allocation to dominate every task's effective benefit, even when task shapes differ. Physical harm, heterogeneous task strengths, or finite-dose saturation can break that comparison. The exact late-to-static marginal benefit ratio at a tie is lambda/beta times x/(exp(x)-1), with x=beta^p(rE)^p; it decreases with exposure. This explains why large sampled phase effects can coexist with small advantage after static optimization, without proving that two-phase gain must be small in the real setting. A conditional-bound diagnostic is being prepared; no empirical model change follows from these identities.
+
+
+### 2026-10-15 — TP029 paired-noise qualification sealed
+
+The effective-harm readout passed all 45 preregistered synthetic checks on three paired SD0.003 seeds for null and strong positive truths. Twelve fitted heads and fourteen raw searches independently replay to maximum error 1.78e-15. All null heads select lambda0; all positive heads select lambda0.5. Positive phase-gain RMSE is .001887/.002181/.001478 BPB and raw regret .000130/.000147/.000096. Absolute actual-tied RMSE remains .021941/.022047/.004009 for positive heads and .022518/.040378/.071006 for null heads; passing relative gates is not uniformly accurate calibration. The truth optimum advantage is small relative to phase effects across sampled policies.
+
+Artifact: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_effective_harm_readout_20261015/stage3/result_manifest.json`, SHA256 `17c48f24a03e5f284f5b2d1d5ebe61aad92d1d87e2dd42a6815db1f1de3cab5f`. The independently replayed audit is `audit/replay_report_v1.json`, SHA256 `1a212113eaa78a848bb2bd03ff63a251d5544e7cd54176a076da3d9ca138b3c4`. No model is promoted. The next proposed test is the unchanged frozen StarCoder quick screen, with no empirical optimization or gate relaxation. Its separate source review is pending.
+
+
+### 2026-10-15 — TP029 frozen StarCoder screen registered
+
+After root and independent source review, the effective-harm variant is running the same five targets and five frozen folds as TP028, with fifty complete fitted heads and 3,460 held-out predictions. The J2 estimator, complete aggregate competitor, seven-point lambda grid and both original reference policies are unchanged. Tests include held-label poisoning and wrong-scope/source-drift rejection. Registration SHA256 `30af3d7cb382fb00d2971f3cf58d46637b92b44f7be3bf0b31a20291779a1db9`; execution identity `2797284d1bec218b5cd9c0ef02012a61a8ffcc027ee6235ff70d0c720674ce8d`. Output root: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_effective_harm_starcoder_20261015/`. This is development evidence on already inspected outcomes, not fresh confirmation. TP028 retains its failed shortlist gate.
+
+
+### 2026-10-15 — TP029 empirical screen rejected and sealed
+
+Effective-exposure harm resolves TP028's C++ shortlist failure but does not pass the complete screen. Macro C++ regret@3 falls from .00968477 to .001054 BPB, while Python regret@3 rises to .01188416. The candidate fails seven of fifty original DSP checks and three of ten aggregate-reference checks: web frontier/selected optimism, Programming Languages selected optimism, and Python shortlist regret. Lambda reaches its physical upper boundary1 in12/25heads (all five C++ folds, four Python and three Programming Languages). The zero-late token-sink interpretation remains visible.
+
+Independent replay verifies fifty heads, three hundred conditional/control NNLS solutions, 1,010,682 profile trials, 3,460 held-out predictions, both original policies, and the entire noisy prerequisite seal. Prediction replay error is at most6.66e-16; the largest coefficient difference is5.82e-11. No clipping, failed search refinement or failed profile solve is reported. This does not establish a causal harm mechanism: TP028 and TP029 refit their shapes and coefficients separately.
+
+Seal: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_effective_harm_starcoder_20261015/result_manifest.json`, SHA256 `646bc77c80084526ed133db9004713ee08b751f1a35c837efeeb5e3620d13f0a`. Independent audit SHA256 `8b8cda9902c12503f60d480a6abc5252429cb7afa6c5f04ab7c7f7b35d0195cb`. Preserve rejection; no empirical optimizer or benchmark promotion.
+
+
+### 2026-10-15 — TP032/033 mean-coordinate controls recover known laws
+
+These are constrained readout controls, not new physical mechanisms. TP032 averages native hazard at total exposure and normalized late exposure before saturation; TP033 averages the two saturated benefits. Both preserve native physical harm, one taskwise lambda, exact tied/null MARINER class, and fixed-aggregate convexity for power<=1 absent upper clipping. The prior-route note records TP032's equivalence to normalized clock at power1 and TP033's exact coefficient-tied cumulative-recency feature overlap. Older rejected estimators remain rejected.
+
+Registration `b433378164f073a040dcf673e7c698852bbe9c2efb59172c55da7df4a2045038`, identity `82fbebd5e1b8afad862f9e0fa76d36a5bbe01f1f32e335e7d16d836db7591e53`. Four matching-law known-shape/floor worlds on original complete-TPP40 covariates recover their null0 and positive0.5 strengths uniquely, with maximum finite-query error4e-15. All true-floor domains are feasible for the later learned search, a separate statement from oracle recovery. Root independent equations replay all112NNLS heads and102,214numericvalues exactly. The positive held-menu phase-gain RMS values are .043019 and .063972BPB; these are not optimized advantages.
+
+Stage1 seal `85937003912bf8b6213684de4c86722135ebfd043dacf3dffcb41485148b4a33` at `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_mean_coordinate_controls_20261015/result_manifest.json`. No learned-estimator or empirical qualification follows. A separate8head noiseless learned-stage draft is being prepared.
+
+
+### 2026-10-15 — TP032/033 noiseless learned stage registered
+
+Both mean-coordinate controls now have separately reviewed source and an exact stage-two registration. Four matching-law worlds fit complete native aggregate and their matching temporal head, eight fits total, followed by four truth and eight fitted raw searches. The original J2 estimator, native-control union and TP028 acceptance checks remain unchanged. No cross-law, noisy or empirical fits are included. Registration SHA256 `d539dfcfc77ebf8c4c56eb8e571523e1a8fa5528d515cd5a5a40b70dc5a2d356`; execution identity `1fb1df1ded9154bffc97b83e4b1b423fed5239fc71b78f7a1ccc489e06fed031`.
+
+
+### 2026-10-15 — Saved conditional phase bounds isolate the optimizer
+
+TP031 evaluates exactly twenty saved TP028 stage-two endpoints with no fits or new nonlinear searches. All predictions, objective conventions and feasibility checks replay. An independent equation implementation and forty HiGHS linear solves agree across1,900numeric quantities to maximum4.10e-12. The positive truth optimum and fitted temporal optimum under its own evaluator have remaining fixed-aggregate improvement upper estimates1.327e-6 and1.562e-6BPB. The fitted policy under truth has estimate3.020e-5. These are small beside the synthetic best-static-to-two-phase gap .00074545BPB. Phase placement at these saved aggregates is therefore unlikely to explain a missing large advantage in this synthetic case. The outer aggregate search remains uncertified; loose static-point bounds do not assert attainable gains.
+
+Seal `reference_outputs/tpp40_conditional_phase_bounds_20261015/result_manifest.json`: `c4423bf7431870c4ae4e923a0f4d3e12772d4dc5d81fdae28823fc3029732cec`,57files896,601bytes. Bounds are floating-point diagnostics, not interval certificates. No empirical qualification changes.
+
+
+### 2026-10-15 — Mean-coordinate learned recovery and raw checks pass
+
+TP032/033 pass all eight noiseless learned-head qualification records and independent replay. Positive hazard-mean and benefit-mean gain RMSE are .0000145713/.0000811183BPB, actual-tied RMSE .000972/.002479, with lambda.5 recovered. Null heads select zero timing and retain actual-tied RMSE .004563. Positive aggregate controls have tied errors .45517/.40163, so relative calibration checks alone remain weak.
+
+The positive numerical truth best-static-to-two-phase advantages are .0026766726 and .0005317341BPB. Matching fitted raw picks have signed regret7.976e-9/3.181e-8 and absolute optimism-.000228/+.000974BPB. All raw endpoints report success and feasibility. These are matching synthetic laws, not real TPP40 gains or global outer guarantees.
+
+Independent replay covers8heads,161,641profiles,4truth+8fitted rawcells and24receipts;29,618numeric/1,954exact checks,max3.55e-15. Dict-form seal `reference_outputs/tpp40_mean_coordinate_controls_20261015/stage2/result_manifest.json`: `f6be7b94c257fb4ad1e21caeebf02f43f23d8c5619fd7af08a1e9b50f4a47c79`,119files45,489,236bytes. Paired-noise stage is drafted separately and remains pending review/registration.
+
+
+### 2026-10-15 — Mean-coordinate paired-noise stage registered
+
+After both noiseless families passed and the complete selected/raw audit seal verified, stage3 is separately registered. Twelve contexts use three paired Gaussian SD.003 seeds on each family/null-positive truth,24heads and4truth+24fitted raw searches. All90 original TP028 checks remain unchanged; no cross-law fitting, partial-family bypass, empirical fit or new thresholds. Registration `e9bf79b6b6c8ecbd94adb2080a8592dc22c551c8c4b7dd8ec3f304079ba6cc41`, identity `c9c66005b41127ff1bf1120c5fa7ea3ce59dc4e83be1b175cee8fbe122b570c2`. Absolute tied calibration and signed regret differences remain in the diagnostics.
+
+
+### 2026-10-15 — Mean-coordinate noisy qualification passes and is sealed
+
+Both formulations pass all90 unchanged checks after24learned heads,4truth and24fitted raw searches. All null timing strengths remain0 and all positive strengths recover.5 with the generating static shape. Positive gain RMSE is .001471/.001483/.001654BPB for hazard mean and .001888/.001348/.001574 for benefit mean. Raw signed regrets are .000211/.000225/.000277 and .000129/.000123/.000137.
+
+Absolute calibration remains less stable than phase selection. Positive actual-tied RMSE is .008637/.039353/.016918 and .025388/.037363/.015802; null .022518/.040378/.071006. Positive raw optimism is -.001668/+.003945/-.002021 and -.007717/+.008784/-.001274. No relative gate pass is presented as uniform absolute calibration.
+
+Independent replay verifies24heads,28rawcells,90gates,64receipts,86source files and484,950profile records;85,310numeric/4,098exact checks,max1.78e-15. Seal `reference_outputs/tpp40_mean_coordinate_controls_20261015/stage3/result_manifest.json`: `1a76942cc0ba8b389d9daa95796084e58d74ebad33aa6d007b7444640a7df7a2`,287files136,127,281bytes. The shared-native75head frozen StarCoder draft is separately reviewed and pending registration.
+
+
+### 2026-10-15 — Both mean controls enter the frozen StarCoder screen
+
+The shared screen fits25complete native aggregates and25heads for each temporal family,75total, retaining5,190held predictions. Each temporal fit independently rescores and refits the complete native competitor; sharing that initial native fit changes no estimator. Original326asymmetric/20tied rows, five atomic targets, frozen folds and bothreference policies remain exact. Each family receives its own50DSP and10aggregate verdicts. Registration `0b83e078c187328a4628c5618f402ada62b9791b8d6e45dc5bc000fe74cfba98`, identity `f6fa757abef8fa560b29254e8a494b0dccff4c64da6771f5e0cfc2b5e5f0f420`. No empirical optimizer, expanded grid or retrospective gate adjustment.
+
+
+### 2026-10-15 — Both mean-coordinate controls fail the frozen empirical screen
+
+TP032 hazard mean and TP033 benefit mean complete the 75-head shared-native StarCoder screen, with 5,190 held predictions. Each fails five of fifty original DSP checks. Hazard mean also fails one of ten aggregate-reference checks; benefit mean fails three. The original matched aggregate remains at 19/50 and 3/10 failures. All gates are unchanged. Neither candidate advances to empirical optimization or the many-bucket benchmark.
+
+Hazard mean fails C++/Python shortlist regret on asymmetric and joint menus, C++ joint RMSE, and Programming Languages joint selected optimism (.0089423 versus .0089153 limit). Benefit mean fails both languages' shortlist gates and Programming Languages joint RMSE, plus Programming Languages optimism and C++/Python joint regret against the aggregate reference. Seven of 25 hazard heads select strength one; no benefit head does. Absolute tied RMSE remains large for hazard mean (C4/Falcon .344/.361; C++/Python .316/.328) and for benefit mean on programming/code (.282/.192/.175), even though benefit mean's web tied errors are .0156/.0253. These errors are retained, not hidden by aggregate metrics.
+
+Independent replay verifies 500 conditional NNLS reconstructions, 1,893,936 recorded search-profile entries, 67,911 numeric and 15,261 exact comparisons, all six verdicts, and the noisy-stage prerequisite. Numeric discrepancy is zero. No clipping or failed refinement explains the failures. Seal `reference_outputs/tpp40_mean_coordinate_starcoder_20261015/result_manifest.json`: `a4b4a1b49170d344603199b92fcc16995a975bebb928a1d6121d0d5b2b3ae5a9`, 246 files and 528,928,950 bytes. Independent audit: `b2f233ec88b691d06be18052e36d81e46bdd595f85a1c28d656345148c3452b5`.
+
+
+### 2026-10-15 — Causal acquisition/retention candidate limited to pure qualification
+
+TP034 proposes physical cumulative acquisition hazard opposed by other groups' newly acquired benefit. Its scalar state composes over prefixes; the endpoint uses the difference from a computed tied counterfactual to preserve the exact native MARINER class. An analytic two-bucket 80/20 example can improve beyond the best static allocation without repetition harm. This establishes representational capacity only. The readout is relative to an empirical tied baseline, not a verified physical knowledge ceiling.
+
+An independent bounded Fable review confirms the core algebra; its claims of exponential sensitivity suppression and a local-rank equivalence are rejected by direct counterexample and Jacobian analysis. Equal-group and global-pool clock masses are distinct fixed hypotheses. The latter discounts repetition in modeled token-equivalent units; neither is selected. No kinetic grid or 39-bucket grouping is chosen.
+
+The next scope is pure numerical qualification and a separately reviewed outcome-free StarCoder derivative screen, with no fitted heads or empirical optimizer. Draft `reference_outputs/tpp40_acquisition_retention_20261015/registration.draft.v1_pure_scope.json`, SHA256 `2e21dfab9d7d73fef9fd70d7d8b2162214f68e8da33dd09c766c816564b9bd01`. Prior dynamic-state and competition failures remain constraints.
+
+
+### 2026-10-15 — Cached inner-CV selector diagnostic registered
+
+TP035 chooses between the completed TP028 and TP029 procedures by their final pooled inner-held-out BPB RMSE in each of the original25contexts. Exact ties prefer physical harm. All choices are committed from fit JSON before any held prediction table is opened, then the chosen saved predictions receive the unchanged50DSP and10aggregate checks. No fitter or optimizer runs. The two histories share training rows, inner partitions, runtime and native controls. This does not reproduce a combined-J2 family/gamma search, which could evaluate uncached cross-family refinements. Families were nominated after their outcomes were inspected; even a numerical pass is retrospective development evidence and cannot promote the selector. Registration SHA256 `c7f46d743c6c59d4376709a01815b96c98d7499366abb2d9f1b235deee2bda7b`.
+
+
+### 2026-10-15 — TP034 zero-kinetic geometry registered
+
+The outcome-free StarCoder diagnostic uses only four frozen policy/metadata files, all28native benefit shapes and six harm thresholds, two fixed clock hypotheses, and the full asymmetric pool plus five original outer-training subsets. It computes directed kinetic derivatives and4032known-floor conditional nuisance projections. Unknown floor/amplitudes and statistical recovery are not certified. In two buckets the clock weights simply rescale derivative columns, so coefficient-free residual ratios cannot select a clock. No empirical labels or fitted heads are read. Registration `3edd78fd3caa57ecdb29acb73a8e4c209f6338f519614f0676ee5de13ba21d3c`; execution identity `3386b7cdc69837c7d8a81206092f1fbd9bce730abf0ef76be878796fbe5a6b3a`. The separately reviewed pure state implementation remains under qualification.
+
+
+### 2026-10-15 — Cached harm selector is inert; acquisition geometry remains distinguishable
+
+TP035 completes and is sealed at `reference_outputs/tpp40_cached_harm_selector_20261015/result_manifest.json` (SHA256 `247e52d7c0032b63169908854b1c6ee6e1a0f816631e005aba540d22893caac7`). Every one of25contexts strictly prefers physical harm by inner-validation RMSE; the1,730predictions reproduce TP028 exactly. The two C++ shortlist failures remain. Independent replay passes26,534exact and6,760numeric comparisons, max8.88e-16. This diagnostic is closed without promotion; it did not run a combined family/gamma search.
+
+TP034's outcome-free geometry is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/geometry/result_manifest.json` (SHA256 `e8587a8e52c9169abee5b0acda3445955e2eb26864efb4d9f2d856062c459f6e`). Its original benefit-coordinate quadrature fails the requested convergence estimate in five of28shape cells; those failures remain explicit. An independent adaptive physical-time integration covers every row, shape and direction with no QUADPACK warnings. Maximum derivative discrepancy is4.47e-8, and recomputing all4,032nuisance projections changes retained-norm ratios by at most1.58e-8. The full-asymmetric conditional retained ratios remain approximately.57–.89 after the conservative native shape-tangent span.
+
+This supports the narrow geometry conclusion that the zero-kinetic feature directions are not absorbed by the tested known-floor nuisance spans. It does not qualify the original integrator, identify a shared kinetic scalar or unknown floor, select clock masses, or establish a real gain. The sealed independent reference is sufficient for this geometry-only disposition. Subsequent synthetic work will use the independently reviewed physical-time pure-law evaluator, with a separate registered scope. No empirical losses or fits have been inspected for TP034.
+
+
+### 2026-10-15 — TP034 pure numerical qualification passes after independent corrections
+
+The pure source is frozen at SHA256 `95980e5615c3c015ecc9720762bbfe23d20cfdaf41e1d3c4e42d21c217701e7c`, with24tests at `42017d8e48e4f611ba7e3febefd9fd4a917a6449a6e253779cb62da8814a1484`. Independent review found and fixed two silent-success cases before freeze: NaN/positive-infinite quadrature inputs and NaN prefix states could bypass convergence or conservation checks. Valid negative-infinite log zeros remain supported. All24tests and nine independent three-bucket state/sensitivity checks pass; maximum discrepancy is4.37e-12. The prior findings remain in the audit.
+
+The pure-only11file manifest is `reference_outputs/tpp40_acquisition_retention_20261015/pure_qualification/result_manifest_v1.json`, SHA256 `2c54e3d4d140f4a202b9aa72c9bb9f560c33f752ccf39aec9816003812e047df`. Numerical qualification is bounded to tested cases, not a uniform interval certificate or a learned-estimator pass. The next design uses asymmetric-only synthetic fitting on the actual two-bucket StarCoder geometry, holding tied outcomes out. This postpones39bucket grouping decisions while retaining all later many-bucket requirements.
+
+
+## 2026-10-15 TP034 synthetic oracle registration
+
+Pure-law and adapter qualification passed; both physical clock hypotheses remain separate. Stage1 is registered before label generation at `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/stage1/registration.json` (SHA f2b7c0ec5e68a77d2151ff8568c6b3ed551bd1e746e3c3c25a86008c69189f1c). Four hand-specified worlds, ten outer0 known-floor/shape heads,184 NNLS solves, and320 floor feasibility records. No learned J2 or empirical fitting is authorized by this stage. Full two-clock truth geometry plus deterministic extrema are subject to independent ODE agreement within1e-8 BPB/benefit before learned advancement. Source review passed7toy tests. Fable protocol feedback is adjudicated in `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/reviews/synthetic_protocol_fable_v1/adjudication_v1.md`; its unsupported CV-floor bias proof and positive-world false-gain gate were rejected.
+
+
+## 2026-10-15 TP034 conditional recovery and floor-domain failure
+
+Stage1 is sealed at `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/stage1/result_manifest.json`, SHA a8c38029614a5df658743f2a551f38b97f44fe7fcc1590a430b3ac91762b6718. Independent replay passes184NNLS heads,320floor records and1468ODE comparisons (maximum BPB discrepancy1.30e-10). Exact-family conditional query errors are at most1.11e-15 and kinetics0/3 are recovered. The inherited gamma1–6 floor interval excludes the true floor in137/320 training subsets, including clean native-null subsets. Original full-J2 stage2 remains blocked and unexecuted. This is a floor-domain failure, not proof of predictive impossibility or temporal-law failure. The diagnosis cannot be repaired by translating/scaling synthetic outcomes. Separate oracle-noise and known-floor full-shape diagnostics are being prepared; neither qualifies a deployable procedure.
+
+
+### TP034 separately registered conditional-noise and raw-truth diagnostics
+
+Registration `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/oracle_extension/registration.json`, SHA 0ff481804aca12ab2fe3b994a3126a9ff65f84ee662faf5883d79d5ed9847678; identity eb0c3837d4d209828468b9e3765709cfb1ae4c7c79307ac45b0333cf368175a2. All200 known-floor/shape cells (3680NNLS solves,10exact initial-cell duplicates) and four fixed raw truths are separately authorized. Raw truth uses17x17mesh,80boundedlineintervals,12Powellstarts and stricter replay; numerical incumbents only. Source review8toy tests passed. Inherited learned-floor-domain failure remains failed, and no full learned or empirical fit follows.
+
+
+### TP034 response-space nuisance geometry
+
+No-fit diagnostic registration `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/floor_geometry/registration.json`, SHA d2fb3c54a64203dd17b3d0023e663f81d798707822d200d96216c62a57643abb. Four previously fixed native/positive clock laws on80asymmetric training subsets; response-space floor/intercept/amplitude/shape/kinetic tangent projections. All finite-difference errors and coarse/fine residual stability remain visible. This diagnoses local conditioning, not global identification, statistical confidence or the discrete J2 estimator. Source/calculus review passed including independent analytic zero-kinetic derivative checks. No empirical labels or parameter fitting.
+
+
+### TP034 known-floor complete nuisance-selection diagnostic
+
+Registration `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/tpp40_acquisition_retention_20261015/known_floor_diagnostic/registration.json`, SHA c57d2b55f6c42fd310cd38cfbef7801dd56d6548329c26e546889fcf952d4149, identity 73955ef0862160c5062953f15d1c7de6d99585734bab484128b267d97341b66e. Exactly40outer0heads overthe four fixed worlds and four existing clean/noiseconditions. Suppliesonlyfloor0.6; complete168shapes/5ridges/7kinetics and freshnativecontrol retention. Three full-API/toytests and independent source review pass. Fourlocalworkers are schedulingonly. No learnedfloor, empiricalfit or promotion;137/320 original floor-domain failures retained.
+
+
+### TP034 conditional noise, complete nuisance selection and floor geometry
+
+The 200-cell known-floor/shape extension is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/oracle_extension/result_manifest_v1.json` (7ad73d85c84ce045d5c810113f6024e6d110f72fc003fd85d6e8bbca3db80c5a). Independent replay covers 3,680 NNLS systems and all 12,470 finite raw-truth trials; maximum ODE disagreement is 1.20e-10 BPB. Clean matching laws recover in all five folds. Under SD .003 training noise, native-null endpoint RMSE reaches .09718 (maximum absolute error .19147), even with the true floor and shape. This is a conditional estimator failure at sparse endpoints, not an information-theoretic lower bound. Fixed synthetic truth searches have numerical best-static improvements .00335088 and .00632382 BPB for the equal-group and pool clocks; these are not TPP40 gain estimates or certified global optima.
+
+The separate 40-head known-floor search completes after a retained SQLite cache-initialization lock in the four-worker attempt and exact-source serial resume. It searches all 168 shapes, five ridges and seven strengths. All clean matching heads recover exactly; all six noisy matching positive heads select generating strength3 and rate.25/power.7. Gain RMSE is .0000272–.000269 and actual-tied RMSE .000162–.000942 BPB; all select the best held menu item. This is outerfold0 only. A noisy native-null equal-clock head selects strength.1 and has tied RMSE .008665; heterogeneous-static tied RMSE reaches .020704. Author replay reconstructs all40 full/120inner selected NNLS systems; its source is independently reviewed and root independently recomputes role/gain metrics. Unselected profile scores are structurally checked only. The true floor is supplied, so this remains a diagnostic rather than a deployable method.
+
+The response-Jacobian diagnostic is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/floor_geometry/result_manifest_v1.json` (08ea367e9949199bec74b5b1f16c7b5afdd4163906ec5179dc5a72e4e9fe1daf). All80 subset records and480 projections independently replay, with relative residual-norm error at most6.76e-10. Independent six-edge ODE derivative checks pass. At the native null the floor direction is extremely weak on some subsets; at finite strength timing trades off substantially with shape/amplitudes. These unconstrained local norms are not statistical confidence intervals. All137 inherited floor-domain failures remain unchanged; full learned J2 and empirical advancement remain blocked.
+
+
+### TP036 response-objective and floor isolation proposed
+
+The corrected Fable review motivates a three-arm conditional test, not an information-impossibility claim or a floor replacement. The accepted proposal fixes the generating shape and kinetics on80 existing full outer-training contexts: supplied-floor log NNLS, supplied-floor direct BPB least squares, and the same BPB objective with jointly profiled nonnegative floor/intercept. The two nonlinear arms share five training-local gamma-derived amplitude starts; neither learned-floor initialization nor selection sees oracle coefficients. The heterogeneous static world remains deliberately misspecified. This distinguishes a response-objective intervention from floor nuisance cost, which previous common-floor log-CV and bundled direct-BPB tests did not isolate on this new law. Source and numerical review precede execution. There is no kinetic selection, new policy optimization, empirical fitting or promotion in this scope. All prior failures remain.
+
+
+### TP034 saved-noise influence diagnostic registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/noise_leverage/registration.json`, SHA eb3b25c4cd5aa115a514afed5f8f269642b63bf8da68e86953a3c4a05c55bb15. Exactly45 fixed-generating-kinetic contexts,90 full/retrospective-active faces and17,964 query/paired-gain rows. Scaled SVD propagates the existing training-noise vectors, Jensen and retransformation terms and unrestricted response Fisher geometry. Active-face approximation bias is retained; its moments are conditional proxies, not the distribution given face selection. All80 static-misspecification residual/timing-tangent cosines are descriptive. Independent source review passed8tests and5additional invented examples after root corrected an omitted active-face clean-projection offset. No parameters are refitted and no new policies or ODEs are evaluated.
+
+
+### TP034 conditional endpoint noise is distinct from frontier selection
+
+The saved noise-influence diagnostic completes with independent source/toy review, author inspection of all17,964rows and root recomputation of key summaries. It does not independently replay every SVD. At the zero-code tied endpoint in fold3, native/equal/pool seed17 errors are -.191468/-.125204/-.060730 BPB, versus first-order propagated noise -.209788/-.130868/-.063224. Full-head response Fisher SD is .141952/.080728/.039740 there. Large endpoint sensitivity therefore exists even in the additive-BPB local information geometry; this is not proof that every constrained or biased estimator must suffer the observed error. Propagated Jensen terms are much smaller in these fixed worlds.
+
+Within each fixed-generating-strength profile's predicted20% frontier, pooled error RMS is .000691/.000549/.000462; maximum menu regret@1 is0/.000078/0 and allregret@3 values zero. These are finite synthetic menus, not continuous optimizer certificates. The heterogeneous-static residual is largely absorbed by native head/shape tangents; remaining temporal cosines are all between-.1344 and.1513. This does not support the suggested dominant local rate-error/kinetic alignment, though nonlinear/global confounding remains possible. No scientific gate changed.
+
+
+### TP036 fixed-law response comparison registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/response_profile/registration.json`, SHA da79d95c0a6df3fdec18ec702fa7a8831095abd5b34d4f9efc04da8fc8cbeebf; execution identity 6b52ec35d3ff8ee93213d14c6a7f62af91577ec6215fac10012789a91a0c5671. Independent pure and runner review passes18toy tests and all prerequisite seals. Normalized-scale prediction, centered envelope gradients and strict JSON serialization were corrected before freeze, with original findings retained. Exactly80full-outer contexts and240heads, including80saved generating-strength log baselines; fixed shape/strength, same five training-local starts, no empirical outcomes or policy search. Failed/nonwinning starts and unresolved profiles remain visible. No earlier scientific gate is changed.
+
+
+### TP034 supplied-floor search extends to all five splits
+
+Registered `reference_outputs/tpp40_acquisition_retention_20261015/known_floor_all_folds/registration.json`, SHA 67590cfa9a84a32fc75206d0d89e747852c2b31cae15b2247e2047d3dfa1750a; identity 3c498806d16c1330d6606f598b091424744007d187a96611900e7bafc0d05a49. Exactly160new heads onfolds1–4 plus40old heads adopted with their original receipts. The168shape/5ridge/7strength search, complete native control and original labels/noise remain unchanged. A separate copy of the sealed cache supports serial work. Root source review and six toy tests pass; all200heads receive unchanged descriptive frontier/regret scoring, with no new acceptance gate or learned-floor qualification.
+
+
+### TP036 direct response fitting isolates a noisy-floor weakness
+
+The80context/240head diagnostic is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/response_profile/result_manifest_v1.json`, SHA c97acfbf0434a4a2fd818983d966781718d6b6388b828c73a6492e046783a4ed. Independent replay covers321receipts,400training-local initialization NNLS projections, selected constrained linear profiles, normalized predictions and score/status accounting; maximum selected-profile prediction discrepancy2.66e-15. The auditor source is independently reviewed. Nonlinear optimizations were not rerun. All134unresolved incumbents and8failedstarts remain, with584finite-difference directions below numerical resolution; these are not certified stationary solutions.
+
+All45correct-family clean references pass(maximum error1.04e-9). On noisy positive worlds, actual-tied error RMS(log known floor / BPB known floor / BPB learned floor) is equal-clock .02065/.02220/.03195 and pool-clock .00914/.00811/.02770. Direct fitting lowers training error but does not consistently improve held calibration; learning the floor is particularly unstable in fold3. Other folds are much better. Fixed generating kinetics means null phase gain is identically zero, so this is not a false-phase selection test. The all-fold plot retains every seed and unresolved head. No learned procedure is promoted.
+
+
+### TP037 unchanged-J2 floor-domain diagnostic registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/unchanged_j2_diagnostic/registration.json`, SHA b62b2eab71177bcb555a9f9b1fd892d45a2156204a5f13fa6b0929169005b675; identity b57d561091f8da1dd8dccbe9e2fe78c9f32d33690add9e9ec936db6d9847d60a. Ten clean outer0 heads use unchanged J2 and the complete refined native control. This measures predictive compensation despite excluded generating floors; it does not reopen or pass the original blocked stage2. Source review and10toy tests pass. Same four worlds/menus, no raw optimization/noise fits/empirical outcomes; comparison is against the sealed supplied-floor search.
+
+
+### TP034 all-fold supplied-floor search exposes static extrapolation and false phase gains
+
+The200head study is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/known_floor_all_folds/result_manifest_v1.json`, SHA 3cf46cfc976d35a11993fbffb084d1e4ee7a5d925994a73db76536dfad0300bc. Author replay reconstructs200full and600inner selected NNLS systems (maximum query discrepancy2.49e-12); its source is independently reviewed and root checks the reported metrics. All772,920candidate records have structural coverage/argmin checks, not numerical replay of every unselected solve. All25clean matching references recover within4.44e-15.
+
+Noisy shape selection has a severe static failure: native-null fold3 seed20261016 predicts48.869975 instead of2.585223BPB at the pure-web tie, an error46.284752. Both temporal models retain that native mu0 head. Its held-menu regret is nevertheless zero; this does not validate the endpoint or an untested raw optimum. Positive matching kinetics recover3 in29/30noisy cases and allregret3/5 values are zero, but actual-tied RMS across folds is.024051(equal clock)/.013854(pool). Native and heterogeneous nulls can invent positive gains up to.006224/.019296. The latter occurs atmu.3, not the one separate upper-boundmu30 selection.
+
+These failures arise even with the true floor supplied. They separate noisy static shape/head extrapolation, temporal null selection, and finite-menu selection. They do not prove an information-theoretic impossibility or identify a new missing state. Original137floor-domain failures and all prior gates remain; no learned or empirical procedure is promoted.
+
+
+### TP037 unchanged J2 approximates the static null but misses clean phase magnitudes
+
+The ten-head clean outer-fold-zero diagnostic is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/unchanged_j2_diagnostic/result_manifest_v1.json`, SHA 381233df0f94dae9927a1a1983687b3f1edeefa3b93d149a9770d8ae01d74ec6. Author replay reconstructs all 10 full and 30 inner selected NNLS systems within 5.78e-15, plus saved menu scores. Independent source review and four invented examples pass. The 232,288 search records receive structural checks; scalar refinement and unselected solves are not rerun.
+
+The native null selects zero kinetics and has actual-tied RMSE 0.001012 despite exclusion of the generating floor. Floor-domain exclusion therefore does not logically imply predictive failure. The equal-clock positive selects the generating strength 3 but has gain RMSE 0.001687. The pool-clock positive selects the upper strength 30, with gain RMSE 0.008609 and actual-tied RMSE 0.011453. Both select the best saved menu item. Corresponding supplied-floor clean searches recover essentially exactly. This diagnoses the inherited full fitting procedure; it does not isolate floor error from simultaneous shape selection.
+
+All eight historical descriptive failures and 137 original floor-domain failures remain. The separate all-fold supplied-floor study already shows noisy instability even without floor estimation. Neither problem is repaired by these results, and original stage2 remains blocked.
+
+
+### TP039 novelty saturation diagnostic registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/novelty_saturation/registration.json`, SHA 908d087ca2422c1e63a6f21d0a3f64708903bb41ea7de81cad7c07073cf89101. The outcome-free diagnostic retains all 280 policies, 39 buckets and 28 native benefit shapes. It records physical early/total hazards, remaining late novelty and positive benefit headroom, with all support categories and predeclared summaries. The mathematical bound is per-bucket feature headroom, not a numerical BPB gain bound. Fixed-policy positive gains vanish asymptotically, but negative effects can persist at support boundaries and moving optimized weights are outside that theorem. Independent source/math review, three toy tests and a 140-coordinate invented check pass. No fit, ODE, grouping, clock selection or measured outcome is included.
+
+
+### TP038 finite-Gaussian ambiguity diagnostic registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/gaussian_pair_diagnostic/registration.json`, SHA 7a6f518fb3871f1be72d046042eb8fcd563c9d56c8dfdd440981a5132bc00853. All 450 existing fitted functions are compared with their synthetic generating function on the exact asymmetric training rows, using stipulated independent Gaussian SD 0.003. The distance determines exact equal-prior test error; a common-class scalar-functional separation supplies a pairwise minimax risk lower bound. This is a statement about a frozen pair under fresh hypothetical observations, not conditional uncertainty for the noise-selected fit.
+
+The inventory has 327 correctly specified family entries and 123 heterogeneous entries; clipping, underflow and nonfinite evaluation separately disqualify analytic-law bounds. Every query and paired gain remains, with original solver flags. Independent source/math review and eight invented-data tests pass. No new fit, ODE, policy optimization or measured outcome is used. This scope includes all ten unchanged-J2 clean heads before evaluation, so procedural mismatch can be distinguished from a hard noisy pair.
+
+
+### TP039 complete geometry supports mixed exposure, not universal saturation
+
+The metadata-only diagnostic is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/novelty_saturation/result_manifest_v1.json`, SHA `8b16dd650545ffdaa6428fbbae442d77be45ad8f11abd54d3113b619f299fa96` (17 files, 18,449,592 bytes). Author arithmetic replay covers all 1,834,560 feature values and 196,560 summary checks; independent source/math review and saved-readout arithmetic pass. Maximum hazard discrepancy is 1.14e-13, with benefit and novelty discrepancies at most 2.22e-16. All threshold counts match.
+
+The largest web pool has median total hazard below one under every one of the 28 shapes. The smallest pool, Wikipedia, has median benefit ranging from .77928 to nearly one; even that bucket is not uniformly saturated. Positive-total asymmetric late-novelty 90th percentiles range .05135–.27945 across shapes. All 40 zero-total coordinates remain separately identified. These are feature coordinates, not fitted interference, BPB gain, or evidence selecting a group/clock. They support investigating a finite mixed-exposure regime while preserving the fixed-policy asymptotic bounds and the possibility of persistent negative boundary effects.
+
+
+### TP038 separates noisy ambiguity from clean fitting failures
+
+The 450-head Gaussian-pair diagnostic is sealed at `reference_outputs/tpp40_acquisition_retention_20261015/gaussian_pair_diagnostic/result_manifest_v1.json`, SHA `d9dba546a0e2a0d1a3b9c6beb390a6a90306ff0b65cc672efb92f9cafb1b10a3` (33 files, 47,355,580 bytes). Author scalar replay covers 117,662 training means, 59,866 endpoints and 29,038 paired gains. Independent source/math and final readout reviews pass. Maximum scalar distance discrepancy is 2.84e-14. The predictive-class eligibility, all 123 heterogeneous entries, 134 unresolved heads and duplicate dependence remain visible. There are 366 distinct finite evaluated-mean vectors, not independent experiments.
+
+The catastrophic native-null endpoint differs by 46.284752 BPB at equal-prior Gaussian test error .050290 under stipulated independent SD .003; its phase-gain separation is exactly zero. A separate pool-positive learned-floor pair differs in phase magnitude by .010369 BPB at test error .128895, yielding root minimax MSE bound .002632 BPB. A known-floor phase-magnitude witness also exists. These are fixed-pair worst-case statements about fresh hypothetical observations, not posterior intervals, typical errors or policy-regret bounds. The gain witnesses need not reverse policy preferences.
+
+The clean unchanged-J2 positive errors have training distances 12.47 and 19.16, with test errors 2.24e-10 and 4.88e-22. Those particular failed fits are readily distinguishable from truth; the original floor/shape/kinetic fitting procedure therefore remains a concrete target for improvement. The existence of other hard noisy pairs does not excuse these clean failures or prove a particular fitting fix. No prior gate is changed and no empirical model advances.
+
+
+### TP040 solver-only response control registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/response_solver_control/registration.json`, SHA `a0c7de2bc6d6926f943131a7cdd94adfba1f803888bf6858e7122cc8e636c8e3`; identity `3c2f17b84bff94a2bb0b6fc2da068beaae715684c50cd037fa59693e2457d9de`. All 160 original nonlinear TP036 profiles repeat with the same five starts, fixed shape/kinetics, response objective, floor domain and amplitude bounds. Only the numerical solver changes to scaled trust-region least squares with the exact active-face variable-projection residual Jacobian. Each start retains the same 5,000 actual-evaluation cap. No policy trust region is introduced.
+
+Nine toy tests and required scoped lint/types pass. Root independently reviews source and four additional nonzero-residual/active-face/gauge cases; maximum finite-difference Jacobian error is 8.78e-9. Original projected-gradient flags remain separate from TRF optimality, and finite incumbents survive failed starts. Near-bound positive amplitudes are not snapped. The original 134 unresolved profiles, 137 floor-domain failures and all scientific gates remain. This checks a numerical uncertainty before considering a complete response-space fitting procedure; no empirical outcomes or new policy queries are included.
+
+
+### TP042 finite-menu decision diagnostic registered
+
+Registration `reference_outputs/tpp40_acquisition_retention_20261015/finite_menu_decisions/registration.json`, SHA `c0bdc8412360d613146e71c7ceaa72c6b076c7ad129633b09783769cefcaaffc`. All 450 TP038 pairs receive three explicitly finite action menus: held asymmetric, held asymmetric plus actual ties, and held asymmetric plus matched tied counterfactuals. No new query is evaluated. Exact-rational regret-line envelopes and Gaussian interval probabilities give equal-prior Bayes regret, a lower bound on the same pair's finite-menu minimax regret. The simpler overlap bound and all original eligibility/status fields remain.
+
+Independent source/math review, 13 tests and 500 additional invented checks pass. Two numerical defects were corrected before freeze: a near-unit likelihood threshold lost precision, and distinct positive intervals could coalesce and receive zero probability. Coalescence now records a failed cell. Fable's core derivation is independently confirmed; its proposed solver-status exclusions and extra prior optimization are not adopted. No empirical outcome, continuous-policy claim, qualification or prior gate change.
+
+## 2026-10-15 — TP40-041 fixed-state readout isolation registered
+
+Registration `8ef82c87518cd7e8dc7fca2643532f89b8b572d0691fa87657458794badc64c0` freezes 312 invented state cases and 624 fixed-head predictions. The causal state is unchanged; compare benefit `b + exp(-R_tied)*(m_path-m_tied)` against `b + m_path-m_tied`, with identical physical repetition harm. Both fixed clock normalizations, balanced and 100-fold pool inventories, four token budgets, signed timing, zero-dose and absent-bucket boundaries are retained. Independent source review and 11 toy checks pass. No outcome data, fitting, optimizer, or performance gate is involved. This tests a readout assumption, not a repair of the inherited floor estimator. Earlier failures remain binding.
+
+## 2026-10-15 — TP40-040 numerical solver control closed
+
+Seal `fbdbcd654819d5ad84d4bfa6cf4dcec7a4d7ecb093439f79bb1918bc188c382f` captures the full 160-pair control and independent saved-output audit (320 selected linear profiles, 800 starts, 401 receipts). Trust-region solving removes failed starts (8 to 0) and lowers the original unresolved count (134 to 118), but changes query predictions by at most 1.0572e-7 BPB and phase gains by 4.329e-9. Training objectives agree within 7.33e-15 scaled units. Noisy calibration failures remain. The large exact-zero projected-gradient flag on tiny positive bound coordinates is retained and explained, not rounded away. This does not support numerical solver cycling as a remedy; it is not a global-optimality certificate or a complete response-space estimator test.
+
+## 2026-10-15 — TP40-041 readout comparison closed
+
+Seal `abcb5c848add8656c2e92196754a4751bf411b9b46a90d8614fc1620291b9eeb` retains all 312 invented state cases and 624 fixed-head comparisons. Author and independent saved-state arithmetic pass, with maximum independent discrepancy 1.60e-14. Removing the survival attenuation amplifies both favorable and adverse state contrasts: 28 additive benefits exceed one, 96 signed bucket contrasts are negative, and 46 net-head gain signs reverse. The additive quantity is utility, not probability. There are 212 exact-native branches and four additional asymmetric zero-dose cases with zero departures; the original prose count was corrected with history retained. No fitted outcome or policy optimization is involved. The four-panel budget illustration was visually checked after removing overlapping y labels. This isolates a substantive readout assumption, not an empirical improvement or floor repair.
+
+## 2026-10-15 — TP40-042 finite-menu decision bounds closed
+
+Seal `dd4e6f35b4f298108351642cac086f0ba53d513976dd3278684c10b7a95d10b7` captures all 1,350 problems from 450 frozen function pairs and three action menus. Independent exact-rational envelope checks and 90-digit Gaussian replay pass. There are 1,098 distinct finite decision fingerprints, not 1,350 independent experiments. All native-null pairs share a best action, including the 46.284752 BPB endpoint discrepancy; the largest eligible equal-prior Bayes regret is 8.678875e-6 BPB. Some individual risks change across menus even though the world maxima and shared-optimum counts match. The saved scalar ambiguity witnesses therefore do not yet imply a large unavoidable policy-selection penalty. This is not proof of identification, continuous-optimum reliability or typical error; unexamined functions may yield harder decisions. All unresolved and misspecified entries remain labeled.
+
+## 2026-10-15 — TP40-044 paired donor-clock isolation registered
+
+Exactly24 invented mixed-inventory states at aggregate0.5 and strength3 will be compared with their sealed TP041 novelty-clock counterparts. The only state-law change is replacing donor acquired benefit with cumulative donor hazard. Both existing readouts and fixed heads remain separate, including negative effects. At p=1/global-pool masses this reproduces NG005 after rescaling; it is not a new causal architecture. Root independent source/math review and12 invented tests pass. Registration `58f892a91c26cc39ae49f6914b4fda826ab9747a0015742932996ddc1e349d62`. No empirical outcomes, fitting, clock selection or promotion.
+
+## 2026-10-15 — TP40-043 clean whole-response estimator registered
+
+The separately registered estimator jointly profiles a nonnegative absolute floor and positive scale under direct BPB error, then selects all168native shapes and7kinetic strengths by three-fold inner BPB CV. Ridge is fixed at zero; five training-local gamma values initialize coefficients only. Exact native profiles and full heads are reused at zero kinetics. Ten clean outer0 heads require at most20,170conditional fits/100,850starts. The prior solver, tolerances and diagnostic flags are unchanged. All full fits must be durable before the separate held-truth scoring command. Independent source review,6invented tests,74pins and2,494prerequisite files pass. Registration `7cae84a9acd0041b834e011a8c599259ac92cd2cbf4940b550e55bb1ff1d1ec4`; no noisy expansion, empirical fit or scientific promotion is authorized.
+
+## 2026-10-15 — TP40-044 donor-clock diagnostic closed
+
+All24 paired states complete. An independent ODE route and analytic tied-state author replay agree within1.60e-11; separate reviewer checks5,584numeric values,2,200exact comparisons and438hashes, maximum arithmetic error1.24e-14. Donor hazard can increase signed state departures at large exposure, while the hazard readout still attenuates saturated-bucket effects near1e-10. Both clocks retain16negative bucket contrasts,4additive overshoots and9readout head-sign flips in this subset. These are fixed-head same-aggregate effects, not optimized gains or empirical evidence. Seal `01bec3d1edd018123d2bb99e0fc8474cdbca8f141c8e323d096e42b400f8cb0a`.
+
+## 2026-10-15 — TP40-043 numerical recording interruption
+
+The clean whole-response run was stopped before held scoring after a finite validation prediction produced overflow in squared-error aggregation. The frozen code left this nonfinite objective eligible and would later reject its JSON serialization. All5,654durable conditional fits and4native heads are preserved; no partial writes remain. Interrupted seal `361769f98d342050f9a0637fac846a33580a7abe80b45c0739032d271eb6dcca`. A separate reviewed wrapper will retain ordinary finite scores exactly, add stable overflow aggregation and explicit invalid-objective status, and adopt only source-verified identical conditional fit payloads. No objective, shape/kinetic grid, scientific threshold or held-label choice changes.
+
+### TP043 numerical continuation registered
+
+V2 preserves the frozen original source and interrupted artifacts. Ordinary finite CV scores remain byte-identical; a scaled residual calculation is used only after intermediate overflow, and an unrepresentable loss becomes explicitly ineligible with its predictions retained. Every adopted fit payload is unchanged and linked to its source hash, original spec/input/identity and the interrupted seal. Family profiles and selections are rebuilt. Independent review checks82pins,all5,654fitpayloads and prior seals;4toys plus2additional overflow probes pass. Registration `6724da811275424b23e8b9d9a08b82d8b0d4165cec98b3999e1c69eb4d7e6f75`. Scope, solver, grid, objective and scientific thresholds remain unchanged.
+
+
+## 2026-10-15 — TP40-045 auxiliary-prefix diagnostic registered
+
+Registration `b879318d384a51900d99a37a80b359993af00c454e0630c9392e36c8b6897c93` freezes 450 existing function pairs, three within-run correlations and three prefix-to-final noise ratios, for 4,050 two-column profiles. The endpoint functions and latent queries stay fixed. Prefix means share canonical shape and benefit/harm amplitudes with the final model, but have separately profiled nonnegative floor and scale. This is an explicit, unverified cross-horizon assumption; real phase-boundary labels are not accessed.
+
+Independent source/math review, 12 invented tests, 958 source/input pins and 2,628 sealed predecessor files pass. Fable confirms the Gaussian calculation. Its useful suggestions add noise-ratio sensitivity, prefix-only separation and parameter-ancestry distinctions; the claim that correlation automatically inflates every profiled distance is rejected. A kinetic-only change with identical native amplitudes and shape has an identical prefix map, so zero-correlation prefix data cannot directly distinguish that change. Surviving fixed-pair witnesses are informative; disappearing witnesses do not establish identification or qualify a fitted procedure. The primary endpoint-only benchmark is unchanged.
+
+
+## 2026-10-15 — TP40-043 clean fitting failure repaired, noisy question remains
+
+The complete response-space estimator is sealed at `whole_response_clean_v2/result_manifest_v1.json`, SHA `c8b4791d17bc9143850c387d044cc0857cc53e72e160025461340c8e0d7b0a8e`. All ten clean outer-fold-zero heads complete. Matching native and temporal families recover the held functions to numerical precision, including the floor and generating shape; both positive worlds select strength 3. Their gain errors fall from the unchanged-J2 values 0.001687 and 0.008609 BPB to below 1e-15. Both temporal formulations retain strength zero in both null worlds. This tests the full shape/kinetic/floor fitting procedure, rather than supplying those quantities.
+
+Author replay checks all 20,160 saved unique inner-fit traces and selections, with separate numerical replay of selected equations. Independent replay covers ten full and thirty inner heads, 2,910 inner predictions and 730 held rows; maximum prediction discrepancy is 4.44e-16. Five unresolved head entries remain: the three reused heterogeneous-null heads and two static controls on genuinely temporal data. All 192 failed inner starts, 241 invalid-prediction profiles and 33 overflow profiles remain visible; profile counts include native reuse.
+
+The two deliberately misspecified static controls retain substantial prediction and selection error, including regrets 0.013394 and 0.016977 BPB. Their mechanical pass of applicable historical checks is not a calibration claim. This result repairs a clean procedural failure of the earlier estimator. It does not establish noisy stability, transfer to measured swarms or reliable continuous optimization, and it does not erase earlier qualification failures.
+
+
+## 2026-10-15 — TP40-046 noisy boundary stress registered
+
+Registration `130f099e08af24e5395250f264abd4e8149b98c99bfabe59d098baa7bc6de0e4` freezes the unchanged TP043 v2 estimator on outer fold 3 and the three existing paired noise seeds, with all four worlds and thirty heads. This split and these seeds were inspected in earlier methods; the result is a targeted falsifier, not fresh validation. All full fits must finish before held scoring. A scoring-only fallback preserves ordinary arithmetic, records extreme finite losses safely, and retains unrepresentable metrics as explicit failures without clipping.
+
+Independent source review, six invented tests, 117 pins and 824 sealed all-fold cache files pass. The maximum search is 60,510 conditional fits and 302,550 starts. Estimated compressed output is 6.43 GB; free space before freeze is 11.399 GiB, with the inherited four-GiB guard. A resource or 18:00 UTC deadline stop preserves the incomplete fixed schedule; it does not permit a favorable subset or weakened gate.
+
+
+## 2026-10-15 — TP40-045 conditional prefix evidence closed
+
+Seal `91d2130278525df53e8cbcca35b468775e1223698247d534d57d77381781192d` captures all 4,050 finite profiles and both arithmetic reviews. The author replay covers 17.4 million numerical checks; independent review reproduces 581,652 eligible functional bounds, every joint-distance decomposition and all 18 published envelope entries. No profile failed. The envelope ranges over different pair-specific experiments and is not a common-design risk bound.
+
+At independent prefix/final noise, the largest saved eligible phase-gain root-MSE lower bound falls from .002632249 BPB to .000563688, .000711522 or .000994610 when prefix noise is one, three or ten times final noise. This only weakens the saved ambiguity witnesses under shared canonical amplitudes; it does not bound achievable error from above or establish identification.
+
+A separate analytic counterexample (`reviews/shape_only_prefix_counterexample_v1.md`, SHA `7b1946cfb0e2d8f591d6b9dcf44095cfb47c6efcf20649741bbb793f03977c67`) shows why the amplitude-sharing assumption matters. The original strongest pool-positive gain pair shares shape and kinetics. Allowing horizon-specific amplitudes permits exactly the same teacher prefix under both hypotheses, so at independent noise the prefix likelihood cancels and the original .002632249 lower bound survives. Correlated-noise and stronger-sharing cases are explicitly outside that statement. No empirical checkpoint labels were fitted.
+
+
+## 2026-10-15 — TP40-046 noisy whole-procedure stress failed
+
+Seal `24466a9ea9d9e014279edd03801a163424f97dca9f06d8f1b201af53d53eb36e` retains all thirty heads, sixty thousand conditional fits, their failures and saved-output audits. Twenty-seven heads have finite query tables; three query-failure records are the same reused native-null fit. Independent arithmetic reproduces 9,330 inner and 918 held predictions, all finite metrics and gate statuses. The complete estimator does not preserve its clean recovery under noise. Matching positive gain RMSE spans .007589–.067046 BPB; every positive head fails the .001 requirement and is worse than the matched supplied-floor and supplied-shape comparators. Nine applicable frontier-bias checks fail. The failure is not limited to distant tied endpoints.
+
+All twenty-seven finite heads still select the best action in their thirty-four-row held menus; the failed records have no selection result. This does not establish raw continuous optimization or calibrated gain. The strongest numerical failure is a native-only model, so it cannot be blamed on adding a temporal state alone. Twenty-nine full fits and every selected inner procedure retain unresolved diagnostics despite successful solver termination. No scientific gate or historical result changes.
+
+## 2026-10-15 — TP40-048 conditional ridge isolation registered
+
+Registration `a45381e8cdd7ff1fc1e8bb8505fe45788e2a582cf3cc9c95d8904160565b9624` freezes eighty existing synthetic contexts, known/free-floor arms, and the full fixed lambda curve 0, .0001, .01, 1, 100. This is 160 exact zero-ridge adoptions and 640 new conditional fits. The objective adds raw canonical amplitude L2 to the same mean BPB error divided by .003 squared. No lambda is selected from held outcomes; shape and kinetics remain supplied. Independent source/math review and ten invented tests pass. This tests variance reduction against floor-shrinkage bias already documented in the September joint-floor work. It supplies no new identification and cannot qualify a full estimator.
+
+
+## 2026-10-15 — TP40-047 fixed-pair follow-up registered
+
+Registration `42622ea4d1d4fd6453a8ab7c5305eb2d5d02ca52f03b614d255202ab0a3d9749` freezes all thirty TP046 selected heads and ninety finite-menu records, including the three failed-query records. It reuses Gaussian testing and exact finite-menu Bayes-regret arithmetic, with every original row and status. The observed noise alignment is descriptive because the fitted alternative was selected adaptively. Root source review corrects inherited menu provenance; no fitting, new policy query or empirical data is involved. The diagnostic may find further hard pairs, but large distance or small pair risk alone cannot classify a realized failure as procedural.
+
+### 2026-10-15 TP40-050: fixed-menu tie-break diagnostic registered
+
+All thirty sealed TP046 heads will be inspected without fitting or new queries. Exact and 64-epsilon arithmetic minimizer sets expose best, worst and uniform-mean true regret while retaining the original official order and failures. Three invented tests and root source review pass. Registration `e7b95363edec4f026e704468e2edb0d468eda7e3ed197c4aeee90bb77fbd209d`. This diagnostic cannot promote a model or interpret numerical tolerance as statistical equivalence.
+
+### 2026-10-15 TP40-049: complete ridge-selection procedure registered
+
+The same30 noisy outer3 heads now select lambda in 0/1e-4/.01/1/100 inside the unchanged full shape/kinetic CV. Selection uses unpenalized held-inner BPB MSE. This menu preceded inspection of TP048 held curves. Zero-ridge fits are exact verified adoptions; positive-ridge fits are new. All30 fullfits precede held scoring. Compact inner records retain selected/start-best/allfailed trials and omission hashes but do not enable omitted-trial replay. Root full-source review, six independent toys and complementary adoption review pass. Registration `3059b8d3ecc080a9297f45aafb441f1e23d382d71254a26f3347ff963efce56f`. Eight workers,4GiB free guard,18UTC boundary stop; preserve partial work. No empirical advancement or new temporal law.
+
+### 2026-10-15 TP40-047/048/050 closed; TP049 running
+
+The fixed-shape ridge diagnostic is complete and sealed (`9ef9d1fa`). All800 heads are finite,160 zero-ridge fits are byte-identical adoptions, and650 original strict first-order flags remain unresolved. Small raw ridge greatly improves native known-floor extrapolation but does not uniformly repair learned-floor calibration or gain; strong ridge biases all80 learned floors to zero. Author profile/trace replay and independent880-summary replay pass. Complete fixed curves and visually checked PNG/PDF are in `response_ridge_isolation/descriptive/`. No lambda was selected from these curves.
+
+The noisy full-fit pair diagnostic is sealed (`96d534b3`). Its strongest eligible gain root lower bound is.00093419, weaker than the earlier.00263225 witness. All81finite pair/menu problems share an optimum;9menus remain unavailable. Six matching positive heads have training likelihood contrasts favoring the generating function, but these adaptive contrasts do not identify the cause of fitting error. Independent2733 arithmetic checks pass.
+
+The minimizer audit (`c6d597e2`) shows why shared-optimum Bayes regret and official single-choice regret can be uninformative: six positive static controls tie the asymmetric winner with its worse tied counterpart. Their worst exact-minimizer regret is.046283/.098540 BPB while the official alphabetical role tie-break reportszero. Matching temporal heads have unique correct winners on this34-row menu. All54finite exact/roundoff sets replay;6unavailable records retained. This neither changes official metrics nor certifies continuous optimization.
+
+TP049's full inner-CV ridge selection is running locally under registration`3059b8d3`. Independent source review`275a85c7`, complementary review`9f58de56`, and root six-toy/source checks pass. No held scores are opened until all30 final fits are durable. The next proposed diagnostic targets raw two-dimensional policy optima, since small-menu success does not establish optimizer quality; no new integrations or raw queries are authorized yet.
+
+
+### 2026-10-15 — Analytic check of the synthetic static references
+
+The four fixed acquisition-retention teachers have a unique static optimum. For \(b(E)=1-\exp[-(rE)^p]\), positive rates and \(0<p\le1\) make \(-b\) strictly convex. Writing \(z=\log(1+E)-\tau\) and \(s=\operatorname{softplus}(z)\), the harm curvature is \(h''(E)=2\operatorname{sigmoid}(z)^2(1-s)/(1+E)^2\). Thus harm is convex up to \(E=e^\tau(e-1)-1\). At the fixed teacher threshold 3, that limit is 33.512613 epochs, above both buckets' maximum 26.457868.
+
+Positive benefit coefficients make the static log-head strictly convex in code weight; the increasing exponential preserves strict convexity. With teacher power .7, opposite infinite endpoint slopes also put the unique minimum inside the interval. Heterogeneous positive rates do not change this argument. Root derivation and an independent analytic check agree. This rules out competing local static minima for these fixed teachers; it does not certify numerical root accuracy, global two-phase optimality, or convexity of fitted heads with other thresholds. No new policy values, fits or ODE evaluations were used, and existing numerical-reference status flags remain unchanged.
+
+
+### 2026-10-15 — TP049 closed; TP051 continuous selection registered
+
+TP049 seal `74dc199d` preserves all 302,400 inner fits and all 30 final heads. Author full-menu replay and independent selected arithmetic pass. All 30 query tables are finite, but all six matching positive gain checks fail, and every end-to-end procedure remains numerically unresolved. Canonical amplitude ridge does not repair calibration; one pool-positive case worsens from .067046 to .206026 gain RMSE. No model is promoted.
+
+TP051 registration `a3893a31e4125c1cecf5d643c19b3d1c27df6dbbbfe44a0458f1551a0632de03` freezes these exact 30 heads before any raw policy search. It adds no fit or mechanism: the full physical two-dimensional domain replaces the small held menu, with all static controls and twelve best-observed training baselines retained. All selections precede teacher scoring. Own-head static, independent native selection, same-aggregate tie, best observed mixture and numerical teacher incumbents are separate comparisons. Signed regret, failed trials and strict replay remain visible. Root and independent source review plus ten invented tests pass. The 18:00 UTC and four-GiB limits remain in force.
+
+
+### 2026-10-15 — TP051 raw selection succeeds narrowly despite calibration failure
+
+Seal `6474d8a0` contains all 30 fixed raw searches, twelve training-only observed baselines and their teacher evaluations. Every raw result is finite with no new numerical-unresolved flag. Author replay reproduces all 60,348 finite trace predictions exactly; independent selected-point integration agrees with teacher BPB within 1.90e-12 and fitted responses within 7.88e-12. No policy was reranked by teacher loss.
+
+The six matching positive heads have regret 0.0000063–0.0006170 BPB against fixed teacher two-phase numerical incumbents. They retain 90.24–99.81% of the corresponding best-static advantage, and all beat their independently learned static control. However, only two beat the best observed noisy training-row choice on clean teacher loss; four lose by 0.0000688–0.0002983 BPB. Training lookup was already near optimal. Useful policy selection therefore survives this targeted test, while additional value beyond lookup remains small and inconsistent. Selected optimism spans −0.001245 to +0.002135 BPB. These are synthetic quantities, not an empirical TPP40 gain estimate.
+
+Every previous calibration failure and unresolved fitting flag remains binding. The temporal law is not promoted. The remaining simplification check is a separately registered raw search of all thirty already fitted zero-ridge TP046 heads under the identical protocol; this will isolate whether ridge helps the policy proposals without another fitting sweep.
+
+### 2026-10-15 TP052 zero-ridge raw policy control registered
+
+Unchanged TP051 search on every sealed TP046 head; registration `78b038b6956a76c0ba337db410c68dcb5ac14e08c3da7e9037455a25e6d6d4bd`. All source/input pins and independent adapter/auditor reviews pass. No refitting or empirical labels. All30 surrogate plus12 observed choices precede teacher scoring, including all three previously failed query records. Same18UTC/4GiB stop, accounting and gates. This measures whether ridge selection adds policy value; it cannot repair calibration by interpretation.
+
+The TP051 v2 descriptive readout received a concurrent math-delimiter edit after sealing; root restored the exact sealed bytes (SHA253864b3 prefix). The correctly rendered v3 remains unchanged. No scientific output changed.
+
+### 2026-10-15 — TP052 closes the raw-policy ridge control
+
+Seal `144b1e1bb5f9e34026afaba17161e50b5c31c97fd2357d6c0a23ade4630a3931` contains all30 zero-ridge policies,12 observed choices and paired TP051 metrics. All selected teacher scores are finite; three copies of the native-null seed16 head retain pure-web overflow/raw-search flags, and29full-fit unresolved flags remain. Author60662finite raw predictions and independent180selected/reporting ODE evaluations reproduce. Six matching positive policies retain92.24–99.81% of the supplied numerical beststatic gap, with regret0.0000063–0.0004908BPB. Four are exactly unchanged by ridge; ridge helps equal/seed17by0.0000435 and hurts pool/seed17by0.0003802. Zero ridge beats observed lookup3/6versus2/6withridge; lookup is already nearoptimal. Positive tests supply the matching clock hypothesis. No empirical gain estimate, calibration repair or promotion follows.
+
+### 2026-10-15 — 11AM autonomy handoff
+
+The bounded offline round ends with no promoted/calibrated empirical TPP40 surrogate. Final synthesis and inspected figure: `reference_outputs/tpp40_acquisition_retention_20261015/session_summary_1100/readout.md`, manifest `b4ff621d8348e263fb912b72389d757242949556198d8a5c7181c367c88a96e9`. TP052 result seal144b1e1b and Fieldbookartifact art_01m50b5dt9geyfkvzjbz9hhnp2 record auditsPASS val_01m50b61v84bd0cx1evh27mz73 and scientificscopeWARNING val_01m50b61ztnazzy6esmqqvy3fn.
+
+CC Fable5.1Max completed session83391137-e8ee-470a-b074-a8d3bc009afe after the first bounded attempt timed out. Root and independent reader accepted the dense-frontier-coverage concern, but rejected new posthoc gates, relabeling tinywins as ties, undefined-estimator claims from unresolvedstationarity, and conflating absoluteoptimism with pairedgainerror. Review and exact adjudication are in reviews/raw_outcome_fable_v1/resume.
+
+The final metadata check d51b6b79 found original frozen StarCoder fold4 already excludes both supplied synthetic-optimum aggregate neighborhoods: held aggregate0.498–0.701; training gap0.440–0.740. Nearest training phase-coordinate distances rise equal0.0105to0.1355 and pool0.00512to0.1907. This used saved policy/fold/teachercoordinates only. Next: complete that existing synthetic fold under unchanged gates before inventing an oracle-radius exclusion; afterward consider the separately registered measured-StarCoder diagnostic. Actual fold4 lookup headroom and outcomes remain unmeasured. No newfits were started for this followup, and no LM training/evaluation jobs were launched. All local audits and writers are complete.

@@ -1,0 +1,33 @@
+{
+  "protocol_id": "two_phase_asymmetric_only_20260921_v1",
+  "tolerances_frozen": false,
+  "tolerance_provenance": {
+    "kind": "reference_calibration",
+    "source": "pending",
+    "frozen_before_candidate_evaluation": false
+  },
+  "required_cells": [],
+  "required_evidence": [
+    "input_integrity",
+    "asymmetric_only_fitting",
+    "nested_split_integrity",
+    "tied_class_mapping",
+    "actual_design_synthetic_recovery",
+    "starcoder_surface_gate",
+    "older_swarm_preservation",
+    "frontier_calibration",
+    "whole_menu_selection",
+    "raw_optimizer_audit",
+    "sampler_rounding_audit",
+    "independent_replay",
+    "known_failure_control_rejected",
+    "support_transfer",
+    "held_horizon_unseen_policy",
+    "source_disjoint_frontier",
+    "directional_common_effect_calibration"
+  ],
+  "evidence": {},
+  "gates": [],
+  "evidence_receipts": {},
+  "scope": "Full qualification template; intentionally incomplete. The operational empirical-screen policies live with the baseline artifacts."
+}

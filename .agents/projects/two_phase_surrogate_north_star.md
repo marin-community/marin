@@ -2,6 +2,15 @@
 
 Status: active
 
+**21 September 2026 — current-round data-contract change.** The user requires
+the deployable surrogate to fit on asymmetric two-phase outcomes without buying
+matched tied controls. The [benchmark and promotion protocol](two_phase_benchmark_20260921/PROTOCOL.md)
+therefore supersedes this charter's 520-row tied-plus-asymmetric discovery contract
+for the current round. Tied outcomes are evaluation-only; the tied restriction
+must retain the MARINER response class. Delphi TPP40 is the primary setting,
+with StarCoder surfaces as the first empirical screen and older swarms as
+required transfer checks. Historical results below retain their original contracts.
+
 Canonical logbook: [WSD80 mechanistic surrogate](../logbooks/wsd80-mechanistic-surrogate.md)
 
 Active candidate registry:
