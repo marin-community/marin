@@ -64,6 +64,7 @@ CHECKPOINT_FILES = (
 )
 GENERATION = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "seed": None}
 TRAINING_PACKAGES = {"torch": "2.13.0+cu132", "transformers": "5.16.1", "datasets": "4.8.5"}
+TRAINING_PARAMETER_DTYPE = "float32"
 
 
 @dataclass(frozen=True)
@@ -400,6 +401,7 @@ def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolk
             "toolkit": TOOLKIT_COMMIT,
             "trainer": TRAINER_COMMIT,
             **TRAINING_PACKAGES,
+            "parameter_dtype": TRAINING_PARAMETER_DTYPE,
             "vllm": asdict(VLLM_GPU_RELEASE),
         },
         job_id=str(job.job_id) if job else None,
@@ -423,6 +425,11 @@ def _initializer(source: Path, root: Path, toolkit: Path) -> Path:
     # The pinned toolkit exposes this ordinary Python function, including map validation.
     prepare = runpy.run_path(str(toolkit / "scripts/prepare_warmstart.py"))["prepare"]
     prepare(str(source), str(root / "stub"), str(destination), list(AUXILIARY_LAYERS), str(d2t), str(t2d))
+    # Native checkpoints carry BF16 export metadata. HF otherwise constructs BF16
+    # parameters and casts restored optimizer masters to BF16, unlike a fresh fit.
+    config = json.loads((destination / "config.json").read_text())
+    config["dtype"] = TRAINING_PARAMETER_DTYPE
+    _write_json(str(destination / "config.json"), config)
     return destination
 
 
