@@ -46,6 +46,7 @@ import uuid
 from typing import Any, Protocol
 
 from omegaconf import DictConfig, OmegaConf
+from rigging.timing import RateLimiter
 
 from cloud.iris.artifacts import ArtifactSource, atomic_directory_update, file_inventory, fs_and_path, materialize
 from cloud.iris.hf_model_cache import (
@@ -192,6 +193,8 @@ def _ray_bin() -> str:
 DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
+STARTUP_POLL_INTERVAL = 1.0
+RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
 # Bound the rank-0 rendezvous PutObject: unbounded fsspec/s3fs put can wedge the
@@ -958,7 +961,7 @@ def poll_rendezvous(
             raise
         except Exception as exc:  # transient object-store hiccup
             _log(f"rendezvous poll error (will retry): {exc}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(STARTUP_POLL_INTERVAL)
     raise TimeoutError(
         f"Worker rank {_rank()} timed out after {timeout}s waiting for "
         f"rank-0 rendezvous at {uri}. Did the head task fail to start?"
@@ -1161,12 +1164,12 @@ def ray_stop() -> None:
 def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
-    ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
-    the rendezvous so its ``written_at`` stays fresh. A worker pod on a cold node can
+    ``rewrite_cb`` (head only) is invoked on every poll and re-publishes the rendezvous
+    at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds so ``written_at`` stays fresh. A worker pod on a cold node can
     start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the head wrote the rendezvous; its
     ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
     one-shot rendezvous as "stale" and wait forever while the head waits for that node —
-    a mutual deadlock. Rewriting each poll keeps the timestamp ahead of any late worker's
+    a mutual deadlock. Periodic rewrites keep the timestamp ahead of any late worker's
     freshness threshold without weakening the prior-ATTEMPT protection (a stale file from
     a dead PRIOR attempt is still never refreshed).
     """
@@ -1191,7 +1194,7 @@ def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_
             if count >= expected_nodes:
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
-            time.sleep(POLL_INTERVAL)
+            time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
     finally:
         ray.shutdown()
@@ -1843,14 +1846,19 @@ def run_head(
         _log(
             f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
         )
+        rewrite_limiter = RateLimiter(RENDEZVOUS_REWRITE_INTERVAL)
         write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        # Re-publish the rendezvous each poll so a late cold-node worker never sees it
-        # as "stale" (see wait_for_nodes docstring — prevents the freshness deadlock).
+        rewrite_limiter.mark_run()
+
+        def rewrite_rendezvous():
+            if rewrite_limiter.should_run():
+                write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
+
         wait_for_nodes(
             ray_address,
             num_tasks,
             args.cluster_join_timeout,
-            rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
+            rewrite_cb=rewrite_rendezvous,
         )
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
