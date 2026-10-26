@@ -203,10 +203,11 @@ def main() -> None:
 @click.option("--types", "type_names", required=True, help="Comma-separated Reasoning Gym task types.")
 @click.option("--per-type", type=int, default=100, show_default=True)
 @click.option("--output", required=True, help="A JSONL file of the held-out gap tasks.")
-def heldout(type_names: str, per_type: int, output: str) -> None:
+@click.option("--train", "train_url", default=TRAIN_URL, show_default=True, help="The seed's training tasks.")
+def heldout(type_names: str, per_type: int, output: str, train_url: str) -> None:
     """Write held-out instances of the gap types."""
     names = type_names.split(",")
-    rows = scan_types()
+    rows = scan_types(train_url)
     tasks = fresh_tasks(rows, {name: heldout_indices(per_type) for name in names}, HELDOUT_CAPABILITY_PREFIX)
     lines = [task.model_dump_json() + "\n" for each in tasks.values() for task in each]
     StoragePath(output).write_text("".join(lines))
