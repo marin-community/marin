@@ -21,6 +21,7 @@ from skyrl_train.entrypoints.main_base import (
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import trainer_metrics
+from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
@@ -105,9 +106,9 @@ class EvalOnlyEntrypoint(BasePPOExp):
             )
             results.update(
                 {
-                    key.replace("eval/all/outcome/", "generate/outcome/", 1): value
+                    key.replace(EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX, 1): value
                     for key, value in tuple(results.items())
-                    if key.startswith("eval/all/outcome/")
+                    if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
                 }
             )
             if local_vllm:
