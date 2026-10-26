@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path("experiments/evaluation/serving_parity")
 POLICY = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs")
 MODEL = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
 REVISION = "50fe2f488aee7730bbccc721024b35229075602e"

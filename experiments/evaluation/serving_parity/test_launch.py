@@ -14,7 +14,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.serving_parity import launch
 from experiments.evaluation.serving_parity.launch import PROFILES, Arm, isolated_runtime
-from experiments.evaluation.serving_parity.settings import PROBE
+from experiments.evaluation.serving_parity.settings import HERE, PROBE
 
 
 def test_gang_entrypoint_preserves_the_arm_argument():
@@ -95,3 +95,22 @@ def test_startup_cleanup_survives_artifact_write_failure(monkeypatch):
     with launch.capture_backend(FailedStorage()):
         launch.VllmEnvironment._report_failure_and_close(FailedEnvironment(), "failure")
     assert calls == ["closed"]
+
+
+def test_worker_assets_remain_relative_after_entrypoint_serialization(tmp_path, monkeypatch):
+    assert not HERE.is_absolute()
+    bootstrap = (HERE / "bootstrap.py").read_bytes()
+    arm = Arm("worker", "v5p-8", "gs://bucket/out", "gs://bucket/model")
+    fn, _args, _kwargs = cloudpickle.loads(arm.entrypoint().workdir_files["_callable.pkl"])
+    runtime = fn.__globals__["isolated_runtime"]
+    monkeypatch.chdir(tmp_path)
+    HERE.mkdir(parents=True)
+    (HERE / "bootstrap.py").write_bytes(bootstrap)
+    with runtime(arm):
+        command = IsolatedTpuVllm(
+            vllm_ref=VLLM_FORK_REQUIREMENT,
+            tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
+        ).command()
+        worker_bootstrap = Path(command[command.index("--config") - 1])
+        assert not worker_bootstrap.is_absolute()
+        assert worker_bootstrap.read_bytes() == bootstrap
