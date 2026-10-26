@@ -45,6 +45,7 @@ from marin.evaluation.eval_stats import (
     panel_aggregate,
     select,
 )
+from marin.evaluation.metric_selection import PUBLICATION_METRIC_POLICY
 from marin.evaluation.records import EvalRunRecord, RunStatus
 from marin.execution.step_status import STATUS_SUCCESS
 
@@ -239,6 +240,7 @@ def cell_payload(measurement: Measurement) -> dict:
     interval = measurement_interval(measurement)
     coverage = measurement.coverage
     return {
+        "metric_policy": PUBLICATION_METRIC_POLICY,
         "value": measurement.value,
         "low": interval.low,
         "high": interval.high,
@@ -482,6 +484,7 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     return {
         "models": all_models,
         "run_facets": run_facets,
+        "metric_policy": PUBLICATION_METRIC_POLICY,
         "default_cohort": SEPTEMBER_24_VERSION,
         "verified_cohorts": list(POLICIES),
         "evals": sorted(eval_names),

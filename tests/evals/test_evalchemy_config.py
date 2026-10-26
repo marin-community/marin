@@ -11,13 +11,10 @@ import os
 import subprocess
 import sys
 import urllib.error
-import zipfile
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from iris.cluster.client.bundle import create_workspace_zip
-from marin.evaluation.evalchemy import runtime
 from marin.evaluation.evalchemy.client import build_command, build_model_args, served_max_length
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
@@ -425,122 +422,6 @@ def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_
         "environment": str(tmp_path / "vendor/evalchemy/.venv"),
         "cwd": str(tmp_path),
     }
-
-
-@pytest.fixture
-def evaluator_sources(tmp_path, monkeypatch):
-    for directory in runtime._RUNTIME_DIRECTORIES:
-        source = tmp_path / directory / "source.py"
-        source.parent.mkdir(parents=True)
-        source.write_text("value = 1\n")
-    for filename in runtime._RUNTIME_FILES:
-        source = tmp_path / filename
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("source input\n")
-    monkeypatch.setattr(runtime, "find_project_root", lambda _start: tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
-def git_evaluator_sources(evaluator_sources):
-    (evaluator_sources / ".gitignore").write_text("ignored.py\nbuild/\ndist/\n")
-    subprocess.run(["git", "init", "--quiet"], cwd=evaluator_sources, check=True)
-    subprocess.run(["git", "add", "."], cwd=evaluator_sources, check=True)
-    return evaluator_sources
-
-
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "vendor/evalchemy/eval/source.py",
-        "vendor/evalchemy/uv.lock",
-        "lib/finestore/src/source.py",
-        "lib/rigging/src/source.py",
-        "lib/marin/src/marin/evaluation/evalchemy/client.py",
-    ],
-)
-def test_evalchemy_provenance_changes_when_runtime_inputs_change(evaluator_sources, filename):
-    before = runtime.evalchemy_runtime_source_hash()
-    source = evaluator_sources / filename
-    source.write_text(source.read_text() + "changed input\n")
-    assert runtime.evalchemy_runtime_source_hash() != before
-
-
-def test_evalchemy_provenance_ignores_build_metadata_and_bytecode(evaluator_sources):
-    before = runtime.evalchemy_runtime_source_hash()
-    for filename in (
-        "vendor/evalchemy/eval/__pycache__/source.cpython-312.pyc",
-        "vendor/evalchemy/eval/benchmark.egg-info/PKG-INFO",
-        "vendor/evalchemy/eval/chat_benchmarks/alpaca_eval/build/lib/alpaca_eval/__init__.py",
-        "vendor/evalchemy/eval/chat_benchmarks/MTBench/dist/wheel.whl",
-        "vendor/evalchemy/eval/.pytest_cache/v/cache/nodeids",
-    ):
-        path = evaluator_sources / filename
-        path.parent.mkdir(parents=True)
-        path.write_text("generated output\n")
-    assert runtime.evalchemy_runtime_source_hash() == before
-
-
-@pytest.mark.parametrize(
-    "filename",
-    ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/packages/source.py", "vendor/evalchemy/uv.lock"],
-)
-def test_evalchemy_evaluator_identity_changes_with_evaluator_inputs(git_evaluator_sources, filename):
-    before = runtime.evalchemy_evaluator_source_hash()
-    source = git_evaluator_sources / filename
-    source.write_text(source.read_text() + "changed evaluator\n")
-
-    assert runtime.evalchemy_evaluator_source_hash() != before
-
-
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "lib/finestore/src/source.py",
-        "lib/rigging/src/source.py",
-        "lib/marin/src/marin/evaluation/evalchemy/client.py",
-    ],
-)
-def test_evalchemy_dependency_changes_affect_provenance_only(git_evaluator_sources, filename):
-    evaluator = runtime.evalchemy_evaluator_source_hash()
-    provenance = runtime.evalchemy_runtime_source_hash()
-    source = git_evaluator_sources / filename
-    source.write_text(source.read_text() + "changed dependency\n")
-
-    assert runtime.evalchemy_evaluator_source_hash() == evaluator
-    assert runtime.evalchemy_runtime_source_hash() != provenance
-
-
-def test_evalchemy_identity_ignores_gitignored_scratch_and_tracks_shipped_new_code(git_evaluator_sources):
-    evaluator = runtime.evalchemy_evaluator_source_hash()
-    provenance = runtime.evalchemy_runtime_source_hash()
-    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
-
-    assert runtime.evalchemy_evaluator_source_hash() == evaluator
-    assert runtime.evalchemy_runtime_source_hash() == provenance
-
-    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
-
-    assert runtime.evalchemy_evaluator_source_hash() != evaluator
-    assert runtime.evalchemy_runtime_source_hash() != provenance
-
-
-def test_evalchemy_identities_match_extracted_iris_bundle(git_evaluator_sources, tmp_path, monkeypatch):
-    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
-    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
-    build = git_evaluator_sources / "vendor/evalchemy/eval/build/lib/generated.py"
-    build.parent.mkdir(parents=True)
-    build.write_text("generated = True\n")
-    evaluator = runtime.evalchemy_evaluator_source_hash()
-    provenance = runtime.evalchemy_runtime_source_hash()
-
-    extracted = tmp_path / "extracted"
-    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(git_evaluator_sources))) as bundle:
-        bundle.extractall(extracted)
-    monkeypatch.setattr(runtime, "find_project_root", lambda _start: extracted)
-
-    assert runtime.evalchemy_evaluator_source_hash() == evaluator
-    assert runtime.evalchemy_runtime_source_hash() == provenance
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

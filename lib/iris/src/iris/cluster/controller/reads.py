@@ -112,6 +112,7 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+    termination_grace_ms: int
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
@@ -123,6 +124,7 @@ class PendingDispatchRow:
     # to DEFAULT when the backend applies it.
     container_profile: int  # job_pb2.ContainerProfile
     egress_policy: int  # job_pb2.EgressPolicy
+    egress_allow_json: list[str]  # rule strings; see iris.cluster.egress
 
 
 @dataclass(frozen=True, slots=True)
@@ -645,12 +647,14 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.max_retries_failure,
             job_config_table.c.max_retries_preemption,
             job_config_table.c.timeout_ms,
+            job_config_table.c.termination_grace_ms,
             job_config_table.c.preemption_policy,
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
             job_config_table.c.container_profile,
             job_config_table.c.egress_policy,
+            job_config_table.c.egress_allow_json,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
         )
@@ -1686,12 +1690,14 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.constraints_json,
     job_config_table.c.task_image,
     job_config_table.c.timeout_ms,
+    job_config_table.c.termination_grace_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
     job_config_table.c.egress_policy,
+    job_config_table.c.egress_allow_json,
 )
 
 
@@ -1716,11 +1722,13 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         constraints_json=r.constraints_json,
         task_image=str(r.task_image),
         timeout_ms=int(_tms) if _tms is not None else None,
+        termination_grace_ms=int(r.termination_grace_ms),
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
         egress_policy=int(r.egress_policy),
+        egress_allow_json=list(r.egress_allow_json),
     )
 
 

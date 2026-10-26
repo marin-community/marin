@@ -17,6 +17,7 @@ import yaml
 
 from infra.ci import run_tests
 from infra.ci.select_tests import (
+    EXTERNAL_TEST_INPUTS,
     SCOPES,
     UV_PACKAGE,
     MatrixLeg,
@@ -26,7 +27,10 @@ from infra.ci.select_tests import (
     select_all_tests,
     select_changed_tests,
     select_local_tests,
+    shard_files,
 )
+
+GITHUB_FILE = re.compile(r"\.github/[\w./-]+\.yaml")
 
 
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
@@ -154,6 +158,40 @@ def test_experiment_tests_run_for_test_and_dependency_changes(
 
 
 @pytest.mark.parametrize(
+    "changed_file",
+    [
+        "lib/rolloutengine/src/rolloutengine/engine.py",
+        "lib/shellbox/src/shellbox/machine.py",
+        "lib/taskcompendium/src/taskcompendium/models.py",
+    ],
+)
+def test_standalone_rollout_dependencies_select_marin_and_experiment_consumers(
+    tmp_path: Path, changed_file: str
+) -> None:
+    write(tmp_path, "lib/taskcompendium/src/taskcompendium/models.py", "TASK = 1\n")
+    write(tmp_path, "lib/shellbox/src/shellbox/machine.py", "MACHINE = 1\n")
+    write(
+        tmp_path,
+        "lib/rolloutengine/src/rolloutengine/engine.py",
+        "from taskcompendium.models import TASK\nfrom shellbox.machine import MACHINE\n",
+    )
+    write(tmp_path, "lib/marin/src/marin/rollouts/evaluation.py", "from rolloutengine.engine import TASK\n")
+    write(tmp_path, "tests/evaluation/test_task_rollouts.py", "from marin.rollouts.evaluation import TASK\n")
+    write(tmp_path, "experiments/evaluation/task_driver.py", "from marin.rollouts.evaluation import TASK\n")
+    write(
+        tmp_path, "experiments/evaluation/test_task_driver.py", "from experiments.evaluation.task_driver import TASK\n"
+    )
+    write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "marin") == [
+        "experiments/evaluation/test_task_driver.py",
+        "tests/evaluation/test_task_rollouts.py",
+    ]
+
+
+@pytest.mark.parametrize(
     "changed_files, run_all_tests",
     [
         ([], True),
@@ -249,6 +287,24 @@ def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
     assert result.direct_tests == {}
 
 
+@pytest.mark.parametrize(
+    "path", [".github/workflows/ops-loom-review.yaml", ".github/actions/launch-loom-run/action.yaml"]
+)
+def test_loom_workflow_change_runs_the_iac_suite(tmp_path: Path, path: str) -> None:
+    write(tmp_path, "infra/loom/tests/test_infrastructure.py", "def test_workflow():\n    assert True\n")
+    write(tmp_path, "infra/pulumi/tests/test_stack.py", "def test_stack():\n    assert True\n")
+
+    assert scopes_in(select_matrix([path], tmp_path)) == {"iac"}
+
+
+def test_every_github_file_read_by_loom_tests_selects_the_iac_suite() -> None:
+    loom_tests = Path(__file__).resolve().parents[3] / "infra/loom/tests"
+    read_paths = {match for test_file in loom_tests.glob("*.py") for match in GITHUB_FILE.findall(test_file.read_text())}
+
+    assert read_paths
+    assert read_paths <= EXTERNAL_TEST_INPUTS["iac"]
+
+
 def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     write(tmp_path, "infra/ci/__init__.py")
     write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
@@ -278,15 +334,36 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/tests/test_docker_machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/pyproject.toml",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
@@ -768,3 +845,15 @@ def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
     assert all(leg.setup == "" for leg in matrix)
+
+
+def test_shards_spread_each_directory_across_runners() -> None:
+    """A directory of neighbouring test files must not land on a single shard."""
+    heavy = [f"experiments/grug/test_{index}.py" for index in range(6)]
+    light = [f"tests/test_{index}.py" for index in range(9)]
+    files = sorted(heavy + light)
+
+    chunks = shard_files(files, 3)
+
+    assert sorted(path for chunk in chunks for path in chunk) == files
+    assert [sum(path in heavy for path in chunk) for chunk in chunks] == [2, 2, 2]
