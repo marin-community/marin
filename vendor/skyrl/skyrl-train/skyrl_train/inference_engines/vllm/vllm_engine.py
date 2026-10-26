@@ -31,7 +31,6 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
     capture_rank_name,
     per_worker_capture_token_credit,
-    request_id_for_group,
 )
 from skyrl_train.inference_engines.vllm.route_capture import response_routes
 from skyrl_train.io import io
@@ -63,6 +62,7 @@ from skyrl_train.inference_engines.base import (
     NamedWeightsUpdateRequest,
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
 from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
@@ -1759,11 +1759,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             if session_ids is None:
                 request_id = uuid4().hex
             else:
-                # A rollout session id is "<prompt uid>_<repetition>", so repetitions of one prompt share a group;
-                # any other session id is its own group.
-                session_id = str(session_ids[index])
-                prompt_uid, _, repetition = session_id.rpartition("_")
-                request_id = request_id_for_group(prompt_uid if prompt_uid and repetition.isdigit() else session_id)
+                request_id = request_id_for_session(session_ids[index])
             request_ids.append(request_id)
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)
