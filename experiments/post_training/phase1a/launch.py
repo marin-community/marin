@@ -62,6 +62,10 @@ CLUSTER = "cw-rno2a"  # where B, the experts and the run data live
 # tokenizer's own; SkyRL forces this file onto the policy tokenizer on every node. SkyRL
 # resolves it against its own root, vendor/skyrl.
 POLICY_CHAT_TEMPLATE = "../../experiments/post_training/chat_templates/grug_shared.jinja"
+# Host memory per learner node. A rank resumed from a CPU-offloaded checkpoint holds ~30-40 GiB
+# more than an unresumed one (STATUS.md, 2026-10-26), which took its first save past 768 GB;
+# cw-rno2a's H100 nodes report 1.16-1.25 TB available.
+LEARNER_MEMORY = "1000GB"
 # Every scheduled checkpoint stays until the weight analysis has read it.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=len(CHECKPOINT_STEPS), temporary_storage_ttl_days=90)
 
@@ -133,7 +137,7 @@ def execution(cluster: str) -> IrisSkyRLExecution:
         cluster=cluster,
         cluster_config=f"lib/iris/config/{cluster}.yaml",
         cpu=16,
-        memory="768GB",
+        memory=LEARNER_MEMORY,
         disk="2TB",
         priority="interactive",
         max_retries=1,
