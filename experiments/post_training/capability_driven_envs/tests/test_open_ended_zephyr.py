@@ -74,6 +74,7 @@ async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
     slots = result["slots"]
     assert isinstance(slots, list) and len(slots) == 1
     assert slots[0]["terminal"] == "accepted"
+    assert slots[0]["validation"]["calibration"]["passed"] is True
     task = TaskSpec.model_validate_json(slots[0]["task_json"])
     assert task.resources.worker == hydrated.solver_resources
     assert task.context.events[-1].content == design.instruction

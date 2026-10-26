@@ -4,6 +4,7 @@
 """One-map Zephyr port for complete open-ended Taskforge bundle lifecycles."""
 
 import asyncio
+import json
 import os
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -23,6 +24,7 @@ from taskforge.stage10_proposal.model import Environment, SolverMachine
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
 from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage_coordinator.coordinator import VALIDATION_FILE
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
@@ -143,11 +145,15 @@ def _services(controller_url: str) -> RLEnvBuildServices:
     )
 
 
-def _accepted_task_json(root: Path, workpiece_id: str) -> str:
-    drafts = sorted((root / "workpieces" / workpiece_id / "rounds").glob(f"*/{DRAFT_DIR}"))
-    if not drafts:
-        raise ValueError(f"accepted workpiece {workpiece_id!r} has no persisted draft")
-    return load_draft(drafts[-1]).task.model_dump_json()
+def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object]:
+    rounds = sorted((root / "workpieces" / workpiece_id / "rounds").glob("*"))
+    if not rounds:
+        raise ValueError(f"accepted workpiece {workpiece_id!r} has no persisted round")
+    draft = rounds[-1] / DRAFT_DIR
+    validation = rounds[-1] / VALIDATION_FILE
+    if not draft.is_dir() or not validation.is_file():
+        raise ValueError(f"accepted workpiece {workpiece_id!r} lacks its draft or validation evidence")
+    return load_draft(draft).task.model_dump_json(), json.loads(validation.read_bytes())
 
 
 async def run_bundle_lifecycle(
@@ -187,7 +193,9 @@ async def run_bundle_lifecycle(
     for slot in result.slots:
         item = slot.model_dump(mode="json")
         if slot.terminal is Terminal.ACCEPTED and slot.workpiece_id is not None:
-            item["task_json"] = _accepted_task_json(root / "coordinator", slot.workpiece_id)
+            task_json, validation = _accepted_artifacts(root / "coordinator", slot.workpiece_id)
+            item["task_json"] = task_json
+            item["validation"] = validation
         slots.append(item)
     return {
         "bundle_id": result.bundle_id,
