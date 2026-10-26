@@ -1,7 +1,7 @@
 name: open-athena-snowball-67b-a2b-base-262k-qk175-skew8
 location: open-athena/snowball-67b-a2b-base-262k-qk175-skew8
 revision: 3bbf729f0555965c8667600ee91c3c109ac21b19
-apply_chat_template: false
+apply_chat_template: true
 resource_hint:
   gpu:
     H100: 8
@@ -12,8 +12,12 @@ serve:
   max_model_len: 73728
   max_num_batched_tokens: 7168
   max_num_seqs: 32
+  tool_call_parser: hermes
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel
   - --model-loader-extra-config
   - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

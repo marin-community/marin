@@ -44,6 +44,9 @@ harbor_eval_harness_profiles:
 # context/output limits. Selection is benchmark-specific; neither launcher nor
 # refill manager changes the serving settings in these canonical YAML files.
 model_config_overrides:
+  open-athena-snowball-67b-a2b-base-262k-qk175-skew8:
+    swebench-verified: model-configs/swebench-verified/open-athena-snowball-67b-a2b-base-262k-qk175-skew8.yaml
+    tau3-pi: model-configs/tau3/open-athena-snowball-67b-a2b-base-262k-qk175-skew8.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25:
     swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25.yaml
