@@ -73,7 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
-from levanter.compute_dtype import cast_model_for_compute
+from levanter.compute_dtype import cast_model_for_compute, compute_policy
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -923,6 +923,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def compute_policy(self) -> jmp.Policy:
+        """The policy for code outside the train step, such as evaluation: ``mp`` plus ``compute_dtype_overrides``."""
+        return compute_policy(self.mp, self.compute_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:

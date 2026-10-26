@@ -494,8 +494,10 @@ def _to_state_dict_with_dtype(
     dtype_overrides: Mapping[str, str] | None = None,
 ) -> StateDict:
     """
-    Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
-    and optionally subsetting to a given set of keys.
+    Convert a model to a torch-compatible state dict, optionally subsetting to a given set of keys.
+
+    Floating-point arrays are converted to ``dtype`` when it is given. ``dtype_overrides`` maps exact state-dict keys
+    to their own dtype; those keys are converted to that dtype even when ``dtype`` is None.
     """
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
     # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
