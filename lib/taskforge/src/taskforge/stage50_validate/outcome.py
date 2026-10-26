@@ -60,6 +60,8 @@ class Cause(StrEnum):
     ``RolloutLimits.tool_turn_timeout``."""
     BUDGET_EXHAUSTED = "budget_exhausted"
     """An explicitly configured agent turn budget ended evaluation before completion."""
+    SEARCH_INCOMPLETE = "search_incomplete"
+    """The finder did not complete; preserve its evidence for resumption."""
     GENERATION_LIMIT = "generation_limit"
     """A physical context or output boundary interrupted generation."""
     GRADER_RAISED = "grader_raised"

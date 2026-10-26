@@ -11,7 +11,7 @@ from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.sandbox.factories import MachineRole, Refusal, RefusalReason
 from taskforge.spec.controls import ControlKind
-from taskforge.stage50_validate.adversary import AdversaryMode, Claim, ClaimKind
+from taskforge.stage50_validate.adversary import AdversaryMode, Defect, SearchReport, SearchRole
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.outcome import Cause
@@ -182,10 +182,11 @@ async def test_a_control_defect_does_not_turn_a_solver_outage_into_rejection():
 async def test_an_adversary_outage_cannot_be_erased_by_other_passing_evidence(cause):
     adversary = AdversaryResult(
         "0",
+        SearchRole.FALSE_ACCEPT,
         AdversaryMode.WHITEBOX,
         TrialStatus.UNGRADED if cause else TrialStatus.GRADED,
         cause,
-        Claim(ClaimKind.NO_SHORTCUT, "", ""),
+        SearchReport((Defect((1,), "Actionable defect", True),), "Completed search"),
         (
             SubmissionResult(0, GradeStatus.INFRA_ERROR, None, False, "adversary/0/failed.json"),
             SubmissionResult(1, GradeStatus.GRADED, 1.0, True, "adversary/0/passed.json"),
@@ -194,3 +195,8 @@ async def test_an_adversary_outage_cannot_be_erased_by_other_passing_evidence(ca
     )
     decision = await default_review(result(adversary=(adversary,)), band=BAND)
     assert isinstance(decision, Hold)
+
+
+async def test_infrastructure_hold_precedes_another_trials_exhausted_budget():
+    checked = result(evidence=solver(1, 0, [Cause.BUDGET_EXHAUSTED, Cause.MODEL_UNAVAILABLE]))
+    assert isinstance(await default_review(checked, band=BAND), Hold)
