@@ -400,7 +400,7 @@ def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_c
     root = tmp_path / "async"
     first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1)
     resumed = train(forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
-    assert scores(resumed)[len(scores(first))] == scores(first)[-1]
+    assert scores(resumed)[: len(scores(first))] == scores(first)
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4
     training = [row for row in resumed if "policy/raw_grad_norm" in row]
     assert [row["trainer/global_step"] for row in training] == list(range(1, 101))
