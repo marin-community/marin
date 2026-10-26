@@ -318,7 +318,7 @@ def build(args: argparse.Namespace) -> dict:
     report = {
         "seed": SEED,
         "inputs": {
-            Path(p).name: sha256(Path(p))
+            f"{Path(p).parent.name}/{Path(p).name}": sha256(Path(p))
             for p in [args.identity_pool, args.general, args.tool, *args.exclude_screens, *args.exclude_identity]
         },
         "bfcl_items": len(list(Path(args.bfcl).glob("*.md"))),
