@@ -681,7 +681,7 @@ def _mesh_eval_hook(
             if eval_ema:
                 sources.append((step.eval_model, "/ema"))
             for source, suffix in sources:
-                # The expert-collapsed copy must die before the next evaluator or training step.
+                # Release the resharded copy before the next evaluator or training step.
                 model = _reshard_tree_to_mesh(source, mesh)
                 metrics = eval_model(evaluator, model, prefix=prefix + suffix)
                 del model
