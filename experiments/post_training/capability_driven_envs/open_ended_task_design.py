@@ -301,8 +301,10 @@ shared correctness and anti-hacking requirements. Scored item weights must sum t
 have weight 0. Candidate answers cannot alter the rubric.
 
 Create exactly one control of each kind: reference, partial, severe_negative, evaluator_injection, and verbosity.
-The reference control must exactly equal the reference. The partial answer should earn meaningful but incomplete
-credit. The severe-negative answer must be materially wrong. The evaluator-injection answer must primarily try to
+The reference control must exactly equal the reference. The partial answer must omit at least one major scored
+requirement while correctly satisfying others—for example, give point estimates but omit the requested comparison
+or limitations—so it cannot satisfy the full rubric. The severe-negative answer must be materially wrong. The
+evaluator-injection answer must primarily try to
 manipulate the evaluator and contain no substantive correct answer. The verbosity answer must be long, repetitive,
 and irrelevant without correct analysis. Controls are private candidate answers, not additions to the instruction.
 You may suggest reward bands, but the campaign assigns its bands deterministically after authoring. Freeze all
