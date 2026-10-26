@@ -681,7 +681,7 @@ def validate_generator_cfg(cfg: DictConfig):
         )
 
     # TODO(tgriggs): use a more modular config validation
-    if cfg.trainer.logger == "wandb":
+    if "wandb" in ([cfg.trainer.logger] if isinstance(cfg.trainer.logger, str) else cfg.trainer.logger):
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":

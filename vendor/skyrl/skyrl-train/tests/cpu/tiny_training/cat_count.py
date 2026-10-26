@@ -9,7 +9,8 @@ from omegaconf import DictConfig, OmegaConf
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.algorithm_registry import AdvantageEstimatorRegistry
 
-from tests.cpu.tiny_training.experiment import run_tiny_training
+from skyrl_train.config.rollout_validation import EntrypointOperation
+from tests.cpu.tiny_training.experiment import TinyGenerateExp, run_tiny_training, run_with_exp
 
 FAST_STEPS = 10
 RUN_TIMEOUT_SECONDS = 300
@@ -87,7 +88,7 @@ def cat_count_config(
                 "resume_mode": "latest" if resume else "none",
                 "ckpt_path": str(root / "ckpts"),
                 "export_path": str(root / "exports"),
-                "logger": "console",
+                "logger": "files",
                 "training_metrics": True,
                 "policy_train_spans": True,
                 "rollout_spans": True,
@@ -117,3 +118,8 @@ def run_cat_count(cfg: DictConfig, worker_env: dict[str, str]) -> None:
         "cat_count_flipped_grpo", flipped_grpo, group_contract=AdvantageEstimatorRegistry.group_contract("grpo")
     )
     run_tiny_training(cfg)
+
+
+def run_cat_count_generate(cfg: DictConfig, worker_env: dict[str, str]) -> None:
+    os.environ.update(worker_env)
+    run_with_exp(cfg, TinyGenerateExp, operation=EntrypointOperation.GENERATE)
