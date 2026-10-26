@@ -134,6 +134,7 @@ def main() -> None:
     parser.add_argument("--model", default=GLM_MODEL)
     parser.add_argument("--api-key-env", default=GLM_BULK_TOKEN_ENV)
     parser.add_argument("--region", default="us-central1")
+    parser.add_argument("--preemptible", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     port = (
@@ -157,6 +158,7 @@ def main() -> None:
         max_workers=1,
         logical_shards=1,
         region=args.region,
+        preemptible=args.preemptible,
     )
     print(f"output={output}")
     print(result)

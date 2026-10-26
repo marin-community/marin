@@ -250,6 +250,7 @@ def run_open_ended_zephyr(
     max_workers: int = 32,
     logical_shards: int = 128,
     region: str = "us-central1",
+    preemptible: bool = True,
 ) -> object:
     """Execute one outer Zephyr map over fully hydrated bundle rows."""
     rows = [{"bundle_json": bundle.model_dump_json()} for bundle in bundles]
@@ -262,13 +263,13 @@ def run_open_ended_zephyr(
     pipeline = dataset.map_shard(partial(run_bundle_shard, config=config)).write_jsonl(output)
     with ZephyrContext(
         max_workers=min(max_workers, shards),
-        resources=ResourceConfig(cpu=1, ram="4g", disk="16g", regions=[region], preemptible=True),
+        resources=ResourceConfig(cpu=1, ram="4g", disk="16g", regions=[region], preemptible=preemptible),
         coordinator_resources=ResourceConfig(
             cpu=0.1,
             ram="2g",
             disk="8g",
             regions=[region],
-            preemptible=True,
+            preemptible=preemptible,
         ),
         name="open-ended-taskforge",
         heartbeat_timeout=900,
