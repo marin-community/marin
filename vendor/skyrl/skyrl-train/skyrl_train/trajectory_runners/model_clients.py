@@ -373,23 +373,11 @@ class DirectModelClient:
                 text = text.removesuffix(eos_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
-            stop_reason = choice["finish_reason"]
-            token_budget = chat_options.get("max_completion_tokens")
-            if (
-                stop_reason == "tool_calls"
-                and token_budget is not None
-                and len(response_ids) >= token_budget
-                and choice.get("stop_reason") is None
-                and response_ids[-1] != tokenizer.eos_token_id
-            ):
-                # A tool parser can replace the backend's output-budget stop reason.
-                stop_reason = "length"
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
             if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
                 text = final_answer_text(decoded)
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
-            reasoning_violation = reasoning_span_violation(decoded, stop_reason)
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
@@ -401,6 +389,18 @@ class DirectModelClient:
                 selected = [
                     select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
                 ]
+            stop_reason = choice["finish_reason"]
+            token_budget = chat_options.get("max_completion_tokens")
+            if (
+                stop_reason == "tool_calls"
+                and token_budget is not None
+                and len(response_ids) >= token_budget
+                and choice.get("stop_reason") is None
+                and response_ids[-1] != tokenizer.eos_token_id
+            ):
+                # A tool parser can replace the backend's output-budget stop reason.
+                stop_reason = "length"
+            reasoning_violation = reasoning_span_violation(decoded, stop_reason)
             return _ChatResult(
                 prompt_ids,
                 response_ids,
