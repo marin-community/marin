@@ -17,14 +17,16 @@ from experiments.grug.belay_tpu.streaming_combine import combine_streaming, disp
 @pytest.mark.parametrize("implementation", ["unrolled", "scan", "flat"])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.parametrize("empty", [False, True])
-def test_streaming_values_and_pullbacks(implementation, dtype, empty):
+@pytest.mark.parametrize("scalar_permutation", ["gather", "sort"])
+@pytest.mark.parametrize("weight_dtype", [jnp.float32, jnp.bfloat16])
+def test_streaming_values_and_pullbacks(implementation, dtype, empty, scalar_permutation, weight_dtype):
     rng = np.random.default_rng(424)
     tokens, topk, width = 31, 3, 16
     order = jnp.asarray(rng.permutation(tokens * topk), jnp.int32)
     inverse = jnp.argsort(order)
     rows = jnp.asarray(rng.normal(size=(tokens * topk, width)), dtype)
     rows = rows.at[0 if empty else 73 :].set(0)
-    weights = jnp.asarray(rng.random((tokens, topk)), jnp.float32).at[:, 0].set(0)
+    weights = jnp.asarray(rng.random((tokens, topk)), weight_dtype).at[:, 0].set(0)
     gradient = jnp.asarray(rng.normal(size=(tokens, width)), dtype)
 
     def evaluate(combine):
@@ -32,7 +34,9 @@ def test_streaming_values_and_pullbacks(implementation, dtype, empty):
         return output, backward(gradient)
 
     expected = evaluate(combine_local)
-    actual = evaluate(functools.partial(combine_streaming, implementation=implementation))
+    actual = evaluate(
+        functools.partial(combine_streaming, implementation=implementation, scalar_permutation=scalar_permutation)
+    )
     tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
     for got, want in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
         assert np.isfinite(got).all()

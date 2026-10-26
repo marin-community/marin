@@ -3,6 +3,7 @@
 
 """Measure direct route accumulation and expert-order pullbacks on TPU."""
 
+import argparse
 import functools
 import json
 import os
@@ -28,6 +29,8 @@ def evaluate(implementation, mode, rows, order, inverse, weights, gradient):
         return (sum_routes(rows, positions, implementation=implementation),)
     if implementation == "source":
         combine = combine_local
+    elif implementation == "scan_sorted":
+        combine = functools.partial(combine_streaming, implementation="scan", scalar_permutation="sort")
     elif implementation == "expert_order":
         combine = combine_expert_order
     else:
@@ -39,6 +42,9 @@ def evaluate(implementation, mode, rows, order, inverse, weights, gradient):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scalar-permutations", action="store_true")
+    args = parser.parse_args()
     output, operator_topology, reference_topology = initialize_operator_check()
     tracker.log_summary({"kernel_check/input_seed": 424})
     failures = []
@@ -54,12 +60,19 @@ def main():
             rows = jnp.asarray(rng.standard_normal((tokens * topk, width), dtype=np.float32), jnp.bfloat16)
             rows = rows.at[9 * rows.shape[0] // 10 :].set(0)
             weights = jnp.asarray(rng.random((tokens, topk), dtype=np.float32)).at[:, 0].set(0)
+            if args.scalar_permutations:
+                weights = weights.astype(jnp.bfloat16)
             gradient = jnp.asarray(rng.standard_normal((tokens, width), dtype=np.float32), jnp.bfloat16)
             inputs = (rows, order, inverse, weights, gradient)
-            for mode in ("combine_forward", "combine_vjp", "dispatch_backward"):
+            modes = (
+                ("combine_vjp",) if args.scalar_permutations else ("combine_forward", "combine_vjp", "dispatch_backward")
+            )
+            for mode in modes:
                 variants = ("source", "unrolled", "scan", "flat")
                 if mode != "dispatch_backward":
                     variants = ("source", "expert_order", "unrolled", "scan", "flat")
+                if args.scalar_permutations:
+                    variants = ("scan", "scan_sorted")
                 expected = None
                 for implementation in variants:
                     function = jax.jit(functools.partial(evaluate, implementation, mode))
@@ -82,9 +95,11 @@ def main():
                         "stage": "streaming_combine_comparison",
                         "kernel": mode,
                         "implementation": implementation,
+                        "reference": variants[0],
                         "case": case,
                         "shape": [tokens, topk, width],
                         "dtype": str(rows.dtype),
+                        "weight_dtype": str(weights.dtype),
                         "backend": jax.default_backend(),
                         "device_type": jax.local_devices()[0].device_kind,
                         "device_count": 1,

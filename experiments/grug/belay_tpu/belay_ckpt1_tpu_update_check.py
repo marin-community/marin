@@ -154,6 +154,7 @@ def main():
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
+    parser.add_argument("--streaming-scalars", choices=("gather", "sort"), default="gather")
     parser.add_argument(
         "--streaming-movement", action="store_true", help="Accumulate expert routes without full restores"
     )
@@ -206,10 +207,14 @@ def main():
         if not args.local_experts:
             parser.error("Expert-order combine requires --local-experts")
         local_experts.combine_local = combine_expert_order
+    if args.streaming_scalars == "sort" and not args.streaming_movement:
+        parser.error("Scalar sorting requires --streaming-movement")
     if args.streaming_movement:
         if not args.local_experts or args.local_movement:
             parser.error("Streaming movement requires --local-experts without --local-movement")
-        local_experts.combine_local = functools.partial(combine_streaming, implementation="scan")
+        local_experts.combine_local = functools.partial(
+            combine_streaming, implementation="scan", scalar_permutation=args.streaming_scalars
+        )
         local_experts.dispatch_local = dispatch_streaming
     if args.expert_reduction == "butterfly":
         local_experts.reduce_expert_gradients = butterfly_reduce_scatter
@@ -269,6 +274,7 @@ def main():
             "diagnostic/local_experts": args.local_experts,
             "diagnostic/local_movement": args.local_movement,
             "diagnostic/streaming_movement": args.streaming_movement,
+            "diagnostic/streaming_scalars": args.streaming_scalars,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,

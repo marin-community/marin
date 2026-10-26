@@ -8,6 +8,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+from experiments.grug.belay_tpu.routing_tpu import restore_assignment_scalars_sort
+
 
 def sum_routes(rows, positions, weights=None, *, implementation="unrolled"):
     """Sum [tokens, topk] expert-row indices with FP32 accumulation.
@@ -41,25 +43,33 @@ def sum_routes(rows, positions, weights=None, *, implementation="unrolled"):
     return result.astype(rows.dtype)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(4,))
-def combine_streaming(rows, order, inverse, weights, implementation="unrolled"):
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def combine_streaming(rows, order, inverse, weights, implementation="unrolled", scalar_permutation="gather"):
     """Combine routed expert outputs and form pullbacks in expert row order."""
+    if scalar_permutation not in ("gather", "sort"):
+        raise ValueError("Unknown scalar permutation implementation")
     del order
     return sum_routes(rows, inverse.reshape(weights.shape), weights, implementation=implementation)
 
 
-def _forward(rows, order, inverse, weights, implementation):
-    return combine_streaming(rows, order, inverse, weights, implementation), (rows, order, inverse, weights)
+def _forward(rows, order, inverse, weights, implementation, scalar_permutation):
+    output = combine_streaming(rows, order, inverse, weights, implementation, scalar_permutation)
+    return output, (rows, order, inverse, weights)
 
 
-def _backward(implementation, residuals, gradient):
+def _backward(implementation, scalar_permutation, residuals, gradient):
     del implementation
     rows, order, inverse, weights = residuals
     token_gradient = gradient[order // weights.shape[1]].astype(jnp.float32)
-    row_weights = weights.reshape(-1)[order]
+    row_weights = (
+        restore_assignment_scalars_sort(weights.reshape(-1), inverse)
+        if scalar_permutation == "sort"
+        else weights.reshape(-1)[order]
+    )
     d_rows = (token_gradient * row_weights[:, None]).astype(rows.dtype)
     d_weights = (token_gradient * rows.astype(jnp.float32)).sum(axis=-1)
-    return d_rows, None, None, d_weights[inverse].reshape(weights.shape).astype(weights.dtype)
+    d_weights = restore_assignment_scalars_sort(d_weights, order) if scalar_permutation == "sort" else d_weights[inverse]
+    return d_rows, None, None, d_weights.reshape(weights.shape).astype(weights.dtype)
 
 
 combine_streaming.defvjp(_forward, _backward)
