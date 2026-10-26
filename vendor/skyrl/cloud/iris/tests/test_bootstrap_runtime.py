@@ -118,7 +118,10 @@ def _fake_frozen_runtime(
     else:
         uv.write_text("#!/bin/sh\nexit 0\n")
     uv.chmod(0o755)
-    return environment, os.environ | {
+    process_environment = os.environ.copy()
+    # Bootstrap must resolve packages from its isolated frozen environment.
+    process_environment.pop("PYTHONPATH", None)
+    return environment, process_environment | {
         "EXPECTED_SYSTEM_PYTHON": str(fake_bin / "python3.12"),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
     }
@@ -142,6 +145,7 @@ def _run_bootstrap(
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
 
 
@@ -238,3 +242,35 @@ def test_bootstrap_rejects_incomplete_agentic_debug_runtime(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+
+
+def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    barrier = tmp_path / "imports-ready"
+    os.mkfifo(barrier)
+    completed = tmp_path / "megatron-completed"
+    transformer_engine = site_packages / "transformer_engine/common/__init__.py"
+    transformer_engine.write_text(
+        transformer_engine.read_text()
+        + f"import select\nwith open({str(barrier)!r}, 'rb', buffering=0) as gate:\n"
+        + "    assert select.select([gate], [], [], 8)[0], 'concurrent import never started'\n"
+        + "    assert gate.read(1) == b'r'\n"
+        + f"Path({str(completed)!r}).touch()\n"
+    )
+    _write_module(
+        site_packages,
+        "memray.py",
+        f"with open({str(barrier)!r}, 'wb', buffering=0) as gate:\n    gate.write(b'r')\n"
+        + "raise RuntimeError('memray import failed')\n",
+    )
+    _write_module(site_packages, "quack/activation.py", "raise RuntimeError('vllm import failed')\n")
+    descriptor = os.open(barrier, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        result = _run_bootstrap(environment, process_environment, "megatron")
+    finally:
+        os.close(descriptor)
+    assert completed.is_file(), result.stderr
+    assert result.returncode != 0, result.stderr
+    assert "memray import failed" in result.stderr
+    assert "vllm import failed" in result.stderr
