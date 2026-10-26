@@ -143,6 +143,8 @@ def recipe(arm: str) -> str:
         config = copy.deepcopy(config)
         trainer = config["trainer"]
         trainer["policy"]["optimizer_config"]["lr"] = 0.0
+        # Megatron's scheduler needs warmup < total steps; at LR 0 the schedule has no effect.
+        trainer["policy"]["optimizer_config"]["num_warmup_steps"] = 0
         trainer["max_steps"] = 2
         trainer["ckpt_interval"] = 2
         trainer["hf_save_interval"] = 2

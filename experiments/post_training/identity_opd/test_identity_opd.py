@@ -149,12 +149,14 @@ def test_recipe_routes_cover_the_mix_and_fill_a_batch():
         assert routes[f"{family}_thinking"]["teacher"] == build_mix.TEACHER[family]
 
 
-def test_dry_arm_only_changes_lr_steps_probe_and_saves():
+def test_dry_arm_only_changes_lr_warmup_steps_probe_and_saves():
     train, dry = yaml.safe_load(launch.recipe("train")), yaml.safe_load(launch.recipe("dry"))
     assert dry["trainer"]["policy"]["optimizer_config"]["lr"] == 0.0
     assert dry["trainer"]["max_steps"] == 2
     assert dry["trainer"]["mismatch_probe"]["updates"] == 2
-    dry["trainer"]["policy"]["optimizer_config"]["lr"] = train["trainer"]["policy"]["optimizer_config"]["lr"]
+    assert dry["trainer"]["policy"]["optimizer_config"]["num_warmup_steps"] == 0
+    for key in ("lr", "num_warmup_steps"):
+        dry["trainer"]["policy"]["optimizer_config"][key] = train["trainer"]["policy"]["optimizer_config"][key]
     assert dry["generator"].pop("trajectory_retention") == {"sample_fraction": 1.0, "required": True}
     assert "trajectory_retention" not in train["generator"]
     assert dry["trainer"]["callbacks"] == [
@@ -303,4 +305,6 @@ def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
     steps = 2 if arm == "dry" else 20
     assert trainer.max_steps == trainer.hf_save_interval == steps
     assert trainer.export_hf_artifact
+    # Megatron's param scheduler asserts warmup < decay steps, and decay steps are at most max_steps.
+    assert trainer.policy.optimizer_config.num_warmup_steps < trainer.max_steps
     assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
