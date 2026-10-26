@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import os
 import random
 import re
+import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import click
 import pytest
@@ -249,9 +252,8 @@ def test_identity_teacher_sees_the_template_system_message_on_plain_and_tool_row
     assert rest.startswith("<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball")
 
 
-@pytest.mark.parametrize("arm", ["dry", "train"])
-def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
-    """The coordinator's launcher composes the recipe against SkyRL's declared keys and export rules."""
+def _composed_trainer(arm, tmp_path):
+    """The arm's ``skyrl.trainer`` as the coordinator's launcher composes it (``load_launch_config``)."""
     launch_config = pytest.importorskip("cloud.iris.launch_config")
     spec = SimpleNamespace(
         config_yaml=launch.recipe(arm),
@@ -301,10 +303,89 @@ def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
         ),
     )
     (tmp_path / "launch.yaml").write_text(text)
-    trainer = launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl.trainer
+    return launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl.trainer
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
+    """The coordinator's launcher composes the recipe against SkyRL's declared keys and export rules."""
+    trainer = _composed_trainer(arm, tmp_path)
     steps = 2 if arm == "dry" else 20
     assert trainer.max_steps == trainer.hf_save_interval == steps
     assert trainer.export_hf_artifact
     # Megatron's param scheduler asserts warmup < decay steps, and decay steps are at most max_steps.
     assert trainer.policy.optimizer_config.num_warmup_steps < trainer.max_steps
     assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
+
+
+def _megatron_scheduler_factory(monkeypatch):
+    """SkyRL's Megatron scheduler builder, or Megatron's own scheduler class with SkyRL's arguments.
+
+    In the SkyRL venv this is ``get_megatron_optimizer_param_scheduler`` itself. Elsewhere, when megatron-core is
+    installed but its package cannot import (it needs triton), Megatron's ``optimizer_param_scheduler.py`` runs
+    from the installed distribution with only its logger import stubbed, built with the arguments SkyRL passes.
+    """
+    try:
+        skyrl_optimizer = importlib.import_module("skyrl_train.distributed.megatron.optimizer")
+    except ImportError:
+        pass
+    else:
+        return skyrl_optimizer.get_megatron_optimizer_param_scheduler
+    try:
+        source = Path(
+            importlib.metadata.distribution("megatron-core").locate_file("megatron/core/optimizer_param_scheduler.py")
+        )
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("megatron-core is not installed")
+    for name in ("megatron", "megatron.core"):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setitem(sys.modules, "megatron.core.utils", SimpleNamespace(log_single_rank=lambda *args: None))
+    namespace: dict = {"__name__": "megatron.core.optimizer_param_scheduler"}
+    exec(compile(source.read_text(), str(source), "exec"), namespace)
+    scheduler_class = namespace["OptimizerParamScheduler"]
+
+    def build(optimizer, config, num_training_steps):
+        styles = {"constant_with_warmup": "constant", "cosine": "cosine"}
+        return scheduler_class(
+            optimizer,
+            init_lr=config.get("lr_warmup_init", 0.0),
+            max_lr=config.lr,
+            min_lr=config.get("min_lr", 0.0),
+            lr_warmup_steps=config.num_warmup_steps,
+            lr_decay_steps=num_training_steps,
+            lr_decay_style=styles[config.get("scheduler", "constant_with_warmup")],
+            start_wd=config.weight_decay,
+            end_wd=config.weight_decay,
+            wd_incr_steps=num_training_steps,
+            wd_incr_style="constant",
+            use_checkpoint_opt_param_scheduler=False,
+            override_opt_param_scheduler=True,
+            wsd_decay_steps=None,
+            lr_wsd_decay_style="exponential",
+        )
+
+    return build
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_megatron_scheduler_accepts_each_arm_and_applies_the_planned_lr(arm, tmp_path, monkeypatch):
+    """Megatron's scheduler asserts its invariants at policy init; build it from the composed config and step it.
+
+    SkyRL's decay steps are the run's total training steps, min(steps per epoch, max_steps); the mix has well over
+    max_steps batches per epoch, so they equal max_steps here.
+    """
+    torch = pytest.importorskip("torch")
+    trainer = _composed_trainer(arm, tmp_path)
+    build = _megatron_scheduler_factory(monkeypatch)
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+    config = trainer.policy.optimizer_config
+    scheduler = build(optimizer=optimizer, config=config, num_training_steps=trainer.max_steps)
+    applied = []
+    for _ in range(trainer.max_steps):
+        scheduler.step(1)
+        applied.append(optimizer.param_groups[0]["lr"])
+    warmup, lr = config.num_warmup_steps, config.lr
+    assert applied == pytest.approx(
+        [lr * min(1.0, step / warmup) if warmup else lr for step in range(1, len(applied) + 1)]
+    )
+    assert applied == pytest.approx([0.0, 0.0] if arm == "dry" else [1e-6, 2e-6] + [3e-6] * 18)
