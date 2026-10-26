@@ -15,6 +15,7 @@ import asyncio
 import copy
 import math
 import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer.module import Float16Module
 from ray.util.placement_group import placement_group
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from transformers import AutoTokenizer
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
@@ -639,8 +641,8 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
 def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
     """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
 
-    Training from the checkpoint again must repeat the step taken right after saving it: a
-    stale CPU master copy would instead restart that step from the later weights.
+    Training from the checkpoint again must repeat the step taken right after saving it, which
+    holds only if the CPU-offloaded masters and moments were restored too.
     """
     world_size = 2
     require_hoppers(world_size)
@@ -654,17 +656,18 @@ def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
     megatron.optimizer_config_kwargs.optimizer_offload_fraction = 1.0
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id)
-    checkpoint_dir = tmp_path / "checkpoint"
+    # Megatron restore reads only CoreWeave S3 checkpoints.
+    checkpoint_dir = marin_temp_bucket(1, f"skyrl-gpu-tests/offload-resume/{uuid.uuid4().hex}")
     initialize_ray(cfg)
     try:
         policy = _init_policy(cfg, world_size)
         _train_step(policy, batch)
         saved = rank0_validation_snapshot(policy, PARAMETER_NAMES)
-        ray.get(policy.async_run_ray_method("pass_through", "save_checkpoint", str(checkpoint_dir), tokenizer))
+        ray.get(policy.async_run_ray_method("pass_through", "save_checkpoint", checkpoint_dir, tokenizer))
         _train_step(policy, batch)
         after_saved_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
 
-        ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", str(checkpoint_dir)))
+        ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", checkpoint_dir))
         restored = rank0_validation_snapshot(policy, PARAMETER_NAMES)
         _train_step(policy, batch)
         after_restored_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
