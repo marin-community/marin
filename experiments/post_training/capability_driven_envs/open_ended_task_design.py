@@ -14,7 +14,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskforge.content_hash import pretty_json, sha256_hex
 from taskforge.llm.policy import Message
 from taskforge.spec.draft import assemble, judge_grader
-from taskforge.spec.rubric import ItemRole, Rubric
+from taskforge.spec.rubric import ItemRole, Rubric, RubricItem
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
@@ -82,6 +82,39 @@ def _validate_rubric(rubric: Rubric) -> None:
         raise ValueError(f"gate, cap, and disqualifier rubric items must have zero weight: {nonzero_caps}")
 
 
+class AuthoredRubricItem(BaseModel):
+    """A model-authored rubric item before deterministic weight and cap normalization."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(min_length=1)
+    intent: str = Field(min_length=1)
+    pass_criterion: str = Field(min_length=1)
+    equivalences: list[str]
+    negation_handling: str
+    weight: float = Field(ge=0)
+    role: ItemRole
+    cap_value: float | None = None
+
+
+class AuthoredRubric(BaseModel):
+    """A structurally simple rubric emitted by the author model."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    deliverable: str = Field(min_length=1)
+    items: tuple[AuthoredRubricItem, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def usable(self) -> Self:
+        ids = [item.id for item in self.items]
+        if len(set(ids)) != len(ids):
+            raise ValueError("authored rubric item IDs must be unique")
+        if not any(item.role is ItemRole.SCORED and item.weight > 0 for item in self.items):
+            raise ValueError("authored rubric needs a positive-weight scored item")
+        return self
+
+
 class AuthoredControl(BaseModel):
     """A private calibration answer before campaign policy assigns its reward band."""
 
@@ -105,13 +138,12 @@ class AuthoredTaskDesign(BaseModel):
         description="The complete solver-facing request, without private evidence, answers, or grading instructions.",
     )
     reference: str = Field(min_length=1, description="A source-grounded private reference answer.")
-    rubric: Rubric
+    rubric: AuthoredRubric
     controls: tuple[AuthoredControl, ...] = Field(min_length=1)
     output_budget_tokens: int = Field(gt=0, description="A justified maximum answer length for later rollout policy.")
 
     @model_validator(mode="after")
     def complete_controls(self) -> Self:
-        _validate_rubric(self.rubric)
         kinds = [control.kind for control in self.controls]
         if any(kinds.count(kind) != 1 for kind in ControlKind):
             raise ValueError("authored design needs exactly one control of every required kind")
@@ -290,13 +322,41 @@ CURATOR INPUT:
 {pretty_json(authoring_record(hydrated, proposal))}"""
 
 
+def freeze_rubric(authored: AuthoredRubric) -> Rubric:
+    """Normalize model-proposed weights and cap semantics into Taskforge's rubric contract."""
+    scored_weight = sum(item.weight for item in authored.items if item.role is ItemRole.SCORED)
+    items: list[RubricItem] = []
+    for item in authored.items:
+        if item.role is ItemRole.SCORED:
+            weight = item.weight / scored_weight
+            cap_value = None
+        else:
+            weight = 0.0
+            cap_value = item.cap_value if item.role is ItemRole.CAP and item.cap_value is not None else 0.0
+            if not 0 <= cap_value < 1:
+                cap_value = 0.0
+        items.append(
+            RubricItem(
+                id=item.id,
+                intent=item.intent,
+                pass_criterion=item.pass_criterion,
+                equivalences=item.equivalences,
+                negation_handling=item.negation_handling,
+                weight=weight,
+                role=item.role,
+                cap_value=cap_value,
+            )
+        )
+    return Rubric(deliverable=authored.deliverable, items=items)
+
+
 def freeze_design(authored: AuthoredTaskDesign) -> OpenEndedTaskDesign:
-    """Apply campaign-fixed control bands to structured model output."""
+    """Apply campaign-fixed rubric and control policy to structured model output."""
     return OpenEndedTaskDesign(
         proposal_slot=authored.proposal_slot,
         instruction=authored.instruction,
         reference=authored.reference,
-        rubric=authored.rubric,
+        rubric=freeze_rubric(authored.rubric),
         controls=tuple(
             OpenEndedControl(
                 control_id=control.control_id,
