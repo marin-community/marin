@@ -390,7 +390,7 @@ def _assert_snowball_recipe(hf_config: HfConfig) -> None:
 
 
 def silu_fp32(x: jax.Array) -> jax.Array:
-    """SiLU computed in FP32 and cast to the input dtype once (the routed experts' ``fp32_activations`` callable)."""
+    """SiLU in FP32, cast to the input dtype once; the shared and routed experts use it under ``fp32_activations``."""
     return jax.nn.silu(x.astype(jnp.float32)).astype(x.dtype)
 
 
