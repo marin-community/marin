@@ -1001,6 +1001,18 @@ def test_default_profile_matches_baseline():
     assert ctx == {"capabilities": {"add": ["SYS_PTRACE"]}}
 
 
+def test_bubblewrap_profile_unconfines_apparmor_without_changing_default_security_or_egress():
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+    manifest = _build_pod_manifest(req, pod_config())
+
+    assert manifest["spec"]["containers"][0]["securityContext"] == {
+        "capabilities": {"add": ["SYS_PTRACE"]},
+        "appArmorProfile": {"type": "Unconfined"},
+    }
+    assert EGRESS_LABEL not in manifest["metadata"]["labels"]
+
+
 def test_restricted_profile_drops_all_caps():
     ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=False)
     assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}

@@ -657,8 +657,8 @@ enum PriorityBand {
 // Named container security posture. Selects a bundle of container/pod security
 // settings instead of exposing individual docker/k8s knobs. The two elevated
 // profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent and require admin
-// authorization at submission (see service.LaunchJob); RESTRICTED and DEFAULT are
-// unprivileged and need none. DOCKER_ACCESS and PRIVILEGED are distinct
+// authorization at submission (see service.LaunchJob); the other profiles
+// need none. DOCKER_ACCESS and PRIVILEGED are distinct
 // capabilities — neither implies the other.
 enum ContainerProfile {
   CONTAINER_PROFILE_UNSPECIFIED = 0;    // resolves to DEFAULT
@@ -681,6 +681,10 @@ enum ContainerProfile {
   // job must carry no workspace bundle. CPU-only (runsc cannot pass a GPU/TPU
   // through). Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
+  // DEFAULT with AppArmor unconfined for nested unprivileged bubblewrap on
+  // Kubernetes. Keeps the default capabilities, seccomp, and egress policy.
+  // Docker's default seccomp blocks the required mount/namespace syscalls.
+  CONTAINER_PROFILE_BUBBLEWRAP = 7;
 }
 
 // What a task's network can reach. INTERNET and NONE both deny the controller,
