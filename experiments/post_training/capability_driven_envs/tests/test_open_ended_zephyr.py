@@ -45,9 +45,10 @@ async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
     )
     document = document_template(hydrated, 1, CONFIG).replace(
         "<...>",
-        "Use the supplied sufficient counts for a donor-aware analysis. Preserve both denominators, missing-call "
-        "semantics, provenance, and cautious interpretation. The generic author derives a weighted rubric, private "
-        "reference, and calibration controls from the curator input without exposing private evidence to the solver.",
+        "Use the supplied sufficient counts for a reproducible descriptive analysis. Preserve the denominators, "
+        "provenance, and cautious interpretation. The generic author derives a weighted rubric, private reference, "
+        "and calibration controls from curator input without exposing private evidence to the solver. Explain the "
+        "supported scope, construction boundary, exact visible resources, and risks without claiming prior execution.",
     )
     model.reply(document)
     model.reply(authored_reply())

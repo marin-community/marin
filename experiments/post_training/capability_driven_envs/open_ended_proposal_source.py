@@ -34,6 +34,7 @@ from taskforge.stage10_proposal.model import (
     solver_machine_violation,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
+from taskforge.stage20_triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext, run_checks
 from taskforge.stage40_build_with_program.sdk import solver_machine as requirements_solver_machine
 
 from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBundle
@@ -302,7 +303,12 @@ def checked_proposal(
         ),
         resources=tuple(resource.path for resource in bundle.solver_resources),
     )
-    return parse(render(TaskProposal(header=header, body=proposal.body)))
+    canonical = parse(render(TaskProposal(header=header, body=proposal.body)))
+    results = run_checks(canonical, CHECKS, CheckContext(allowed_combinations=ALL_COMBINATIONS))
+    blocking = [f"{result.name}: {result.reason}" for result in results if result.blocks]
+    if blocking:
+        raise ProposalFormatError(f"open-ended proposal fails deterministic preflight: {'; '.join(blocking)}")
+    return canonical
 
 
 def null_slot_proposal(

@@ -40,8 +40,10 @@ def plan(*slots: dict[str, object]) -> str:
 def filled_document(number: int) -> str:
     return document_template(bundle(), number, CONFIG).replace(
         "<...>",
-        "Use the supplied counts for a donor-aware analysis. Keep the frozen rubric private and validate positive, "
-        "partial, severe-negative, verbosity, and evaluator-injection controls.",
+        "Use the supplied counts for a reproducible descriptive analysis. Keep the frozen rubric private and "
+        "validate positive, partial, severe-negative, verbosity, and evaluator-injection controls. Explain the "
+        "supported scope, exact visible inputs, construction boundary, calibrated interpretation, and leakage risks "
+        "without claiming that any build or validation has already executed successfully.",
     )
 
 
