@@ -1,4 +1,4 @@
-# Task 310 runtime precision binding
+# Snowball SFT runtime precision binding
 
 This source is not a precision-pass receipt or permission to train. The four-host/32-H100
 collectives, memory, complete LR0 audit and saved-model checks remain H100 gates.
@@ -6,13 +6,14 @@ collectives, memory, complete LR0 audit and saved-model checks remain H100 gates
 ## Source metadata and measured policy are separate
 
 `runtime_recipe.configure_precision_runtime` takes the source config/generation
-**bytes**, the immutable torch rounding report bytes, its approved SHA256 and its
-regional artifact path. It returns the source-derived recipe with only the
-registered router policy applied, plus a schema-v2 derived receipt:
+**bytes**, the immutable torch rounding report bytes, its approved SHA256, its
+regional artifact path and the XLA precision setting. It returns the source-derived
+recipe with only the registered router policy applied, plus a derived receipt
+(`schema_version` 6):
 
 - `source_metadata.model_config.router_dot_fp32` remains **false**; the six native
-  files and their hashes are not edited. `source_metadata_receipt` now explicitly
-  uses schema version 2; old receipts must be regenerated and reviewed.
+  files and their hashes are not edited. `source_metadata_receipt` uses schema
+  version 2.
 - `runtime_model_config.router_dot_fp32` is **true** for the measured dot-only
   trigger; `compute_dtype_overrides` is exactly `{"router_bias": "float32"}`.
 - The receipt binds the approved rounding artifact path/hash and native export
@@ -29,9 +30,11 @@ unrounded FP32 trainable router masters: the dot upcasts the BF16 **compute view
 
 `levanter.main.train_lm.preserve_hf_runtime_settings` runs **after** the public
 converter parses native HF config. HF remains authoritative for every model
-architecture field. Only the runtime router flag and pinned checkpoint/tokenizer
-IO settings are copied from the requested recipe; the enabled flag requires the
-exact bias override.
+architecture field. Only the runtime settings HF metadata does not carry (the FP32
+router dot, combine and activations flags, the attention and MoE implementations
+and the MoE capacity factor) and the requested checkpoint/tokenizer IO settings are
+copied from the requested recipe; the FP32 router dot requires the exact bias
+override.
 
 Stock `train_lm.main` uses this helper at its HF reload. The later
 `_load_lm_model_from_configured_source` passes the resolved config explicitly;

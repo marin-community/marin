@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Task 310 configuration only: native-format SFT, with no submission side effects."""
+"""Snowball identity SFT configuration only: native-format SFT, with no submission side effects."""
 
 import hashlib
 import json
@@ -171,7 +171,7 @@ def check_runtime_recipe(config: TrainLmConfig, *, source_config: dict, source_g
     check_runtime_model(config.model, source_config)
     if config.model.router_dot_fp32:
         assert trainer.compute_dtype_overrides == {"router_bias": "float32"}
-    assert config.model.moe_capacity_factor == trainer.mesh.axes["expert"]  # dropless (ruled 2026-10-25)
+    assert config.model.moe_capacity_factor == trainer.mesh.axes["expert"]  # dropless, as vLLM is
     assert config.use_hf_model_config is True
     assert config.hf_generation_eos_token_ids == source_generation_eos(source_config, source_generation_config)
     assert trainer.frozen_parameter_storage == FrozenParameterStorage.NATIVE
@@ -244,7 +244,7 @@ def identity_sft_config(
         source_generation_config: Parsed source generation_config.json with the approved EOS list.
         moe_capacity_factor: Expert-parallel capacity; must equal the expert-axis size (4), so the MoE is
             dropless in the gate and in training, as vLLM is.
-        router_combine_fp32: Whether the routed combine runs in FP32 (one of the two r6 arms); explicit, with
+        router_combine_fp32: Whether the routed combine runs in FP32; explicit, with
             no default, because it changes the forward numerics.
         fp32_activations: Whether SiLU and sigmoid run in FP32, cast to BF16 once (GatedNorm, attention head gate,
             shared and expert MLPs); explicit, with no default, because it changes the forward numerics.

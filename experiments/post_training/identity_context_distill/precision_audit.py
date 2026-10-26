@@ -68,7 +68,11 @@ def audit_initialized_masters(tensors: Mapping[str, jax.Array], source_receipt_p
 
 
 def compare_tensor_bytes(source: TensorRecord, exported: TensorRecord) -> str:
-    """Compare all bytes and finite values with bounded source/export read buffers."""
+    """Compare all bytes and finite values with bounded source/export read buffers.
+
+    Returns the SHA256 hex digest of the tensor's bytes, which are the same in both files. Raises ``ValueError`` on a
+    shape, dtype or byte difference, a truncated payload or a nonfinite value.
+    """
     if source.shape != exported.shape or source.dtype != exported.dtype:
         raise ValueError(f"Tensor shape/dtype changed: {source.key}")
     digest = hashlib.sha256()
