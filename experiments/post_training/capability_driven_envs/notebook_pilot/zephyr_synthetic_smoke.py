@@ -130,6 +130,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API root ending in /v1")
     parser.add_argument("--relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument("--relay-service", default=None)
     parser.add_argument("--model", default=GLM_MODEL)
     parser.add_argument("--api-key-env", default=GLM_BULK_TOKEN_ENV)
     parser.add_argument("--region", default="us-central1")
@@ -138,7 +139,12 @@ def main() -> None:
     port = (
         OpenAIModelPort(args.model, args.api_key_env, base_url=args.base_url)
         if args.base_url
-        else OpenAIModelPort(args.model, args.api_key_env, relay_job=args.relay_job, relay_service=args.model)
+        else OpenAIModelPort(
+            args.model,
+            args.api_key_env,
+            relay_job=args.relay_job,
+            relay_service=args.relay_service or args.model,
+        )
     )
     output = args.output or (
         "gs://marin-us-central1/marin/taskforge/open-ended-smoke/"
