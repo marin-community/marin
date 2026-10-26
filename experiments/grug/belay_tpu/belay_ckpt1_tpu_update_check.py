@@ -48,6 +48,7 @@ from experiments.grug.belay_tpu.expert_gradient_adapter import (
     whole_width_tiling,
 )
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
+from experiments.grug.belay_tpu.hybrid_experts import hybrid_gathered_expert_mlp
 from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
@@ -177,6 +178,7 @@ def main():
     )
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
+    parser.add_argument("--expert-group-size", type=int, choices=(1, 2), default=1)
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
     parser.add_argument(
         "--expert-reduction", choices=("native", "butterfly", "all-to-all", "all-to-all-source"), default="native"
@@ -260,6 +262,16 @@ def main():
         local_experts.reduce_expert_gradients = all_to_all_reduce_scatter
     elif args.expert_reduction == "all-to-all-source":
         local_experts.gather_expert_weights = gather_expert_weights_with_owner_sum
+    if args.expert_group_size == 2:
+        if not args.local_experts or args.expert_row_partitions != 2:
+            parser.error("Paired expert ownership requires local experts with two row partitions")
+        if not args.streaming_movement or args.streaming_scalars != "gather" or args.capacity_layout != "intervals":
+            parser.error("Paired expert ownership uses streaming movement, gathered scalars and interval capacity")
+        if args.expert_reduction != "native" or args.saved_relu2 or args.saved_output:
+            parser.error("Paired expert ownership requires native reduction and retained activations")
+        model.gathered_expert_mlp = functools.partial(
+            hybrid_gathered_expert_mlp, expert_group_size=args.expert_group_size
+        )
     if args.update_steps < 2:
         parser.error("Checkpoint continuation requires at least two consecutive updates")
     if args.profile_steps < 0:
@@ -312,6 +324,7 @@ def main():
             "diagnostic/expert_reduction": args.expert_reduction,
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
+            "diagnostic/expert_group_size": args.expert_group_size,
             "diagnostic/local_movement": args.local_movement,
             "diagnostic/streaming_movement": args.streaming_movement,
             "diagnostic/streaming_scalars": args.streaming_scalars,
