@@ -692,13 +692,14 @@ turn budget, sampling and minimum number of distinct candidates. `blackbox` expo
 `whitebox` also exposes the grader, reference and controls without clipping their text.
 
 The search uses `shell` on a private task machine and `submit` to replay a candidate's reply and named
-files on a fresh grading machine. It must call `finish_search` with a report containing defects and a summary. Each defect identifies
-tested candidate submissions, explains the issue, and states whether it needs addressing. An empty defect
-list explicitly completes a search with no findings. Prose alone is incomplete; grading a probe does not
+files on a fresh grading machine. It must call `finish_search` with a report containing defects and a summary.
+Each defect identifies tested candidate submissions, explains the issue, and states whether it needs addressing.
+An empty defect list reports no findings; execution and evidence completeness checks still apply.
+Prose alone is incomplete; grading a probe does not
 submit a defect. FA/FR selects the search objective, independently of this common reporting contract.
 
 After checking execution and evidence completeness, review requests repair for submitted defects marked
-as needing attention. Informational defects do not force repair. Optional second review is a stub with
+as needing addressing. Informational defects do not force repair. Optional second review is a stub with
 access to the full task and submitted candidate evidence; it makes no model calls and does not gate normal
 defect handling. Candidate files are preserved exactly, including binary files.
 Saved searches are bound to the task, grader, role, search policy and search model.
