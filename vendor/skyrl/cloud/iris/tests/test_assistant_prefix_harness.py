@@ -29,6 +29,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     FunctionDefinition,
     PlainText,
+    ReasoningMarkupPolicy,
     Source,
     TaskSpec,
     TextMessage,
@@ -64,7 +65,6 @@ def task_inputs():
             "max_turns": 2,
             "max_input_length": 100,
             "apply_overlong_filtering": False,
-            "reasoning_spans": {"policy": "grade"},
             "sampling_params": {
                 "max_generate_length": 10,
                 "temperature": 1.0,
@@ -150,11 +150,16 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "policy,status,reward", [("reject", Outcome.SUBMISSION_FAILURE, 0.0), ("grade", Outcome.GRADED, 1.0)]
+    "policy,status,reward",
+    [
+        (ReasoningMarkupPolicy.REJECT, Outcome.SUBMISSION_FAILURE, 0.0),
+        (ReasoningMarkupPolicy.GRADE, Outcome.GRADED, 1.0),
+    ],
 )
-async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(task_inputs, policy, status, reward):
+async def test_the_worker_applies_the_task_reasoning_markup_policy_to_a_malformed_turn(
+    task_inputs, policy, status, reward
+):
     config, request = task_inputs
-    config = OmegaConf.merge(config, {"reasoning_spans": {"policy": policy}})
     package = verifyit_package(StructureClosureSpec('{"value":', '{"value":12}', ClosureFormat.JSON))
     task = request.rows[0].spec.task.model_copy(
         update={
@@ -167,6 +172,7 @@ async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(
             "answer_type": AnswerType.TEXT,
             "answer_format": PlainText(),
             "grader": package.grader,
+            "reasoning_markup": policy,
         }
     )
     request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))

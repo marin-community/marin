@@ -1,7 +1,6 @@
 """SkyRL training signals projected from Marin's graded attempt records."""
 
 from dataclasses import asdict, dataclass, field, replace
-from enum import StrEnum
 from typing import Any
 
 from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, RolloutFailure, TaskRolloutSpec
@@ -11,16 +10,6 @@ from taskcompendium.models import NoGrader
 from verifyit.reasoning_markup import ReasoningViolation
 
 REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
-
-
-class ReasoningSpanPolicy(StrEnum):
-    """How training treats a rollout with a malformed reasoning span.
-
-    GRADE keeps the task grade. REJECT grades the rollout as a reward-0 submission failure.
-    """
-
-    GRADE = "grade"
-    REJECT = "reject"
 
 
 @dataclass(frozen=True)
