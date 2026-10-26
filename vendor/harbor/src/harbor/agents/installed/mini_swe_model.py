@@ -104,6 +104,9 @@ class OpenAIModel(OpenRouterModel):
     def _completion(
         self, messages: list[dict[str, Any]], **kwargs: Any
     ) -> dict[str, Any]:
+        # Mini-SWE's OpenRouter defaults include LiteLLM's drop_params flag;
+        # the direct OpenAI SDK transport does not accept it.
+        kwargs.pop("drop_params", None)
         with OpenAI(
             base_url=self.api_base,
             api_key=os.environ.get("MSWEA_API_KEY")

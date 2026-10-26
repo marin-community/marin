@@ -335,6 +335,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     )
 
     def completion(**kwargs):
+        assert "drop_params" not in kwargs
         completions.append(kwargs)
         (tmp_path / LITERAL_LOG_FILENAME).write_text(
             json.dumps(
