@@ -6,9 +6,13 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 
+import cloudpickle
 import pytest
 from levanter.models.snowball import SnowballConfig
 from levanter.tracker import NoopConfig
@@ -43,10 +47,8 @@ def fixture(
     fp32_activations: bool = False,
     attention_implementation: str = "torch_order",
     xla_precision: str = "default",
-    order: list | None = None,
 ):
-    """Fixture source/routing bytes behind a fake StoragePath, and the receipt they derive, as approved bytes. The
-    process runs the receipt's XLA precision setting; ``order`` records the XLA check and the storage check."""
+    """Bind synthetic source bytes and the process's recorded XLA flags."""
     config, args = inputs()
     assert isinstance(config.model, SnowballConfig)
     model = replace(
@@ -61,8 +63,6 @@ def fixture(
         monkeypatch.setenv(name, value)
     if xla_precision == "default":
         monkeypatch.delenv("XLA_FLAGS", raising=False)
-    order = [] if order is None else order
-    monkeypatch.setattr(lr0_probe, "require_xla_precision", lambda expected: order.append(("xla", expected)))
     receipt_bytes = json.dumps(receipt).encode()
     files = {
         "config.json": args["config_bytes"],
@@ -84,11 +84,11 @@ def fixture(
             return files[self.path.rsplit("/", 1)[-1]]
 
     monkeypatch.setattr(lr0_probe, "StoragePath", Path)
-    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: order.append(("storage",)))
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: None)
     return receipt_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None, route_policy="G1a"):
+def binding_worker(monkeypatch, receipt_bytes, receipt_sha256, route_policy):
     calls: dict = {"writer": 0}
     monkeypatch.setattr(lr0_probe, "make_pre_update_gate", lambda inputs: calls.setdefault("gate", inputs))
 
@@ -106,13 +106,64 @@ def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None, route_policy="G1
     )
     monkeypatch.setattr(lr0_probe, "run_precision_probe", probe)
     lr0_probe.lr0_worker(RUN_ROOT, "t310-lr0", receipt_bytes, receipt_sha256 or sha(receipt_bytes), route_policy)
+    callbacks = calls["kwargs"]
+    audits = []
+    monkeypatch.setattr(lr0_probe, "audit_precision_source", lambda *args: audits.append(("source", *args)))
+    monkeypatch.setattr(lr0_probe, "audit_initialized_masters", lambda *args: audits.append(("master", *args)))
+    monkeypatch.setattr(
+        lr0_probe, "audit_precision_export", lambda *args, receipt_path: audits.append(("export", *args, receipt_path))
+    )
+
+    class State:
+        class model:
+            @staticmethod
+            def to_state_dict():
+                return {"w": 1}
+
+    callbacks.pop("source_audit")("SRC")
+    master = callbacks.pop("master_audit")
+    master(State, 0)
+    master(State, 1)
+    with pytest.raises(ValueError, match="master audit step"):
+        master(State, 2)
+    callbacks.pop("export_audit")("SRC", "EXP")
+    receipts = {}
+    monkeypatch.setattr(lr0_probe, "write_json", lambda path, value: receipts.__setitem__(path, value))
+    rows = [{"process": process, "local_device": 0, "peak_bytes_in_use": 7} for process in (0, 1)]
+    callbacks.pop("post_update_receipt")(rows)
+    calls.update(audits=audits, rank_receipts=receipts)
     return calls
+
+
+def run_worker(receipt_bytes, receipt_sha256=None, route_policy="G1a"):
+    """Run callback-binding checks in a fresh process with the real pre-backend guard.
+
+    Source/pod storage, gate/probe and source/master/export callbacks, and
+    export/rank receipt writers are fakes. The real guard precedes the
+    rank callback's first JAX query; test_lr0_startup supplies the real
+    distributed lifecycle.
+    """
+    payload = (receipt_bytes, receipt_sha256, route_policy, lr0_probe.StoragePath, lr0_probe.check_pod_storage)
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "result.pkl"
+        child = subprocess.run(
+            [sys.executable, __file__, "--binding-worker", str(output)],
+            input=cloudpickle.dumps(payload),
+            capture_output=True,
+            env={**os.environ, "JAX_PLATFORMS": "cpu", "CUDA_VISIBLE_DEVICES": ""},
+            timeout=60,
+        )
+        assert child.returncode == 0, child.stderr.decode()[-4000:]
+        ok, result = cloudpickle.loads(output.read_bytes())
+    if not ok:
+        raise result
+    return result
 
 
 def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     receipt_bytes = fixture(monkeypatch)
     receipt = json.loads(receipt_bytes)
-    calls = run_worker(monkeypatch, receipt_bytes)
+    calls = run_worker(receipt_bytes)
     config, kwargs = calls["config"], calls["kwargs"]
     assert config.model.router_dot_fp32 is True
     assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, False)
@@ -132,39 +183,16 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     assert calls["writer"] == 1
     assert calls["result"] == (f"{RUN_ROOT}/lr0-result.json", {"completed_updates": 1})
 
-    audits = []
-    monkeypatch.setattr(lr0_probe, "audit_precision_source", lambda *args: audits.append(("source", *args)))
-    monkeypatch.setattr(lr0_probe, "audit_initialized_masters", lambda *args: audits.append(("master", *args)))
-    monkeypatch.setattr(
-        lr0_probe, "audit_precision_export", lambda *args, receipt_path: audits.append(("export", *args, receipt_path))
-    )
-
-    class State:
-        class model:
-            @staticmethod
-            def to_state_dict():
-                return {"w": 1}
-
-    kwargs["source_audit"]("SRC")
-    kwargs["master_audit"](State, 0)
-    kwargs["master_audit"](State, 1)
-    kwargs["export_audit"]("SRC", "EXP")
     source_receipt = f"{RUN_ROOT}/audits/source-tensor-hashes.json"
-    assert audits == [
+    assert calls["audits"] == [
         ("source", "SRC", lr0_probe.SOURCE_FILE_HASHES, source_receipt),
         ("master", {"w": 1}, source_receipt, f"{RUN_ROOT}/audits/master-step-0.json"),
         ("master", {"w": 1}, source_receipt, f"{RUN_ROOT}/audits/master-step-1.json"),
         ("export", "SRC", "EXP", lr0_probe.SOURCE_FILE_HASHES, "EXP/precision-audit.json"),
     ]
-    with pytest.raises(ValueError, match="master audit step"):
-        kwargs["master_audit"](State, 2)
-
     # After the update, each rank writes its own devices' memory into its gate rank receipt.
-    receipts = {}
-    monkeypatch.setattr(lr0_probe, "write_json", lambda path, value: receipts.__setitem__(path, value))
     rows = [{"process": process, "local_device": 0, "peak_bytes_in_use": 7} for process in (0, 1)]
-    kwargs["post_update_receipt"](rows)
-    assert receipts == {
+    assert calls["rank_receipts"] == {
         f"{RUN_ROOT}/precision-gate/ranks/0.json": {
             "process": 0,
             "stage": "updated",
@@ -174,27 +202,23 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
 
 
 def test_worker_takes_the_runtime_settings_from_the_bound_receipt(monkeypatch):
-    order: list = []
     receipt_bytes = fixture(
         monkeypatch,
         router_combine_fp32=True,
         fp32_activations=True,
         attention_implementation="torch_order",
         xla_precision="no_excess_precision",
-        order=order,
     )
-    model = run_worker(monkeypatch, receipt_bytes)["config"].model
+    model = run_worker(receipt_bytes)["config"].model
     assert (model.moe_capacity_factor, model.router_combine_fp32, model.fp32_activations) == (4.0, True, True)
     assert model.attention_implementation == "torch_order"
-    # The XLA setting is checked first, before the storage check and any read.
-    assert order == [("xla", "no_excess_precision"), ("storage",)]
 
 
 def test_worker_refuses_a_process_without_the_receipt_xla_precision(monkeypatch):
     receipt_bytes = fixture(monkeypatch, xla_precision="no_excess_precision")
     monkeypatch.delenv("XLA_FLAGS")
-    with pytest.raises(ValueError, match="Derived runtime recipe differs"):
-        run_worker(monkeypatch, receipt_bytes)
+    with pytest.raises(ValueError, match="XLA precision"):
+        run_worker(receipt_bytes)
 
 
 def test_base_config_refuses_a_receipt_without_the_runtime_settings():
@@ -239,11 +263,11 @@ def test_schema4_reviewed_receipts_are_refused(name):
 def test_worker_refuses_unreviewed_or_mismatched_receipts(monkeypatch):
     receipt_bytes = fixture(monkeypatch)
     with pytest.raises(ValueError, match="Runtime receipt sha256"):
-        run_worker(monkeypatch, receipt_bytes + b" ", sha(receipt_bytes))
+        run_worker(receipt_bytes + b" ", sha(receipt_bytes))
     changed = json.loads(receipt_bytes)
     changed["trigger"]["bias_only"] = True
     with pytest.raises(ValueError, match="Derived runtime recipe differs"):
-        run_worker(monkeypatch, json.dumps(changed).encode())
+        run_worker(json.dumps(changed).encode())
 
 
 def test_gate_inputs_are_the_frozen_regional_inputs():
@@ -306,7 +330,7 @@ def test_worker_checks_pod_storage_before_any_read(monkeypatch):
     monkeypatch.setattr(lr0_probe, "check_pod_storage", missing)
     monkeypatch.setattr(lr0_probe, "StoragePath", lambda path: pytest.fail("read before the storage check"))
     with pytest.raises(RuntimeError, match="Pod storage"):
-        run_worker(monkeypatch, receipt_bytes)
+        run_worker(receipt_bytes)
 
 
 def test_io_smoke_runs_every_step_and_cleans_only_its_own_objects(monkeypatch, tmp_path):
@@ -407,3 +431,15 @@ class _Local:
 
     def read_bytes(self):
         return self._store[self.path]
+
+
+if __name__ == "__main__":
+    receipt_bytes, receipt_sha, route_policy, storage, pod_storage = cloudpickle.loads(sys.stdin.buffer.read())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(lr0_probe, "StoragePath", storage)
+        patch.setattr(lr0_probe, "check_pod_storage", pod_storage)
+        try:
+            result = (True, binding_worker(patch, receipt_bytes, receipt_sha, route_policy))
+        except Exception as error:
+            result = (False, error)
+    Path(sys.argv[2]).write_bytes(cloudpickle.dumps(result))
