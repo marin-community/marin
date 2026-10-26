@@ -43,22 +43,45 @@ def sum_routes(rows, positions, weights=None, *, implementation="unrolled"):
     return result.astype(rows.dtype)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
-def combine_streaming(rows, order, inverse, weights, implementation="unrolled", scalar_permutation="gather"):
+def sum_routes_blocked(rows, positions, weights=None, *, tile_tokens=1024):
+    """Reduce all routes within bounded token tiles without a global accumulator."""
+    tokens, topk = positions.shape
+    tile = min(tokens, tile_tokens)
+    padding = (-tokens) % tile
+    indices = jnp.pad(positions, ((0, padding), (0, 0))).reshape(-1, tile, topk)
+    coefficients = None if weights is None else jnp.pad(weights, ((0, padding), (0, 0))).reshape(-1, tile, topk)
+
+    def reduce_tile(inputs):
+        index, coefficient = inputs
+        values = rows[index].astype(jnp.float32)
+        if coefficient is not None:
+            values = values * coefficient[..., None].astype(jnp.float32)
+        return values.sum(axis=1).astype(rows.dtype)
+
+    outputs = jax.lax.map(reduce_tile, (indices, coefficients))
+    return outputs.reshape(-1, rows.shape[1])[:tokens]
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5, 6))
+def combine_streaming(
+    rows, order, inverse, weights, implementation="unrolled", scalar_permutation="gather", token_tile=0
+):
     """Combine routed expert outputs and form pullbacks in expert row order."""
     if scalar_permutation not in ("gather", "sort"):
         raise ValueError("Unknown scalar permutation implementation")
     del order
+    if token_tile:
+        return sum_routes_blocked(rows, inverse.reshape(weights.shape), weights, tile_tokens=token_tile)
     return sum_routes(rows, inverse.reshape(weights.shape), weights, implementation=implementation)
 
 
-def _forward(rows, order, inverse, weights, implementation, scalar_permutation):
-    output = combine_streaming(rows, order, inverse, weights, implementation, scalar_permutation)
+def _forward(rows, order, inverse, weights, implementation, scalar_permutation, token_tile):
+    output = combine_streaming(rows, order, inverse, weights, implementation, scalar_permutation, token_tile)
     return output, (rows, order, inverse, weights)
 
 
-def _backward(implementation, scalar_permutation, residuals, gradient):
-    del implementation
+def _backward(implementation, scalar_permutation, token_tile, residuals, gradient):
+    del implementation, token_tile
     rows, order, inverse, weights = residuals
     token_gradient = gradient[order // weights.shape[1]].astype(jnp.float32)
     row_weights = (
