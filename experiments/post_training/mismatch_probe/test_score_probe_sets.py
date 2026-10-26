@@ -11,6 +11,7 @@ from experiments.post_training.mismatch_probe.score_probe_sets import (
     forward_groups,
     load_reference_shard,
     padded_rows,
+    resolve_reference_roots,
     save_reference_shard,
     shard_path,
     summarize_flips,
@@ -159,6 +160,17 @@ def test_flip_rows_compare_top1_at_the_reference_logits_positions():
     flips = [row for row in rows if row.flipped]
     assert len(flips) == 1 and flips[0].sequence_id == "s1" and flips[0].position == 2
     assert flips[0].reference_top1 == 8 and flips[0].candidate_top1 == 99
+
+
+def test_reference_roots_default_to_reference_out_and_override_per_set():
+    sets = {"P_X": "s3://px.jsonl", "P_chat": "s3://chat.jsonl"}
+    roots = resolve_reference_roots(sets, "s3://refs", ["P_X=s3://refs-e-x"])
+    assert roots == {"P_X": "s3://refs-e-x", "P_chat": "s3://refs"}
+    assert resolve_reference_roots(sets, "s3://refs", None) == {name: "s3://refs" for name in sets}
+    with pytest.raises(ValueError, match="must be SET=DIR"):
+        resolve_reference_roots(sets, "s3://refs", ["P_R=s3://refs-e-r"])
+    with pytest.raises(ValueError, match="must be SET=DIR"):
+        resolve_reference_roots(sets, "s3://refs", ["unknown-set=s3://refs"])
 
 
 def test_flip_summaries_report_overall_bucket_and_margin_quartile_rates(tmp_path):

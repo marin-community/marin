@@ -312,10 +312,17 @@ def candidate_rows(
 
 
 def candidate_pass(
-    model_path: str, label: str, step: int, sets: dict[str, str], reference_out: str, out: str, limit: int | None
+    model_path: str,
+    label: str,
+    step: int,
+    sets: dict[str, str],
+    reference_roots: dict[str, str],
+    out: str,
+    limit: int | None,
 ) -> None:
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
+            reference_out = reference_roots[set_name]
             with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
                 reference_meta = json.load(handle)
             for index, group, real in group_sequences(stage_set(uri, limit)):
@@ -336,10 +343,13 @@ def candidate_pass(
             write_json(f"{out.rstrip('/')}/{set_name}/kl-{label}.json", summarize_kl(out, set_name, f"kl-{label}"))
 
 
-def noise_pass(model_path: str, sets: dict[str, str], reference_out: str, out: str, limit: int | None) -> None:
+def noise_pass(
+    model_path: str, sets: dict[str, str], reference_roots: dict[str, str], out: str, limit: int | None
+) -> None:
     """The reference model gathered on its own support with each group's rows reversed (C5)."""
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
+            reference_out = reference_roots[set_name]
             for index, group, real in group_sequences(stage_set(uri, limit)):
                 path = shard_path(out, set_name, "kl-noise", index, "parquet")
                 if exists(path):
@@ -475,11 +485,18 @@ def summarize_kl(out: str, set_name: str, kind: str) -> dict[str, Any]:
 
 
 def flips_pass(
-    model_path: str, label: str, step: int, sets: dict[str, str], reference_out: str, out: str, limit: int | None
+    model_path: str,
+    label: str,
+    step: int,
+    sets: dict[str, str],
+    reference_roots: dict[str, str],
+    out: str,
+    limit: int | None,
 ) -> None:
     """Greedy-token flips per scored position: the candidate's top-1 against the reference's."""
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
+            reference_out = reference_roots[set_name]
             with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
                 reference_meta = json.load(handle)
             for index, group, real in group_sequences(stage_set(uri, limit)):
@@ -582,6 +599,17 @@ def summarize_flips(out: str, set_name: str, kind: str) -> dict[str, Any]:
     }
 
 
+def resolve_reference_roots(sets: dict[str, str], default: str, overrides: list[str] | None) -> dict[str, str]:
+    """One reference root per set: the ``--reference-out`` default, with ``SET=DIR`` overrides."""
+    roots = {set_name: default for set_name in sets}
+    for spec in overrides or []:
+        set_name, separator, directory = spec.partition("=")
+        if not separator or set_name not in sets:
+            raise ValueError(f"--reference-root {spec!r} must be SET=DIR for a scored set ({', '.join(sorted(sets))})")
+        roots[set_name] = directory
+    return roots
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -594,6 +622,13 @@ def main() -> None:
             command.add_argument("--model-path", required=True)
         if name in ("candidate", "noise", "flips"):
             command.add_argument("--reference-out", required=True)
+            command.add_argument(
+                "--reference-root",
+                dest="reference_roots",
+                action="append",
+                default=None,
+                help="SET=DIR: where SET's stored reference lives, when sets share one --reference-out",
+            )
         if name in ("candidate", "exact", "flips"):
             command.add_argument("--label", required=True, help="names this candidate's shards")
         if name in ("candidate", "flips"):
@@ -606,11 +641,14 @@ def main() -> None:
     if args.command == "reference":
         reference_pass(args.model_path, sets, args.out, args.limit)
     elif args.command == "candidate":
-        candidate_pass(args.model_path, args.label, args.step, sets, args.reference_out, args.out, args.limit)
+        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        candidate_pass(args.model_path, args.label, args.step, sets, roots, args.out, args.limit)
     elif args.command == "noise":
-        noise_pass(args.model_path, sets, args.reference_out, args.out, args.limit)
+        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        noise_pass(args.model_path, sets, roots, args.out, args.limit)
     elif args.command == "flips":
-        flips_pass(args.model_path, args.label, args.step, sets, args.reference_out, args.out, args.limit)
+        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        flips_pass(args.model_path, args.label, args.step, sets, roots, args.out, args.limit)
     else:
         exact_pass(args.reference_model, args.candidate_model, args.label, sets, args.out, args.limit)
 
