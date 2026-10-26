@@ -169,7 +169,7 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
             max_retries=1,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=24,
+            coordinator_timeout_seconds=24 * 3600,
             wandb_entity="marin-community",
         ),
     )

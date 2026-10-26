@@ -25,10 +25,7 @@ from cloud.iris import export_hf_checkpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.identity_opd.launch import CLUSTER, IRIS_HUB_CLUSTER_CONFIG
-
-# 50 minutes on the 4 x 8 H100 policy geometry: 26.7 H100-hours.
-EXPORT_TIMEOUT_SECONDS = 3000
+from experiments.post_training.identity_opd.launch import CLUSTER, EXPORT_TIMEOUT_SECONDS, IRIS_HUB_CLUSTER_CONFIG
 
 
 def training_launch_doc(resolved: dict, destination: Path) -> Path:

@@ -44,7 +44,8 @@ class _IrisSubmissionRoute:
     cluster_config: str
     target_cluster: str | None
     priority: str
-    timeout_hours: int
+    timeout_seconds: int
+    max_retries_preemption: int | None
     container_profile: job_pb2.ContainerProfile | None
 
 
@@ -83,12 +84,18 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
+    preemption_retries = {execution.max_retries_preemption for execution in executions}
+    if len(preemption_retries) != 1:
+        raise ValueError(
+            f"one RL main cannot use multiple preemption retry limits: {sorted(preemption_retries, key=repr)!r}"
+        )
     cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
-        timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
+        timeout_seconds=max(execution.coordinator_timeout_seconds for execution in executions),
+        max_retries_preemption=preemption_retries.pop(),
         container_profile=container_profile,
     )
 
@@ -126,7 +133,8 @@ def _coordinator_request(
         ),
         environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
-        timeout=Duration.from_hours(route.timeout_hours),
+        timeout=Duration.from_seconds(route.timeout_seconds),
+        **({} if route.max_retries_preemption is None else {"max_retries_preemption": route.max_retries_preemption}),
     )
     return route.cluster_config, request
 

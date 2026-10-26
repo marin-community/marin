@@ -255,7 +255,7 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         max_retries=3,
         target_cluster=None,
         parent_cluster_config=None,
-        coordinator_timeout_hours=12,
+        coordinator_timeout_seconds=12 * 3600,
         job_timeout_seconds=1800,
     )
 

@@ -11,6 +11,8 @@ Two arms share one recipe (``recipe.yaml``) and one frozen mix (``build_mix.py``
 - ``train``: the 20-update run.
 
 Both run in the production band with no retries on 8 H100 nodes: 4 policy (PP2 x EP8), 2 rollout engines, 2 teachers.
+Every Iris job is submitted with no preemption retries and a time limit: the training job ``JOB_TIMEOUT_SECONDS``, the
+terminal HF export ``EXPORT_TIMEOUT_SECONDS``, and the coordinator, which waits for both, their sum plus a margin.
 
 Usage (prints the plan and output roots; add ``--run`` to submit the coordinator)::
 
@@ -97,6 +99,10 @@ NUM_NODES = 8
 
 # Whole-job ceilings (margay's launch plan): 50 and 110 H100-hours on 64 GPUs.
 JOB_TIMEOUT_SECONDS = {"dry": 2812, "train": 6187}
+# The terminal HF export job: 50 minutes on the 4 x 8 H100 policy geometry, 26.7 H100-hours.
+EXPORT_TIMEOUT_SECONDS = 3000
+# The coordinator outlives the training job and the export it submits after, plus this margin.
+COORDINATOR_MARGIN_SECONDS = 900
 
 DRY_PROBE = {
     "enabled": True,
@@ -160,6 +166,26 @@ def recipe(arm: str) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
+def execution(arm: str) -> IrisSkyRLExecution:
+    """Where and how the arm runs: production band, no retries, every Iris job bounded in time."""
+    return IrisSkyRLExecution(
+        cluster=CLUSTER,
+        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cpu=32,
+        memory="1800GB",
+        disk="2TB",
+        priority="production",
+        max_retries=0,
+        target_cluster=CLUSTER,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_seconds=JOB_TIMEOUT_SECONDS[arm] + EXPORT_TIMEOUT_SECONDS + COORDINATOR_MARGIN_SECONDS,
+        wandb_entity="marin-community",
+        job_timeout_seconds=JOB_TIMEOUT_SECONDS[arm],
+        max_retries_preemption=0,
+        export_timeout_seconds=EXPORT_TIMEOUT_SECONDS,
+    )
+
+
 def build(arm: str) -> ArtifactStep:
     mix = ArtifactStep.adopt(MIX_NAME, resolve_version(MIX_NAME, None), MIX_ROOT)
     name = user_owned_name(f"checkpoints/{EXPERIMENT_NAME}/{arm}")
@@ -177,20 +203,7 @@ def build(arm: str) -> ArtifactStep:
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=SEED,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=32,
-            memory="1800GB",
-            disk="2TB",
-            priority="production",
-            max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=24,
-            wandb_entity="marin-community",
-            job_timeout_seconds=JOB_TIMEOUT_SECONDS[arm],
-        ),
+        execution(arm),
         export_hf=True,
     )
 

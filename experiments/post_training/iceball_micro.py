@@ -370,7 +370,7 @@ def iceball_rl_execution() -> IrisSkyRLExecution:
         max_retries=3,
         target_cluster=ICEBALL_CLUSTER,
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-        coordinator_timeout_hours=24,
+        coordinator_timeout_seconds=24 * 3600,
         wandb_entity="marin-community",
     )
 

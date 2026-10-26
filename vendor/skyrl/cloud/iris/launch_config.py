@@ -14,6 +14,7 @@ from omegaconf import MISSING, DictConfig, OmegaConf
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
+from skyrl_train.hf_export_schema import DEFAULT_HF_EXPORT_TIMEOUT
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
@@ -114,6 +115,10 @@ class IrisConfig:
     priority: str = "interactive"
     max_retries: int = 3
     timeout: int = 0
+    # None leaves the Iris client's preemption retry default in place.
+    max_retries_preemption: int | None = None
+    # Iris timeout of the terminal HF export job the coordinator submits after training.
+    export_timeout: int = DEFAULT_HF_EXPORT_TIMEOUT
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
     container_profile: str | None = None
@@ -307,6 +312,10 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(f"unsupported inputs.data_kind: {raw['inputs']['data_kind']!r}")
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
+    if raw["iris"]["max_retries_preemption"] is not None and raw["iris"]["max_retries_preemption"] < 0:
+        raise ValueError("iris.max_retries_preemption cannot be negative")
+    if raw["iris"]["export_timeout"] <= 0:
+        raise ValueError("iris.export_timeout must be positive")
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
     if (

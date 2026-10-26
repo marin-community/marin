@@ -413,7 +413,7 @@ def export_terminal_policy(training_config_path: Path) -> None:
         priority=str(training_config.iris.priority),
         gpu_variant=str(allocation.gpu_variant),
         job_name=f"{training_config.iris.job_name}-export-{step}",
-        timeout=DEFAULT_HF_EXPORT_TIMEOUT,
+        timeout=int(training_config.iris.export_timeout),
         no_wait=False,
         cluster_config=str(training_config.iris.cluster_config),
         target_cluster=training_config.iris.target_cluster,

@@ -264,25 +264,11 @@ def _launch_doc(arm, tmp_path) -> Path:
         retention=skyrl.SkyRLRetentionPolicy(resume_checkpoint_count=1),
         seed=launch.SEED,
     )
-    execution = SimpleNamespace(
-        cluster=launch.CLUSTER,
-        cluster_config=f"lib/iris/config/{launch.CLUSTER}.yaml",
-        cpu=32,
-        memory="1800GB",
-        disk="2TB",
-        priority="production",
-        max_retries=0,
-        target_cluster=launch.CLUSTER,
-        parent_cluster_config=launch.IRIS_HUB_CLUSTER_CONFIG,
-        wandb_entity="marin-community",
-        job_timeout_seconds=launch.JOB_TIMEOUT_SECONDS[arm],
-        container_profile=None,
-    )
     out, tmp = f"{launch.PREFIX}/users/u/checkpoints/x/{arm}/v", f"{launch.TEMP_PREFIX}/tmp/x/{arm}/v"
     source = skyrl.ResolvedDirectoryDataSource(uri=f"{out}/mix", identity="mix", local_path="/tmp/mix", relative_path="")
     text = skyrl._launch_config_yaml(
         spec,
-        execution,
+        launch.execution(arm),
         export_hf=True,
         run_id=f"x-{arm}",
         attempt_id="a",
