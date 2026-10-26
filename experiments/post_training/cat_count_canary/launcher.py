@@ -35,6 +35,23 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe
+from skyrlrecipe.sections import (
+    Algorithm,
+    ChatTemplate,
+    Data,
+    DynamicSampling,
+    Environment,
+    EvalSamplingParams,
+    Generator,
+    Policy,
+    PolicyMegatronConfig,
+    PolicyOptimizerConfig,
+    Ref,
+    RolloutBuffer,
+    SamplingParams,
+    Trainer,
+)
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
 from experiments.post_training.cat_count_canary.data import (
@@ -129,73 +146,25 @@ def role_plan(
 
 
 ROLE_SETTINGS = frozenset(_role_plan_config_values(role_plan()))
-DERIVED_SETTINGS = frozenset(
+PROTECTED_SETTINGS = ROLE_SETTINGS | frozenset(
     {
-        "generator.max_input_length",
-        "trainer.max_prompt_length",
-        "generator.max_turns",
-        "generator.sampling_params.max_generate_length",
-        "generator.eval_sampling_params.max_generate_length",
-        "generator.engine_init_kwargs.max_model_len",
-        "generator.trajectory_reward_shaping.overlong.l_max",
-        "generator.trajectory_reward_shaping.overlong.l_cache",
+        "entrypoint",
+        "trainer.strategy",
+        "trainer.policy.megatron_config",
+        "trainer.ref.megatron_config",
+        "trainer.resume_mode",
+        "trainer.eval_before_train",
+        "trainer.ckpt_interval",
+        "trainer.callbacks",
+        "generator.chat_template",
+        "generator.chat_template_kwargs",
+        "generator.run_engines_locally",
+        "generator.enable_http_endpoint",
+        "generator.backend",
+        "environment.env_class",
+        "data.kind",
     }
 )
-PROTECTED_SETTINGS = (
-    ROLE_SETTINGS
-    | DERIVED_SETTINGS
-    | frozenset(
-        {
-            "entrypoint",
-            "trainer.strategy",
-            "trainer.policy.model.path",
-            "trainer.policy.megatron_config",
-            "trainer.ref.megatron_config",
-            "trainer.ref.model.path",
-            "trainer.resume_mode",
-            "trainer.seed",
-            "trainer.max_ckpts_to_keep",
-            "trainer.eval_before_train",
-            "trainer.ckpt_interval",
-            "trainer.callbacks",
-            "generator.chat_template",
-            "generator.chat_template_kwargs",
-            "generator.run_engines_locally",
-            "generator.enable_http_endpoint",
-            "generator.backend",
-            "environment.env_class",
-            "data.kind",
-        }
-    )
-)
-
-
-def apply_setting(config: dict, text: str) -> None:
-    key, separator, raw = text.partition("=")
-    if not separator or not key:
-        raise click.BadParameter(f"expected dotted.key=value, got {text!r}")
-    if any(
-        key == protected or key.startswith(f"{protected}.") or protected.startswith(f"{key}.")
-        for protected in PROTECTED_SETTINGS
-    ) or key.startswith("data."):
-        raise click.BadParameter(f"{key!r} is owned by the launcher; use a typed option")
-    if not key.startswith(("trainer.", "generator.", "context_budget.")):
-        raise click.BadParameter(f"{key!r} is outside the configurable recipe")
-    parts = key.split(".")
-    node = config
-    for part in parts[:-1]:
-        node = node.get(part)
-        if not isinstance(node, dict):
-            raise click.BadParameter(f"unknown setting {key!r}")
-    if parts[-1] not in node:
-        raise click.BadParameter(f"unknown setting {key!r}")
-    value = yaml.safe_load(raw)
-    if isinstance(node[parts[-1]], float) and isinstance(value, str):
-        try:
-            value = float(value)
-        except ValueError as error:
-            raise click.BadParameter(f"{key!r} requires a numeric value") from error
-    node[parts[-1]] = value
 
 
 def training_config(
@@ -233,84 +202,84 @@ def training_config(
         "expert_model_parallel_size": 1,
         "expert_tensor_parallel_size": 1,
     }
-    config = {
-        "entrypoint": "standard",
-        "context_budget": {
-            "request_window_tokens": 128,
-            "max_new_tokens_per_turn": 64,
-            "max_turns": 1,
-        },
-        "environment": {"env_class": ENV_CLASS},
-        "trainer": {
-            "strategy": "megatron",
-            "flash_attn": False,
-            "use_sample_packing": False,
-            "gradient_checkpointing": False,
-            "epochs": 1,
-            "max_steps": max_steps,
-            "update_epochs_per_batch": 2,
-            "micro_forward_batch_size_per_gpu": micro_train_batch_size,
-            "eval_batch_size": len(cat_count_eval_ns(train_ns)),
-            "eval_interval": 1 if preset == "dry" else 5,
-            "hf_save_interval": max_steps,
-            "resume_mode": "latest" if checkpoint else "none",
-            "max_ckpts_to_keep": 1,
-            "seed": seed,
-            "logger": "wandb",
-            "project_name": "marin-cat-count-canary",
-            "tracker_commit_each_step": True,
-            "training_metrics": True,
-            "policy_train_spans": True,
-            "rollout_spans": True,
-            "algorithm": {
-                "advantage_estimator": "grpo",
-                "policy_loss_type": "behavior_clip" if lane == "async" else "regular",
-                "eps_clip_low": 0.2,
-                "eps_clip_high": 0.2,
-                "use_kl_loss": False,
-                "use_kl_in_reward": False,
-                "off_policy_correction": "tis" if lane == "sync" else "none",
-                "dynamic_sampling": {"type": None},
-            },
-            "policy": {
-                "optimizer_config": {
-                    "optimizer": "AdamW",
-                    "lr": 2.0e-6,
-                    "weight_decay": 0.01,
-                    "max_grad_norm": 1.0,
-                },
-                "megatron_config": {**geometry, "check_dp_weight_consistency": True},
-            },
-            "ref": {"megatron_config": geometry},
-            "rollout_buffer": {
-                "max_staleness_steps": 0 if lane == "sync" else 2,
-                "batch_policy": "full_batch",
-                "max_in_flight": batch_size,
-                "object_store_root": None,
-            },
-        },
-        "generator": {
-            "backend": "vllm",
-            "model_dtype": "bfloat16",
-            "vllm_attention_backend": "FLASH_ATTN",
-            "run_engines_locally": True,
-            "enable_http_endpoint": False,
-            "weight_sync_backend": "nccl",
-            "gpu_memory_utilization": 0.7,
-            "enforce_eager": False,
-            "chat_template": {"source": "name", "name_or_path": choice.chat_template},
-            "sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0},
-            "eval_sampling_params": {"temperature": 0.0},
-            "eval_n_samples_per_prompt": 1,
-            "inference_stats_interval": 1,
-        },
-        "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
-    }
+    config = SkyRLRecipe(
+        entrypoint=RLEntrypoint.STANDARD,
+        context_budget=ContextBudget(request_window_tokens=128, max_new_tokens_per_turn=64, max_turns=1),
+        environment=Environment(env_class=ENV_CLASS),
+        trainer=Trainer(
+            strategy="megatron",
+            flash_attn=False,
+            use_sample_packing=False,
+            gradient_checkpointing=False,
+            epochs=1,
+            max_steps=max_steps,
+            update_epochs_per_batch=2,
+            micro_forward_batch_size_per_gpu=micro_train_batch_size,
+            eval_batch_size=len(cat_count_eval_ns(train_ns)),
+            eval_interval=1 if preset == "dry" else 5,
+            hf_save_interval=max_steps,
+            resume_mode="latest" if checkpoint else "none",
+            logger="wandb",
+            project_name="marin-cat-count-canary",
+            tracker_commit_each_step=True,
+            training_metrics=True,
+            policy_train_spans=True,
+            rollout_spans=True,
+            algorithm=Algorithm(
+                advantage_estimator="grpo",
+                policy_loss_type="behavior_clip" if lane == "async" else "regular",
+                eps_clip_low=0.2,
+                eps_clip_high=0.2,
+                use_kl_loss=False,
+                use_kl_in_reward=False,
+                off_policy_correction="tis" if lane == "sync" else "none",
+                dynamic_sampling=DynamicSampling(type=None),
+            ),
+            policy=Policy(
+                optimizer_config=PolicyOptimizerConfig(
+                    optimizer="AdamW", lr=2e-06, weight_decay=0.01, max_grad_norm=1.0
+                ),
+                megatron_config=PolicyMegatronConfig(**geometry, check_dp_weight_consistency=True),
+            ),
+            ref=Ref(megatron_config=geometry),
+            rollout_buffer=RolloutBuffer(
+                max_staleness_steps=0 if lane == "sync" else 2,
+                batch_policy="full_batch",
+                max_in_flight=batch_size,
+                object_store_root=None,
+            ),
+        ),
+        generator=Generator(
+            backend="vllm",
+            model_dtype="bfloat16",
+            vllm_attention_backend="FLASH_ATTN",
+            run_engines_locally=True,
+            enable_http_endpoint=False,
+            weight_sync_backend="nccl",
+            gpu_memory_utilization=0.7,
+            enforce_eager=False,
+            chat_template=ChatTemplate(source="name", name_or_path=choice.chat_template),
+            sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+            eval_sampling_params=EvalSamplingParams(temperature=0.0),
+            eval_n_samples_per_prompt=1,
+            inference_stats_interval=1,
+        ),
+        data=Data(kind="parquet", shuffle=False, train_data=(), val_data=()),
+    ).to_skyrl()
     _materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
         config["generator"]["chat_template_kwargs"] = dict(choice.chat_template_kwargs)
     for setting in settings:
-        apply_setting(config, setting)
+        key = setting.partition("=")[0]
+        if any(
+            key == protected or key.startswith(f"{protected}.") or protected.startswith(f"{key}.")
+            for protected in PROTECTED_SETTINGS
+        ) or key.startswith("data."):
+            raise click.BadParameter(f"{key!r} is owned by the launcher; use a typed option")
+    try:
+        config = RecipePatch.from_document(config).with_settings(settings).to_skyrl()
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
     trainer = config["trainer"]
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = max(1, trainer["eval_interval"]) if checkpoint else -1
@@ -355,7 +324,8 @@ def training_config(
         trainer["callbacks"].append({"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]})
     if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
         raise ValueError("the sync lane requires zero rollout staleness")
-    return config
+    authored = SkyRLRecipe.from_document(config)
+    return authored.to_skyrl()
 
 
 def run_canary(config: SkyRLRunConfig) -> SkyRLRun:
@@ -401,7 +371,8 @@ def build_run(
     max_steps = config["trainer"]["max_steps"]
     prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
     train_rows = batch_size * max_steps + prefetch_rows
-    identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
+    identity_config = {**config, "trainer": {**config["trainer"], "seed": seed, "max_ckpts_to_keep": 1}}
+    identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(identity_config) + repr(train_ns))}"
     data_identity = fingerprint_hash(repr((train_ns, train_rows, seed)))
     data_name = f"documents/{EXPERIMENT_NAME}/{data_identity}"
     data = cat_count_data_step(
