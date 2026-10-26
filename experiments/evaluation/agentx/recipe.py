@@ -6,9 +6,15 @@
 import os
 from pathlib import Path
 
-SERIES_PATH = Path(__file__).with_name("series.json")
+import yaml
+
+SERIES_PATH = Path(__file__).with_name("series.yaml")
 REQUIREMENTS_PATH = Path(__file__).with_name("requirements-harness.txt")
 PREPARATION_VERSION = 1
+
+
+def load_series(path: Path = SERIES_PATH) -> dict:
+    return yaml.safe_load(path.read_text())
 
 
 def harness_command(series: dict) -> list[str]:
@@ -21,6 +27,26 @@ def harness_command(series: dict) -> list[str]:
         "--with-requirements",
         str(REQUIREMENTS_PATH),
     ]
+
+
+def preparation_command(series: dict, series_path: Path, bundle: Path) -> list[str]:
+    return [
+        *harness_command(series),
+        "python",
+        "-m",
+        "experiments.evaluation.agentx.prepare",
+        "--series",
+        str(series_path),
+        "--output",
+        str(bundle),
+    ]
+
+
+def processor_package(series: dict) -> str:
+    return (
+        "infx @ git+https://github.com/SemiAnalysisAI/InferenceX.git@"
+        f"{series['processor_source']}#subdirectory=inferencex-e2e"
+    )
 
 
 def profile_arguments(series: dict, concurrency: int, url: str, output: Path) -> list[str]:

@@ -5,7 +5,6 @@
 
 import argparse
 import hashlib
-import json
 import logging
 import os
 import subprocess
@@ -22,9 +21,9 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
 
-from experiments.evaluation.agentx.collect import copy_file, read_record, unpack, write_record
-from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, prepare_processor, recover_results
-from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.artifacts import copy_file, read_record, unpack, write_record
+from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, recover_results, run_coordinator
+from experiments.evaluation.agentx.recipe import load_series
 
 
 def action_output(name: str, value: str) -> None:
@@ -57,7 +56,7 @@ def coordinator_plan(
     source: dict, profile: str, cluster: str, priority: str, root: str, concurrency: int | None
 ) -> dict:
     """Freeze the Action identity and requested grid; Iris resolves the recipe."""
-    series = json.loads(SERIES_PATH.read_text())
+    series = load_series()
     name = f"agentx-{source['run_id']}-{source['run_attempt']}-{profile}"
     return {
         "name": name,
@@ -78,29 +77,10 @@ def coordinator_plan(
 
 def submit_coordinator(client: IrisClient, plan: dict):
     return client.submit(
-        entrypoint=Entrypoint(
-            command=[
-                "uv",
-                "run",
-                "--frozen",
-                "--python",
-                "3.12",
-                "--package",
-                "marin-core",
-                "--extra",
-                "cpu",
-                "--no-default-groups",
-                "python",
-                "-m",
-                "experiments.evaluation.agentx.coordinator",
-                "--plan",
-                "agentx-plan.json",
-            ],
-            workdir_files={"agentx-plan.json": json.dumps(plan).encode()},
-        ),
+        entrypoint=Entrypoint.from_callable(run_coordinator, plan),
         name=plan["name"],
         resources=ResourceSpec(cpu=2, memory="32GB", disk="64GB"),
-        environment=EnvironmentSpec(setup_scripts=[]),
+        environment=EnvironmentSpec(sync_packages=["marin-core"], extras=["cpu"]),
         constraints=[
             Constraint.create(key="cluster", op=ConstraintOp.EQ, value=plan["cluster"]),
             preemptible_constraint(False),
@@ -108,12 +88,12 @@ def submit_coordinator(client: IrisClient, plan: dict):
         priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[
             plan["priority"]
         ],
-        scheduling_timeout=Duration.from_seconds(json.loads(SERIES_PATH.read_text())["scheduling_timeout"]),
+        scheduling_timeout=Duration.from_seconds(load_series()["scheduling_timeout"]),
         timeout=Duration.from_seconds(COORDINATOR_TIMEOUT),
         max_retries_failure=0,
         max_retries_preemption=0,
         existing_job_policy=job_pb2.EXISTING_JOB_POLICY_KEEP,
-        task_image=json.loads(SERIES_PATH.read_text())["task_image"],
+        task_image=load_series()["task_image"],
     )
 
 
@@ -152,18 +132,26 @@ def materialize(result_uri: str, output: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["submit", "observe", "cancel", "recover", "export", "ack"])
-    parser.add_argument("--root", required=True)
-    parser.add_argument("--profile", choices=["h100", "gb200", "both"], default="both")
-    parser.add_argument("--cluster", choices=["cw-rno2a", "cw-us-east-02a"], default="cw-rno2a")
-    parser.add_argument("--priority", choices=["batch", "interactive"], default="batch")
-    parser.add_argument("--concurrency", type=int, choices=[8, 32])
-    parser.add_argument("--run-id", type=int)
-    parser.add_argument("--run-attempt", type=int, default=1)
-    parser.add_argument("--result-uri")
-    parser.add_argument("--work", type=Path)
-    parser.add_argument("--artifact-url")
-    parser.add_argument("--observe-seconds", type=int, default=600)
+    subparsers = parser.add_subparsers(dest="operation", required=True)
+    commands = {
+        name: subparsers.add_parser(name) for name in ("submit", "observe", "cancel", "recover", "export", "ack")
+    }
+    for command in commands.values():
+        command.add_argument("--root", required=True)
+    for name in ("submit", "observe", "cancel", "recover"):
+        commands[name].add_argument("--profile", choices=["h100", "gb200", "both"], default="both")
+    for name in ("observe", "cancel", "recover"):
+        commands[name].add_argument("--run-id", type=int, required=True)
+        commands[name].add_argument("--run-attempt", type=int, default=1)
+    commands["submit"].add_argument("--cluster", choices=["cw-rno2a", "cw-us-east-02a"], default="cw-rno2a")
+    commands["submit"].add_argument("--priority", choices=["batch", "interactive"], default="batch")
+    commands["submit"].add_argument("--concurrency", type=int, choices=[8, 32])
+    commands["submit"].add_argument("--work", type=Path)
+    commands["observe"].add_argument("--observe-seconds", type=int, default=300)
+    commands["export"].add_argument("--work", type=Path, required=True)
+    commands["export"].add_argument("--result-uri")
+    commands["ack"].add_argument("--result-uri", required=True)
+    commands["ack"].add_argument("--artifact-url", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if args.operation == "ack":
@@ -223,8 +211,7 @@ def main() -> None:
                 elif args.operation == "recover":
                     with tempfile.TemporaryDirectory(prefix="agentx-recovery-") as directory:
                         work = Path(directory)
-                        prepare_processor(work / "processor")
-                        print(recover_results(client, plan, work, work / "processor"))
+                        print(recover_results(client, plan, work))
 
 
 if __name__ == "__main__":

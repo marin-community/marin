@@ -13,11 +13,12 @@ from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.timing import Duration
 
-from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.recipe import SERIES_PATH, load_series
+from experiments.evaluation.agentx.run import run
 
 
 def point_manifest(profile: str, concurrency: int, source: dict, workload: dict, release: dict) -> dict:
-    series = json.loads(SERIES_PATH.read_text())
+    series = load_series()
     requirements = SERIES_PATH.with_name("requirements-harness.txt").read_bytes()
     recipe = {
         "series": series,
@@ -38,7 +39,7 @@ def point_manifest(profile: str, concurrency: int, source: dict, workload: dict,
 
 def submit_point(client: IrisClient, name: str, manifest: dict, priority: str):
     """Submit a child on the coordinator's peer with native whole-attempt retries."""
-    series = json.loads(SERIES_PATH.read_text())
+    series = load_series()
     if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise ValueError("The submission checkout does not match the saved series")
     if json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE), sort_keys=True) != json.dumps(
@@ -46,32 +47,8 @@ def submit_point(client: IrisClient, name: str, manifest: dict, priority: str):
     ):
         raise ValueError("The submission checkout changed the saved vLLM adoption")
     profile = series["profiles"][manifest["profile"]]
-    entrypoint = Entrypoint(
-        command=[
-            "timeout",
-            "--signal=TERM",
-            "--kill-after=60s",
-            str(series["task_timeout"]),
-            "uv",
-            "run",
-            "--frozen",
-            "--python",
-            "3.12",
-            "--package",
-            "marin-core",
-            "--extra",
-            "cpu",
-            "--no-default-groups",
-            "python",
-            "-m",
-            "experiments.evaluation.agentx.run",
-            "--manifest",
-            "agentx-point.json",
-        ],
-        workdir_files={"agentx-point.json": json.dumps(manifest, sort_keys=True).encode()},
-    )
     return client.submit(
-        entrypoint=entrypoint,
+        entrypoint=Entrypoint.from_callable(run, manifest),
         name=name,
         resources=ResourceSpec(
             cpu=profile["cpu"],
@@ -79,13 +56,13 @@ def submit_point(client: IrisClient, name: str, manifest: dict, priority: str):
             disk=profile["disk"],
             device=gpu_device(profile["gpu"], profile["gpus"]),
         ),
-        environment=EnvironmentSpec(setup_scripts=[]),
+        environment=EnvironmentSpec(sync_packages=["marin-core"], extras=["cpu"]),
         # Cluster pins route roots through federation; a peer cannot route its own
         # children again. Clear inherited routing pins; Iris retains the peer region.
         constraints=[],
         priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[priority],
         scheduling_timeout=Duration.from_seconds(series["scheduling_timeout"]),
-        timeout=Duration.from_seconds(series["scheduling_timeout"] + series["task_timeout"]),
+        timeout=Duration.from_seconds(series["task_timeout"]),
         max_retries_failure=series["max_retries_failure"],
         max_task_failures=series["max_retries_failure"],
         max_retries_preemption=series["max_retries_preemption"],

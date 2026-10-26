@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.recipe import load_series
 from experiments.evaluation.agentx.workload import prepare_workload
 
 
@@ -20,35 +20,14 @@ def test_workload_restores_without_preparation_and_rebuilds_expired_or_changed_i
     bin_directory = tmp_path / "bin"
     bin_directory.mkdir()
     producer = bin_directory / "uvx"
-    producer.write_text(
-        f"#!{sys.executable}\n"
-        + """
-import json, os, sys
-from pathlib import Path
-
-args = sys.argv[1:]
-output = Path(args[args.index('--output') + 1])
-series = json.loads(Path(args[args.index('--series') + 1]).read_text())
-events = Path(os.environ['AGENTX_FIXTURE_EVENTS'])
-if '--check' in args:
-    assert (output / 'native' / 'dataset.dat').is_file()
-    with events.open('a') as stream:
-        stream.write('check\\n')
-else:
-    assert not os.environ.get('HF_HUB_OFFLINE')
-    with events.open('a') as stream:
-        stream.write('build\\n')
-    (output / 'native').mkdir()
-    (output / 'native' / 'dataset.dat').write_bytes(str(series['random_seed']).encode() * 100)
-    (output / 'lineage.json').write_text(json.dumps({'fixture': True, 'seed': series['random_seed']}))
-"""
-    )
+    fixture = Path(__file__).with_name("fixtures") / "prepare.py"
+    producer.write_text(f"#!{sys.executable}\n" + fixture.read_text())
     producer.chmod(0o755)
     events = tmp_path / "events"
     monkeypatch.setenv("PATH", f"{bin_directory}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("AGENTX_FIXTURE_EVENTS", str(events))
-    series = json.loads(SERIES_PATH.read_text())
-    series_path = tmp_path / "series.json"
+    series = load_series()
+    series_path = tmp_path / "series.yaml"
     series_path.write_text(json.dumps(series))
     store = str(tmp_path / "store")
 

@@ -13,13 +13,14 @@ from pathlib import Path
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.evaluation.agentx.collect import copy_file, read_record, retain_artifacts, unpack, write_record
+from experiments.evaluation.agentx.artifacts import copy_file, read_record, retain_artifacts, unpack, write_record
 from experiments.evaluation.agentx.processes import run_logged
 from experiments.evaluation.agentx.recipe import (
     PREPARATION_VERSION,
     REQUIREMENTS_PATH,
     SERIES_PATH,
-    harness_command,
+    load_series,
+    preparation_command,
     workload_environment,
 )
 
@@ -54,24 +55,10 @@ def preparation_recipe(series: dict) -> dict:
     }
 
 
-def preparation_key(recipe: dict) -> str:
-    return hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
-
-
 def check_native_cache(bundle: Path, series_path: Path, log: Path) -> None:
-    series = json.loads(series_path.read_text())
+    series = load_series(series_path)
     run_logged(
-        [
-            *harness_command(series),
-            "python",
-            "-m",
-            "experiments.evaluation.agentx.prepare",
-            "--series",
-            str(series_path),
-            "--output",
-            str(bundle),
-            "--check",
-        ],
+        [*preparation_command(series, series_path, bundle), "--check"],
         workload_environment(bundle, series),
         log,
         timeout=300,
@@ -93,9 +80,9 @@ def restore_workload(receipt: dict, bundle: Path) -> None:
 def prepare_workload(work: Path, *, series_path: Path = SERIES_PATH, cache_root: str | None = None) -> dict:
     """Restore a TTL hit or build a missing native workload in an isolated CPU process."""
     work.mkdir(parents=True, exist_ok=False)
-    series = json.loads(series_path.read_text())
+    series = load_series(series_path)
     recipe = preparation_recipe(series)
-    key = preparation_key(recipe)
+    key = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
     root = cache_root or marin_temp_bucket(WORKLOAD_TTL_DAYS, "agentx-workload")
     pointer = prefix_join(root, f"{key}/workload.json")
     bundle = work / "bundle"
@@ -128,16 +115,7 @@ def prepare_workload(work: Path, *, series_path: Path = SERIES_PATH, cache_root:
     for variable in ("HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE", "TRANSFORMERS_OFFLINE"):
         environment.pop(variable, None)
     run_logged(
-        [
-            *harness_command(series),
-            "python",
-            "-m",
-            "experiments.evaluation.agentx.prepare",
-            "--series",
-            str(series_path),
-            "--output",
-            str(bundle),
-        ],
+        preparation_command(series, series_path, bundle),
         environment,
         work / "preparation.log",
         timeout=series["prepare_timeout"],

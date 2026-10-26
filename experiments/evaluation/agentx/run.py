@@ -7,7 +7,6 @@ Iris owns placement and retries. Each attempt has a new server, cache and output
 directory. AgentX alone owns replay, warmup, the measurement clock and validity.
 """
 
-import argparse
 import dataclasses
 import hashlib
 import json
@@ -25,7 +24,7 @@ from marin.inference.config import InferenceModelConfig, VllmCompilationCacheMod
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 
 from experiments.evaluation.agentx.processes import run_logged
-from experiments.evaluation.agentx.recipe import SERIES_PATH, benchmark_command, workload_environment
+from experiments.evaluation.agentx.recipe import SERIES_PATH, benchmark_command, load_series, workload_environment
 from experiments.evaluation.agentx.workload import check_native_cache, restore_workload
 
 SERVER_ENVIRONMENT_KEYS = (
@@ -48,7 +47,7 @@ def interrupt(signum: int, _frame: object) -> None:
 
 
 def run_point(manifest: dict, output: Path, bundle: Path) -> None:
-    series = json.loads(SERIES_PATH.read_text())
+    series = load_series()
     if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise RuntimeError("Series changed since submission")
     release = dataclasses.asdict(VLLM_GPU_RELEASE)
@@ -59,6 +58,7 @@ def run_point(manifest: dict, output: Path, bundle: Path) -> None:
     record = manifest | {
         "architecture": platform.machine(),
         "status": "preparing",
+        "server_parallelism": {"tp": series["tensor_parallel"], "dp": profile["gpus"], "ep": profile["gpus"], "pp": 1},
         "iris_task_id": os.environ["IRIS_TASK_ID"],
         "iris_attempt_uid": os.environ["IRIS_ATTEMPT_UID"],
         "iris_bundle_id": os.environ["IRIS_BUNDLE_ID"],
@@ -192,21 +192,14 @@ def run_point(manifest: dict, output: Path, bundle: Path) -> None:
         print(f"AGENTX_ATTEMPT_STATUS {record['status']}", flush=True)
 
 
-def run(manifest: dict, output: Path) -> None:
-    with tempfile.TemporaryDirectory(prefix="agentx-workload-") as directory:
-        run_point(manifest, output, Path(directory) / "bundle")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
-    args = parser.parse_args()
+def run(manifest: dict) -> None:
+    """Run one native Iris attempt, recording interruption and preparation failures."""
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
-    # Iris creates IRIS_OUTPUT_DIR itself. Each attempt writes a distinct child.
     output = Path(os.environ["IRIS_OUTPUT_DIR"]) / "point"
     try:
-        run(json.loads(args.manifest.read_text()), output)
+        with tempfile.TemporaryDirectory(prefix="agentx-workload-") as directory:
+            run_point(manifest, output, Path(directory) / "bundle")
     except BaseException as error:
         record_path = output / "attempt.json"
         if record_path.exists():
@@ -216,7 +209,3 @@ def main() -> None:
             )
             record_path.write_text(json.dumps(record, indent=2))
         raise
-
-
-if __name__ == "__main__":
-    main()

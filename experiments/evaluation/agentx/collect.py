@@ -1,109 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Collect one terminal Iris point using its uploader receipt and upstream formats."""
+"""Retain valid Iris output and compact final failures in upstream result formats."""
 
-import dataclasses
-import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
-import tarfile
-from collections.abc import Mapping
-from datetime import datetime
-from enum import Enum
 from pathlib import Path
 
-import zstandard
-from fsspec.implementations.local import LocalFileSystem
 from iris.client.client import IrisClient
-from iris.client.workload import JobStatus, TaskOutputArchive, TaskOutputArchiveState
-from iris.cluster.types import JobName
+from iris.client.workload import JobStatus, TaskOutputArchiveState
 from iris.resources.state import JobState, TaskState
-from rigging.filesystem import atomic
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
-from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.artifacts import copy_file, file_digest, retain_artifacts, unpack, write_record
+from experiments.evaluation.agentx.recipe import SERIES_PATH, load_series, processor_package
 
-STREAM_LOG_LINE_LIMIT = 20_000
-
-
-def json_value(value: object) -> object:
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {field.name: getattr(value, field.name) for field in dataclasses.fields(value)}
-    if isinstance(value, Mapping):
-        return dict(value)
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, (JobName, Path)):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, Timestamp):
-        return {"epoch_ms": value.epoch_ms()}
-    raise TypeError(f"Cannot serialize {type(value)}")
-
-
-def read_record(uri: str) -> dict:
-    filesystem, path = filesystem_for(uri)
-    with filesystem.open(path, "rt") as stream:
-        return json.load(stream)
-
-
-def write_record(uri: str, record: dict) -> None:
-    filesystem, path = filesystem_for(uri)
-    if isinstance(filesystem, LocalFileSystem):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with atomic.atomic_rename(path, filesystem=filesystem) as temporary:
-        # fsspec.open's automatic mkdir issues CreateBucket on S3. The existing
-        # bucket is infrastructure; writing an object must not try to create it.
-        with filesystem.open(temporary, "wt") as stream:
-            json.dump(record, stream, indent=2, default=json_value)
-
-
-def copy_file(source: str, destination: str) -> None:
-    """Commit a complete file before publishing a receipt that points to it."""
-    source_fs, source_path = filesystem_for(source)
-    destination_fs, destination_path = filesystem_for(destination)
-    if isinstance(destination_fs, LocalFileSystem):
-        Path(destination_path).parent.mkdir(parents=True, exist_ok=True)
-    with atomic.atomic_rename(destination_path, filesystem=destination_fs) as temporary:
-        with source_fs.open(source_path, "rb") as reader, destination_fs.open(temporary, "wb") as writer:
-            shutil.copyfileobj(reader, writer, length=8 * 1024 * 1024)
-
-
-def unpack(archive: Path, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    with archive.open("rb") as encoded, zstandard.ZstdDecompressor().stream_reader(encoded) as decoded:
-        with tarfile.open(fileobj=decoded, mode="r|") as contents:
-            contents.extractall(destination, filter="data")
-
-
-def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -> tuple[str, str]:
-    """Archive output under its checksum so earlier result descriptors remain readable."""
-    with bundle.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
-        with tarfile.open(fileobj=compressed, mode="w|") as contents:
-            contents.add(artifacts, arcname=".")
-    with bundle.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    uri = prefix_join(prefix, f"{name}-{digest}.tar.zst")
-    copy_file(str(bundle), uri)
-    return uri, digest
-
-
-def retain_archive(archive: TaskOutputArchive, prefix: str, directory: Path) -> tuple[Path, str]:
-    directory.mkdir(parents=True, exist_ok=True)
-    local = directory / "outputs.tar.zst"
-    copy_file(archive.uri, str(local))
-    with local.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    if digest != archive.sha256:
-        raise ValueError("Downloaded output differs from Iris's uploader SHA256")
-    copy_file(str(local), prefix_join(prefix, "outputs.tar.zst"))
-    return local, digest
+logger = logging.getLogger(__name__)
+FAILURE_LOG_LINES = 100
 
 
 def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
@@ -118,7 +34,7 @@ def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
     metadata = export["metadata"]
     if metadata.get("submission_valid") is not True or export["was_cancelled"]:
         raise ValueError("AgentX did not validate this complete window")
-    series = json.loads(SERIES_PATH.read_text())
+    series = load_series()
     coverage = [row for row in metadata["metric_duration_coverage"] if row["phase_name"] == "profiling"]
     if len(coverage) != 1 or coverage[0]["expected_duration_seconds"] != series["duration"]:
         raise ValueError("Measurement duration differs from the pinned normal-duration series")
@@ -151,12 +67,9 @@ def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
     }
 
 
-def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path) -> None:
+def process_point(point: Path, manifest: dict, artifacts: Path) -> None:
     """Invoke the pinned upstream processor in a separate Python environment."""
-    series = json.loads(SERIES_PATH.read_text())
-    actual = subprocess.check_output(["git", "-C", str(processor), "rev-parse", "HEAD"], text=True).strip()
-    if actual != series["processor_source"]:
-        raise ValueError("Processor checkout differs from the tested source pin")
+    series = load_series()
     profile = manifest["profile"]
     count = series["profiles"][profile]["gpus"]
     suffix = f"snowball011_{profile}_vllm_{series['precision']}_agentx_c{manifest['concurrency']}"
@@ -177,7 +90,8 @@ def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path)
         "PRECISION": series["precision"],
         "RUNNER_TYPE": profile,
         "CONC": str(manifest["concurrency"]),
-        "TP": str(series["tensor_parallel"]),
+        # Upstream uses TP for the full attention worker group (native TP * DP).
+        "TP": str(series["tensor_parallel"] * count),
         "PP_SIZE": "1",
         "EP_SIZE": str(count),
         "DP_SIZE": str(count),
@@ -194,20 +108,17 @@ def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path)
         environment["GITHUB_RUN_ATTEMPT"] = str(source["run_attempt"])
     subprocess.run(
         [
-            "uv",
-            "run",
-            "--no-project",
+            "uvx",
             "--python",
             "3.12",
-            "--with",
-            "pydantic==2.12.5",
-            "--with",
-            "PyYAML==6.0.3",
+            "--from",
+            processor_package(series),
+            "--with-requirements",
+            str(SERIES_PATH.with_name("requirements-processor.txt")),
             "python",
             "-m",
             "infx.results.agentic.process_agentic_result",
         ],
-        cwd=processor / "inferencex-e2e",
         env=environment,
         check=True,
         timeout=300,
@@ -222,128 +133,94 @@ def collect_terminal(
     manifest: dict,
     retention: str,
     work: Path,
-    processor: Path,
     now: float,
     *,
     client: IrisClient | None = None,
 ) -> dict | None:
-    """Retain every final outcome, and process only its complete successful attempt.
+    """Retain valid final output; return None while successful capture is pending.
 
-    Returns:
-        The retained receipt, or None while Iris output finalization is pending.
+    Failed and preempted archives remain under Iris retention. Only the final
+    failure's reason, configuration and bounded log tail become durable.
     """
     if len(status.tasks) > 1:
         raise ValueError("A benchmark point must be one single-node Iris task")
-    if not status.tasks or not status.tasks[0].attempts:
-        # A scheduling rejection or cancellation can finish before a pod exists.
-        prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/no-attempt")
-        write_record(prefix_join(prefix, "iris-status.json"), json.loads(json.dumps(status, default=json_value)))
-        receipt = {
-            "job_id": str(status.job_id),
-            "attempt_uid": None,
-            "attempt_number": None,
-            "native_state": status.state.value,
-            "status": "failed",
-            "source": manifest["source"],
-            "iris_status_uri": prefix_join(prefix, "iris-status.json"),
-            "reason": "Job ended before creating an Iris attempt",
-        }
-        write_record(prefix_join(prefix, "receipt.json"), receipt)
-        return receipt
-    task = status.tasks[0]
-    attempt = next(item for item in task.attempts if item.attempt_number == task.current_attempt_number)
-    prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/{attempt.attempt_uid}")
-    directory = work / manifest["profile"] / f"c{manifest['concurrency']}" / attempt.attempt_uid
-    directory.mkdir(parents=True, exist_ok=True)
+    task = status.tasks[0] if status.tasks else None
+    attempt = (
+        next(item for item in task.attempts if item.attempt_number == task.current_attempt_number)
+        if task is not None and task.attempts
+        else None
+    )
+    uid = attempt.attempt_uid if attempt is not None else "no-attempt"
+    prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/{uid}")
     receipt = {
         "job_id": str(status.job_id),
-        "attempt_uid": attempt.attempt_uid,
-        "attempt_number": attempt.attempt_number,
+        "attempt_uid": attempt.attempt_uid if attempt is not None else None,
+        "attempt_number": attempt.attempt_number if attempt is not None else None,
         "native_state": status.state.value,
         "status": "failed",
         "source": manifest["source"],
-        "iris_status_uri": prefix_join(prefix, "iris-status.json"),
+        "configuration": {
+            "series": load_series(),
+            "profile": manifest["profile"],
+            "concurrency": manifest["concurrency"],
+            "vllm_release": manifest["vllm_release"],
+            "recipe_fingerprint": manifest["recipe_fingerprint"],
+            "workload_key": manifest["workload"]["key"],
+        },
     }
-    snapshot = json.loads(json.dumps(status, default=json_value))
-    write_record(prefix_join(prefix, "iris-status.json"), snapshot)
-    (directory / "iris-status.json").write_text(json.dumps(snapshot, indent=2))
-    receipt["previous_attempts"] = []
-    receipt["stream_logs"] = []
-    for previous in task.attempts:
-        previous_prefix = prefix_join(
-            retention, f"{manifest['profile']}/c{manifest['concurrency']}/{previous.attempt_uid}"
+    if attempt is None:
+        receipt["reason"] = status.error_message or "Job ended before creating an Iris attempt"
+    elif status.state != JobState.SUCCEEDED or attempt.state != TaskState.SUCCEEDED or attempt.exit_code != 0:
+        receipt["reason"] = (
+            attempt.error_message
+            or attempt.terminal_reason
+            or status.error_message
+            or (f"Iris attempt ended in {attempt.state.value} with exit code {attempt.exit_code}")
         )
-        previous_archive = previous.output_archive
-        if client is not None and (
-            previous_archive is None or previous_archive.state != TaskOutputArchiveState.UPLOADED
-        ):
-            entries = (
-                client.task(task.task_id)
-                .attempt(previous.attempt_number)
-                .logs(max_lines=STREAM_LOG_LINE_LIMIT, tail=True)
-            )
-            logs_uri = prefix_join(previous_prefix, "stream-logs.json")
-            write_record(
-                logs_uri,
-                {
-                    "attempt_uid": previous.attempt_uid,
-                    "tail": True,
-                    "max_lines": STREAM_LOG_LINE_LIMIT,
-                    "entries": entries,
-                },
-            )
-            receipt["stream_logs"].append(
-                {
-                    "attempt_uid": previous.attempt_uid,
-                    "uri": logs_uri,
-                    "returned_lines": len(entries),
-                    "max_lines": STREAM_LOG_LINE_LIMIT,
-                }
-            )
-        if previous.attempt_uid == attempt.attempt_uid:
-            continue
-        retained = {"attempt_uid": previous.attempt_uid, "state": previous.state.value}
-        if previous_archive is not None and previous_archive.state == TaskOutputArchiveState.UPLOADED:
-            _, previous_digest = retain_archive(
-                previous_archive, previous_prefix, directory.parent / previous.attempt_uid
-            )
-            retained.update({"archive_uri": prefix_join(previous_prefix, "outputs.tar.zst"), "sha256": previous_digest})
+    else:
+        archive = attempt.output_archive
+        if archive is None:
+            finished = attempt.finished_at or status.finished_at
+            if finished is not None and now - finished.epoch_ms() / 1000 < 600:
+                return None
+            receipt["reason"] = "No output receipt after the bounded Iris finalization period"
+        elif archive.state != TaskOutputArchiveState.UPLOADED:
+            receipt["reason"] = f"Iris output capture: {archive.state.value}: {archive.error_message}"
         else:
-            retained["reason"] = "No uploaded archive; native attempt metadata remains in iris-status.json"
-        receipt["previous_attempts"].append(retained)
-    archive = attempt.output_archive
-    if archive is None:
-        finished = attempt.finished_at or status.finished_at
-        if finished is not None and now - finished.epoch_ms() / 1000 < 600:
-            return None
-        receipt["reason"] = "No output receipt after the bounded Iris finalization period"
-        write_record(prefix_join(prefix, "receipt.json"), receipt)
-        return receipt
-    if archive.state == TaskOutputArchiveState.UPLOADED:
-        local, digest = retain_archive(archive, prefix, directory)
-        receipt.update({"archive_uri": prefix_join(prefix, "outputs.tar.zst"), "sha256": digest})
-        unpack(local, directory / "raw")
-        if status.state == JobState.SUCCEEDED and attempt.state == TaskState.SUCCEEDED and attempt.exit_code == 0:
+            directory = work / manifest["profile"] / f"c{manifest['concurrency']}" / uid
+            directory.mkdir(parents=True, exist_ok=True)
+            local = directory / "outputs.tar.zst"
+            copy_file(archive.uri, str(local))
+            if file_digest(local) != archive.sha256:
+                raise ValueError("Downloaded output differs from Iris's uploader SHA256")
+            unpack(local, directory / "raw")
             point = directory / "raw" / "point"
             try:
-                receipt["validation"] = validate_window(point, manifest, attempt.attempt_uid)
+                receipt["validation"] = validate_window(point, manifest, uid)
             except (ValueError, KeyError, FileNotFoundError) as error:
                 receipt["reason"] = str(error)
             else:
+                archive_uri = prefix_join(prefix, "outputs.tar.zst")
+                copy_file(str(local), archive_uri)
+                receipt.update({"archive_uri": archive_uri, "sha256": archive.sha256})
                 artifacts = directory / "artifacts"
-                process_point(point, manifest, processor, artifacts)
+                process_point(point, manifest, artifacts)
                 bundle_uri, bundle_digest = retain_artifacts(
                     artifacts, directory / "inferencex.tar.zst", prefix, name="inferencex"
                 )
-                receipt.update(
-                    {
-                        "status": "valid",
-                        "artifacts_uri": bundle_uri,
-                        "artifacts_sha256": bundle_digest,
-                    }
+                receipt.update({"status": "valid", "artifacts_uri": bundle_uri, "artifacts_sha256": bundle_digest})
+    if receipt["status"] == "failed" and task is not None and attempt is not None and client is not None:
+        try:
+            receipt["log_tail"] = [
+                entry.data
+                for entry in (
+                    client.task(task.task_id)
+                    .attempt(attempt.attempt_number)
+                    .logs(max_lines=FAILURE_LOG_LINES, tail=True)
                 )
-    else:
-        receipt["reason"] = f"Iris output capture: {archive.state.value}: {archive.error_message}"
+            ]
+        except Exception:
+            # A diagnostics read must not discard the terminal failure record.
+            logger.warning("Could not fetch failure logs for %s", status.job_id, exc_info=True)
     write_record(prefix_join(prefix, "receipt.json"), receipt)
-    (directory / "receipt.json").write_text(json.dumps(receipt, indent=2))
     return receipt

@@ -17,22 +17,18 @@ import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload import JobStatus, ResourceRequest
+from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
-from iris.resources.state import FederationState, JobState
+from iris.resources.state import FederationState, JobState, TaskState
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.collect import (
-    collect_terminal,
-    read_record,
-    retain_artifacts,
-    unpack,
-    validate_window,
-    write_record,
-)
+from experiments.evaluation.agentx.artifacts import read_record, retain_artifacts, unpack, write_record
+from experiments.evaluation.agentx.collect import collect_terminal, validate_window
 from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
 from experiments.evaluation.agentx.coordinator import recover_results, resolve_plan, run_points
 from experiments.evaluation.agentx.processes import logged_process
-from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.recipe import load_series
 
 
 def job_status(job_id: JobName, state: JobState) -> JobStatus:
@@ -118,7 +114,7 @@ def test_coordinator_retains_each_terminal_outcome_and_runs_points_serially(save
     plan, _ = saved_batch
     controller = FakeController(plan)
     with pytest.raises(RuntimeError, match="points failed"):
-        run_points(controller, plan, tmp_path, tmp_path)
+        run_points(controller, plan, tmp_path)
     result = read_record(pending_result(plan["root"]))
     assert result["source"] == plan["source"]
     assert len(controller.waited) == 2
@@ -134,11 +130,11 @@ def test_coordinator_loss_keeps_completed_results_and_manual_recovery_never_subm
     controller = FakeController(plan)
     controller.stop_after = 1
     with pytest.raises(InterruptedError):
-        run_points(controller, plan, tmp_path, tmp_path)
+        run_points(controller, plan, tmp_path)
     completed_uri = pending_result(plan["root"])
     first_result = read_record(completed_uri)
     controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
-    recovered_uri = recover_results(controller, read_record(descriptor), tmp_path, tmp_path)
+    recovered_uri = recover_results(controller, read_record(descriptor), tmp_path)
     assert read_record(recovered_uri) == first_result
     assert len(controller.jobs) == 2  # Failed parent and its only submitted child.
     assert len(controller.waited) == 1
@@ -148,7 +144,7 @@ def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
     plan, _ = saved_batch
     controller = FakeController(plan)
     with pytest.raises(ValueError, match="still live"):
-        recover_results(controller, plan, tmp_path, tmp_path)
+        recover_results(controller, plan, tmp_path)
     assert len(controller.jobs) == 1
 
 
@@ -156,7 +152,7 @@ def test_recovery_after_preparation_loss_publishes_no_measurements(saved_batch, 
     plan, _ = saved_batch
     controller = FakeController(plan)
     controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
-    result = read_record(recover_results(controller, plan, tmp_path, tmp_path))
+    result = read_record(recover_results(controller, plan, tmp_path))
     assert result["points"] == []
     assert result["source"] == plan["source"]
     assert list(controller.jobs) == [plan["job_id"]]
@@ -170,7 +166,7 @@ def test_overlapping_sources_retain_independent_completed_results(saved_batch, t
     )
     for submission in (plan, second):
         with pytest.raises(RuntimeError):
-            run_points(FakeController(submission), submission, tmp_path, tmp_path)
+            run_points(FakeController(submission), submission, tmp_path)
     sources = {
         json.loads(path.read_text())["source"]["run_id"] for path in (tmp_path / "retained" / "completed").glob("*.json")
     }
@@ -180,7 +176,7 @@ def test_overlapping_sources_retain_independent_completed_results(saved_batch, t
 def test_delivery_acknowledgement_does_not_change_results_or_create_execution_state(saved_batch, tmp_path):
     plan, _ = saved_batch
     with pytest.raises(RuntimeError):
-        run_points(FakeController(plan), plan, tmp_path, tmp_path)
+        run_points(FakeController(plan), plan, tmp_path)
     uri = pending_result(plan["root"])
     original = read_record(uri)
     result = materialize(uri, tmp_path / "import")
@@ -225,7 +221,7 @@ def exported_window(tmp_path, saved_batch):
     (tmp_path / "attempt.json").write_text(json.dumps(manifest | {"status": "succeeded", "iris_attempt_uid": "winner"}))
     artifacts = tmp_path / "aiperf_artifacts"
     artifacts.mkdir()
-    duration = json.loads(SERIES_PATH.read_text())["duration"]
+    duration = load_series()["duration"]
     export = {
         "metadata": {
             "submission_valid": True,
@@ -285,10 +281,11 @@ def test_scheduling_failure_retains_diagnostics_without_waiting_for_a_nonexisten
     batch, _ = saved_batch
     point = batch["points"][0]
     status = job_status(JobName.from_string(batch["job_id"] + "/" + point["name"]), JobState.FAILED)
-    receipt = collect_terminal(status, point["manifest"], str(tmp_path / "retained"), tmp_path, tmp_path, 1001)
+    receipt = collect_terminal(status, point["manifest"], str(tmp_path / "retained"), tmp_path, 1001)
     assert receipt["status"] == "failed"
     assert receipt["attempt_uid"] is None
-    assert read_record(receipt["iris_status_uri"])["state"] == "failed"
+    assert receipt["native_state"] == "failed"
+    assert [path.name for path in (tmp_path / "retained").rglob("*") if path.is_file()] == ["receipt.json"]
 
 
 def test_error_ratio_is_checked_separately_from_agentx_scenario_validity(exported_window):
@@ -319,3 +316,80 @@ def test_iris_archive_can_be_read_without_host_zstd_or_tar(tmp_path, monkeypatch
     monkeypatch.setenv("PATH", str(tmp_path / "no-external-tools"))
     unpack(incoming, tmp_path / "retained")
     assert (tmp_path / "retained" / "point" / "attempt.json").read_bytes() == content
+
+
+def task_with_attempts(batch):
+    task = job_pb2.TaskStatus(
+        task_id=batch["job_id"] + "/c8/0",
+        state=job_pb2.TASK_STATE_FAILED,
+        current_attempt_id=1,
+    )
+    for number, state in enumerate((job_pb2.TASK_STATE_PREEMPTED, job_pb2.TASK_STATE_FAILED)):
+        attempt = task.attempts.add(
+            attempt_id=number, attempt_uid=f"attempt-{number}", state=state, error="fixture failure"
+        )
+        # These URI targets are intentionally absent. Failed attempt collection
+        # must leave their full archives under Iris retention.
+        attempt.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+        attempt.output_archive.uri = f"/native-iris-retention/attempt-{number}.tar.zst"
+    return task_status_from_proto(task)
+
+
+@pytest.mark.parametrize("logs_available", [True, False])
+def test_final_failure_keeps_only_its_record_and_bounded_tail(saved_batch, tmp_path, logs_available):
+    batch, _ = saved_batch
+    task = task_with_attempts(batch)
+    status = dataclasses.replace(
+        job_status(JobName.from_string(batch["job_id"]).child("c8"), JobState.FAILED), tasks=(task,)
+    )
+    lines = [f"diagnostic {index}" for index in range(120)]
+
+    def attempt(number):
+        assert number == 1
+
+        def logs(*, max_lines, tail):
+            if not logs_available:
+                raise ConnectError(Code.UNAVAILABLE, "Fixture log store is unavailable")
+            assert tail
+            return [SimpleNamespace(data=line) for line in lines[-max_lines:]]
+
+        return SimpleNamespace(logs=logs)
+
+    client = SimpleNamespace(task=lambda _task_id: SimpleNamespace(attempt=attempt))
+    receipt = collect_terminal(
+        status, batch["points"][0]["manifest"], str(tmp_path / "retained"), tmp_path, 1000, client=client
+    )
+    assert receipt["status"] == "failed"
+    assert receipt["reason"] == "fixture failure"
+    assert receipt["attempt_uid"] == "attempt-1"
+    assert receipt["configuration"]["workload_key"] == "fixture"
+    if logs_available:
+        assert receipt["log_tail"] == lines[-100:]
+    else:
+        assert "log_tail" not in receipt
+    files = [path for path in (tmp_path / "retained").rglob("*") if path.is_file()]
+    assert len(files) == 1
+    assert read_record(str(files[0])) == receipt
+
+
+def test_successful_attempt_waits_for_capture_then_retains_a_missing_output_failure(saved_batch, tmp_path):
+    batch, _ = saved_batch
+    task = task_with_attempts(batch)
+    final = dataclasses.replace(
+        task.attempts[-1],
+        state=TaskState.SUCCEEDED,
+        exit_code=0,
+        output_archive=None,
+        finished_at=Timestamp.from_seconds(1000),
+    )
+    task = dataclasses.replace(task, state=TaskState.SUCCEEDED, attempts=(*task.attempts[:-1], final))
+    status = dataclasses.replace(
+        job_status(JobName.from_string(batch["job_id"]).child("c8"), JobState.SUCCEEDED), tasks=(task,)
+    )
+    args = (status, batch["points"][0]["manifest"], str(tmp_path / "retained"), tmp_path)
+    assert collect_terminal(*args, 1050) is None
+    assert not (tmp_path / "retained").exists()
+    receipt = collect_terminal(*args, 1601)
+    assert receipt["status"] == "failed"
+    assert receipt["attempt_uid"] == "attempt-1"
+    assert "artifacts_uri" not in receipt

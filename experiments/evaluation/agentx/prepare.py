@@ -29,11 +29,16 @@ from aiperf.dataset.loader.weka_trace import _trace_peak_context_length
 from aiperf.dataset.loader.weka_trace_models import WekaTrace
 from huggingface_hub import snapshot_download
 
-from experiments.evaluation.agentx.recipe import PREPARATION_VERSION, profile_arguments
+from experiments.evaluation.agentx.recipe import PREPARATION_VERSION, load_series, profile_arguments
 
 
 class PreparationManager(DatasetManager):
-    """Run the pinned native preparation path without starting a service mesh."""
+    """Adapt AgentX 1.0.12's configure path for CPU-only preparation.
+
+    This release has no standalone preparation command. Its private configure
+    method and context-fit helper stay in this module; cache reads use its
+    public mmap API. Suppress service messages because no workers are running.
+    """
 
     @classmethod
     def get_service_type(cls):
@@ -62,15 +67,15 @@ def prepare_sources(series: dict, bundle: Path) -> dict:
     digest = file_digest(snapshot / "traces.jsonl")
     if digest != series["dataset_sha256"]:
         raise RuntimeError("Corpus bytes differ from the reviewed pin")
-    coverage = []
+    sessions = 0
     with (snapshot / "traces.jsonl").open() as stream:
         for line in stream:
             trace = WekaTrace.model_validate_json(line)
             peak = _trace_peak_context_length(trace)
             if peak > series["max_context"]:
                 raise RuntimeError(f"Pinned corpus session exceeds the context: {trace.id} ({peak})")
-            coverage.append({"id": trace.id, "peak_context": peak})
-    if len(coverage) != series["sessions"]:
+            sessions += 1
+    if sessions != series["sessions"]:
         raise RuntimeError("Corpus session count differs from the reviewed pin")
     tokenizer = Path(
         snapshot_download(
@@ -86,8 +91,7 @@ def prepare_sources(series: dict, bundle: Path) -> dict:
         "dataset": series["dataset"],
         "dataset_revision": series["dataset_revision"],
         "dataset_sha256": digest,
-        "sessions": len(coverage),
-        "eligible": coverage,
+        "sessions": sessions,
         "filtered_sessions": 0,
         "tokenizer": series["model"],
         "tokenizer_revision": series["model_revision"],
@@ -137,7 +141,6 @@ async def native_cache(series: dict, bundle: Path, *, check_only: bool) -> dict:
             "conversations": hit.manifest.num_conversations,
             "turns": metadata.total_turn_count,
             "metadata_sha256": hashlib.sha256(hit.manifest.dataset_metadata_json.encode()).hexdigest(),
-            "settings": mmap_cache._settings_payload_from_run(run),
         }
 
 
@@ -147,7 +150,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    series = json.loads(args.series.read_text())
+    series = load_series(args.series)
     started = time.monotonic()
     sources = {} if args.check else prepare_sources(series, args.output)
     native = asyncio.run(native_cache(series, args.output, check_only=args.check))
