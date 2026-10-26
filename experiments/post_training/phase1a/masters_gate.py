@@ -66,8 +66,9 @@ def save_recipe() -> dict:
     return gate_recipe(learning_rate=GATE_LEARNING_RATE, max_steps=3, weight_steps=[2, 3], optimizer_steps=[3])
 
 
-def reload_recipe(resume_path: str) -> dict:
-    recipe = gate_recipe(learning_rate=0.0, max_steps=4, weight_steps=[4], optimizer_steps=[4])
+def reload_recipe(resume_path: str, to_step: int = 4) -> dict:
+    """Resume ``resume_path`` at learning rate 0 and save a full checkpoint at ``to_step``."""
+    recipe = gate_recipe(learning_rate=0.0, max_steps=to_step, weight_steps=[to_step], optimizer_steps=[to_step])
     recipe["trainer"].update(resume_mode="from_path", resume_path=resume_path)
     return recipe
 
@@ -145,12 +146,14 @@ def save(b_uri: str, b_version: str, rows_uri: str, rows_version: str) -> list[A
 
 @cli.command()
 @_with_common
-@click.option("--resume-path", required=True, help="the save run's global_step_3 checkpoint")
+@click.option("--resume-path", required=True, help="a global_step_N checkpoint of a gate run")
+@click.option("--to-step", type=int, default=4, show_default=True, help="the step to train to and save")
+@click.option("--name", default="masters-gate-reload", show_default=True)
 @rl_build_options
 def reload(
-    b_uri: str, b_version: str, rows_uri: str, rows_version: str, resume_path: str
+    b_uri: str, b_version: str, rows_uri: str, rows_version: str, resume_path: str, to_step: int, name: str
 ) -> list[ArtifactStep[SkyRLRun]]:
-    return [gate_step("masters-gate-reload", reload_recipe(resume_path), b_uri, b_version, rows_uri, rows_version)]
+    return [gate_step(name, reload_recipe(resume_path, to_step), b_uri, b_version, rows_uri, rows_version)]
 
 
 @cli.command()
