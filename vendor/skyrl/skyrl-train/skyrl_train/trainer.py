@@ -2653,6 +2653,7 @@ class RayPPOTrainer:
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
                 metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2686,6 +2687,7 @@ class RayPPOTrainer:
                 token_level_shaping=token_level_shaping,
                 group_advantage_invariant=self.group_advantage_invariant,
                 metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
         data["returns"] = returns
         data["advantages"] = advantages

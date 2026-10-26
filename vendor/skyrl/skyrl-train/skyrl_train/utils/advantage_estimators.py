@@ -277,15 +277,16 @@ def compute_rloo_n_outcome_advantage(
         n_total_groups = len(set(index))
         metrics = kwargs.get("metrics")
         if metrics is not None:
+            metric_groups = set(index[: bsz - kwargs.get("pad_size", 0)])
             metrics.update(
                 {
                     "reward/rloo_n_filtered_groups": float(
                         sum(
                             len(id2included_scores[group_id]) < min_group_size or id2no_variance[group_id]
-                            for group_id in set(index)
+                            for group_id in metric_groups
                         )
                     ),
-                    "reward/rloo_n_total_groups": float(n_total_groups),
+                    "reward/rloo_n_total_groups": float(len(metric_groups)),
                 }
             )
         if n_excluded > 0 or n_groups_below_min > 0 or n_no_variance_groups > 0:

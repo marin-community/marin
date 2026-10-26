@@ -105,14 +105,22 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     "generate/tokens_per_second_per_gpu": tokens / elapsed / engine_gpus,
                 }
             )
-            snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
             results.update(
                 {
-                    f"generate/{key}": value
-                    for key, value in trainer_metrics(snapshot).items()
-                    if key.startswith("vllm/")
+                    key.replace("eval/all/outcome/", "generate/outcome/", 1): value
+                    for key, value in tuple(results.items())
+                    if key.startswith("eval/all/outcome/")
                 }
             )
+            if self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm":
+                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                results.update(
+                    {
+                        f"generate/{key}": value
+                        for key, value in trainer_metrics(snapshot).items()
+                        if key.startswith("vllm/")
+                    }
+                )
         finally:
             try:
                 await trajectory_runner.shutdown()

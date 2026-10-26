@@ -218,7 +218,7 @@ def _calculate_eval_metrics(
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
     metrics.update(
         {
-            key: value
+            f"eval/all/{key.removeprefix('generate/')}": value
             for key, value in (batch.get("rollout_metrics") or {}).items()
             if key.startswith("generate/outcome/")
         }
