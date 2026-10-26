@@ -328,19 +328,10 @@ def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
     assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
 
 
-@pytest.mark.parametrize("arm", ["dry", "train"])
-def test_terminal_export_config_passes_launch_validation(arm, tmp_path, monkeypatch):
-    """The terminal export's launch document, derived by the coordinator from the arm's, passes launch validation.
-
-    Runs ``export_terminal_policy`` on the arm's launch document up to the submit, with the checkpoint step and its
-    export request stubbed as the dry run's step-2 checkpoint wrote them.
-    """
-    launch_config = pytest.importorskip("cloud.iris.launch_config")
+def _step2_export(training, monkeypatch, tmp_path):
+    """Stub the export launcher's checkpoint reads with a step-2 request as the dry run wrote it; collect submits."""
     export_hf = pytest.importorskip("cloud.iris.export_hf_checkpoint")
     HFExportRequest = pytest.importorskip("skyrl_train.hf_export_schema").HFExportRequest
-
-    training_path = _launch_doc(arm, tmp_path)
-    training = launch_config.load_launch_config(training_path)
     placement = training.skyrl.trainer.placement
     checkpoint_root = str(training.artifacts.checkpoint_root)
     request = HFExportRequest(
@@ -359,6 +350,19 @@ def test_terminal_export_config_passes_launch_validation(arm, tmp_path, monkeypa
     monkeypatch.setattr(export_hf, "terminal_checkpoint_step", lambda root: 2)
     monkeypatch.setattr(export_hf, "_read_hf_export_request", lambda path: request)
     monkeypatch.setattr(export_hf, "submit_requested_export", lambda spec, command: submitted.append(spec))
+    return export_hf, request, submitted
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_terminal_export_config_passes_launch_validation(arm, tmp_path, monkeypatch):
+    """The terminal export's launch document, derived by the coordinator from the arm's, passes launch validation.
+
+    Runs ``export_terminal_policy`` on the arm's launch document up to the submit.
+    """
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    training_path = _launch_doc(arm, tmp_path)
+    training = launch_config.load_launch_config(training_path)
+    export_hf, _, submitted = _step2_export(training, monkeypatch, tmp_path)
 
     export_hf.export_terminal_policy(training_path)
 
@@ -366,6 +370,36 @@ def test_terminal_export_config_passes_launch_validation(arm, tmp_path, monkeypa
     exported = launch_config.load_launch_config(Path(spec.launch_config_path))
     assert exported.run.mode == "checkpoint_export"
     assert training.skyrl.trainer.mismatch_probe.enabled == (arm == "dry")
+    assert "mismatch_probe" not in exported.skyrl.trainer
+    launch_config.validate_launch_config(exported)
+
+
+def test_export_step_job_is_bounded_by_its_timeout(tmp_path, monkeypatch):
+    """The export-only job, derived from the dry arm's resolved launch record, carries the budget timeout."""
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    OmegaConf = pytest.importorskip("omegaconf").OmegaConf
+    export_step = pytest.importorskip("experiments.post_training.identity_opd.export_step")
+
+    training = launch_config.load_launch_config(_launch_doc("dry", tmp_path))
+    record = {"config": OmegaConf.to_container(training, resolve=True)}
+    launch_doc = export_step.training_launch_doc(record, tmp_path / "training-launch.yaml")
+    export_hf, request, submitted = _step2_export(training, monkeypatch, tmp_path)
+    args = export_step.export_args(launch_doc, request.checkpoint_path, dry_run=False)
+    monkeypatch.setattr(sys, "argv", ["export_hf_checkpoint", *args])
+
+    export_hf.main()
+
+    [spec] = submitted
+    exported = launch_config.load_launch_config(Path(spec.launch_config_path))
+    assert export_step.EXPORT_TIMEOUT_SECONDS == 2400
+    assert exported.iris.timeout == 2400
+    assert exported.iris.max_retries == 0
+    assert exported.iris.priority == "production"
+    assert (exported.iris.allocation.num_nodes, exported.iris.allocation.gpus_per_node) == (4, 8)
+    assert (exported.iris.target_cluster, exported.iris.parent_cluster_config) == (
+        launch.CLUSTER,
+        launch.IRIS_HUB_CLUSTER_CONFIG,
+    )
     assert "mismatch_probe" not in exported.skyrl.trainer
     launch_config.validate_launch_config(exported)
 
