@@ -18,6 +18,7 @@ from jaxtyping import Array, Float, Int
 from experiments.grug.belay_tpu.kda_chunk_prep import chunk_prep_midpoint
 from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
 from experiments.grug.belay_tpu.kda_state_tpu import state_pass
+from experiments.grug.belay_tpu.kda_triangular_tpu import chunk_prep_solve
 from experiments.grug.moe.kda import _chunk_prep_xla, _prepare_qk, _segment_masks, doc_starts
 
 
@@ -34,6 +35,7 @@ def chunk_kda_tpu(
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     state_tile: int = 1,
     chunk_size: int = 16,
+    solve_groups: int = 0,
     state_precision: jax.lax.Precision = jax.lax.Precision.HIGHEST,
 ) -> tuple[jax.Array, jax.Array]:
     """Evaluate packed KDA with a 128-wide saved state and bounded decay tiles."""
@@ -71,6 +73,8 @@ def chunk_kda_tpu(
     qc, kc, vc, gc = (chunks(x) for x in (q, k, v, g))
     ec = kc if erase is None else kc * chunks(padded(erase.astype(jnp.float32)))
     prepare = _chunk_prep_xla if c == 16 else chunk_prep_midpoint
+    if solve_groups:
+        prepare = functools.partial(chunk_prep_solve, groups=solve_groups)
     prep = prepare(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
     initial = jnp.zeros((b * h, d, d), jnp.float32)
     if initial_state is not None:

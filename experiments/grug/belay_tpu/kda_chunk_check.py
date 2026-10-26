@@ -3,6 +3,7 @@
 
 """Compare larger KDA chunks against the saved-state C=16 path without updates."""
 
+import argparse
 import functools
 import json
 import os
@@ -20,8 +21,16 @@ from experiments.grug.moe.kda import recurrent_kda
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--saved-solve", action="store_true")
+    args = parser.parse_args()
     output, operator_topology, reference_topology = initialize_operator_check()
-    tracker.log_summary({"kernel_check/input_seed": 426})
+    variants = (
+        [(16, 0)] + [(c, group) for c in (16, 32, 64) for group in (1, 4)]
+        if args.saved_solve
+        else [(c, 0) for c in (16, 32, 64, 128)]
+    )
+    tracker.log_summary({"kernel_check/input_seed": 426, "kernel_check/saved_solve": args.saved_solve})
     failures = []
     cases = (("packed", 57), ("strong_decay", 128), ("long", 128), ("target", 4096), ("weak_decay", 4096))
     with jax.default_device(jax.local_devices()[0]), jax.default_matmul_precision("highest"):
@@ -55,9 +64,13 @@ def main():
                     else None
                 )
                 precision = jax.lax.Precision.HIGHEST if dtype == jnp.float32 else jax.lax.Precision.HIGH
-                for chunk_size in (16, 32, 64, 128):
+                for chunk_size, solve_groups in variants:
                     kernel = functools.partial(
-                        chunk_kda_tpu, matmul_dtype=dtype, state_precision=precision, chunk_size=chunk_size
+                        chunk_kda_tpu,
+                        matmul_dtype=dtype,
+                        state_precision=precision,
+                        chunk_size=chunk_size,
+                        solve_groups=solve_groups,
                     )
                     function = jax.jit(functools.partial(evaluate, kernel))
                     start = time.perf_counter()
@@ -73,7 +86,7 @@ def main():
                         for row in [*deviations, *(oracle_errors or [])]
                     )
                     if not passed:
-                        failures.append((case, str(dtype), chunk_size))
+                        failures.append((case, str(dtype), chunk_size, solve_groups))
                     samples = []
                     for _ in range(9):
                         start = time.perf_counter()
@@ -82,7 +95,10 @@ def main():
                     row = {
                         "stage": "kda_chunk_comparison",
                         "kernel": "chunk_kda_tpu",
-                        "implementation": f"chunk_{chunk_size}",
+                        "implementation": (
+                            f"chunk_{chunk_size}_solve_{solve_groups}" if args.saved_solve else f"chunk_{chunk_size}"
+                        ),
+                        "solve_groups": solve_groups,
                         "state_precision": precision.name,
                         "case": case,
                         "shape": shape,
@@ -96,7 +112,7 @@ def main():
                         "block_sizes": {
                             "chunk": chunk_size,
                             "state_tile": 1,
-                            "decay_tile": 16 if chunk_size == 16 else 32,
+                            "decay_tile": 16 if chunk_size == 16 or solve_groups else 32,
                         },
                         "source_parity_pass": passed,
                         "errors": deviations,
