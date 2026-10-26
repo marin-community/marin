@@ -6,6 +6,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.rollouts.pi_judging import PiJudgeSettings
 from skyrl_train.rollouts.pi_prefix_schedule import PiPrefixSchedule
+from skyrl_train.rollouts.pi_turn_schedule import PiTurnMixtureSchedule
 from skyrl_train.rollouts.pi_teacher_binding import PiTeacherBinding
 
 from marinskyrl.distillation import (
@@ -38,6 +39,8 @@ def validate_pi_objective_config(cfg: DictConfig) -> None:
         "teacher_demo_pi_base": "teacher_trace",
         "teacher_demo_pi_verified_base": "teacher_trace",
         "student_prefix_teacher_completion_pi_base": "literal",
+        "dagger_pi_turn_mixture_base": "literal",
+        "critique_revision_pi_base": "literal",
     }
     if preset not in modes:
         raise ValueError(f"Pi training preset {preset!r} is not wired to a production objective")
@@ -127,6 +130,8 @@ def validate_pi_training_config(cfg: DictConfig) -> None:
         "teacher_demo_pi_base",
         "teacher_demo_pi_verified_base",
         "student_prefix_teacher_completion_pi_base",
+        "dagger_pi_turn_mixture_base",
+        "critique_revision_pi_base",
     ):
         return
     binding = OmegaConf.select(cfg, "terminal_bench_config.installed_agent.teacher")
@@ -135,16 +140,31 @@ def validate_pi_training_config(cfg: DictConfig) -> None:
     teacher = PiTeacherBinding.model_validate(OmegaConf.to_container(binding, resolve=True))
     preset = OmegaConf.select(cfg, "scenario.preset")
     agent_model = OmegaConf.select(cfg, "terminal_bench_config.installed_agent.agent.model_name")
-    if preset == "student_prefix_teacher_completion_pi_base":
-        raw_schedule = OmegaConf.select(cfg, "terminal_bench_config.installed_agent.prefix_schedule")
-        if raw_schedule is None:
-            raise ValueError("Pi student-prefix completion requires a prefix schedule")
-        schedule = PiPrefixSchedule.model_validate(OmegaConf.to_container(raw_schedule, resolve=True))
-        if schedule.max.end > cfg.generator.max_turns:
-            raise ValueError("Pi prefix schedule exceeds the installed-agent turn limit")
+    if preset in (
+        "student_prefix_teacher_completion_pi_base", "dagger_pi_turn_mixture_base", "critique_revision_pi_base"
+    ):
+        installed = cfg.terminal_bench_config.installed_agent
+        controls = (installed.get("prefix_schedule"), installed.get("turn_mixture_schedule"), installed.get("critique_principle"))
+        selected = {
+            "student_prefix_teacher_completion_pi_base": 0,
+            "dagger_pi_turn_mixture_base": 1,
+            "critique_revision_pi_base": 2,
+        }[preset]
+        if controls[selected] is None or any(
+            value is not None for index, value in enumerate(controls) if index != selected
+        ):
+            raise ValueError("Pi scenario requires only its matching execution or feedback control")
+        if selected == 0:
+            schedule = PiPrefixSchedule.model_validate(OmegaConf.to_container(controls[0], resolve=True))
+            if schedule.max.end > cfg.generator.max_turns:
+                raise ValueError("Pi prefix schedule exceeds the installed-agent turn limit")
+        elif selected == 1:
+            PiTurnMixtureSchedule.model_validate(OmegaConf.to_container(controls[1], resolve=True))
+        elif not isinstance(controls[2], str) or not controls[2].strip() or cfg.generator.max_turns < 2:
+            raise ValueError("Pi critique requires a nonempty principle and two model turns")
         student_alias = cfg.generator.engine_init_kwargs.get("served_model_name") or cfg.trainer.policy.model.path
         if agent_model not in (None, f"hosted_vllm/{student_alias}"):
-            raise ValueError("Pi prefix student template must address the served student model")
+            raise ValueError("Pi student template must address the served student model")
     elif agent_model != f"hosted_vllm/{teacher.model}":
         raise ValueError("Pi teacher agent must address the bound teacher alias")
     if teacher.student_model != cfg.trainer.policy.model.path:

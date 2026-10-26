@@ -51,13 +51,14 @@ export default async function (pi) {
   const critique = Boolean(process.env.HARBOR_PI_CRITIQUE_PLAN);
   if (critique) {
     pi.on('turn_end', async (event) => {
+      // SSE can finish before the loopback handler has appended its record.
+      await recorder.waitForIdle();
       if (recorder.records.length !== 1 || recorder.critique || recorder.critiqueFailure) return;
       try {
         const feedback = await recorder.requestCritique(event.toolResults);
-        pi.sendUserMessage(feedback, { deliverAs: 'steer' });
+        pi.sendUserMessage(feedback, { deliverAs: 'followUp' });
       } catch (error) {
         recorder.failCritique(error);
-        throw error;
       }
     });
     pi.on('tool_call', (event) => {
@@ -71,12 +72,15 @@ export default async function (pi) {
       // SSE can deliver the final token before the recorder finishes parsing and
       // appending its evidence. Wait for the in-flight HTTP handler, not log files.
       await recorder.waitForIdle();
+      if (critique && !recorder.critique && !recorder.critiqueFailure) {
+        recorder.failCritique('unexpected_turn_count');
+      }
       const payload = critique
         ? { entries: recorder.records, critique: recorder.critique, failure: recorder.critiqueFailure }
         : process.env.HARBOR_PI_DAGGER_PLAN
           ? { entries: recorder.records, dagger_turns: recorder.daggerTurns }
           : { entries: recorder.records };
-      payload.trajectory = recorder.buildTrajectory();
+      payload.trajectory = critique && recorder.critiqueFailure ? {} : recorder.buildTrajectory();
       recordDiagnostic('capture_complete', { turn_count: recorder.records.length });
       // Short numbered lines survive stdout transports that split or reorder
       // large writes. The payload stays in memory and is never a log artifact.

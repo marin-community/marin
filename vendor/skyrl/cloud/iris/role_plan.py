@@ -426,15 +426,17 @@ def _pi_teacher_claims(config: dict[str, Any], values: _RolePlanValues) -> tuple
         "teacher_demo_pi_base",
         "teacher_demo_pi_verified_base",
         "student_prefix_teacher_completion_pi_base",
+        "dagger_pi_turn_mixture_base",
+        "critique_revision_pi_base",
     ):
         return ()
     raw = _at(config, "terminal_bench_config.installed_agent.teacher")
     teacher = PiTeacherBinding.model_validate(raw)
-    role_id = (
-        "teacher:pi_prefix"
-        if _optional_at(config, "scenario.preset") == "student_prefix_teacher_completion_pi_base"
-        else "teacher:pi_trace"
-    )
+    role_id = {
+        "student_prefix_teacher_completion_pi_base": "teacher:pi_prefix",
+        "dagger_pi_turn_mixture_base": "teacher:pi_mixture",
+        "critique_revision_pi_base": "teacher:pi_critique",
+    }.get(_optional_at(config, "scenario.preset"), "teacher:pi_trace")
     if teacher.source == "external_vllm":
         return (
             ModelRoleClaim(

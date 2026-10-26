@@ -189,6 +189,51 @@ def test_prefix_completion_composes_distinct_teacher_sft_and_bounded_schedule(tm
         _compose(path)
 
 
+@pytest.mark.parametrize(
+    ("preset", "control", "role_id"),
+    [
+        ("dagger_pi_turn_mixture_base", "turn_mixture_schedule", "teacher:pi_mixture"),
+        ("critique_revision_pi_base", "critique_principle", "teacher:pi_critique"),
+    ],
+)
+def test_pi_remaining_scenarios_compose_with_independent_student_and_teacher(tmp_path, preset, control, role_id):
+    raw, path = _recipe(tmp_path, preset)
+    raw["context_budget"]["max_turns"] = 4
+    raw["generator"].pop("n_samples_per_prompt", None)
+    raw["trainer"]["algorithm"].pop("advantage_estimator", None)
+    raw["terminal_bench"]["installed_agent"]["teacher"] = {
+        "source": "skyrl_managed",
+        "model": "teacher",
+        "model_path": "Qwen/independent-teacher",
+        "revision": "a" * 40,
+        "student_model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "max_context_tokens": 4096,
+        "resources": {"backend": "vllm", "num_engines": 1, "tensor_parallel_size": 1},
+    }
+    path.write_text(yaml.safe_dump(raw))
+    cfg = _compose(path)
+    assert cfg.scenario.preset == preset
+    assert cfg.terminal_bench_config.installed_agent.agent.pi.mode == "literal"
+    assert cfg.terminal_bench_config.installed_agent.get(control) is not None
+    assert cfg.trainer.algorithm.policy_loss_type == "sft"
+    assert cfg.generator.n_samples_per_prompt == 1
+    assert derive_role_plan(OmegaConf.to_container(cfg, resolve=True)).claim(role_id).num_nodes == 1
+
+    if control == "turn_mixture_schedule":
+        raw["terminal_bench"]["installed_agent"][control] = {
+            "teacher_execution_probability": {
+                "scheduler": "linear", "start": 1.0, "end": 1.5, "duration_iterations": 2
+            }
+        }
+        expected = "probabilities"
+    else:
+        raw["terminal_bench"]["installed_agent"][control] = " "
+        expected = "principle"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match=expected):
+        _compose(path)
+
+
 def test_distribution_preset_uses_shared_topk_scoring_and_teacher_role(tmp_path):
     raw, path = _recipe(tmp_path, "teacher_distribution_pi_base")
     del raw["generator"]["n_samples_per_prompt"]

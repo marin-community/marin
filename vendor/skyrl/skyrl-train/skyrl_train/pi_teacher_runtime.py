@@ -28,6 +28,8 @@ def prepare_pi_teacher(cfg: DictConfig) -> PreparedPiTeacher | None:
         "teacher_demo_pi_base",
         "teacher_demo_pi_verified_base",
         "student_prefix_teacher_completion_pi_base",
+        "dagger_pi_turn_mixture_base",
+        "critique_revision_pi_base",
     ):
         return None
     settings = InstalledAgentSettings.model_validate(
@@ -130,7 +132,8 @@ def student_eval_harbor_config(harbor: DictConfig, student_model: str) -> DictCo
     OmegaConf.update(evaluation, "installed_agent.agent.pi.mode", "literal")
     OmegaConf.update(evaluation, "installed_agent.agent.model_name", f"hosted_vllm/{student_model}")
     del evaluation.installed_agent.teacher
-    if evaluation.installed_agent.get("prefix_schedule") is not None:
-        del evaluation.installed_agent.prefix_schedule
+    for control in ("prefix_schedule", "turn_mixture_schedule", "critique_principle"):
+        if evaluation.installed_agent.get(control) is not None:
+            del evaluation.installed_agent[control]
     InstalledAgentSettings.model_validate(OmegaConf.to_container(evaluation.installed_agent, resolve=True))
     return evaluation

@@ -134,6 +134,51 @@ def test_external_teacher_launch_preflight_and_student_only_eval(teacher_config)
     assert eval_worker.installed_agents is not None and eval_worker.installed_agents.student_only
 
 
+@pytest.mark.parametrize(
+    ("preset", "control"),
+    [
+        ("dagger_pi_turn_mixture_base", "turn_mixture_schedule"),
+        ("critique_revision_pi_base", "critique_principle"),
+    ],
+)
+def test_dual_model_pi_scenarios_bind_teacher_and_student_only_eval(teacher_config, preset, control):
+    cfg, student, teacher = teacher_config
+    cfg.scenario.preset = preset
+    cfg.generator.max_turns = 4
+    cfg.generator.sampling_params.logprobs = 0
+    cfg.terminal_bench_config.installed_agent.agent.pi.mode = "literal"
+    cfg.terminal_bench_config.installed_agent.agent.model_name = None
+    if control == "turn_mixture_schedule":
+        value = {"teacher_execution_probability": {
+            "scheduler": "linear", "start": 1.0, "end": 0.6, "duration_iterations": 2
+        }}
+    else:
+        value = "Give actionable private feedback"
+    OmegaConf.update(cfg, f"terminal_bench_config.installed_agent.{control}", value, force_add=True)
+    validate_pi_training_config(cfg)
+    prepared = prepare_pi_teacher(cfg)
+    assert prepared is not None and prepared.binding.model_path == str(teacher)
+    eval_config = student_eval_harbor_config(cfg.terminal_bench_config, str(student))
+    assert "teacher" not in eval_config.installed_agent
+    assert control not in eval_config.installed_agent
+    student_engine = CPUInferenceEngine(str(student), seed=3)
+    tokenizer = AutoTokenizer.from_pretrained(student)
+    launcher = BasePPOExp.__new__(BasePPOExp)
+    launcher.sessions = {}
+    launcher.prepared_pi_teacher = prepared
+    launcher.pi_teacher_engines = None
+    inference = InferenceEngineClient([student_engine], tokenizer, cfg)
+    train_worker = launcher.get_task_runner(cfg, inference)._spec.build(tokenizer, WorkerShard(0, 1))
+    eval_worker = launcher.get_task_runner(cfg, inference, harbor_config=eval_config, evaluation=True)._spec.build(
+        tokenizer, WorkerShard(0, 1)
+    )
+    assert train_worker.teacher_model_client is not None
+    assert train_worker.installed_agents is not None and not train_worker.installed_agents.student_only
+    assert train_worker.installed_agents.backend.teacher_model_name == "teacher"
+    assert eval_worker.installed_agents is not None and eval_worker.installed_agents.student_only
+    assert eval_worker.teacher_model_client is None
+
+
 def test_managed_teacher_provisions_independent_pinned_engine_role(teacher_config):
     cfg, student, teacher = teacher_config
     cfg.terminal_bench_config.installed_agent.teacher.source = "skyrl_managed"
