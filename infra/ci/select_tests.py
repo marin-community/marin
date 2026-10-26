@@ -43,6 +43,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
     "verifyit",
     "deploy",
     "iac",
@@ -93,6 +94,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -159,6 +161,7 @@ DEFAULT_LEG_TIMEOUT = 15
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
