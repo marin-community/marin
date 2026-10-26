@@ -29,7 +29,6 @@ from marin.inference.vllm_backend import VllmBackend, VllmServedModel
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
-from rolloutengine.models import RolloutLimits
 from taskcompendium.models import TaskSpec
 from taskforge.agentic.instances import task_instances
 
@@ -50,6 +49,7 @@ from experiments.post_training.rsi.policy import (
 )
 from experiments.post_training.rsi.resume import SavedTask, accepted_tasks
 from experiments.post_training.rsi.rollouts import (
+    POLICY_LIMITS,
     PolicyRunner,
     TaskRollouts,
     group_record,
@@ -64,16 +64,6 @@ logger = logging.getLogger(__name__)
 WEIGHTS_STREAM = "stream"
 WEIGHTS_DOWNLOAD = "download"
 WEIGHTS_DIR = "/tmp/baby-rsi-weights"
-POLICY_LIMITS = RolloutLimits(
-    max_turns=20,
-    max_total_tokens=None,
-    model_turn_timeout=600,
-    tool_turn_timeout=120,
-    total_turn_timeout=None,
-    attempt_timeout=1800,
-    verifier_timeout=360,
-    cleanup_timeout=60,
-)
 REPEAT_NAME = "base-repeat"
 PROBE_BUILD_SLOTS = 16
 STARTUP_TIMEOUT = 1800

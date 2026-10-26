@@ -53,6 +53,17 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
 
 logger = logging.getLogger(__name__)
 
+POLICY_LIMITS = RolloutLimits(
+    max_turns=20,
+    max_total_tokens=None,
+    model_turn_timeout=600,
+    tool_turn_timeout=120,
+    total_turn_timeout=None,
+    attempt_timeout=1800,
+    verifier_timeout=360,
+    cleanup_timeout=60,
+)
+
 SHELL_HARNESS = "shell"
 MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
 """The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""

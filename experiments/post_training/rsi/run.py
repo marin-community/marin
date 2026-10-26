@@ -58,20 +58,27 @@ from experiments.post_training.rsi.resume import (
     known_ideas,
     untrained_instances,
 )
-from experiments.post_training.rsi.rollouts import TaskRollouts, group_record
+from experiments.post_training.rsi.live_eval import EvalSet, eval_policy, evaluator, policy_step
+from experiments.post_training.rsi.rollouts import POLICY_LIMITS, PolicyRunner, TaskRollouts, group_record, rollout_engine
 from experiments.post_training.rsi.gap import (
+    DIAGNOSTIC_CAPABILITY_PREFIX,
     GAP_CAPABILITY_PREFIX,
+    diagnostic_indices,
     fresh_tasks,
     interleave,
     scan_types,
     training_indices,
     without_generators,
 )
-from experiments.post_training.rsi.seed import TRAIN_URL, TaskPool
+from experiments.post_training.rsi.seed import TRAIN_URL, VALIDATION_URL, TaskPool
 from experiments.post_training.rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
 from experiments.post_training.rsi.streams import Source, from_iterable, mix
 
 logger = logging.getLogger(__name__)
+
+EVAL_CONCURRENCY = 64
+EVAL_GRADER_SLOTS = 16
+EVAL_GAP_INSTANCES = 20
 
 SOLVER_ROLLOUTS_PER_TASK = 160
 """Solver rollouts that a synthesis session can spend for each task: the solver is the local policy, so they are
@@ -102,6 +109,13 @@ def feedback_options(function):
             click.option("--probes-per-task", type=int, default=8, show_default=True),
             click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time."),
             click.option("--agent-turns", type=int, default=300, show_default=True),
+            click.option("--eval-every", type=int, default=10, show_default=True, help="Steps between evaluations."),
+            click.option("--eval-samples", type=int, default=4, show_default=True, help="Attempts at each task."),
+            click.option(
+                "--eval-gap-types",
+                default="",
+                help="Comma-separated Reasoning Gym types whose unseen instances join the evaluation set.",
+            ),
             click.option(
                 "--held-out-idea-share",
                 type=click.FloatRange(0, 1),
@@ -136,6 +150,9 @@ class FeedbackOptions:
     probes_per_task: int
     sessions: int
     agent_turns: int
+    eval_every: int
+    eval_samples: int
+    eval_gap_types: str
     held_out_idea_share: float
 
 
@@ -203,11 +220,31 @@ async def _feedback_boxes(
         new = generate_tasks(ideas, synthesis)
         return mix(Source(resumed, share=1.0), Source(new, share=1.0), seed=0)
 
+    eval_set = await asyncio.to_thread(evaluation_set, feedback.eval_gap_types)
+    runner = PolicyRunner(rollout_engine(EVAL_GRADER_SLOTS), solver, POLICY_LIMITS, EVAL_CONCURRENCY)
+    evaluate = evaluator(runner, eval_set, feedback.eval_samples, output)
     return Boxes(
         train=trainer,
+        eval_policy=partial(eval_policy, evaluate=evaluate, every=feedback.eval_every, step_of=policy_step),
         analyze_failed_runs=partial(analyze_failed_runs, config=analysis, known=known_ideas(output)),
         generate_tasks=generate,
     )
+
+
+def evaluation_set(gap_types: str) -> EvalSet:
+    """The validation panel of the seed's selection, and unseen instances of ``gap_types`` when there are any."""
+    panel = [task for task in TaskPool.read(VALIDATION_URL).stream(0)]
+    tasks = [task.task for task in panel]
+    labels = {task.task.id: f"panel:{task.stratum}" for task in panel}
+    if gap_types:
+        names = gap_types.split(",")
+        types = scan_types()
+        indices = {name: diagnostic_indices(types[name], EVAL_GAP_INSTANCES) for name in names}
+        for name, fresh in fresh_tasks(types, indices, DIAGNOSTIC_CAPABILITY_PREFIX).items():
+            tasks += fresh
+            labels.update({task.id: f"gap:{name}" for task in fresh})
+    logger.info("The evaluation box evaluates %d tasks", len(tasks))
+    return EvalSet(tasks, labels)
 
 
 def skyrl_options(function):

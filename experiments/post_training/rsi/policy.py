@@ -30,6 +30,7 @@ POLICY_ENDPOINT_FILE = "policy_endpoint.json"
 """The file of a SkyRL task feed that holds the endpoint of the job's live policy (see ``skyrl_box``)."""
 BASE_MODEL_NAME = "base"
 """The served name of the weights."""
+LIVE_MODEL = "live"
 MAX_MODEL_LEN = 16384
 TOKEN_ID_PREFIX = "token_id:"
 TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
@@ -269,6 +270,11 @@ class LivePolicy:
     max_model_len: int
     chat_template_kwargs: dict[str, Any]
     _policy: VllmPolicy | None = None
+
+    @property
+    def model(self) -> str:
+        """The served name of the live weights, once the policy has answered a request."""
+        return self._policy.model if self._policy is not None else LIVE_MODEL
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         policy = self._policy or await self._connect()

@@ -12,10 +12,11 @@ The design document writes the loop as::
         eval_scores, rollouts = eval_policy(model)
         task_prompts = analyze_failed_runs(rollouts)
 
-Here each box is a function from a stream to a stream, and the data drives the loop: the tasks flow into training,
-training yields graded rollouts, the failed rollouts flow into the failed-run analysis, its ideas flow into task
-synthesis, and the new tasks flow back into training beside the seed tasks. A box that needs enough data waits for a
-batch, and a slow box never stops a fast one.
+Here each box is a function from a stream to a stream, and the data drives the loop: the tasks flow into training;
+the evaluation box follows training and evaluates the live policy every few steps; the failed rollouts of each
+evaluation flow into the failed-run analysis, its ideas flow into task synthesis, and the new tasks flow back into
+training beside the seed tasks. The analysis reads evaluation rollouts, as the design document's loop does, and not
+the training rollouts. A box that needs enough data waits for a batch, and a slow box never stops a fast one.
 """
 
 from collections.abc import AsyncIterable, AsyncIterator, Callable
@@ -34,6 +35,8 @@ class Boxes:
     """The boxes of the loop, each with its configuration bound."""
 
     train: Callable[[AsyncIterable[TaskSpec]], AsyncIterator[TaskRollouts]]
+    eval_policy: Callable[[AsyncIterable[TaskRollouts]], AsyncIterator[TaskRollouts]]
+    """Follows the training groups and yields the groups of each evaluation of the live policy."""
     analyze_failed_runs: Callable[[AsyncIterable[list[FailedRun]]], AsyncIterator[CapabilityIdea]]
     generate_tasks: Callable[[AsyncIterable[CapabilityIdea]], AsyncIterator[TaskSpec]]
 
@@ -51,7 +54,7 @@ class LoopConfig:
 def rsi_loop(seed_tasks: AsyncIterable[TaskSpec], boxes: Boxes, config: LoopConfig) -> AsyncIterator[TaskRollouts]:
     """Train on the seed tasks and on the tasks that the loop makes from the policy's own failures."""
     rollouts = Broadcast[TaskRollouts]()
-    failures = failed_runs(rollouts.listen(), config.max_pass_rate)
+    failures = failed_runs(boxes.eval_policy(rollouts.listen()), config.max_pass_rate)
     ideas = boxes.analyze_failed_runs(batched(failures, config.failures_per_analysis))
     new_tasks = boxes.generate_tasks(ideas)
     tasks = mix(

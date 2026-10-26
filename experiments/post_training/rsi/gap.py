@@ -51,6 +51,7 @@ EVAL_MODULUS = 5
 SYNTHESIZED_TAG = "baby-rsi.synthesized"
 GAP_CAPABILITY_PREFIX = "capability:gap-"
 HELDOUT_NAME_PREFIX = "heldout-"
+DIAGNOSTIC_CAPABILITY_PREFIX = "capability:diagnostic-"
 HELDOUT_CAPABILITY_PREFIX = f"capability:{HELDOUT_NAME_PREFIX}"
 READ_BATCH_ROWS = 2000
 
@@ -105,6 +106,12 @@ def scan_types(train_url: str = TRAIN_URL) -> dict[str, TypeRows]:
 def training_indices(rows: TypeRows) -> list[int]:
     """Entries that never train in the seed and are not held out."""
     return [index for index in range(ROWS_PER_TASK) if index % EVAL_MODULUS != 0 and index not in rows.used]
+
+
+def diagnostic_indices(rows: TypeRows, count: int) -> list[int]:
+    """Entries for the loop's evaluation box: the last training entries, so that they differ from the first ones that
+    an oracle trains on, and never held out."""
+    return training_indices(rows)[-count:]
 
 
 def heldout_indices(count: int) -> list[int]:
