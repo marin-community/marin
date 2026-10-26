@@ -38,7 +38,9 @@ def main(dry_run: bool, bootstrap_unrecorded: bool) -> None:
         click.echo(json.dumps({"action": "unchanged", "status": before}))
         return
     if state == "unrecorded" and not bootstrap_unrecorded:
-        raise click.ClickException("Live source is unrecorded; inspect it, then dispatch with bootstrap_unrecorded=true.")
+        raise click.ClickException(
+            "Live source is unrecorded; inspect it, then dispatch with bootstrap_unrecorded=true."
+        )
     if state not in {"different", "unrecorded"}:
         raise click.ClickException(f"Refusing to release source in state {state!r}")
 
