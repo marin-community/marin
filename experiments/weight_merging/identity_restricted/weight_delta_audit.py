@@ -25,6 +25,9 @@ Checks common to both (all fatal):
 4. The re-hash read of each source slice payload equals the source native SHA-256.
 
 Slice tensors whose exported bytes did not change are listed by name, not fatal.
+
+``audit_receipts`` is the in-job form for a training run: the same hash checks on the source receipt and the trained
+save audit only, with no tensor reads. It does not replace the post-job re-hash and audit.
 """
 
 import argparse
@@ -226,6 +229,55 @@ def rehash(
                 "equal": digest == tensors[name]["export_sha256"],
             }
     return result
+
+
+def audit_receipts(source_receipt: bytes, trained_audit: dict, slice_set: set[str], completed_updates: int) -> dict:
+    """In-job check on the two receipts the training job already has; no tensor reads.
+
+    Applies the hash checks of ``audit --trained-audit`` without the independent re-hash: the pinned source receipt,
+    the cited receipt and update count, the 502-tensor keyset, every tensor outside the slice keeping its source
+    master and native hashes, and every slice master changed. Raises ValueError naming each failing tensor, so the
+    job stops before it writes its result. The post-job re-hash and full audit remain the verdict of record.
+    """
+    if hashlib.sha256(source_receipt).hexdigest() != SOURCE_RECEIPT_SHA256:
+        raise ValueError("Source receipt differs from its pin")
+    source = json.loads(source_receipt)["tensors"]
+    if trained_audit.get("source_receipt_sha256") != SOURCE_RECEIPT_SHA256:
+        raise ValueError("Trained audit does not cite the pinned source receipt")
+    if trained_audit.get("completed_updates") != completed_updates:
+        raise ValueError(
+            f"Trained audit reports {trained_audit.get('completed_updates')} updates, not {completed_updates}"
+        )
+    tensors = trained_audit["tensors"]
+    if len(source) != TENSOR_COUNT or set(source) != set(tensors):
+        raise ValueError(f"Source and trained receipts do not cover the same {TENSOR_COUNT} tensors")
+    missing = sorted(slice_set - set(source))
+    if missing:
+        raise ValueError(f"Slice names not in the checkpoint: {missing}")
+    failures, export_unchanged = [], []
+    for name in sorted(source):
+        master_equal = tensors[name]["master_sha256"] == source[name]["master_sha256"]
+        export_equal = tensors[name]["export_sha256"] == source[name]["native_sha256"]
+        if name in slice_set:
+            if master_equal:
+                failures.append(f"{name}: slice master unchanged")
+            if export_equal:
+                export_unchanged.append(name)
+        elif not (master_equal and export_equal):
+            changed = [k for k, equal in (("master", master_equal), ("export", export_equal)) if not equal]
+            failures.append(f"{name}: frozen tensor changed: {', '.join(changed)}")
+    if failures:
+        raise ValueError(f"{len(failures)} weight-delta failures: " + "; ".join(failures))
+    return {
+        "verdict": "PASS",
+        "mode": "receipts-only",
+        "source_receipt_sha256": SOURCE_RECEIPT_SHA256,
+        "completed_updates": completed_updates,
+        "slice": sorted(slice_set),
+        "frozen_equal": TENSOR_COUNT - len(slice_set),
+        "slice_master_changed": len(slice_set),
+        "slice_export_unchanged": export_unchanged,
+    }
 
 
 def audit(

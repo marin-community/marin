@@ -154,3 +154,64 @@ def test_fail_in_job_receipt_disagrees_with_rehash(case):
     result = case(export_edits=SLICE, master_edits=SLICE, tamper_audit=lie)
     assert result["verdict"] == "FAIL"
     assert {"tensor": lie, "reason": "recomputed export hash differs from the producer receipt"} in result["failures"]
+
+
+@pytest.fixture
+def receipts(monkeypatch):
+    """A pinned source receipt and a trained audit in which only the slice masters and exports changed."""
+    names = sorted(SLICE | set(FROZEN))
+    source = {"tensors": {n: {"master_sha256": sha(b"m" + n.encode()), "native_sha256": sha(n.encode())} for n in names}}
+    source_bytes = json.dumps(source).encode()
+    monkeypatch.setattr(wda, "SOURCE_RECEIPT_SHA256", sha(source_bytes))
+    monkeypatch.setattr(wda, "TENSOR_COUNT", len(names))
+    trained = {
+        "completed_updates": 16,
+        "source_receipt_sha256": sha(source_bytes),
+        "tensors": {
+            n: (
+                {"master_sha256": sha(b"t" + n.encode()), "export_sha256": sha(b"e" + n.encode())}
+                if n in SLICE
+                else {"master_sha256": row["master_sha256"], "export_sha256": row["native_sha256"]}
+            )
+            for n, row in source["tensors"].items()
+        },
+    }
+    return source_bytes, trained
+
+
+def test_receipts_only_passes_and_reports_unchanged_slice_exports(receipts):
+    source_bytes, trained = receipts
+    idle_export = "model.layers.18.self_attn.k_proj.weight"
+    trained["tensors"][idle_export]["export_sha256"] = json.loads(source_bytes)["tensors"][idle_export]["native_sha256"]
+    result = wda.audit_receipts(source_bytes, trained, SLICE, 16)
+    assert result["verdict"] == "PASS" and result["mode"] == "receipts-only"
+    assert result["slice_export_unchanged"] == [idle_export]
+
+
+@pytest.mark.parametrize(
+    ("edit", "match"),
+    [
+        (lambda t, s: t["tensors"]["model.layers.0.mlp.router.bias"].update(export_sha256=sha(b"x")), "router.bias"),
+        (lambda t, s: t["tensors"]["lm_head.weight"].update(master_sha256=sha(b"x")), "frozen tensor changed: master"),
+        (
+            lambda t, s: t["tensors"]["model.layers.18.self_attn.q_proj.weight"].update(
+                master_sha256=s["tensors"]["model.layers.18.self_attn.q_proj.weight"]["master_sha256"]
+            ),
+            "slice master unchanged",
+        ),
+        (lambda t, s: t.update(completed_updates=15), "reports 15 updates"),
+        (lambda t, s: t.update(source_receipt_sha256=sha(b"other")), "does not cite"),
+        (lambda t, s: t["tensors"].pop("lm_head.weight"), "same 7 tensors"),
+    ],
+)
+def test_receipts_only_fails(receipts, edit, match):
+    source_bytes, trained = receipts
+    edit(trained, json.loads(source_bytes))
+    with pytest.raises(ValueError, match=match):
+        wda.audit_receipts(source_bytes, trained, SLICE, 16)
+
+
+def test_receipts_only_refuses_an_unpinned_source_receipt(receipts):
+    source_bytes, trained = receipts
+    with pytest.raises(ValueError, match="differs from its pin"):
+        wda.audit_receipts(source_bytes + b" ", trained, SLICE, 16)
