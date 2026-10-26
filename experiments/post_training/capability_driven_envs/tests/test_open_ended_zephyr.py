@@ -4,7 +4,6 @@
 import json
 
 from taskcompendium.models import TaskSpec
-from taskforge.content_hash import canonical_json
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import Environment, SolverMachine
 from verifyit.spec import JudgeSpec
@@ -17,7 +16,7 @@ from experiments.post_training.capability_driven_envs.open_ended_zephyr import r
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
 from experiments.post_training.capability_driven_envs.tests.test_open_ended import bundle
 from experiments.post_training.capability_driven_envs.tests.test_open_ended_pipeline import SERVICES
-from experiments.post_training.capability_driven_envs.tests.test_open_ended_task_design import design
+from experiments.post_training.capability_driven_envs.tests.test_open_ended_task_design import authored_reply, design
 
 CONFIG = OpenEndedProposalConfig(Environment.SHELLSIM, SolverMachine.SHELLSIM)
 
@@ -51,7 +50,7 @@ async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
         "reference, and calibration controls from the curator input without exposing private evidence to the solver.",
     )
     model.reply(document)
-    model.reply(canonical_json(authored))
+    model.reply(authored_reply())
     reward_by_answer = {
         control.answer: (control.minimum_reward + control.maximum_reward) / 2 for control in authored.controls
     }

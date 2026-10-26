@@ -72,8 +72,47 @@ class OpenEndedControl(BaseModel):
         return self
 
 
+class AuthoredControl(BaseModel):
+    """A private calibration answer before campaign policy assigns its reward band."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    control_id: str = Field(min_length=1)
+    kind: ControlKind
+    answer: str = Field(min_length=1)
+
+
+class AuthoredTaskDesign(BaseModel):
+    """The structured model output before deterministic campaign policy is applied."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    proposal_slot: int = Field(gt=0, description="The integer slot encoded in the proposal ID.")
+    instruction: str = Field(
+        min_length=1,
+        description="The complete solver-facing request, without private evidence, answers, or grading instructions.",
+    )
+    reference: str = Field(min_length=1, description="A source-grounded private reference answer.")
+    rubric: Rubric
+    controls: tuple[AuthoredControl, ...] = Field(min_length=1)
+    output_budget_tokens: int = Field(gt=0, description="A justified maximum answer length for later rollout policy.")
+
+    @model_validator(mode="after")
+    def complete_controls(self) -> Self:
+        kinds = [control.kind for control in self.controls]
+        if any(kinds.count(kind) != 1 for kind in ControlKind):
+            raise ValueError("authored design needs exactly one control of every required kind")
+        ids = [control.control_id for control in self.controls]
+        if len(set(ids)) != len(ids):
+            raise ValueError("authored design control IDs must be unique")
+        reference = next(control for control in self.controls if control.kind is ControlKind.REFERENCE)
+        if reference.answer != self.reference:
+            raise ValueError("reference control answer must equal the authored reference")
+        return self
+
+
 class OpenEndedTaskDesign(BaseModel):
-    """A frozen model-authored instruction, grading contract, and controls."""
+    """A frozen model-authored design with deterministic campaign control bands."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -227,8 +266,8 @@ have weight 0. Candidate answers cannot alter the rubric.
 
 Create exactly one control of each kind: reference, partial, severe_negative, evaluator_injection, and verbosity.
 The reference control must exactly equal the reference. Controls are private candidate answers, not additions to the
-instruction. Use these exact reward bands: reference [0.85, 1.0], partial [0.3, 0.8], severe_negative [0.0, 0.2],
-evaluator_injection [0.0, 0.1], and verbosity [0.0, 0.3]. Freeze all criteria before calibration.
+instruction. The campaign assigns their reward bands deterministically after authoring. Freeze all criteria before
+calibration.
 """
 
 
@@ -244,6 +283,27 @@ CURATOR INPUT:
 {pretty_json(authoring_record(hydrated, proposal))}"""
 
 
+def freeze_design(authored: AuthoredTaskDesign) -> OpenEndedTaskDesign:
+    """Apply campaign-fixed control bands to structured model output."""
+    return OpenEndedTaskDesign(
+        proposal_slot=authored.proposal_slot,
+        instruction=authored.instruction,
+        reference=authored.reference,
+        rubric=authored.rubric,
+        controls=tuple(
+            OpenEndedControl(
+                control_id=control.control_id,
+                kind=control.kind,
+                answer=control.answer,
+                minimum_reward=CONTROL_BANDS[control.kind][0],
+                maximum_reward=CONTROL_BANDS[control.kind][1],
+            )
+            for control in authored.controls
+        ),
+        output_budget_tokens=authored.output_budget_tokens,
+    )
+
+
 @rl_env_build_step
 async def design(
     context: RLEnvBuildContext,
@@ -256,11 +316,11 @@ async def design(
         {"role": "system", "content": AUTHOR_SYSTEM_PROMPT},
         {"role": "user", "content": author_prompt(hydrated, proposal)},
     ]
-    result = await context.model.complete_structured(messages, OpenEndedTaskDesign, context.sampling)
+    result = await context.model.complete_structured(messages, AuthoredTaskDesign, context.sampling)
     expected_slot = _slot(proposal, hydrated)
     if result.value.proposal_slot != expected_slot:
         raise ValueError(f"authored design names proposal slot {result.value.proposal_slot}, expected {expected_slot}")
-    return result.value
+    return freeze_design(result.value)
 
 
 @rl_env_build_sink
