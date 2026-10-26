@@ -110,7 +110,8 @@ def iris_job_states(args: argparse.Namespace) -> dict[str, str]:
 def primary_runs(api, args: argparse.Namespace) -> list:
     try:
         runs = api.runs(args.project, per_page=50)
-        return [run for run in runs if run.name.startswith(args.run_name_prefix) and run.job_type != "worker_monitor"]
+        # Every run in the project, the trainer's included, has job_type "worker_monitor"; match on the name only.
+        return [run for run in runs if run.name.startswith(args.run_name_prefix)]
     except ValueError:
         return []  # the project exists only after the run's first log
 

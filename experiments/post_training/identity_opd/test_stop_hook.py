@@ -129,7 +129,8 @@ def test_sigterm_while_waiting_writes_a_killed_record(tmp_path, capsys):
 
 
 def test_a_found_run_that_fires_cancels_the_job(tmp_path):
-    run = SimpleNamespace(id="abc", name="opd-dry-2026", job_type="train")
+    # The dry .4 trainer run (nvhmk151) carried job_type "worker_monitor".
+    run = SimpleNamespace(id="abc", name="opd-dry-2026-356871096913", job_type="worker_monitor")
     rows = [{STEP_METRIC: step, GAP_METRIC: -0.1 * step} for step in range(1, 7)]
     cancels = []
     record = run_hook(
