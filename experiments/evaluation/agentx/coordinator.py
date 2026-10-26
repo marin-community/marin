@@ -118,7 +118,7 @@ def run_points(client: IrisClient, plan: dict, work: Path, processor: Path) -> N
         job.wait(timeout=COORDINATOR_TIMEOUT, raise_on_failure=False, stream_logs=True)
         receipt = collect_point(client, job.job_id, point, plan, work, processor)
         completed.append(point | {"job_id": str(job.job_id), "receipt": receipt})
-        # Each point reaches delivery before waiting for the next GPU allocation.
+        # Retain each point before waiting for the next GPU allocation.
         logger.info("Retained %s: %s", job.job_id, publish_results(plan, completed))
     if any(point["receipt"]["status"] != "valid" for point in completed):
         raise RuntimeError("One or more points failed; completed siblings remain importable")

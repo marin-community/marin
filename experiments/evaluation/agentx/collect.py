@@ -82,14 +82,14 @@ def unpack(archive: Path, destination: Path) -> None:
             contents.extractall(destination, filter="data")
 
 
-def retain_processed_artifacts(artifacts: Path, bundle: Path, prefix: str) -> tuple[str, str]:
+def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -> tuple[str, str]:
     """Archive output under its checksum so earlier result descriptors remain readable."""
     with bundle.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
         with tarfile.open(fileobj=compressed, mode="w|") as contents:
             contents.add(artifacts, arcname=".")
     with bundle.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    uri = prefix_join(prefix, f"inferencex-{digest}.tar.zst")
+    uri = prefix_join(prefix, f"{name}-{digest}.tar.zst")
     copy_file(str(bundle), uri)
     return uri, digest
 
@@ -332,8 +332,8 @@ def collect_terminal(
             else:
                 artifacts = directory / "artifacts"
                 process_point(point, manifest, processor, artifacts)
-                bundle_uri, bundle_digest = retain_processed_artifacts(
-                    artifacts, directory / "inferencex.tar.zst", prefix
+                bundle_uri, bundle_digest = retain_artifacts(
+                    artifacts, directory / "inferencex.tar.zst", prefix, name="inferencex"
                 )
                 receipt.update(
                     {

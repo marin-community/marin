@@ -24,7 +24,7 @@ from rigging.timing import Timestamp
 from experiments.evaluation.agentx.collect import (
     collect_terminal,
     read_record,
-    retain_processed_artifacts,
+    retain_artifacts,
     unpack,
     validate_window,
     write_record,
@@ -199,7 +199,9 @@ def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(
     completed = []
     for value in [1, 2]:
         aggregate.write_text(json.dumps({"value": value}))
-        uri, digest = retain_processed_artifacts(artifacts, tmp_path / "working.tar.zst", str(tmp_path / "retained"))
+        uri, digest = retain_artifacts(
+            artifacts, tmp_path / "working.tar.zst", str(tmp_path / "retained"), name="inferencex"
+        )
         result_uri = str(tmp_path / f"result-{value}.json")
         write_record(
             result_uri,

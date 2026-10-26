@@ -8,14 +8,12 @@ import hashlib
 import json
 import logging
 import shutil
-import tarfile
 from pathlib import Path
 
-import zstandard
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.evaluation.agentx.collect import copy_file, read_record, unpack, write_record
+from experiments.evaluation.agentx.collect import copy_file, read_record, retain_artifacts, unpack, write_record
 from experiments.evaluation.agentx.processes import run_logged
 from experiments.evaluation.agentx.recipe import (
     PREPARATION_VERSION,
@@ -146,13 +144,7 @@ def prepare_workload(work: Path, *, series_path: Path = SERIES_PATH, cache_root:
     )
     check_native_cache(bundle, series_path, work / "native-cache-check.log")
     archive = work / "workload.tar.zst"
-    with archive.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
-        with tarfile.open(fileobj=compressed, mode="w|") as contents:
-            contents.add(bundle, arcname=".")
-    with archive.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    uri = prefix_join(root, f"{key}/workload-{digest}.tar.zst")
-    copy_file(str(archive), uri)
+    uri, digest = retain_artifacts(bundle, archive, prefix_join(root, key), name="workload")
     receipt = {
         "key": key,
         "recipe": recipe,
