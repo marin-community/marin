@@ -148,12 +148,19 @@ pulumi -C infra/pulumi up --stack marin
 Use the [Cloud Run IAP access check](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#cloud-run-iap-access)
 to confirm `serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com`
 has `roles/iap.httpsResourceAccessor` on Marina before dispatching a dry-run.
-CI previews IAM changes but does not apply this stack. The run summary
-and `snowball-release-<run>-<attempt>` artifact record the observed previous version,
-published revision URL and source commit. The command saves the publication record
-before verifying the live selection; summary and artifact collection also run if
-verification fails. No model discovery or graph editing runs
-in this job. A source-tree change can trigger a release even if the graph is unchanged.
+CI previews IAM changes but does not apply this stack. After the access check,
+dispatch a dry-run from `main` and inspect the completed run:
+
+```bash
+gh workflow run marin-release-snowball-tree.yaml --ref main -f dry_run=true
+```
+
+The run summary and `snowball-release-<run>-<attempt>` artifact record the
+observed previous version, published revision URL and source commit. The command
+saves the publication record before verifying the live selection. Summary and
+artifact collection also run if verification fails. No model discovery or graph
+editing runs in this job. A source-tree change can trigger a release even if
+the graph is unchanged.
 
 A legacy live package without source provenance stops normal nightly publication.
 Inspect the live package and record its differences in the tree PR or tracking issue,
@@ -166,8 +173,8 @@ gh workflow run marin-release-snowball-tree.yaml --ref main \
 
 After checking that preview, dispatch with `dry_run=false` and
 `bootstrap_unrecorded=true` to establish the recorded main baseline. Subsequent
-nightly runs need no bootstrap flag. After the IAM grant, successful preview and
-bootstrap are verified, enable the schedule:
+nightly runs need no bootstrap flag. After the IAM grant, a successful dry-run,
+and any required bootstrap, enable the schedule:
 
 ```bash
 gh variable set SNOWBALL_TREE_RELEASE --repo marin-community/marin --body enabled

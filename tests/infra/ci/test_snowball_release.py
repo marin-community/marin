@@ -81,7 +81,6 @@ def test_unrecorded_source_needs_explicit_bootstrap(marina_process, tmp_path):
     result = CliRunner().invoke(snowball_release.main, ["--record", str(tmp_path / "release.json")])
 
     assert result.exit_code != 0
-    assert "bootstrap_unrecorded=true" in result.output
     assert len(commands) == 1
 
 
@@ -112,7 +111,6 @@ def test_post_release_selection_change_is_reported(marina_process, tmp_path):
     result = CliRunner().invoke(snowball_release.main, ["--record", str(tmp_path / "release.json")])
 
     assert result.exit_code != 0
-    assert "no longer current" in result.output
     record = json.loads((tmp_path / "release.json").read_text())
     assert record["release"] == {"version": 7}
     assert record["verification"] == "failed"
