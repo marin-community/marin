@@ -153,6 +153,12 @@ def selected_runs(
 ) -> list[RunPlan]:
     if stage == "lr-sweep":
         runs = phase0c_lr_sweep()
+        if learning_rate is not None:
+            # The sweep runs serially, one learning rate at a time, smallest first.
+            runs = [run for run in runs if run.learning_rate == learning_rate]
+            if not runs:
+                grid = sorted({run.learning_rate for run in phase0c_lr_sweep()})
+                raise click.UsageError(f"--learning-rate {learning_rate} is not in the lr-sweep grid {grid}")
     elif learning_rate is None:
         raise click.UsageError("--learning-rate is required for phase1a; take it from the Phase 0c sweep")
     else:
@@ -168,7 +174,11 @@ def selected_runs(
 
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice(["phase1a", "lr-sweep"]), required=True)
-@click.option("--learning-rate", type=float)
+@click.option(
+    "--learning-rate",
+    type=float,
+    help="phase1a: the sweep's chosen LR, required. lr-sweep: optionally restrict the sweep to one LR.",
+)
 @click.option("--method", "methods", multiple=True, type=click.Choice([str(method) for method in Method]))
 @click.option("--condition", "conditions", multiple=True, type=click.Choice([str(c) for c in Condition]))
 @click.option("--seed", "seeds", multiple=True, type=int)

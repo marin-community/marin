@@ -25,6 +25,7 @@ from experiments.post_training.phase1a.launch import (
     execution,
     require_teacher_pin,
     run_spec,
+    selected_runs,
     teacher_model,
 )
 from experiments.post_training.phase1a.matrix import (
@@ -58,6 +59,14 @@ def test_matrix_holds_thirty_cells_two_nulls_and_an_eight_run_sweep():
     sweep = phase0c_lr_sweep()
     assert len(sweep) == 8 and {run.condition for run in sweep} == {Condition.X}
     assert {(run.method, run.learning_rate) for run in sweep} == {(m, rate) for m in Method for rate in LR_SWEEP}
+
+
+def test_lr_sweep_selection_can_restrict_to_one_learning_rate():
+    runs = selected_runs("lr-sweep", 5e-7, (), (), ())
+    assert {(run.method, run.learning_rate, run.seed) for run in runs} == {(Method.M1, 5e-7, 0), (Method.M4, 5e-7, 0)}
+    assert len(selected_runs("lr-sweep", 5e-7, ("m1",), (), ())) == 1
+    with pytest.raises(click.UsageError, match="not in the lr-sweep grid"):
+        selected_runs("lr-sweep", 3e-6, (), (), ())
 
 
 @pytest.mark.parametrize("condition", [*PHASE1A_CONDITIONS, Condition.PROCEDURE_NULL])
