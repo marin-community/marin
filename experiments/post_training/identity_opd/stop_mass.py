@@ -26,7 +26,7 @@ import requests
 from marinskyrl.distillation import TeacherPromptInsertion, conditioned_teacher_prompt
 from transformers import AutoTokenizer
 
-from experiments.post_training.identity_opd.dry_run_report import END_OF_TURN, TOOL_CALL, trajectory_records
+from experiments.post_training.identity_opd.dry_run_report import END_OF_TURN, TOOL_CALL, _write_new, trajectory_records
 from experiments.post_training.identity_opd.teacher_insertion import insertion_rule
 
 TOOL_OPEN = '<tool_call>\n{"'
@@ -122,7 +122,7 @@ def main() -> None:
     parser.add_argument("--tokenizer", required=True, help="v0.1 adc0078a tokenizer directory")
     parser.add_argument("--endpoint", required=True, help="base URL of the v0.1 serve")
     parser.add_argument("--model", required=True, help="served model name")
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out", required=True, help="new report file, local or S3; never overwritten")
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     tool_open = tokenizer.encode(TOOL_OPEN, add_special_tokens=False)
@@ -132,9 +132,9 @@ def main() -> None:
         tool_open,
         endpoint_scorer(args.endpoint, args.model),
     )
-    with open(args.out, "w") as handle:
-        json.dump(result, handle, indent=1, sort_keys=True)
-    print(json.dumps({key: result[key] for key in ("tool_samples", "stopped_without_call", "medians", "flag")}))
+    digest = _write_new(args.out, result)
+    summary = {key: result[key] for key in ("tool_samples", "stopped_without_call", "medians", "flag")}
+    print(json.dumps({"out": args.out, "sha256": digest, **summary}))
 
 
 if __name__ == "__main__":
