@@ -71,7 +71,7 @@ class FakeClef:
 
     def tokens(self, request: SystemOneRequest, max_length: int) -> int:
         if self.tokenizer is not None:
-            return input_tokens(self.tokenizer, request, max_length)
+            return min(max_length, input_tokens(self.tokenizer, request))
         return min(max_length, len(render(request.state)) // 4 + 64 * len(request.questions))
 
     def answer(self, body: dict[str, Any], max_length: int | None = None) -> dict[str, Any]:

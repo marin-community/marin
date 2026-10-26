@@ -188,8 +188,8 @@ class DecisionClient(Protocol):
 
     The host supplies one (``RLEnvBuildServices.decision``, ``EngineSettings.decision``); a build program and
     an author never construct one. ``decide`` answers within ``timeout`` seconds, the caller's deadline, and
-    raises ``DecisionUnavailable`` for a transient failure. ``elastic`` is the state key the client may shorten
-    to fit its model's window: the solver's output.
+    raises ``DecisionUnavailable`` when a complete read is unavailable, including when the state exceeds
+    the supported context window.
     """
 
     async def decide(
@@ -197,7 +197,6 @@ class DecisionClient(Protocol):
         state: Mapping[str, JsonValue],
         questions: Mapping[str, ScoreQuestion],
         *,
-        elastic: str,
         timeout: float,
     ) -> Mapping[str, tuple[float, ...]]: ...
 
@@ -297,11 +296,6 @@ def rubric_view(item: RubricItem) -> dict[str, JsonValue]:
     return view
 
 
-def solver_output_key(grader: DecisionGrader) -> str:
-    """The state key that holds the solver's output (the first, if the template repeats it)."""
-    return next(key for key, source in grader.state.items() if source is StateSource.SOLVER_TURN_OUTPUT)
-
-
 def decision_state(grader: DecisionGrader, solver_output: str) -> dict[str, JsonValue]:
     """The decision model's state: ``grader.state``'s keys, in order, each filled from its source."""
     values: dict[StateSource, JsonValue] = {
@@ -336,7 +330,7 @@ async def grade_decision_answer(
     state, questions = decision_state(grader, output), {QUESTION_ID: comparative_question()}
     try:
         async with asyncio.timeout(timeout):
-            reads = await client.decide(state, questions, elastic=solver_output_key(grader), timeout=timeout)
+            reads = await client.decide(state, questions, timeout=timeout)
     except TimeoutError as error:
         raise DecisionUnavailable(f"no decision within the {timeout:.0f}-second verifier deadline") from error
     grade = decision_grade(expected_level(reads[QUESTION_ID]), grader.bar)

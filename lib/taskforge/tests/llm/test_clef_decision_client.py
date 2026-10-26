@@ -10,6 +10,7 @@ import time
 
 import httpx
 import pytest
+from pydantic import JsonValue
 from rolloutengine.models import GradedRolloutInterrupted
 from rolloutengine.test_support import ReplayModel, engine, rollout_spec
 from taskcompendium.chat import chat_conversation
@@ -250,6 +251,31 @@ async def test_oversized_state_holds_without_grading_a_truncated_answer(window, 
                 calibrated(None), [TRANSCRIPT[0], {"role": "assistant", "content": long_reply}], clef, timeout=30
             )
     assert not recording.fake.seen
+
+
+@pytest.mark.parametrize("field", ["reference", "candidate"])
+async def test_full_serialized_state_must_fit_even_when_raw_text_fits(field):
+    # JSON doubles every quote. The raw value fits 16k, but its wire representation does not.
+    state = {"reference": "42", "candidate": "42", field: '"' * 9000}
+    fake = FakeClef(tokenizer=TOKENIZER, prober=at_level(3.0), token=TOKEN)
+    async with client(fake.handle, 16384) as clef:
+        with pytest.raises(DecisionUnavailable):
+            await clef.decide(state, {"whole": decision.ScoreQuestion(QUESTION, LEVELS)}, timeout=30)
+    assert not fake.seen
+
+
+async def test_full_request_is_sent_unchanged_with_the_requested_window():
+    state: dict[str, JsonValue] = {
+        "reference": 'A quoted value: "42"',
+        "candidate": "42\n",
+        "rubric": ["Give the value."],
+    }
+    recording = Recording()
+    async with client(recording.handle, 16384) as clef:
+        probabilities = await clef.decide(state, {"whole": decision.ScoreQuestion(QUESTION, LEVELS)}, timeout=30)
+    assert probabilities["whole"] == level_probabilities(3.0)
+    assert recording.fake.seen[0].state == state
+    assert recording.headers[0]["x-clef-window"] == "16384"
 
 
 async def test_the_token_is_never_logged_or_shown(caplog, monkeypatch):

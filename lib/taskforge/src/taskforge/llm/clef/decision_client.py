@@ -15,7 +15,7 @@ door's ``clef_unavailable``, the deadline) raises ``DecisionUnavailable`` and th
 raises ``DecisionRequestError`` and is not retried.
 
 The full state must fit the pinned physical window, or Clef's 131,072-token maximum when unpinned.
-If ``budget.fit_request`` would truncate it, the client raises ``DecisionUnavailable`` before HTTP.
+An oversized request raises ``DecisionUnavailable`` before HTTP.
 A pinned window is sent as ``x-clef-window``. Optional relay discovery resolves the current endpoint for
 each request. The token is sent as a bearer header and appears in no log, error or repr.
 """
@@ -31,7 +31,7 @@ from typing import Self
 import httpx
 from pydantic import JsonValue
 
-from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, TruncateFrom, fit_request, load_tokenizer
+from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, input_tokens, load_tokenizer
 from taskforge.llm.clef.schema import ScoreAnswer, ScoreQuestion, SystemOneRequest, SystemOneResponse
 from taskforge.llm.glm_client import GLM_MODEL, Pool, RelayEndpoint
 from taskforge.spec import decision
@@ -42,8 +42,8 @@ WINDOWS = (16384, 32768, 65536, 131072)
 """The engine windows of a Clef node; a pinned window is one of them."""
 UNAVAILABLE_CODE = "clef_unavailable"
 """The front door's error code while Clef swaps in."""
-FIT_WORKERS = 4
-"""Threads of the client's own pool that tokenize states to fit them."""
+TOKENIZER_WORKERS = 4
+"""Threads of the client's own pool that count request tokens."""
 
 
 class DecisionRequestError(ValueError):
@@ -96,7 +96,7 @@ class ClefDecisionClient:
             None if config.relay_job is None else RelayEndpoint(config.relay_job, token, Pool.BULK, config.endpoint_name)
         )
         self._slots = asyncio.Semaphore(config.max_inflight)
-        self._executor = ThreadPoolExecutor(max_workers=FIT_WORKERS, thread_name_prefix="clef-fit")
+        self._executor = ThreadPoolExecutor(max_workers=TOKENIZER_WORKERS, thread_name_prefix="clef-tokenizer")
         self._http = httpx.AsyncClient(
             base_url=config.base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {token}"},
@@ -122,7 +122,6 @@ class ClefDecisionClient:
         state: Mapping[str, JsonValue],
         questions: Mapping[str, decision.ScoreQuestion],
         *,
-        elastic: str,
         timeout: float,
     ) -> Mapping[str, tuple[float, ...]]:
         """One Clef read of ``questions`` over ``state``, within ``timeout`` seconds.
@@ -130,7 +129,6 @@ class ClefDecisionClient:
         Raises:
             DecisionUnavailable: a connection error or timeout, a 5xx or ``clef_unavailable``, or the deadline.
             DecisionRequestError: a 4xx, or an answer that is not a score for each question asked.
-            taskforge.llm.clef.schema.ClefRequestError: the questions and the non-elastic state do not fit the window.
         """
         request = SystemOneRequest(
             state=dict(state),
@@ -139,20 +137,17 @@ class ClefDecisionClient:
         try:
             async with asyncio.timeout(timeout):
                 async with self._slots:
-                    fitted, budget = await asyncio.get_running_loop().run_in_executor(
+                    tokens = await asyncio.get_running_loop().run_in_executor(
                         self._executor,
-                        fit_request,
+                        input_tokens,
                         self._tokenizer,
                         request,
-                        (elastic,),
-                        TruncateFrom.MIDDLE,
-                        self._max_length,
                     )
-                    if budget.truncated:
+                    if tokens > self._max_length:
                         raise decision.DecisionUnavailable(
                             f"the complete grading state exceeds Clef's physical context ({self._max_length} tokens)"
                         )
-                    response = await self._post(fitted, timeout)
+                    response = await self._post(request, timeout)
         except TimeoutError as error:
             raise decision.DecisionUnavailable(f"clef gave no answer within {timeout:.1f}s") from error
         return _probabilities(response, questions)

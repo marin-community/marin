@@ -4,7 +4,7 @@
 # Copied from the WS1 clefclient package, phase11/ws1-clef-client/clefclient/schema.py in the WS1 scratch
 # workspace (2026-10-15). That package has no repository; the source file's sha256 is
 # b424aed8c3c1fb4038ced1669c5a25a57c4657ac2c266873fdb262ff505ed564.
-# Changed: nothing.
+# Changed: unused convenience projections are omitted.
 
 """Request and response model for Clef's ``POST /v1/systemone``.
 
@@ -133,10 +133,6 @@ class SystemOneRequest:
             raise ClefRequestError("question ids must be non-empty strings")
         json.dumps(self.state)  # TypeError here, not on the wire
 
-    @property
-    def question_ids(self) -> tuple[str, ...]:
-        return tuple(self.questions)
-
     def to_json(self) -> dict[str, Any]:
         return {
             "model": self.model,
@@ -244,20 +240,3 @@ class SystemOneResponse:
             id=payload.get("id"),
             raw=payload,
         )
-
-
-Decision = str | bool | float
-
-
-def decisions(response: SystemOneResponse, noul_cutoff: float = 0.5) -> dict[str, Decision]:
-    """Plain decisions per question id: choice -> the chosen option name; noul -> P(yes) >= ``noul_cutoff``;
-    score -> the expected 0-indexed level as Clef gives it. Probabilities stay on ``response.answers``."""
-    out: dict[str, Decision] = {}
-    for qid, answer in response.answers.items():
-        if isinstance(answer, ChoiceAnswer):
-            out[qid] = answer.choice
-        elif isinstance(answer, NoulAnswer):
-            out[qid] = answer.noul >= noul_cutoff
-        else:
-            out[qid] = answer.score
-    return out

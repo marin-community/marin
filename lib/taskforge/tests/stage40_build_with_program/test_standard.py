@@ -495,11 +495,11 @@ class RubricSensitiveClient:
     reads: FakeDecisionClient
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, elastic: str, timeout: float
+        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, timeout: float
     ) -> Mapping[str, tuple[float, ...]]:
         if state["z_candidate_answer"] == FLUENT_WRONG and LENIENT_CRITERION in json.dumps(state["rubric"]):
             return {name: level_probabilities(3.5) for name in questions}
-        return await self.reads.decide(state, questions, elastic=elastic, timeout=timeout)
+        return await self.reads.decide(state, questions, timeout=timeout)
 
 
 async def test_the_grader_step_sends_back_a_rubric_that_credits_a_fooling_answer(context, fake_glm):
