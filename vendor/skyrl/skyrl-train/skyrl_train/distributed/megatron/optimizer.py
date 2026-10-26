@@ -22,6 +22,7 @@ from collections.abc import Mapping
 import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
+from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
@@ -31,6 +32,29 @@ from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megat
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
+
+
+def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
+    """Megatron's CPU-offload optimizer, made safe to load into under the distributed optimizer.
+
+    Megatron (through 0.19.2) indexes ``param_to_fp32_param`` with every parameter that has
+    state, but that map only holds parameters that were not already fp32. The distributed
+    optimizer hands it fp32 main shards only, so every ``load_state_dict`` -- and each
+    checkpoint load starts with one -- raised ``KeyError``. An fp32 parameter holds its loaded
+    value itself: copy it into the CPU copy the sub-optimizer steps, or the next step would
+    copy stale CPU values back over the restored weights.
+    """
+    if not self.param_update_in_fp32:
+        return
+    for param, state in self.state.items():
+        fp32_param = self.param_to_fp32_param.get(param)
+        if fp32_param is None:
+            self.param_to_inner_param[param].data.copy_(param.data)
+        else:
+            fp32_param.data.copy_(state["master_param"])
+
+
+HybridDeviceOptimizer._update_fp32_params_by_new_state = _update_fp32_params_by_new_state
 
 
 def _grug_muonh_extra(optim_config: Mapping) -> dict:
