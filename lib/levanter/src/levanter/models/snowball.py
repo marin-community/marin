@@ -21,7 +21,7 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -40,7 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
-from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+from levanter.grug._moe.common import MoeDispatchCounts, _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -59,7 +59,8 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -138,7 +139,6 @@ _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
-_EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -228,6 +228,10 @@ class SnowballConfig(HFCompatConfig):
     moe_implementation: Optional[MoeImplementation] = None
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
+    moe_capacity_factor: float = 1.0
+    """Expert-parallel capacity: each expert shard keeps at most ``factor x assignments / shards`` routed
+    assignments and silently drops the rest. At the expert-axis size it covers every assignment (dropless). A
+    runtime knob like ``router_dot_fp32``: not exported in HF metadata."""
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -237,6 +241,8 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if not self.moe_capacity_factor > 0:
+            raise ValueError(f"moe_capacity_factor must be positive, got {self.moe_capacity_factor}")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
         if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
@@ -536,12 +542,60 @@ class DenseMLP(eqx.Module):
         return jnp.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
-class SnowballMoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights (inference forward only).
+class MoeForwardStats(eqx.Module):
+    """Selected routes and globally counted valid dispatch losses from one forward.
 
-    Drops the training-only QB-beta statistics, router metrics, and capacity-overflow reporting;
-    only the routed output is needed for scoring/serving. The loaded ``router_bias`` already has the
-    QB betas baked in (from the export), so we add it directly and never re-apply the update.
+    Backends mask invalid assignments before counting drops. Receiver losses are
+    counted after sender selection, so their sum counts each lost assignment once.
+    Padding skips are not capacity drops.
+    """
+
+    routes: Array
+    sender_dropped: Array
+    receiver_dropped: Array
+
+    @property
+    def dropped(self) -> Array:
+        return self.sender_dropped + self.receiver_dropped
+
+
+def dispatch_token_validity(example: LmExample) -> NamedArray:
+    """Read unshifted query validity from packing metadata, independently of loss masking."""
+    if not isinstance(example.attn_mask, LmHeadAttentionMask) or example.attn_mask.segment_ids is None:
+        raise ValueError("Snowball checked dispatch requires explicit query segment IDs")
+    query_segments, _ = example.attn_mask.segment_ids
+    if query_segments.axes != example.tokens.axes:
+        raise ValueError("Query segment IDs must have the token axes")
+    return query_segments >= 0
+
+
+def snowball_loss_with_dispatch_stats(
+    model: "SnowballLMHeadModel", example: LmExample, *, key=None
+) -> tuple[NamedArray | Array, dict[str, Array]]:
+    """Compute next-token loss and dispatch counts in one validity-masked forward."""
+    hidden, stats = model.activations_with_stats(example.tokens, dispatch_token_validity(example))
+    loss = maybe_fused_next_token_loss(
+        model.Pos,
+        model.Embed,
+        model.Vocab,
+        hidden,
+        model.get_lm_head(),
+        example.tokens,
+        loss_weight=example.loss_weight,
+    )
+    return loss, {
+        "moe_dropped": stats.dropped,
+        "moe_sender_dropped": stats.sender_dropped,
+        "moe_receiver_dropped": stats.receiver_dropped,
+    }
+
+
+class SnowballMoEMLP(eqx.Module):
+    """QB-routed MoE with sigmoid combine weights and frozen routing biases.
+
+    The loaded ``router_bias`` already includes the exported QB updates. This forward
+    never updates it or computes QB-beta statistics. The checked dispatch path also
+    returns capacity losses for valid assignments.
     """
 
     router: jax.Array
@@ -567,7 +621,7 @@ class SnowballMoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.moe_capacity_factor,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
             ),
             cfg=cfg,
@@ -579,11 +633,13 @@ class SnowballMoEMLP(eqx.Module):
 
     def with_routes(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], Int[Array, "B S K"]]:
         """The routed output and the selected expert ids [B, S, K], as used (an observer)."""
-        out, ids = self._forward(x, return_routes=True)
+        out, ids, _ = self._forward(x, return_routes=True)
         assert ids is not None
         return out, ids
 
-    def _forward(self, x: Float[Array, "B S D"], return_routes: bool) -> tuple[Float[Array, "B S D"], Array | None]:
+    def _forward(
+        self, x: Float[Array, "B S D"], return_routes: bool, token_valid: Array | None = None
+    ) -> tuple[Float[Array, "B S D"], Array | None, MoeDispatchCounts | None]:
         b, s, _ = x.shape
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_input = x_flat
@@ -606,19 +662,26 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
 
-        routed_flat = self.expert_mlp(
+        valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
+        result = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
-            report_capacity_overflow=False,
+            token_valid=valid_flat,
+            report_capacity_overflow=token_valid is not None,
         )
+        counts = None
+        if token_valid is not None:
+            routed_flat, counts = cast(tuple[Array, MoeDispatchCounts], result)
+        else:
+            routed_flat = cast(Array, result)
         out = jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
         if not return_routes:
-            return out, None
+            return out, None, counts
         # Replicated: a small int array, so the observer adds no sharding constraint to the forward.
         ids = reshard(selected_experts.astype(jnp.int32), P(None, None))
-        return out, jnp.reshape(ids, (b, s, ids.shape[-1]))
+        return out, jnp.reshape(ids, (b, s, ids.shape[-1])), counts
 
 
 class SnowballBlock(eqx.Module):
@@ -664,6 +727,18 @@ class SnowballBlock(eqx.Module):
         return_routes: bool,
     ) -> tuple[Float[Array, "B S D"], Array | None]:
         """The block output and, with ``return_routes``, the MoE's selected expert ids [B, S, K] (an observer)."""
+        hidden, routes, _ = self._forward(x, short_mask, long_mask, use_long, return_routes)
+        return hidden, routes
+
+    def _forward(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: Bool[Array, ""],
+        return_routes: bool,
+        token_valid: Array | None = None,
+    ) -> tuple[Array, Array | None, MoeDispatchCounts | None]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -676,8 +751,8 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        routed, routes = self.mlp.with_routes(mlp_in) if return_routes else (self.mlp(mlp_in), None)
-        return x + (routed + self.shared(mlp_in)), routes
+        routed, routes, counts = self.mlp._forward(mlp_in, return_routes, token_valid)
+        return x + (routed + self.shared(mlp_in)), routes, counts
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -735,13 +810,23 @@ class SnowballTransformer(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], Int[Array, "L B S K"]]:
         """The final hidden state [B, S, D] and every layer's selected expert ids [L, B, S, K], collected from the
         forward as run (an observer: routing is not recomputed or changed)."""
-        hidden, routes = self._forward(token_ids, mask, return_routes=True)
+        hidden, routes, _ = self._forward(token_ids, mask, return_routes=True)
         assert routes is not None
         return hidden, routes
 
+    def with_stats(self, token_ids: Array, token_valid: Array) -> tuple[Array, MoeForwardStats]:
+        """Run the ordinary causal forward with explicit dispatch validity and counts."""
+        hidden, routes, counts = self._forward(token_ids, None, True, token_valid)
+        assert routes is not None and counts is not None
+        return hidden, MoeForwardStats(routes, counts.sender_dropped, counts.receiver_dropped)
+
     def _forward(
-        self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask], return_routes: bool
-    ) -> tuple[Float[Array, "B S D"], Array | None]:
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: Optional[AttentionMask],
+        return_routes: bool,
+        token_valid: Array | None = None,
+    ) -> tuple[Float[Array, "B S D"], Array | None, MoeDispatchCounts | None]:
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
@@ -750,6 +835,8 @@ class SnowballTransformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        if token_valid is not None:
+            token_valid = reshard(token_valid, P(_BATCH_AXES, _context_axis()))
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
@@ -761,15 +848,21 @@ class SnowballTransformer(eqx.Module):
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         long_schedule = long_attention_layer_mask(num_blocks)
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], Array | None]:
+        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag):
             layer, use_long = layer_and_flag
+            if token_valid is not None:
+                hidden, routes, counts = layer._forward(
+                    carry, short_mask, long_mask, use_long, return_routes, token_valid
+                )
+                return hidden, (routes, counts)
             if return_routes:
-                return layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
-            return layer(carry, short_mask, long_mask, use_long), None
+                hidden, routes = layer.forward(carry, short_mask, long_mask, use_long, return_routes=True)
+                return hidden, (routes, None)
+            return layer(carry, short_mask, long_mask, use_long), (None, None)
 
         # Bound routed-expert activation memory during the backward pass as well as forward.
-        hidden, routes = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
-        return self.final_gated_norm(self.final_norm(hidden)), routes
+        hidden, (routes, counts) = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
+        return self.final_gated_norm(self.final_norm(hidden)), routes, counts
 
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
@@ -813,6 +906,19 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden, routes = self._activations(input_ids, return_routes=True)
         assert routes is not None
         return hidden, routes
+
+    def activations_with_stats(
+        self, input_ids: NamedArray, token_valid: NamedArray
+    ) -> tuple[NamedArray, MoeForwardStats]:
+        """Return hidden states, routes and valid-assignment drops from the same forward."""
+        if token_valid.axes != input_ids.axes or token_valid.dtype != jnp.bool_:
+            raise ValueError("token_valid must be boolean with the token axes")
+        sequence = input_ids.array.shape[-1]
+        hidden, stats = self.transformer.with_stats(
+            input_ids.array.reshape(-1, sequence), token_valid.array.reshape(-1, sequence)
+        )
+        hidden = hidden.reshape(*input_ids.array.shape, self.Embed.size)
+        return hax.named(hidden, (*input_ids.axes, self.Embed)), stats
 
     def _activations(self, input_ids: NamedArray, return_routes: bool) -> tuple[NamedArray, Array | None]:
         # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
