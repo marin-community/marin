@@ -77,9 +77,12 @@ class LaunchBackend(Protocol):
     def export_terminal_policy(self, config_path: Path) -> None: ...
 
 
-def _prepared_sources(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _prepared_sources(values: list[str | dict[str, Any]]) -> list[str | dict[str, Any]]:
     prepared = []
     for value in values:
+        if isinstance(value, str):
+            prepared.append(value)
+            continue
         source = data_source(value)
         if isinstance(source, TaskTroveParquetSource):
             summary = select_task_references(source)
