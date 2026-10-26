@@ -312,13 +312,15 @@ def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, for
 
 
 @pytest.mark.timeout(2 * RUN_TIMEOUT_SECONDS)
+@pytest.mark.parametrize("step_wise", [False, True])
 def test_cat_count_rloo_n_preserves_metrics_across_resume(
-    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
 ):
     root = tmp_path / "rloo-n"
     for steps, resume in ((2, False), (4, True)):
         cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
+        cfg.trainer.step_wise_training = step_wise
         cfg.trainer.algorithm.group_advantage_min_size = 2
         cfg.trainer.train_batch_size = 5
         cfg.trainer.policy_mini_batch_size = 5
@@ -407,7 +409,12 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     tokens = sum(len(row["response_token_ids"]) for row in rows)
     assert metrics["generate/response_tokens"] == tokens
     assert metrics["generate/wall_seconds"] > 0
-    assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(tokens / metrics["generate/wall_seconds"])
+    generated_tokens = 2 * len(expected) * 8
+    assert metrics["generate/vllm/generation_tokens"] == generated_tokens
+    assert generated_tokens > tokens
+    assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
+        generated_tokens / metrics["generate/wall_seconds"]
+    )
     assert metrics["generate/vllm/num_engines"] == 1
     assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
         "graded": 8,

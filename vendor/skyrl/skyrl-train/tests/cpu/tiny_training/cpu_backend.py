@@ -427,7 +427,7 @@ class CPUInferenceEngine(InferenceEngineInterface):
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body["max_completion_tokens"],
             "logprobs": body.get("logprobs"),
-            **{key: body[key] for key in (*NEUTRAL_SAMPLING_PARAMS, "min_tokens", "stop") if key in body},
+            **{key: body[key] for key in (*NEUTRAL_SAMPLING_PARAMS, "min_tokens", "stop", "ignore_eos") if key in body},
         }
         result = await self.generate(
             InferenceEngineInput(
