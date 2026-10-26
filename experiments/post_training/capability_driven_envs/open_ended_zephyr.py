@@ -24,7 +24,7 @@ from taskforge.stage10_proposal.model import Environment, SolverMachine
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft, step_output
 from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
-from taskforge.stage_coordinator.coordinator import DECISION_FILE, STORE_DIR, VALIDATION_FILE
+from taskforge.stage_coordinator.coordinator import DECISION_FILE, FAILURES_DIR, STORE_DIR, VALIDATION_FILE
 from taskforge.stage_coordinator.event_log import EVENTS_FILE, WORKPIECES_DIR
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 from verifyit.modes.grade_judge import JudgeConnection
@@ -155,10 +155,14 @@ def _workpiece_artifacts(root: Path, workpiece_id: str) -> dict[str, object]:
         artifacts["events"] = json.loads(events.read_bytes())
     rounds = sorted((workpiece / "rounds").glob("*"))
     if rounds:
+        latest = rounds[-1]
         for key, name in (("validation", VALIDATION_FILE), ("decision", DECISION_FILE)):
-            path = rounds[-1] / name
+            path = latest / name
             if path.is_file():
                 artifacts[key] = json.loads(path.read_bytes())
+        failures = sorted((latest / FAILURES_DIR).glob("*.txt"))
+        if failures:
+            artifacts["failures"] = [{"file": path.name, "text": path.read_text()} for path in failures]
     return artifacts
 
 
