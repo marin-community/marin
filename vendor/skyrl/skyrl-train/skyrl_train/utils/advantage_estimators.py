@@ -147,6 +147,9 @@ def compute_rloo_n_outcome_advantage(
     exclude_from_baseline: Optional[np.ndarray] = None,
     group_advantage_invariant: GroupAdvantageInvariant | None = None,
     config=None,
+    *,
+    metrics: dict[str, float] | None,
+    pad_size: int,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -275,9 +278,8 @@ def compute_rloo_n_outcome_advantage(
         n_groups_all_excluded = sum(1 for group_id in set(index) if len(id2included_scores[group_id]) == 0)
         n_groups_below_min = sum(1 for group_id in set(index) if 0 < len(id2included_scores[group_id]) < min_group_size)
         n_total_groups = len(set(index))
-        metrics = kwargs.get("metrics")
         if metrics is not None:
-            metric_groups = set(index[: bsz - kwargs.get("pad_size", 0)])
+            metric_groups = set(index[: bsz - pad_size])
             metrics.update(
                 {
                     "reward/rloo_n_filtered_groups": float(
@@ -316,6 +318,9 @@ def compute_rloo_n_pbs_advantage(
     group_advantage_invariant: GroupAdvantageInvariant | None = None,
     config=None,
     token_level_shaping: Optional[torch.Tensor] = None,
+    *,
+    metrics: dict[str, float] | None,
+    pad_size: int,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Combine RLOO-N outcome advantage with potential-based token shaping.
@@ -352,6 +357,8 @@ def compute_rloo_n_pbs_advantage(
         exclude_from_baseline=exclude_from_baseline,
         group_advantage_invariant=group_advantage_invariant,
         config=config,
+        metrics=metrics,
+        pad_size=pad_size,
         **kwargs,
     )
 
