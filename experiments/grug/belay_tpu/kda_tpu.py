@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ckpt 1 KDA with source chunk preparation and a TPU state kernel.
+"""Ckpt 1 KDA with selectable preparation and a TPU state kernel.
 
 Inputs are fully device-local heads-first arrays. The model owns the enclosing
 shard_map, so batch/heads are partitioned and the sequence remains local.
-The saved FP32 states and corrected values are read directly in backward;
-neither chunk preparation nor forward recurrence is recomputed.
+Backward reads saved FP32 states and corrected values. Fused preparation also
+saves prefixes and solve factors; it rebuilds elementwise factors in VMEM.
 """
 
 import functools
@@ -16,6 +16,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from experiments.grug.belay_tpu.kda_chunk_prep import chunk_prep_midpoint
+from experiments.grug.belay_tpu.kda_fused_prep_tpu import chunk_prep_fused
 from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
 from experiments.grug.belay_tpu.kda_state_tpu import state_pass
 from experiments.grug.belay_tpu.kda_triangular_tpu import chunk_prep_solve
@@ -36,6 +37,7 @@ def chunk_kda_tpu(
     state_tile: int = 1,
     chunk_size: int = 16,
     solve_groups: int = 0,
+    fused_prep: bool = False,
     state_precision: jax.lax.Precision = jax.lax.Precision.HIGHEST,
 ) -> tuple[jax.Array, jax.Array]:
     """Evaluate packed KDA with a 128-wide saved state and bounded decay tiles."""
@@ -73,8 +75,10 @@ def chunk_kda_tpu(
     qc, kc, vc, gc = (chunks(x) for x in (q, k, v, g))
     ec = kc if erase is None else kc * chunks(padded(erase.astype(jnp.float32)))
     prepare = _chunk_prep_xla if c == 16 else chunk_prep_midpoint
+    if fused_prep and not solve_groups:
+        raise ValueError("Fused preparation requires one/four solve groups")
     if solve_groups:
-        prepare = functools.partial(chunk_prep_solve, groups=solve_groups)
+        prepare = functools.partial(chunk_prep_fused if fused_prep else chunk_prep_solve, groups=solve_groups)
     prep = prepare(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
     initial = jnp.zeros((b * h, d, d), jnp.float32)
     if initial_state is not None:

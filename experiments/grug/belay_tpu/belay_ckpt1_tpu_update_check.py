@@ -156,6 +156,7 @@ def main():
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--kda-chunk-size", type=int, choices=(16, 32, 64), default=16)
     parser.add_argument("--kda-solve-groups", type=int, choices=(0, 1, 4), default=0)
+    parser.add_argument("--kda-fused-prep", action="store_true")
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
     parser.add_argument("--route-counts", choices=("source", "factorized"), default="source")
     parser.add_argument("--capacity-layout", choices=("source", "intervals"), default="source")
@@ -189,13 +190,14 @@ def main():
     )
     args = parser.parse_args()
     state_precision = jax.lax.Precision[args.kda_state_precision.upper()]
-    if args.kda_chunk_size != 16 and not args.kda_solve_groups:
-        parser.error("Full-update larger chunks require the causal saved-solve implementation")
+    if (args.kda_chunk_size != 16 or args.kda_fused_prep) and not args.kda_solve_groups:
+        parser.error("Larger chunks and fused preparation require one/four causal saved-solve groups")
     model.chunk_kda_tpu = functools.partial(
         model.chunk_kda_tpu,
         state_precision=state_precision,
         chunk_size=args.kda_chunk_size,
         solve_groups=args.kda_solve_groups,
+        fused_prep=args.kda_fused_prep,
     )
     if args.initial_checkpoint and args.reference_step1:
         parser.error("A continuation cannot compare its first update to the initialization reference")
@@ -301,6 +303,7 @@ def main():
             "diagnostic/kda_state_precision": args.kda_state_precision,
             "diagnostic/kda_chunk_size": args.kda_chunk_size,
             "diagnostic/kda_solve_groups": args.kda_solve_groups,
+            "diagnostic/kda_fused_prep": args.kda_fused_prep,
             "diagnostic/attention_kernel": args.attention_kernel,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
@@ -312,7 +315,12 @@ def main():
     if jax.device_count() != chips or jax.default_backend() != "tpu":
         raise AssertionError("Unexpected TPU topology")
     check_muon_gram_port()
-    check_packed_kda(state_precision=state_precision, chunk_size=args.kda_chunk_size, solve_groups=args.kda_solve_groups)
+    check_packed_kda(
+        state_precision=state_precision,
+        chunk_size=args.kda_chunk_size,
+        solve_groups=args.kda_solve_groups,
+        fused_prep=args.kda_fused_prep,
+    )
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
     checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-after-first-update"
     output = Path(os.environ["IRIS_OUTPUT_DIR"])

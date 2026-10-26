@@ -13,6 +13,7 @@ import jax.scipy as jsp
 import numpy as np
 import pytest
 
+from experiments.grug.belay_tpu.kda_fused_prep_tpu import chunk_prep_fused
 from experiments.grug.belay_tpu.kda_triangular_tpu import chunk_prep_solve, solve_unit_lower
 from experiments.grug.belay_tpu.kernel_check import evaluate, measure_errors
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
@@ -43,11 +44,12 @@ def test_saved_solve_values_and_gradients(chunk, repeated):
     assert all(row["normalized_max"] <= 1 for row in deviations), json.dumps(deviations)
 
 
+@pytest.mark.parametrize("prepare", [chunk_prep_solve, chunk_prep_fused], ids=["saved_solve", "fused_prep"])
 @pytest.mark.parametrize("chunk", [16, 32, 64])
 @pytest.mark.parametrize("case", ["packed", "strong_packed", "weak_long"])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.timeout(180)
-def test_saved_solve_kda_recurrence_and_gradients(chunk, case, dtype, request):
+def test_saved_solve_kda_recurrence_and_gradients(prepare, chunk, case, dtype, request):
     if dtype == jnp.bfloat16 and case == "weak_long" and chunk > 16:
         request.applymarker(
             pytest.mark.xfail(
@@ -76,17 +78,18 @@ def test_saved_solve_kda_recurrence_and_gradients(chunk, case, dtype, request):
     candidate = functools.partial(chunk_kda, chunk_size=chunk, matmul_dtype=dtype)
     with jax.default_matmul_precision("highest"):
         expected = jax.jit(functools.partial(evaluate, reference))(inputs, segments, cotangents)
-        with patch("experiments.grug.moe.kda._chunk_prep_xla", functools.partial(chunk_prep_solve, interpret=True)):
+        with patch("experiments.grug.moe.kda._chunk_prep_xla", functools.partial(prepare, interpret=True)):
             function = jax.jit(functools.partial(evaluate, candidate)).lower(inputs, segments, cotangents).compile()
         actual = function(inputs, segments, cotangents)
     deviations = measure_errors(actual, expected, 1e-4 if dtype == jnp.float32 else 2e-2)
     assert all(row["normalized_max"] <= 1 for row in deviations), json.dumps(deviations)
 
 
+@pytest.mark.parametrize("prepare", [chunk_prep_solve, chunk_prep_fused], ids=["saved_solve", "fused_prep"])
 @pytest.mark.parametrize("chunk", [32, 64])
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.timeout(180)
-def test_saved_solve_preserves_prefix_and_document_independence(chunk, dtype):
+def test_saved_solve_preserves_prefix_and_document_independence(prepare, chunk, dtype):
     rng = np.random.default_rng(429)
     shape = (1, 2, 129, 128)
     q, k, v = (jnp.asarray(rng.normal(size=shape), dtype) for _ in range(3))
@@ -103,7 +106,7 @@ def test_saved_solve_preserves_prefix_and_document_independence(chunk, dtype):
 
     inputs = (q, k, v, g, beta)
     with jax.default_matmul_precision("highest"):
-        with patch("experiments.grug.moe.kda._chunk_prep_xla", functools.partial(chunk_prep_solve, interpret=True)):
+        with patch("experiments.grug.moe.kda._chunk_prep_xla", functools.partial(prepare, interpret=True)):
             function = jax.jit(forward).lower(*inputs).compile()
             gradient = jax.jit(derivative).lower(*inputs).compile()
     expected = np.asarray(function(*inputs))

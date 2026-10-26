@@ -35,8 +35,7 @@ def _transpose(value):
     return jnp.swapaxes(value, -1, -2)
 
 
-def _forward(ar, br, yr, tr, *, dtype):
-    a, rhs = ar[...], br[...]
+def _inverse(a, dtype):
     c = a.shape[-1]
     row = jax.lax.broadcasted_iota(jnp.int32, a.shape, 1)
     col = jax.lax.broadcasted_iota(jnp.int32, a.shape, 2)
@@ -45,12 +44,16 @@ def _forward(ar, br, yr, tr, *, dtype):
         size = 1 << level
         mask = (row // (2 * size) == col // (2 * size)) & (row // size % 2 == 1) & (col // size % 2 == 0)
         inverse += _product(_product(inverse, jnp.where(mask, a, 0.0), dtype), inverse, dtype)
-    yr[...] = _product(inverse, rhs, dtype)
+    return inverse
+
+
+def _forward(ar, br, yr, tr, *, dtype):
+    inverse = _inverse(ar[...], dtype)
+    yr[...] = _product(inverse, br[...], dtype)
     tr[...] = inverse
 
 
-def _backward(tr, yr, dyr, dar, dbr, *, dtype):
-    inverse, solution, dy = tr[...], yr[...], dyr[...]
+def _solve_gradients(inverse, solution, dy, dtype):
     precision = jax.lax.Precision.HIGHEST if dtype == jnp.float32 else jax.lax.Precision.HIGH
 
     def dot(x, y):
@@ -62,7 +65,12 @@ def _backward(tr, yr, dyr, dar, dbr, *, dtype):
     da = dot(db, _transpose(solution))
     row = jax.lax.broadcasted_iota(jnp.int32, da.shape, 1)
     col = jax.lax.broadcasted_iota(jnp.int32, da.shape, 2)
-    dar[...] = jnp.where(row > col, da, 0.0)
+    return jnp.where(row > col, da, 0.0), db
+
+
+def _backward(tr, yr, dyr, dar, dbr, *, dtype):
+    da, db = _solve_gradients(tr[...], yr[...], dyr[...], dtype)
+    dar[...] = da
     dbr[...] = db
 
 
@@ -135,19 +143,10 @@ def solve_unit_lower(a, rhs, *, dtype=jnp.bfloat16, groups=4, interpret=False):
     return _solve(a, rhs, dtype, groups, interpret)[:count]
 
 
-def chunk_prep_solve(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks, *, groups=4, interpret=False):
-    """KDA adapter with causal 16-token factors and a saved fused solve.
-
-    C16 retains its existing factors. C32/64 use the first gate of each
-    subblock with a fixed offset, avoiding data-dependent future anchors.
-    Remaining gate/mask/attention derivatives use standard AD.
-    """
-    if c not in (16, 32, 64):
-        raise ValueError("The bounded solve adapter supports C16/32/64")
+def _prep_factors(qc, kc, ec, vc, cumulative, bc, mm, c, masks):
     lower = jnp.tril(jnp.ones((c, c), dtype=bool))
     if masks is not None:
         lower = lower & masks.same
-    cumulative = jnp.einsum("...tj,...jd->...td", lower.astype(jnp.float32), gc, precision=jax.lax.Precision.HIGHEST)
     inflate = jnp.exp(cumulative)
     qi = qc * inflate
     beta_keys = ec * bc[..., None]
@@ -165,22 +164,24 @@ def chunk_prep_solve(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks, *, groups=4
             row_anchor = jnp.broadcast_to(anchor, cumulative[..., start:stop, :].shape)
             col_anchor = jnp.broadcast_to(anchor, cumulative[..., :stop, :].shape)
             if masks is not None:
-                row_anchor = jnp.where(masks.same[..., start:stop, start, None], row_anchor, 0.0)
-                col_anchor = jnp.where(masks.same[..., start, :stop, None], col_anchor, 0.0)
-                eligible = jnp.any(masks.same[..., start:stop, :stop], axis=-2)
+                row_anchor = jnp.where(masks.same[..., start:stop, start : start + 1], row_anchor, 0.0)
+                col_anchor = jnp.where(jnp.swapaxes(masks.same[..., start : start + 1, :stop], -1, -2), col_anchor, 0.0)
+                eligible = jnp.swapaxes(jnp.any(masks.same[..., start:stop, :stop], axis=-2, keepdims=True), -1, -2)
             else:
-                eligible = jnp.ones(cumulative[..., :stop, 0].shape, dtype=bool)
+                eligible = jnp.ones(cumulative[..., :stop, :1].shape, dtype=bool)
             row_factor = jnp.exp(cumulative[..., start:stop, :] - row_anchor + 15.0)
             # Exclude older documents before exponentiation; their prefixes
             # may be arbitrarily far from the current document's zero anchor.
-            col_exponent = jnp.where(eligible[..., None], col_anchor - cumulative[..., :stop, :] - 15.0, 0.0)
+            col_exponent = jnp.where(eligible, col_anchor - cumulative[..., :stop, :] - 15.0, 0.0)
             columns = kc[..., :stop, :] * jnp.exp(col_exponent)
             ar = -mm("...rd,...id->...ri", beta_keys[..., start:stop, :] * row_factor, columns)
             qr = mm("...rd,...id->...ri", qc[..., start:stop, :] * row_factor, columns)
-            padding = [(0, 0)] * ar.ndim
-            padding[-1] = (0, c - stop)
-            a_rows.append(jnp.pad(ar, padding))
-            attention_rows.append(jnp.pad(qr, padding))
+            if stop < c:
+                zeros = jnp.zeros((*ar.shape[:-1], c - stop), ar.dtype)
+                ar = jnp.concatenate((ar, zeros), axis=-1)
+                qr = jnp.concatenate((qr, zeros), axis=-1)
+            a_rows.append(ar)
+            attention_rows.append(qr)
         a_raw = jnp.concatenate(a_rows, axis=-2)
         attention_raw = jnp.concatenate(attention_rows, axis=-2)
     a = jnp.where(strict, a_raw, 0.0)
@@ -194,6 +195,23 @@ def chunk_prep_solve(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks, *, groups=4
         kw = kw * masks.last_doc[..., None]
         decay = decay * masks.carry_through[..., None]
     rhs = jnp.concatenate((vc * bc[..., None], state_keys), axis=-1)
+    return qi, attention, kw, decay, a, rhs
+
+
+def chunk_prep_solve(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks, *, groups=4, interpret=False):
+    """KDA adapter with causal 16-token factors and a saved fused solve.
+
+    C16 retains its existing factors. C32/64 use the first gate of each
+    subblock with a fixed offset, avoiding data-dependent future anchors.
+    Remaining gate/mask/attention derivatives use standard AD.
+    """
+    if c not in (16, 32, 64):
+        raise ValueError("The bounded solve adapter supports C16/32/64")
+    lower = jnp.tril(jnp.ones((c, c), dtype=bool))
+    if masks is not None:
+        lower = lower & masks.same
+    cumulative = jnp.einsum("...tj,...jd->...td", lower.astype(jnp.float32), gc, precision=jax.lax.Precision.HIGHEST)
+    qi, attention, kw, decay, a, rhs = _prep_factors(qc, kc, ec, vc, cumulative, bc, mm, c, masks)
     solved = solve_unit_lower(
         a.reshape(-1, c, c), rhs.reshape(-1, c, rhs.shape[-1]), dtype=mm_dtype, groups=groups, interpret=interpret
     ).reshape(rhs.shape)
