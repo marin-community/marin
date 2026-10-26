@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager, nullcontext
-from dataclasses import replace, dataclass
+from dataclasses import replace
 import io as stdlib_io
 import json
 import math
@@ -9,7 +9,8 @@ import os
 import shutil
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Callable, Any, Dict, List, Optional, Tuple, Union
 from jaxtyping import Float
 
 import ray
@@ -26,7 +27,7 @@ import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch, dump_training_batch
-from skyrl_train.rollouts.buffer import RolloutGroup, RowFacts
+from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
@@ -35,16 +36,12 @@ from skyrl_train.trajectory_runners.base import (
 )
 import copy
 
-from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches, token_reward_rows
+from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
-from skyrl_train.distillation_adapters import (
-    AsyncRoutedTeacherScoreTicket,
-    RoutedScoredDistillationBatch,
-    collate_student_selected_rollout,
-)
+from skyrl_train.distillation_adapters import AsyncRoutedTeacherScoreTicket, RoutedScoredDistillationBatch
 from skyrl_train.distillation_runtime import DistillationRuntime
 from skyrl_train.teacher_routing import route_row_metrics
 from skyrl_train.domain_gradient_balance import DomainGradientBalancer
@@ -55,13 +52,8 @@ from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
 
-from skyrl_train.utils.advantage_estimators import (
-    compute_advantages_and_returns,
-    apply_loop_advantages,
-    batch_advantages,
-    drop_advantage_inputs,
-)
-from marinskyrl.runtime_options import PolicyLossType, reference_model_required, WeightSyncTransport
+from skyrl_train.utils.advantage_estimators import compute_advantages_and_returns
+from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
     DistillationRewardMode,
@@ -77,10 +69,8 @@ from skyrl_train.closure_training import (
     mixed_boundary_modes,
 )
 from skyrl_train.ftpo import select_ftpo_candidates
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
-    parse_trajectory_reward_shaping_config,
-    refresh_trajectory_reward_shaping_metrics,
-)
+from skyrl_train.distillation_adapters import collate_student_selected_rollout
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.distributed.dispatch import (
     ActorInfo,
     MeshRank,
@@ -107,8 +97,6 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
-    POLICY_CHECKPOINT_SUBDIRECTORY,
-    policy_export_path,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -143,7 +131,6 @@ from skyrl_train.telemetry import (
     record_event,
     record_policy_step,
     record_training_metrics,
-    record_consumed_staleness,
 )
 from skyrl_train.rollout_observability import async_phase_window, monitor_event_loop_lag
 
@@ -153,6 +140,8 @@ from skyrl_train.hf_export import (
     read_hf_export_request,
     write_hf_export_request,
 )
+from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
+from marinskyrl.runtime_options import WeightSyncTransport
 from skyrl_train.utils.logging_utils import log_exception_as_text
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
 from skyrl_train.hf_export_schema import (
@@ -163,6 +152,9 @@ from skyrl_train.hf_export_schema import (
     HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import refresh_trajectory_reward_shaping_metrics
+from marinskyrl.runtime_options import BatchBuilder
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
 from skyrl_train.batch_metrics import (
     consumed_work,
     install_correction,
@@ -173,8 +165,20 @@ from skyrl_train.batch_metrics import (
     rollout_staleness_metrics,
     token_staleness_metrics,
 )
-from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
+from skyrl_train.batch_source import (
+    BatchSource,
+    BatchSummary,
+    WorkerBatchSource,
+    batch_lifetime,
+    require_worker_batch_support,
+)
+from skyrl_train.batch_verification import VerifyBatchSource
+from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.telemetry import record_consumed_staleness
+from skyrl_train.trajectory_runners.trajectory_processing import token_reward_rows
 from skyrl_train.trajectory_runners.types import BatchFields
+from skyrl_train.utils.advantage_estimators import apply_loop_advantages, batch_advantages, drop_advantage_inputs
+from skyrl_train.utils.importance_ratio_diagnostics import LocalReduction
 
 
 @dataclass(frozen=True)
@@ -238,7 +242,13 @@ class DriverBatchSource:
         if scored is not None:
             self.trainer._attach_teacher_evidence(batch, scored)
         self.batch = batch
-        self.trainer._log_rollout_batch_completed(self.groups, duration_seconds=self.wait_duration)
+        responses = [response for group in self.groups for response in group.trajectory_batch["response_ids"]]
+        self.trainer._log_rollout_batch_completed(
+            groups=len(self.groups),
+            sequences=len(responses),
+            response_tokens=sum(map(len, responses)),
+            duration_seconds=self.wait_duration,
+        )
 
     @property
     def empty(self) -> bool:
@@ -267,7 +277,9 @@ class DriverBatchSource:
                 raise ValueError("distillation reward_mode=replace requires teacher evidence on every training batch")
             training_input["loss_mask"] = training_input["loss_mask"] * training_input["teacher_valid_mask"]
 
-        self.trainer.all_metrics.update(install_correction(training_input, self.trainer.cfg.trainer.algorithm))
+        self.trainer.all_metrics.update(
+            install_correction(training_input, self.trainer.cfg.trainer.algorithm, reduction=LocalReduction())
+        )
 
         if self.trainer.cfg.trainer.algorithm.use_kl_in_reward:
             with Timer("apply_reward_kl_penalty", self.trainer.all_timings):
@@ -281,6 +293,14 @@ class DriverBatchSource:
             training_input = self.trainer.finalize_advantages_for_training(training_input)
 
         self.batch = training_input
+
+    def summary(self) -> BatchSummary:
+        return BatchSummary(
+            consumed_work(self.batch),
+            self.batch.metadata["consumed_stop_metrics"],
+            tuple(self.trainer._current_step_rewards),
+            self.batch.batch_size,
+        )
 
     async def train(self, *, step_wall: StepWallTime | None) -> dict:
         if self.empty:
@@ -307,6 +327,11 @@ class DriverBatchSource:
             status = await asyncio.to_thread(self.trainer.train_critic_and_policy, training_input)
         self.trainer._finish_policy_update(status)
         return status
+
+    async def release(self, error: BaseException | None = None) -> None:
+        self.batch = None
+        self.groups = []
+        self.metadata = None
 
 
 class RayPPOTrainer:
@@ -341,6 +366,9 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        self.batch_builder = BatchBuilder(cfg.trainer.batch_builder)
+        if self.batch_builder is not BatchBuilder.DRIVER:
+            require_worker_batch_support(cfg)
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -1269,17 +1297,17 @@ class RayPPOTrainer:
         self,
         *,
         epoch: int,
-        training_input: TrainingInputBatch,
+        summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
-        self.all_metrics.update(training_input.metadata["consumed_stop_metrics"])
+        self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
-            record_consumed_work(consumed_work(training_input), step=self.global_step)
+            record_consumed_work(summary.work, step=self.global_step)
         logger.info(
             "Optimizer step completed: step={} epoch={} sequences={} duration_seconds={:.3f}",
             self.global_step,
             epoch,
-            len(training_input["sequences"]),
+            summary.batch_size,
             duration_seconds,
         )
 
@@ -1460,13 +1488,13 @@ class RayPPOTrainer:
         )
 
     def _update_step_performance_metrics(
-        self, training_input: TrainingInputBatch, *, core_seconds: float, cycle_started: float
+        self, summary: BatchSummary, *, core_seconds: float, cycle_started: float
     ) -> None:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
         generator = self.cfg.generator
-        consumed = consumed_work(training_input)
+        consumed = summary.work
         self.all_metrics.update(
             async_step_metrics(
                 core_seconds=core_seconds,
@@ -1491,41 +1519,44 @@ class RayPPOTrainer:
         await self._begin_speculator_capture(step)
         await self.context.publish(step)
 
-    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> TrainingInputBatch:
-        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return its training input."""
-        source = DriverBatchSource(self)
-        step_wall.start("group_admission")
-        logger.info(
-            "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
-        )
-        with (
-            critical_phase("rollout_or_inference_wait", self.global_step),
-            async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
-        ):
-            selection_metrics = await source.admit(
-                stall_timeout=admission_stall_timeout(
-                    recent_step_times=self._step_time_history,
-                    timeout_override=self.group_admission_stall_timeout,
-                ),
+    async def _train_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
+        """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return its work summary."""
+        source = make_batch_source(self)
+        async with batch_lifetime(source):
+            step_wall.start("group_admission")
+            logger.info(
+                "Rollout batch started: step={} required_groups={}", self.global_step, self.context.config.batch_size
             )
-        self.all_metrics.update(selection_metrics)
-        await self._seal_speculator_capture()
-        await self._start_speculator_update()
-        if self.colocate_all:
-            # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
-            await self.inference_engine_client.sleep()
+            with (
+                critical_phase("rollout_or_inference_wait", self.global_step),
+                async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
+            ):
+                selection_metrics = await source.admit(
+                    stall_timeout=admission_stall_timeout(
+                        recent_step_times=self._step_time_history,
+                        timeout_override=self.group_admission_stall_timeout,
+                    ),
+                )
+            self.all_metrics.update(selection_metrics)
+            await self._seal_speculator_capture()
+            await self._start_speculator_update()
+            if self.colocate_all:
+                # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
+                await self.inference_engine_client.sleep()
 
-        await source.prepare(global_step=self.global_step, step_wall=step_wall)
-        step_wall.start("training_preparation")
-        with (
-            Timer("run_training", self.all_timings),
-            async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
-        ):
-            status = await self._run_training(source, step_wall=step_wall)
+            await source.prepare(global_step=self.global_step, step_wall=step_wall)
+            step_wall.start("training_preparation")
+            with (
+                Timer("run_training", self.all_timings),
+                async_phase_window("training", step=self.global_step, enabled=self._rollout_spans_enabled),
+            ):
+                status = await self._run_training(source, step_wall=step_wall)
+            summary = source.summary()
+            self._current_step_rewards = list(summary.callback_rewards)
         step_wall.start("group_bookkeeping")
         self._log_optimizer_step_completed(
             epoch=epoch,
-            training_input=source.batch,
+            summary=summary,
             duration_seconds=self.all_timings["train_critic_and_policy"],
         )
 
@@ -1536,7 +1567,7 @@ class RayPPOTrainer:
 
         logger.info(status)
         self.all_metrics.update({"trainer/epoch": epoch, "trainer/global_step": self.global_step})
-        return source.batch
+        return summary
 
     def _attach_teacher_evidence(
         self, training_input: TrainingInputBatch, scored_distillation: tuple[RoutedScoredDistillationBatch, ...]
@@ -1556,15 +1587,16 @@ class RayPPOTrainer:
             }
         )
 
-    def _log_rollout_batch_completed(self, groups: List[RolloutGroup], *, duration_seconds: float) -> None:
-        response_ids = [response for group in groups for response in group.trajectory_batch["response_ids"]]
+    def _log_rollout_batch_completed(
+        self, *, groups: int, sequences: int, response_tokens: int, duration_seconds: float
+    ) -> None:
         logger.info(
             "Rollout batch completed: step={} groups={} trajectories={} response_tokens={} staleness_mean={:.3f} "
             "staleness_max={} duration_seconds={:.3f}",
             self.global_step,
-            len(groups),
-            len(response_ids),
-            sum(len(response) for response in response_ids),
+            groups,
+            sequences,
+            response_tokens,
             self.all_metrics["async/staleness_mean"],
             self.all_metrics["async/staleness_max"],
             duration_seconds,
@@ -1622,7 +1654,7 @@ class RayPPOTrainer:
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
-    async def _run_training(self, source: DriverBatchSource, *, step_wall: StepWallTime | None = None):
+    async def _run_training(self, source: BatchSource, *, step_wall: StepWallTime | None = None):
         await source.forward()
         await source.finalize(step_wall=step_wall)
         return await source.train(step_wall=step_wall)
@@ -2091,6 +2123,7 @@ class RayPPOTrainer:
         if routed_experts is None:
             fields = fields.without_routes()
         plan = BatchPlan(
+            batch_id=self.global_step,
             global_step=self.global_step,
             uids=tuple(uids),
             facts=facts,
@@ -2107,7 +2140,9 @@ class RayPPOTrainer:
         )
         if self._training_metrics_enabled:
             self.all_metrics.update(
-                token_staleness_metrics(training_input, facts if rollout_staleness is not None else ())
+                token_staleness_metrics(
+                    training_input, facts if rollout_staleness is not None else (), reduction=LocalReduction()
+                )
             )
         rollout_staleness_tensor = training_input["rollout_staleness"]
         prompt_ids = trajectory_batch["prompt_token_ids"]
@@ -2450,6 +2485,7 @@ class RayPPOTrainer:
             advantage_metrics(
                 data,
                 algorithm=self.cfg.trainer.algorithm,
+                reduction=LocalReduction(),
                 step_wise=self.cfg.trainer.step_wise_training,
             )
         )
@@ -2672,6 +2708,7 @@ class RayPPOTrainer:
             training_input,
             staleness=training_input.pop("rollout_staleness"),
             algorithm=self.cfg.trainer.algorithm,
+            reduction=LocalReduction(),
             training_metrics_enabled=self._training_metrics_enabled,
             rollout_logprobs_enabled=self.cfg.generator.sampling_params.logprobs is not None,
         )
@@ -2757,6 +2794,12 @@ class RayPPOTrainer:
         Run the training step for the policy and critic models (this is overlapped if colocate_all is False).
         """
         data.metadata["global_step"] = self.global_step
+        if not self.colocate_all and self.critic_model is None:
+            status, cache_refs = self._train_policy(
+                lambda: self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
+            )
+            ray.get(cache_refs)
+            return status
         if self.colocate_all:
             if self.critic_model is not None:
                 with Timer("critic_train", self.all_timings):
@@ -2791,14 +2834,6 @@ class RayPPOTrainer:
                     )
                     policy_statuses = all_statuses[: len(policy_refs)]
                     critic_statuses = all_statuses[len(policy_refs) :]
-            else:
-                with Timer("policy_train", self.all_timings):
-                    policy_refs = self.policy_model.async_run_ray_method("mesh", "ppo_train", data)
-                    policy_statuses = collect_actor_results(
-                        self.policy_model.actor_infos,
-                        policy_refs,
-                        operation="policy ppo_train",
-                    )
 
         empty_cache_refs = []
         if self.critic_model is not None:
@@ -2814,6 +2849,16 @@ class RayPPOTrainer:
         ray.get(empty_cache_refs)
 
         return policy_status
+
+    def _train_policy(self, dispatch: Callable[[], List[ObjectRef]]) -> tuple[dict, List[ObjectRef]]:
+        if self.cfg.trainer.offload_optimizer_during_rollouts:
+            with Timer("backload_policy_optimizer_to_gpu", self.all_timings):
+                self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=False)
+        with Timer("policy_train", self.all_timings):
+            outputs = collect_actor_results(self.policy_model.actor_infos, dispatch(), operation="policy training")
+        status = outputs[0].metadata["train_status"]
+        self.all_metrics.update({f"policy/{key}": value for key, value in status.items()})
+        return status, self.policy_model.async_run_ray_method("pass_through", "empty_cache")
 
     def _get_dp_group_models(self, rank: int, model_type: str = ""):
         model = getattr(self, model_type)
@@ -3202,3 +3247,24 @@ class RayPPOTrainer:
             logger.warning(f"Failed to clean up temporary policy export directory {policy_export_dir}: {e}")
 
         logger.info("Successfully update ref model with policy model, training continue.")
+
+
+def make_batch_source(trainer: RayPPOTrainer) -> BatchSource:
+    """Select the configured batch lifetime."""
+    mode = trainer.batch_builder
+    if mode is BatchBuilder.DRIVER:
+        return DriverBatchSource(trainer)
+    worker = WorkerBatchSource(
+        context=trainer.context,
+        policy=trainer.policy_model,
+        cfg=trainer.cfg,
+        pad_token_id=trainer.tokenizer.pad_token_id,
+        num_experts=trainer._resolve_num_experts() if moe_router_replay_requested(trainer.cfg) else None,
+        metrics=trainer.all_metrics,
+        timings=trainer.all_timings,
+        drain_policy=trainer._drain_policy_event_loops,
+        train_policy=trainer._train_policy,
+        finish_update=trainer._finish_policy_update,
+        log_batch=trainer._log_rollout_batch_completed,
+    )
+    return worker if mode == BatchBuilder.WORKER else VerifyBatchSource(worker)

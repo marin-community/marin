@@ -74,6 +74,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrl_train.training_batch import TrainingInputBatch
 
 
 class _MegatronInitMode(StrEnum):
@@ -372,6 +373,26 @@ class MegatronWorker:
 
 
 class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        """Give every pipeline stage the last stage's response logprobs."""
+        scores = self.forward(data)["output"]
+        if self.mesh_rank.pp_size == 1:
+            return scores
+        shape = (data.batch_size, data.metadata["response_length"])
+        device = self.strategy.collective_device()
+        if mpu.is_pipeline_last_stage(ignore_virtual=True):
+            scores = scores.to(device)
+            if scores.dtype != torch.float32 or tuple(scores.shape) != shape:
+                raise ValueError("worker pipeline forward requires float32 response scores with the global width")
+        else:
+            scores = torch.empty(shape, dtype=torch.float32, device=device)
+        torch.distributed.broadcast(
+            scores,
+            src=mpu.get_pipeline_model_parallel_last_rank(),
+            group=mpu.get_pipeline_model_parallel_group(),
+        )
+        return scores.cpu()
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.model: MegatronModelWrapper = None
