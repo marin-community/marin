@@ -17,6 +17,8 @@ backend-state queries, frozen-input loader, audits, HF loader, distributed initi
 patched on the valid path. Iris task environment variables drive Levanter's normal initializer. The sensitivity
 arm deliberately inserts a real gather before that initializer. Four processes expose eight CPU devices each;
 the optimizer and mask are not stubbed. The ordinary startup arm runs no optimizer update.
+Negative slice-binding arms alter only the receipt supplied to the loaded-model check, or the HF loader's
+returned serialization mapping; initialization, mask resolution and the production refusal checks stay real.
 """
 
 import base64
@@ -27,6 +29,7 @@ import os
 import socket
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +46,7 @@ from iris.client.client import IrisContext, iris_ctx_scope
 from jax._src import xla_bridge
 from jax.sharding import Mesh
 from levanter import trainer as trainer_module
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
@@ -325,6 +329,30 @@ def child(root, rank, port, mode):
             return replace(config, data=data, trainer=trainer)
 
         patch.setattr(sft_launch, "sft_config", config_factory)
+        if mode == "bad_slice_names":
+            run_identity = sft_launch.run_identity_sft
+
+            def damaged_slice(config, **kwargs):
+                receipt = deepcopy(kwargs["runtime_receipt"])
+                receipt["update_policy"]["physical_names"][0] += ".wrong"
+                return run_identity(config, **(kwargs | {"runtime_receipt": receipt}))
+
+            patch.setattr(sft_launch, "run_identity_sft", damaged_slice)
+        if mode == "missing_projection":
+            load_pretrained = HFCheckpointConverter.load_pretrained
+            serialize = SnowballLMHeadModel.to_state_dict
+
+            def missing_projection(model, prefix=None):
+                values = serialize(model, prefix)
+                values.pop(HF_NAMES[0], None)
+                return values
+
+            def damaged_hf_load(converter, *args, **kwargs):
+                model = load_pretrained(converter, *args, **kwargs)
+                patch.setattr(SnowballLMHeadModel, "to_state_dict", missing_projection)
+                return model
+
+            patch.setattr(HFCheckpointConverter, "load_pretrained", damaged_hf_load)
         if mode == "early_gather":
             initialize = sft_launch.initialize
 
@@ -556,6 +584,22 @@ def test_sft_startup_rejects_a_collective_before_code_owned_distributed_init(tmp
     for code, _, error in results:
         assert code != 0 and "jax.distributed.initialize() must be called before any JAX calls" in error
     assert not (tmp_path / "run/sft-result.json").exists()
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "mode,message",
+    [
+        ("bad_slice_names", "differs from the reviewed physical/HF names"),
+        ("missing_projection", "lacks the reviewed HF projection weights"),
+    ],
+)
+def test_loaded_model_slice_refusals_precede_optimizer_initialization(tmp_path, mode, message):
+    write_fixture(tmp_path)
+    results = run_children(tmp_path, workdir=Path.cwd(), mode=mode)
+    for code, _, error in results:
+        assert code != 0 and message in error, error[-8000:]
+    assert not (tmp_path / "run/audits/master-step-0.json").exists()
 
 
 @pytest.mark.timeout(900)

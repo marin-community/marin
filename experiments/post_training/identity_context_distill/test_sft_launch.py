@@ -135,7 +135,7 @@ def frozen(monkeypatch, data_bytes: bytes) -> bytes:
     return data_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes, data_bytes, learning_rate):
+def run_worker(monkeypatch, receipt_bytes, data_bytes, learning_rate, result_factory=None, result_sink=None):
     calls: dict = {"writer": 0}
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {receipt_sha})
@@ -146,14 +146,19 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes, learning_rate):
 
     def run(config, **kwargs):
         calls["config"], calls["kwargs"] = config, kwargs
+        if result_factory is not None:
+            return result_factory()
         return {"completed_updates": 16}
 
     monkeypatch.setattr(sft_launch, "StoragePath", lambda path: _Remote(str(path)))
     monkeypatch.setattr(sft_launch, "check_pod_storage", lambda: None)
     monkeypatch.setattr(sft_launch, "run_on_export_writer", writer)
-    monkeypatch.setattr(
-        sft_launch, "write_export_json", lambda path, value: calls.setdefault("result", (path.path, value))
-    )
+    if result_sink is None:
+
+        def result_sink(path, value):
+            return calls.setdefault("result", (path.path, value))
+
+    monkeypatch.setattr(sft_launch, "write_export_json", result_sink)
     monkeypatch.setattr(sft_launch, "run_identity_sft", run)
     audits = sft_launch.SftAudits(lambda it, config: (it, {}), lambda batch, update: {}, lambda state, path: None)
     sft_launch.sft_worker(
@@ -591,6 +596,23 @@ def test_sft_refuses_unreviewed_or_changed_runtime_receipts(monkeypatch):
     assert sft_launch.sft_runtime_receipt(receipt_bytes, digest)["schema_version"] == 7
 
 
+@pytest.mark.parametrize(
+    "damage,message",
+    [("base", "reviewed base forward receipt"), ("schema", "Not a restricted attention update receipt")],
+)
+def test_allowed_receipt_digest_does_not_bypass_schema_or_base_binding(monkeypatch, damage, message):
+    receipt = json.loads(fixture(monkeypatch))
+    if damage == "base":
+        receipt["update_policy"]["base_receipt_sha256"] = "0" * 64
+    else:
+        receipt = base_runtime_receipt(receipt)
+    contents = json.dumps(receipt).encode()
+    digest = hashlib.sha256(contents).hexdigest()
+    monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {digest})
+    with pytest.raises(ValueError, match=message):
+        sft_launch.sft_runtime_receipt(contents, digest)
+
+
 def test_submit_requires_the_precision_setting_before_any_job_access():
     missing_precision = partial(sft_launch.submit_entrypoint, "job", object(), 7200, "production")
     with pytest.raises(TypeError, match="xla_precision"):
@@ -648,7 +670,7 @@ def test_lr0_submit_keeps_route_policy_and_precision_through_shared_helper(monke
 
 @pytest.mark.parametrize("outside_changed", [False, True])
 def test_weight_delta_binding_is_fatal_before_a_result_receipt(tmp_path, monkeypatch, outside_changed):
-    """Only the source-receipt digest is replaced for this synthetic 502-tensor metadata fixture."""
+    """Drive the real worker's result write; model execution and storage are fixture boundaries."""
     selected = set(weight_delta_audit.slice_names("18-23", "q,k,v,o"))
     names = selected | {f"frozen.{index}" for index in range(478)}
     source = {name: {"native_sha256": "a" * 64, "master_sha256": "b" * 64} for name in names}
@@ -668,12 +690,48 @@ def test_weight_delta_binding_is_fatal_before_a_result_receipt(tmp_path, monkeyp
     export.mkdir()
     (export / "trained-precision-audit.json").write_text(json.dumps(trained))
     run = tmp_path / "run"
+    receipt_bytes = fixture(
+        monkeypatch, router_combine_fp32=True, fp32_activations=True, attention_implementation="torch_order"
+    )
+    _, evidence = inputs()
+    _FILES.update(
+        {
+            "config.json": evidence["config_bytes"],
+            "generation_config.json": evidence["generation_bytes"],
+            "routing.json": evidence["rounding_bytes"],
+        }
+    )
+    data_bytes = frozen(monkeypatch, data_config())
+    path_type = sft_launch.StoragePath
+    write_json = sft_launch.write_export_json
+    events = []
+
+    def completed_run():
+        with monkeypatch.context() as audit_context:
+            audit_context.setattr(sft_launch, "StoragePath", path_type)
+            audit_context.setattr(sft_launch, "write_export_json", write_json)
+            binding = sft_launch.write_weight_delta(str(run), str(export), source_bytes)
+        events.append("audit-passed")
+        return {"completed_updates": 16, "weight_delta_audit": binding}
+
+    def result_sink(path, value):
+        events.append("result-written")
+        (tmp_path / "sft-result.json").write_text(json.dumps(value))
+
+    def invoke_worker():
+        with monkeypatch.context() as worker_context:
+            return run_worker(worker_context, receipt_bytes, data_bytes, 2e-6, completed_run, result_sink)
+
     if outside_changed:
         with pytest.raises(ValueError, match=r"frozen\.0: frozen tensor changed"):
-            sft_launch.write_weight_delta(str(run), str(export), source_bytes)
+            invoke_worker()
+        assert events == [] and not (tmp_path / "sft-result.json").exists()
         assert not run.exists()
         return
-    binding = sft_launch.write_weight_delta(str(run), str(export), source_bytes)
+    invoke_worker()
+    assert events == ["audit-passed", "result-written"]
+    result = json.loads((tmp_path / "sft-result.json").read_bytes())
+    binding = result["weight_delta_audit"]
     contents = (run / "audits/weight-delta.json").read_bytes()
     assert binding == {
         "path": str(run / "audits/weight-delta.json"),
@@ -683,4 +741,3 @@ def test_weight_delta_binding_is_fatal_before_a_result_receipt(tmp_path, monkeyp
     summary = json.loads(contents)
     assert summary["frozen_equal"] == 478 and summary["slice_master_changed"] == 24
     assert summary["slice_export_unchanged"] == sorted(selected)
-    assert not (run / "sft-result.json").exists()
