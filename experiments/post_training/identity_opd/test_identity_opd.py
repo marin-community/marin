@@ -254,8 +254,8 @@ def test_identity_teacher_sees_the_template_system_message_on_plain_and_tool_row
     assert rest.startswith("<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball")
 
 
-def _composed_trainer(arm, tmp_path):
-    """The arm's ``skyrl.trainer`` as the coordinator's launcher composes it (``load_launch_config``)."""
+def _composed_skyrl(arm, tmp_path):
+    """The arm's ``skyrl`` config as the coordinator's launcher composes it (``load_launch_config``)."""
     launch_config = pytest.importorskip("cloud.iris.launch_config")
     spec = SimpleNamespace(
         config_yaml=launch.recipe(arm),
@@ -305,13 +305,16 @@ def _composed_trainer(arm, tmp_path):
         ),
     )
     (tmp_path / "launch.yaml").write_text(text)
-    return launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl.trainer
+    return launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl
 
 
 @pytest.mark.parametrize("arm", ["dry", "train"])
 def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
     """The coordinator's launcher composes the recipe against SkyRL's declared keys and export rules."""
-    trainer = _composed_trainer(arm, tmp_path)
+    composed = _composed_skyrl(arm, tmp_path)
+    # The served student has no tool-call parser, so "auto" (vLLM's default when a row has tools) is rejected.
+    assert composed.generator.tool_choice == "none"
+    trainer = composed.trainer
     steps = 2 if arm == "dry" else 20
     assert trainer.max_steps == trainer.hf_save_interval == steps
     assert trainer.export_hf_artifact
@@ -395,7 +398,7 @@ def test_megatron_optimizer_config_and_scheduler_accept_each_arm(arm, tmp_path, 
     the first update trains at the LR before or after the first step is SkyRL's call order, not checked here.
     """
     torch = pytest.importorskip("torch")
-    trainer = _composed_trainer(arm, tmp_path)
+    trainer = _composed_skyrl(arm, tmp_path).trainer
     builders = _skyrl_megatron_builders(monkeypatch)
     settings = trainer.policy.optimizer_config
     config = builders._init_megatron_optim_config(settings, trainer.policy.megatron_config.optimizer_config_kwargs)

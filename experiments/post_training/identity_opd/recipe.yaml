@@ -9,6 +9,8 @@
 # - no evaluation or reference_validation callback, no opd_token_mask or frozen_token_ids (not on this tree; the
 #   control arm's values were null and empty).
 # - rollout logprobs are vLLM processed logprobs, so the dry run's mismatch probe and this run sample alike.
+# - generator.tool_choice is "none": tool rows keep their tools in the prompt, but the student is served without a
+#   tool-call parser, and vLLM rejects its default "auto" for a request with tools.
 # - one epoch over the frozen 1,280-row mix: 20 updates of 64.
 entrypoint: standard
 
@@ -94,6 +96,7 @@ generator:
     temperature: 1.0
     top_p: 1.0
     logprobs: 0
+  tool_choice: "none"
   engine_init_kwargs:
     logprobs_mode: processed_logprobs
     generation_config: vllm
