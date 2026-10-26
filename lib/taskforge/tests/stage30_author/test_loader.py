@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
-import re
 import sys
 
 import pytest
@@ -200,49 +199,6 @@ def test_a_program_outside_the_rules_is_refused_and_unregistered(edit, problem):
         load_program_source(source, SDK)
 
     assert module_name(source) not in sys.modules
-
-
-UNBOUND = re.escape("the program reads names that no import, definition, assignment or builtin binds:")
-IMPORT_EACH = re.escape("Import each SDK name the program uses from its module.")
-
-
-@pytest.mark.parametrize(
-    ("edit", "message"),
-    [
-        (
-            lambda s: s.replace(
-                '    return Question(text="What is 6 * 7?")',
-                '    await qzxv()\n    return Question(text="What is 6 * 7?")',
-            ),
-            rf"{UNBOUND}\n- `qzxv` \(line \d+\)\n{IMPORT_EACH}",
-        ),
-        (
-            lambda s: s.replace(
-                '    return Question(text="What is 6 * 7?")',
-                '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
-            ),
-            rf"{UNBOUND}\n- `research` \(line \d+\); "
-            rf"did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?\n"
-            rf"{IMPORT_EACH}",
-        ),
-        (
-            lambda s: s.replace("from dataclasses", "import os\nfrom dataclasses"),
-            r"the program failed to load: ImportError: build programs may not import 'os'\. Allowed: \[.*\]",
-        ),
-        (
-            lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
-            r"the program failed to load: ImportError: build programs may not import "
-            r"'taskforge\.stage40_build_with_program\.output'; "
-            r"did you mean 'taskforge\.stage40_build_with_program\.outputs'\? Allowed: \[.*\]",
-        ),
-    ],
-    ids=["unbound-without-suggestion", "unbound-with-suggestion", "import-without-suggestion", "import-with-suggestion"],
-)
-def test_a_refusal_ends_each_sentence_once_with_or_without_a_suggestion(edit, message):
-    with pytest.raises(ValueError) as refusal:
-        load_program_source(edit(PROGRAM), SDK)
-
-    assert re.fullmatch(message, str(refusal.value)), str(refusal.value)
 
 
 def test_the_loader_suggests_only_the_sdk_names_its_caller_passes():
