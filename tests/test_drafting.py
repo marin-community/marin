@@ -3,100 +3,44 @@
 
 import hashlib
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
-import numpy as np
 import pytest
-import torch
-from marin.drafting import (
-    DraftTrainingConfig,
-    _CompletedEpoch,
-    _publish_checkpoint,
-    _restore_training_run,
-    _TrainingRun,
-    prepare_coding_sample,
-)
+from marin.drafting import DraftTrainingConfig, draft_serving, prepare_coding_sample
 
 
-@pytest.fixture
-def training_run():
-    return _TrainingRun(
-        config=DraftTrainingConfig("target", "tokenizer", "revision", "prompts", "output", epochs=2),
-        tokenizer_sha256="unused",
-        target_config={},
-        target_objects={},
-        prompts_sha256="unused",
-        rollouts_sha256="unused",
-        generation={},
-        split={},
-        teacher_states={},
-        runtime={},
-        job_id=None,
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_export_roundtrip_serves_original_target_and_checks_weights(tmp_path, corrupt):
+    """A serving export works after the worker and its native checkpoints are gone."""
+    export = tmp_path / "export"
+    export.mkdir()
+    weights = b"opaque durable weights"
+    (export / "model.safetensors").write_bytes(weights)
+    config = DraftTrainingConfig(
+        target="s3://bucket/target",
+        tokenizer="namespace/tokenizer",
+        tokenizer_revision="immutable",
+        data="prompts",
+        output=str(export),
     )
-
-
-def test_completed_epoch_survives_object_store_roundtrip(tmp_path, training_run):
-    """Recovery selects the published epoch despite a later interrupted upload."""
-    root = tmp_path / "original"
-    checkpoint = root / "checkpoints/0"
-    checkpoint.mkdir(parents=True)
-    (root / "data").mkdir()
-    for name in ("d2t", "t2d"):
-        np.save(root / f"data/{name}-4.npy", np.arange(4))
-    progress = {"epoch": 0, "local_step": 0, "global_step": 3}
-    (checkpoint / "training_state.json").write_text(json.dumps(progress))
-    (checkpoint / "config.json").write_text(json.dumps({"draft_vocab_size": 4}))
-    (checkpoint / "val_metrics.json").write_text(json.dumps({"loss_epoch": 2.5}))
-    # Preserve real serialized optimizer/scheduler state, including scalar tensors.
-    parameter = torch.nn.Parameter(torch.tensor([1.0, 2.0]))
-    optimizer = torch.optim.AdamW([parameter], lr=0.1)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
-    parameter.sum().backward()
-    optimizer.step()
-    scheduler.step()
-    torch.save(optimizer.state_dict(), checkpoint / "optimizer_state_dict.pt")
-    torch.save(scheduler.state_dict(), checkpoint / "scheduler_state_dict.pt")
-    (checkpoint / "model.safetensors").write_bytes(b"opaque model bytes")
-    (root / "checkpoints/checkpoint_best").symlink_to("0", target_is_directory=True)
-    remote = tmp_path / "object-store"
-    config = replace(training_run.config, output=str(remote))
-    record = replace(training_run, config=config)
-    _publish_checkpoint(root, config, record, 0)
-    # Simulate loss of a worker during publication of the next epoch.
-    (remote / "checkpoints/1").mkdir()
-    (remote / "checkpoints/1/model.safetensors").write_bytes(b"unfinished upload")
-    (remote / "checkpoints/1/val_metrics.json").write_text('{"loss_epoch": 1.0}')
-    restored = tmp_path / "new-worker"
-    restored_config, restored_record = _restore_training_run(str(remote), restored)
-    assert restored_config == config
-    assert restored_record.checkpoint == _CompletedEpoch(0, 0, 3, 2.5)
-    assert sorted(path.name for path in (restored / "checkpoints").iterdir()) == ["0", "checkpoint_best"]
-    assert (restored / "checkpoints/checkpoint_best").resolve() == restored / "checkpoints/0"
-    for original in checkpoint.iterdir():
-        assert (restored / "checkpoints/0" / original.name).read_bytes() == original.read_bytes()
-    reloaded_optimizer = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(2))], lr=1.0)
-    reloaded_optimizer.load_state_dict(torch.load(restored / "checkpoints/0/optimizer_state_dict.pt", weights_only=True))
-    assert reloaded_optimizer.param_groups[0]["lr"] == optimizer.param_groups[0]["lr"]
-    torch.testing.assert_close(
-        next(iter(reloaded_optimizer.state.values()))["exp_avg"], optimizer.state[parameter]["exp_avg"], rtol=0, atol=0
-    )
-    for name in ("d2t", "t2d"):
-        np.testing.assert_array_equal(np.load(restored / f"data/{name}-4.npy"), np.arange(4))
-
-
-def test_resume_requires_optimizer_state(tmp_path, training_run):
-    source = tmp_path / "run"
-    checkpoint = source / "checkpoints/0"
-    checkpoint.mkdir(parents=True)
-    record = replace(
-        training_run, config=replace(training_run.config, output=str(source)), checkpoint=_CompletedEpoch(0, 0, 3, 2.5)
-    )
-    (source / "run.json").write_text(json.dumps(asdict(record)))
-    (checkpoint / "config.json").write_text("{}")
-    (checkpoint / "model.safetensors").write_bytes(b"serving weights alone")
-    with pytest.raises(ValueError, match=r"optimizer_state_dict\.pt"):
-        _restore_training_run(str(source), tmp_path / "worker")
+    (export / "training.json").write_text(json.dumps({"config": asdict(config)}))
+    digest = hashlib.sha256(weights).hexdigest()
+    (export / "export_manifest.json").write_text(json.dumps({"files": {"model.safetensors": {"sha256": digest}}}))
+    if corrupt:
+        (export / "model.safetensors").write_bytes(b"interrupted upload")
+        with pytest.raises(ValueError, match="Serving draft bytes"):
+            with draft_serving(str(export)):
+                pytest.fail("Corrupt weights were offered for serving")
+        return
+    with draft_serving(str(export)) as (model, engine):
+        assert model.weights == "s3://bucket/target"
+        assert (model.tokenizer, model.tokenizer_revision) == ("namespace/tokenizer", "immutable")
+        assert model.max_model_len == 65536
+        assert engine.speculative.model.identity == digest
+        staged = Path(engine.speculative.model.uri)
+        assert (staged / "model.safetensors").read_bytes() == weights
+    assert not staged.exists()
 
 
 def test_coding_sample_ignores_answers_and_corpus_order(tmp_path, monkeypatch):

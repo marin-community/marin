@@ -9,7 +9,7 @@ The [CLI](https://github.com/marin-community/marin/blob/main/experiments/post_tr
 calls the reusable functions in
 [`marin.drafting`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/drafting.py).
 The recipe installs the pinned toolkit and trainer, stages the target, builds its
-training stub, and handles completed checkpoint uploads and serving exports.
+training stub, and publishes the final toolkit export.
 You supply storage access, Iris placement, prompts and an unused output location.
 Keep one writer per output. Use storage in the worker's region.
 
@@ -67,8 +67,8 @@ uv run iris --cluster marin job run --job-name standalone-draft-fit \
 
 The defaults bound this example to two epochs, 512-token training sequences and
 128 generated tokens per problem. Generation uses temperature 1, top-p 0.95 and
-top-k 20. The pinned generator has no seed option. `run.json` records those
-settings and the exact generated response hash; frozen responses are retained.
+top-k 20. The pinned generator has no seed option. `training.json` records those
+settings and the exact generated response hash; responses are retained.
 The twelve-problem sample produces eight training and four holdout rows.
 
 The target must have 26 layers, hidden size 2560 and native context 65,536.
@@ -78,44 +78,34 @@ The trainer applies the target's RMSNorm and learned sigmoid gate to that final
 residual before computing teacher logits. Managed RL hidden-state captures use
 a different convention; they are not inputs to this offline path.
 
-The returned JSON contains the export URI and its weight SHA256. The durable run
-contains `run.json`, prompts, exact target responses, extraction manifests,
-offline data/states, the target stub, numeric `checkpoints/`, and `exports/epoch-N/`.
-`run.json` records target object sizes/ETags, tokenizer and data hashes, the
-task split, runtime pins, vocabulary-map hashes and the selected export identity.
+The returned JSON contains the export URI and its weight SHA256, taken from the
+toolkit's `export_manifest.json`. `RUN` is a standard embedding-free HF draft:
+`config.json`, `model.safetensors`, original vocabulary maps and the toolkit
+manifest. `training.json` records the target objects, pinned tokenizer, input
+and response hashes, task split, teacher convention, runtime pins and final
+validation metrics. The prompt and response JSONL are retained beside it.
 
-## Recover an interrupted fit
+Extraction states, target stub and native Trainer checkpoints stay on the worker
+and are deleted when the fit exits. A failed fit must start again with a new
+output. Keep one writer per output; an interrupted upload may leave an unusable
+partial directory. Serving requires the final `training.json` receipt, written
+after the export upload, and verifies the recorded weight hash.
 
-Use the same output location on another worker:
+### Optional warm starts and recovery
 
-```bash
-uv run iris --cluster marin job run --job-name standalone-draft-resume \
-  --enable-extra-resources --target-cluster cw-us-east-02a --gpu H100x8 \
-  --cpu 16 --memory 512GB --disk 400GB --priority interactive --timeout 3600 \
-  --sync-package marin-core --extra cpu \
-  -- python -m experiments.post_training.standalone_draft resume --output "$RUN"
-```
+These commands support fresh training. They do not implement cloud recovery or
+warm starts. Warm starts save training time when a compatible learned draft
+already exists; recovery saves work after a failed long fit. Warm starts require a compatible export and its original vocabulary maps.
+Recovery also requires native checkpoints and their original data. They are unnecessary for
+this small example and add staging and recovery obligations to every caller.
 
-Resume uses the saved configuration and frozen data. It restores the last
-published completed epoch's model, optimizer, scheduler, learning rates and
-global progress. Publication selects an epoch only after its files finish
-uploading. Recovery excludes later partial uploads and rebuilds the trainer's
-`checkpoint_best` symlink locally. Missing optimizer/scheduler files or changed
-vocabulary-map bytes fail before training. If training has finished, resume
-recreates the serving export without further updates.
-
-Recovery is at an epoch boundary. It does not restore RNG state or unfinished
-minibatches, and it does not promise a bitwise identical training trajectory.
-The pinned trainer serializes floating model and optimizer tensors as BF16 and
-restores optimizer masters as FP32. A run that fails before its first completed
-epoch has no resumable checkpoint; start with a new output.
-
-For fine-tuning into a **new** run, add `--initial-draft "$OLD_EXPORT"` to `train`
-and choose a new `--output`. Supply a compatible export with its original
-`d2t-<size>.npy` and `t2d-<size>.npy` files. The toolkit checks those maps against
-the learned tensors, keeps the original vocabulary identity, retargets a private
-copy to the current target stub, and starts a new optimizer schedule. A serving
-export has no optimizer or scheduler state and cannot serve as a resume point.
+For a longer custom fit, use the pinned [toolkit's training and adaptation
+commands](https://github.com/lukedhlee/grugmoe-eagle3/tree/8b1558baa74cafb6c7440f1dca2ebb9ab71dc054#2-train-a-base-draft-or-adapt-one)
+in a persistent workspace. The toolkit can retarget a compatible draft while
+checking its maps. That starts a new optimizer schedule. Actual recovery also
+requires native optimizer, scheduler and progress files plus their original data.
+The recipe does not promise recovery from copied object-store checkpoint trees.
+A final serving export contains no optimizer state.
 
 ## Serve the export
 
@@ -154,7 +144,7 @@ Compilation and CUDA graphs stay enabled, with the target's native 65,536-token
 context.
 
 Python callers can use `train_draft(DraftTrainingConfig(...))`,
-`resume_draft(run_uri)`, or `with draft_serving(run_uri) as (model, engine):`.
+`with draft_serving(export_uri) as (model, engine):`.
 Pass that pair to `local_inference(model, engine, num_chips=8)` for a scoped HTTP
 session, or to `IrisServiceConfig` for a named endpoint. These calls execute
 inside the existing allocation; they do not submit more GPU jobs.
@@ -170,15 +160,12 @@ qualified here at source `01911be34fac8715347962a8d791ca34a879e01e`.
 The ordinary Marin CPU environment remains separate. The handoffs between these
 environments are files and HTTP requests.
 
-The small Iris qualification checked finite holdout loss, changed draft weights,
-the Grug teacher equation, preserved vocabulary maps, recovery into a new local
-directory with serialized optimizer/scheduler/progress restored, and a real HTTP
-generation using the new export with standard speculative proposal counters.
-The teacher numerical check used BF16 bounds `rtol=0.016`, `atol=0.00001`; target
-norm/gate tensors, maps and serialized recovery state were compared exactly.
-This establishes compatibility for this target and workload. It does not measure
-convergence, useful acceptance rates, quality or speedup. Longer training,
-production data preparation and benchmark reproduction need separate validation.
+The earlier Iris qualification checked the Grug teacher equation, preserved
+vocabulary maps and real speculative HTTP generation. This cleanup retains the
+same extraction and training commands. The fresh-fit, final-export and ordinary
+serving handoff is checked separately after lifecycle changes. A tiny fit tests
+compatibility; it does not measure convergence, useful acceptance, quality or
+speedup.
 
 Ongoing RL refresh is optional. Existing SkyRL runs configure
 `generator.speculative_decoding` with an EAGLE3 `model` source and a `training`
@@ -189,8 +176,8 @@ generator:
   speculative_decoding:
     method: eagle3
     model:
-      source_uri: s3://your-bucket/standalone-draft/run-001/exports/epoch-1
-      source_identity: <model.safetensors SHA256 from run.json>
+      source_uri: s3://your-bucket/standalone-draft/run-001
+      source_identity: <model.safetensors SHA256 from export_manifest.json>
     num_speculative_tokens: 3
     training:
       interval_steps: 10
@@ -200,3 +187,17 @@ Setting `training: null` keeps serving without refresh. Its bounded online
 trainer and held-out promotion checks remain owned by
 [`marinskyrl.speculative_decoding`](https://github.com/marin-community/marin/blob/main/vendor/skyrl/marinskyrl/speculative_decoding.py)
 and SkyRL's trainer. The standalone commands above do not import that lifecycle.
+
+Online refresh keeps a long-lived one-GPU trainer with its own FP32 optimizer
+masters and RNG state. It uses sealed proposal-aware captures whose teacher
+states already passed the target head's normalization/gate convention. Offline
+extraction supplies raw residuals and lets Speculators apply that transform.
+The datasets and recovery states are different, so the two loops remain separate.
+
+An accepted online candidate uploads its native recovery state and serving
+weights to an immutable revision directory. One atomic `latest.json` record is
+written after upload and size verification. Refresh readers check source lineage
+and weight size, then use the existing safe refresh boundary. The held-out gate,
+rejection rollback and optimizer restore path remain unchanged. Old draft
+publication records are unsupported; use a new draft checkpoint root after this
+change. Historical artifacts and policy checkpoints are preserved.
