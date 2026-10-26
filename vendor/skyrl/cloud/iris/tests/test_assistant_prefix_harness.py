@@ -160,30 +160,16 @@ async def test_the_worker_applies_the_task_reasoning_markup_policy_to_a_malforme
     task_inputs, policy, status, reward
 ):
     config, request = task_inputs
-    package = verifyit_package(StructureClosureSpec('{"value":', '{"value":12}', ClosureFormat.JSON))
-    task = request.rows[0].spec.task.model_copy(
-        update={
-            "context": ConversationInput(
-                events=(
-                    TextMessage(role="user", content="Complete the supplied structure"),
-                    TextMessage(role="assistant", content='{"value":'),
-                ),
-            ),
-            "answer_type": AnswerType.TEXT,
-            "answer_format": PlainText(),
-            "grader": package.grader,
-            "reasoning_markup": policy,
-        }
-    )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+    task = request.rows[0].spec.task.model_copy(update={"reasoning_markup": policy})
+    request = replace(request, rows=(task_input(lowered_task(task, max_turns=1)),))
 
     class Client:
         """Reports a stray end marker in the turn's reply, as the chat transport records one."""
 
         async def generate(self, model_request):
             return {
-                "responses": ["12}"],
-                "assistant_messages": [{"role": "assistant", "content": "12}"}],
+                "responses": ["12"],
+                "assistant_messages": [{"role": "assistant", "content": "12"}],
                 "prompt_ids": [[1, 2]],
                 "response_ids": [[11, 12, 13]],
                 "response_logprobs": [[-0.1, -0.2, -0.3]],

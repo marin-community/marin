@@ -307,7 +307,7 @@ def _text_scored(
 
 
 def convert_calendar(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """NeMo Gym scores a calendar reply that contains reasoning markup as 0."""
+    """NeMo Gym scores a calendar reply with malformed reasoning markup as 0."""
     return _text_scored(
         row, context, ("calendar_simple_agent",), CALENDAR_GRADE, reasoning_markup=ReasoningMarkupPolicy.REJECT
     )
