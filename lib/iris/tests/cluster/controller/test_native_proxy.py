@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import threading
 import time
@@ -962,4 +963,49 @@ def test_capability_proxy_signals_task_replacement_and_forwards_new_registration
                 proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(5, ()))))
                 assert client.get(path).status_code == 404
     finally:
+        threads.stop()
+
+
+def test_task_endpoint_request_timeout_remains_gateway_timeout(permissive_native_proxy_auth_json: str) -> None:
+    threads = ThreadContainer()
+    release = threading.Event()
+
+    async def hold(_request: Request) -> JSONResponse:
+        await asyncio.to_thread(release.wait)
+        return JSONResponse({"ready": True})
+
+    try:
+        server = uvicorn.Server(
+            uvicorn.Config(
+                Starlette(routes=[Route("/hold", hold)]),
+                host="127.0.0.1",
+                port=0,
+                log_level="error",
+                log_config=None,
+            )
+        )
+        threads.spawn_server(server, name="slow-native-upstream")
+        ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+            lambda: server.started, timeout=Duration.from_seconds(5)
+        )
+        assert server.servers
+        port = server.servers[0].sockets[0].getsockname()[1]
+        mapping = ProxyEndpointMapping(
+            endpoint_id="slow-task",
+            name="/serve/slow",
+            address=f"http://127.0.0.1:{port}",
+            link_access=False,
+            peer_id=None,
+            task_id="/job/serve/0",
+            timeout_seconds=0.1,
+            lease_deadline_epoch_ms=Timestamp.now().add(Duration.from_minutes(5)).epoch_ms(),
+        )
+        with _standalone_proxy(permissive_native_proxy_auth_json) as proxy:
+            proxy.replace_registry(json.dumps(asdict(ProxyRegistrySnapshot(2, (mapping,)))))
+            with httpx.Client(base_url=proxy.address, trust_env=False) as client:
+                response = client.get("/proxy/serve.slow/hold")
+        assert response.status_code == 504
+        assert "retry-after" not in response.headers
+    finally:
+        release.set()
         threads.stop()

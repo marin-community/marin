@@ -1233,14 +1233,10 @@ async fn send(
         match tokio::time::timeout(timeout, client.request(request)).await {
             Ok(response) => response,
             Err(_) => {
-                return if task_owned {
-                    replacement_response()
-                } else {
-                    error_response(
-                        StatusCode::GATEWAY_TIMEOUT,
-                        &format!("upstream timeout after {}s", timeout.as_secs_f64()),
-                    )
-                }
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    &format!("upstream timeout after {}s", timeout.as_secs_f64()),
+                )
             }
         }
     } else {
@@ -1405,7 +1401,7 @@ async fn ingress_inner(
                                 task_owned: matches!(
                                     federation.direction,
                                     FederationDirection::Inbound
-                                ),
+                                ) && federation.task_id.is_some(),
                             },
                         )
                         .await
