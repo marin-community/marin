@@ -64,7 +64,8 @@ def test_generation_launch_keeps_its_rollout_role():
 
 
 @pytest.mark.parametrize("colocate_all", [False, True])
-def test_generate_launch_allocates_only_one_engine_node(colocate_all):
+@pytest.mark.parametrize("run_engines_locally", [False, True])
+def test_generate_launch_reserves_local_resources(colocate_all, run_engines_locally):
     config = skyrl_config(
         **{
             "trainer.placement.colocate_all": colocate_all,
@@ -72,13 +73,20 @@ def test_generate_launch_allocates_only_one_engine_node(colocate_all):
             "trainer.algorithm.use_kl_loss": True,
             "environment.env_class": "gsm8k",
             "generator.num_inference_engines": 1,
+            "generator.run_engines_locally": run_engines_locally,
         }
     )
     config["entrypoint"] = "generate"
     config["generator"].update(inference_engine_data_parallel_size=8, inference_engine_expert_parallel_size=8)
     plan = derive_role_plan(config)
-    assert [claim.kind for claim in plan.claims] == [ModelRoleKind.ROLLOUT]
-    assert derive_num_nodes(plan) == 1
+    expected_roles = (
+        [ModelRoleKind.ROLLOUT]
+        if run_engines_locally
+        else [ModelRoleKind.POLICY, ModelRoleKind.REFERENCE, ModelRoleKind.ROLLOUT]
+    )
+    assert [claim.kind for claim in plan.claims] == expected_roles
+    expected_nodes = 1 if run_engines_locally else 4
+    assert derive_num_nodes(plan) == expected_nodes
     config.pop("entrypoint")
 
     allocation = validate_iris_allocation(
@@ -88,7 +96,7 @@ def test_generate_launch_allocates_only_one_engine_node(colocate_all):
             "runtime": {"entrypoint": "skyrl_train.entrypoints.main_generate"},
             "iris": {
                 "allocation": {
-                    "num_nodes": 1,
+                    "num_nodes": expected_nodes,
                     "gpus_per_node": 8,
                     "gpu_variant": "H100",
                     "cpu": 48,
@@ -98,7 +106,7 @@ def test_generate_launch_allocates_only_one_engine_node(colocate_all):
             },
         }
     )
-    assert (allocation.num_nodes, allocation.gpus_per_node) == (1, 8)
+    assert (allocation.num_nodes, allocation.gpus_per_node) == (expected_nodes, 8)
 
 
 @pytest.mark.parametrize("runner", ["task", "harbor"])

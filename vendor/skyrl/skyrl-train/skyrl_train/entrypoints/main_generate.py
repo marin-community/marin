@@ -78,8 +78,13 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
+        local_vllm = self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm"
         try:
             await trajectory_runner.startup()
+            initial_tokens = 0
+            if local_vllm:
+                initial_snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.PEEK)
+                initial_tokens = sum(engine.cumulative.generation_tokens for engine in initial_snapshot.engines)
             started = time.perf_counter()
             results: dict[str, Any] = await evaluate(
                 eval_dataloader=build_eval_dataloader(self.cfg, self.eval_dataset),
@@ -91,18 +96,11 @@ class EvalOnlyEntrypoint(BasePPOExp):
             )
             elapsed = time.perf_counter() - started
             tokens = results["eval/all/response_tokens"]
-            engine_gpus = (
-                self.cfg.generator.num_inference_engines
-                * self.cfg.generator.inference_engine_tensor_parallel_size
-                * self.cfg.generator.inference_engine_pipeline_parallel_size
-                * self.cfg.generator.inference_engine_data_parallel_size
-            )
             results.update(
                 {
                     "generate/wall_seconds": elapsed,
                     "generate/response_tokens": tokens,
                     "generate/prompts_dropped_too_long": self.eval_dataset.prompts_dropped_too_long,
-                    "generate/tokens_per_second_per_gpu": tokens / elapsed / engine_gpus,
                 }
             )
             results.update(
@@ -112,8 +110,17 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     if key.startswith("eval/all/outcome/")
                 }
             )
-            if self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm":
+            if local_vllm:
                 snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                generated_tokens = (
+                    sum(engine.cumulative.generation_tokens for engine in snapshot.engines) - initial_tokens
+                )
+                engine_gpus = (
+                    self.cfg.generator.num_inference_engines
+                    * self.cfg.generator.inference_engine_tensor_parallel_size
+                    * self.cfg.generator.inference_engine_pipeline_parallel_size
+                    * self.cfg.generator.inference_engine_data_parallel_size
+                )
                 results.update(
                     {
                         f"generate/{key}": value
@@ -121,6 +128,8 @@ class EvalOnlyEntrypoint(BasePPOExp):
                         if key.startswith("vllm/")
                     }
                 )
+                results["generate/vllm/generation_tokens"] = generated_tokens
+                results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / engine_gpus
         finally:
             try:
                 await trajectory_runner.shutdown()
