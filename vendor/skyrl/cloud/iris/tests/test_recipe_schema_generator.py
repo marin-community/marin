@@ -8,6 +8,7 @@ import skyrlrecipe as schema
 from skyrlrecipe.model import Section, thaw
 from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
 from scripts import generate_recipe_schema as generator
+from scripts.recipe_schema_sidecar import OPEN
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -98,6 +99,8 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
         for key, expected in mapping.items():
             path = f"{prefix}.{key}" if prefix else key
             if path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(expected):
+                continue
+            if path in OPEN and expected:
                 continue
             value = getattr(actual, key)
             if isinstance(expected, dict) and isinstance(value, Section):

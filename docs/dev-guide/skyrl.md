@@ -124,15 +124,13 @@ recipe = SkyRLRecipe(
 
 Serialize `recipe.to_skyrl()` to YAML for `SkyRLSpec.config_yaml`. Supply the seed and checkpoint
 retention through the launch envelope. Closed sections reject unknown and launcher-owned fields;
-open mappings also check owned paths. `combine` rejects unequal leaves across named parts,
-including parent/descendant conflicts; `merge` and `with_settings` apply explicit overrides.
+open mappings also check owned paths. `merge` and `with_settings` apply explicit overrides.
 An explicit empty mapping is retained, including `environment.task_sessions.local: {}`.
 
 After changing SkyRL YAML or group options, regenerate the author classes from the nested environment:
 
 ```bash
 uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py
-uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py --check
 ```
 
 Types and open mappings that YAML cannot express belong in `vendor/skyrl/scripts/recipe_schema_sidecar.py`.

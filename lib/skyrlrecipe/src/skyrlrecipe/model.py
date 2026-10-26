@@ -75,8 +75,6 @@ def freeze(value: Any) -> Any:
 
 def thaw(value: Any) -> Any:
     """Return ordinary JSON containers independent of the immutable source."""
-    if isinstance(value, Enum):
-        return value.value
     if isinstance(value, Mapping):
         return {key: thaw(item) for key, item in value.items()}
     if isinstance(value, tuple | list):

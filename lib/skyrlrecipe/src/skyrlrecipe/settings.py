@@ -39,24 +39,10 @@ def parse_setting(model: type[Section], key: str, raw: str) -> Any:
 
 
 def _parse_value(annotation: Any, raw: str) -> Any:
-    options = tuple(_annotations(annotation))
-    adapter = TypeAdapter(annotation)
-    if raw == "null" or any(
-        option is FrozenMap
-        or get_origin(option) in (tuple, dict, Mapping)
-        or (isinstance(option, type) and issubclass(option, Section))
-        for option in options
-    ):
-        return _json_or_text(raw)
-    parsed = adapter.validate_strings(raw)
-    if int in options and float in options:
-        try:
-            numeric = json.loads(raw)
-        except json.JSONDecodeError:
-            return parsed
-        if isinstance(numeric, int | float) and not isinstance(numeric, bool):
-            return adapter.validate_python(numeric, strict=True)
-    return parsed
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return TypeAdapter(annotation).validate_strings(raw)
 
 
 def _annotations(annotation: Any):
