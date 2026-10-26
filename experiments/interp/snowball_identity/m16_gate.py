@@ -334,8 +334,8 @@ def too_weak_value(
 SHARED_MODEL_FILES = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
 # The one metadata difference the candidate preflight may accept (an embedded copy of the baseline template).
 TEMPLATE_ADDITION = "tokenizer_config.json.chat_template"
-# A candidate is an SFT export bound by its run root, or a merged export bound by its audit and readback.
-CANDIDATE_KINDS = ("sft", "merge")
+# A candidate is an SFT export bound by its run root, or a merged or OPD export bound by its audit and readback.
+CANDIDATE_KINDS = ("sft", "merge", "opd")
 # The one shared file the preflight may accept when only its JSON formatting differs from the baseline's.
 REFORMATTED_FILE = "generation_config.json"
 

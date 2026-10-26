@@ -219,40 +219,50 @@ def accept_candidate_metadata(
     }
 
 
-def bind_merge(model: str, audit_path: str, readback_path: str) -> dict:
-    """A declared non-SFT candidate: a merged export, bound by its audit and readback receipts.
+# Declared non-SFT candidates: an export bound by its audit and readback receipts, recorded under its own kind.
+EXPORT_KINDS = ("merge", "opd")
+
+
+def bind_export(kind: str, model: str, audit_path: str, readback_path: str, run_id: str | None = None) -> dict:
+    """A declared non-SFT candidate (a merged or OPD export), bound by its audit and readback receipts.
+
+    An OPD export also records the OPD run id that produced it.
 
     It replaces only the SFT binding. The export is then checked like an SFT candidate (headers, metadata
     acceptance), served with the same SERVE_ARGS and scored by the same ``score_arm``; ``decide`` is unchanged.
     """
-    receipts = {}
-    for key, path in (("merge_audit", audit_path), ("merge_readback", readback_path)):
+    if kind not in EXPORT_KINDS:
+        raise click.ClickException(f"unknown export kind {kind!r}")
+    if kind == "opd" and not run_id:
+        raise click.ClickException("an opd arm needs the OPD run id")
+    receipts = {"opd_run_id": run_id} if kind == "opd" else {}
+    for key, path in ((f"{kind}_audit", audit_path), (f"{kind}_readback", readback_path)):
         try:
             data = read(path)
         except FileNotFoundError:
             raise click.ClickException(f"{key} receipt not found") from None
         receipts[key] = path
         receipts[f"{key}_sha256"] = hashlib.sha256(data).hexdigest()
-    return {"candidate_kind": "merge", "hf_path": model.rstrip("/"), **receipts}
+    return {"candidate_kind": kind, "hf_path": model.rstrip("/"), **receipts}
 
 
-def preflight_arm(arm: str, run_root: str | None, merge: dict | None = None) -> dict:
+def preflight_arm(arm: str, run_root: str | None, export: dict | None = None) -> dict:
     baseline, baseline_bytes = model_receipt(BASELINE_MODEL)
     if baseline["file_sha256"] != BASELINE_FILE_HASHES:
         raise click.ClickException("Baseline mirror metadata differs from the LR0 source hashes")
     if arm == "baseline":
         return {"arm": arm, "revision": BASELINE_REVISION, **baseline, "vllm": VLLM, "serve_args": SERVE_ARGS}
-    if arm == "merge":
-        if not merge:
-            raise click.ClickException("--model, --merge-audit and --merge-readback are required for a merge arm")
-        binding = bind_merge(merge["model"], merge["audit"], merge["readback"])
+    if arm in EXPORT_KINDS:
+        if not export:
+            raise click.ClickException(f"--model, an audit and a readback are required for a {arm} arm")
+        binding = bind_export(arm, export["model"], export["audit"], export["readback"], export.get("run_id"))
     elif run_root is None:
         raise click.ClickException("--run-root is required for the candidate arm")
     else:
         binding = bind_candidate(run_root.rstrip("/"))
     candidate, candidate_bytes = model_receipt(binding["hf_path"])
     accepted = accept_candidate_metadata(baseline, candidate, baseline_bytes, candidate_bytes)
-    kind = "merge" if arm == "merge" else "sft"
+    kind = arm if arm in EXPORT_KINDS else "sft"
     provenance = {"arm": "candidate", "candidate_kind": kind, "binding": binding, **candidate, **accepted}
     return {**provenance, "vllm": VLLM, "serve_args": SERVE_ARGS}
 
@@ -286,48 +296,69 @@ def cli():
     pass
 
 
-def merge_options(fn):
-    fn = click.option("--model", default=None, help="Merged export path (merge arm).")(fn)
+def export_options(fn):
+    fn = click.option("--model", default=None, help="Export path (merge or opd arm).")(fn)
     fn = click.option("--merge-audit", default=None, help="Merge audit receipt (merge arm).")(fn)
     fn = click.option("--merge-readback", default=None, help="Merge readback receipt (merge arm).")(fn)
-    return click.option("--label", default=None, help="Output label for a merge arm.")(fn)
+    fn = click.option("--opd-audit", default=None, help="OPD export audit receipt (opd arm).")(fn)
+    fn = click.option("--opd-readback", default=None, help="OPD export readback receipt (opd arm).")(fn)
+    fn = click.option("--opd-run-id", default=None, help="OPD run id that produced the export (opd arm).")(fn)
+    return click.option("--label", default=None, help="Output label for a merge or opd arm.")(fn)
 
 
-def merge_spec(arm: str, model, merge_audit, merge_readback, label) -> dict | None:
-    if arm != "merge":
+def export_spec(arm: str, model, merge_audit, merge_readback, opd_audit, opd_readback, opd_run_id, label) -> dict | None:
+    if arm not in EXPORT_KINDS:
         return None
-    if not (model and merge_audit and merge_readback and label):
-        raise click.ClickException("a merge arm needs --model, --merge-audit, --merge-readback and --label")
-    return {"model": model, "audit": merge_audit, "readback": merge_readback, "label": label}
+    audit, readback = (merge_audit, merge_readback) if arm == "merge" else (opd_audit, opd_readback)
+    if not (model and audit and readback and label):
+        raise click.ClickException(f"a {arm} arm needs --model, --{arm}-audit, --{arm}-readback and --label")
+    if arm == "opd" and not opd_run_id:
+        raise click.ClickException("an opd arm needs --opd-run-id")
+    return {"model": model, "audit": audit, "readback": readback, "run_id": opd_run_id, "label": label}
 
 
 @cli.command()
-@click.option("--arm", type=click.Choice(["baseline", "candidate", "merge"]), required=True)
+@click.option("--arm", type=click.Choice(["baseline", "candidate", *EXPORT_KINDS]), required=True)
 @click.option("--run-root", default=None, help="SFT run root (candidate arm).")
-@merge_options
+@export_options
 @click.option("--out", required=True, type=click.Path(path_type=Path))
-def preflight(arm, run_root, model, merge_audit, merge_readback, label, out):
+def preflight(arm, run_root, model, merge_audit, merge_readback, opd_audit, opd_readback, opd_run_id, label, out):
     """Bind the arm and write its provenance; no GPU."""
-    m16_gate.write_json(out, preflight_arm(arm, run_root, merge_spec(arm, model, merge_audit, merge_readback, label)))
+    spec = export_spec(arm, model, merge_audit, merge_readback, opd_audit, opd_readback, opd_run_id, label)
+    m16_gate.write_json(out, preflight_arm(arm, run_root, spec))
     print(json.dumps({"arm": arm, "provenance": str(out), "status": "ok"}))
 
 
 @cli.command()
-@click.option("--arm", type=click.Choice(["baseline", "candidate", "merge"]), required=True)
+@click.option("--arm", type=click.Choice(["baseline", "candidate", *EXPORT_KINDS]), required=True)
 @click.option("--run-root", default=None)
-@merge_options
+@export_options
 @click.option("--gate", "gate_path", required=True, type=click.Path(path_type=Path, exists=True))
 @click.option("--prompt-dir", required=True, type=click.Path(path_type=Path, exists=True))
 @click.option("--tokenizer", required=True)
 @click.option("--out-dir", required=True, type=click.Path(path_type=Path))
-def run(arm, run_root, model, merge_audit, merge_readback, label, gate_path, prompt_dir, tokenizer, out_dir):
+def run(
+    arm,
+    run_root,
+    model,
+    merge_audit,
+    merge_readback,
+    opd_audit,
+    opd_readback,
+    opd_run_id,
+    label,
+    gate_path,
+    prompt_dir,
+    tokenizer,
+    out_dir,
+):
     """Serve one arm in the production band, score it and release the serve."""
     gate = m16_gate.load_gate(gate_path)
     tok = AutoTokenizer.from_pretrained(tokenizer)
     m16_gate.check_frozen_inputs(prompt_dir, tok)
-    merge = merge_spec(arm, model, merge_audit, merge_readback, label)
-    provenance = preflight_arm(arm, run_root, merge)
-    tag = f"merge-{label}" if merge else arm
+    export = export_spec(arm, model, merge_audit, merge_readback, opd_audit, opd_readback, opd_run_id, label)
+    provenance = preflight_arm(arm, run_root, export)
+    tag = f"{arm}-{label}" if export else arm
     idle = idle_whole_h100_nodes()
     if idle < 1:
         raise click.ClickException("No idle whole H100 node on cw-rno2a; not submitting")

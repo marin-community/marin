@@ -368,7 +368,7 @@ def test_decide_requires_and_reports_the_candidate_kind():
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, "file_sha256": files}}
     cand = {**serve, "file_sha256": files, "accepted_metadata_additions": [], "accepted_metadata_reformatted": []}
-    for kind in ("sft", "merge"):
+    for kind in ("sft", "merge", "opd"):
         decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": {**cand, "candidate_kind": kind}}, False)
         assert decision["candidate_kind"] == kind
     for provenance in (cand, {**cand, "candidate_kind": "other"}):
@@ -421,6 +421,49 @@ def test_merge_arm_replaces_only_the_sft_binding(monkeypatch):
         m16_gate_run.preflight_arm("merge", None, {**spec, "readback": "s3://b/merge/missing.json"})
     with pytest.raises(click.ClickException, match="required for a merge arm"):
         m16_gate_run.preflight_arm("merge", None, None)
+
+
+def test_opd_arm_binds_its_receipts_and_run_id_under_its_own_kind(monkeypatch):
+    receipts = {"s3://b/opd/audit.json": b'{"a": 2}', "s3://b/opd/readback.json": b'{"r": 2}'}
+    merge_world(monkeypatch, receipts)
+    spec = m16_gate_run.export_spec(
+        "opd", "s3://b/opd/hf/", None, None, "s3://b/opd/audit.json", "s3://b/opd/readback.json", "opd-r1", "opd-dry"
+    )
+    provenance = m16_gate_run.preflight_arm("opd", None, spec)
+    assert provenance["arm"] == "candidate" and provenance["candidate_kind"] == "opd"
+    assert provenance["model"] == "s3://b/opd/hf"
+    assert provenance["binding"] == {
+        "candidate_kind": "opd",
+        "hf_path": "s3://b/opd/hf",
+        "opd_run_id": "opd-r1",
+        "opd_audit": "s3://b/opd/audit.json",
+        "opd_audit_sha256": hashlib.sha256(b'{"a": 2}').hexdigest(),
+        "opd_readback": "s3://b/opd/readback.json",
+        "opd_readback_sha256": hashlib.sha256(b'{"r": 2}').hexdigest(),
+    }
+    assert provenance["accepted_metadata_additions"] == [] and provenance["serve_args"] == m16_gate_run.SERVE_ARGS
+    with pytest.raises(click.ClickException, match="opd_audit"):
+        m16_gate_run.preflight_arm("opd", None, {**spec, "audit": "s3://b/opd/missing.json"})
+    with pytest.raises(click.ClickException, match="opd_readback"):
+        m16_gate_run.preflight_arm("opd", None, {**spec, "readback": "s3://b/opd/missing.json"})
+    with pytest.raises(click.ClickException, match="OPD run id"):
+        m16_gate_run.preflight_arm("opd", None, {**spec, "run_id": None})
+    with pytest.raises(click.ClickException, match="required for a opd arm"):
+        m16_gate_run.preflight_arm("opd", None, None)
+
+
+def test_opd_options_are_required_and_merge_receipts_do_not_count(monkeypatch):
+    args = ("s3://b/opd/hf", None, None, "s3://b/a.json", "s3://b/r.json", "opd-r1", "opd-dry")
+    assert m16_gate_run.export_spec("opd", *args)["run_id"] == "opd-r1"
+    for i, missing in ((0, "--model"), (3, "--opd-audit"), (4, "--opd-readback"), (6, "--label")):
+        broken = list(args)
+        broken[i] = None
+        with pytest.raises(click.ClickException, match=missing):
+            m16_gate_run.export_spec("opd", *broken)
+    with pytest.raises(click.ClickException, match="--opd-run-id"):
+        m16_gate_run.export_spec("opd", *args[:5], None, args[6])
+    with pytest.raises(click.ClickException, match="--opd-audit"):
+        m16_gate_run.export_spec("opd", "s3://b/opd/hf", "s3://b/a.json", "s3://b/r.json", None, None, "opd-r1", "x")
 
 
 def test_sft_arm_records_its_candidate_kind(monkeypatch):
