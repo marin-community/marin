@@ -188,7 +188,10 @@ budget, rounded down to a whole number of batch shards. Dropless evals increase 
 within each rack when one sequence per batch shard would exceed that budget. With the current 16K
 hero and batch 704, 4K/16K/65K/262K evals use batches 2816/704/176/44 and CP1/CP1/CP4/CP16.
 Each holds 16,384 tokens per GPU; full-attention compute still increases with context length.
-The next relaunch needs an accelerator rehearsal of the four evals and their handoff back to training.
+Production use is blocked pending device-group reuse and an accelerator rehearsal of all four evals
+and their handoff back to training. [PR #10709](https://github.com/marin-community/marin/pull/10709)
+reports that new eval device groups retain additional NCCL communicator memory outside the allocator
+pool and can OOM the next training step. Holding the token budget fixed does not bound that memory.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the

@@ -559,7 +559,7 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
-    remainder: Literal["drop", "pad"] = "drop",
+    remainder: Literal["drop", "pad"],
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     fmt = component.format
@@ -1388,6 +1388,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            remainder="drop",
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
@@ -1417,6 +1418,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            remainder="pad",
         )
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 

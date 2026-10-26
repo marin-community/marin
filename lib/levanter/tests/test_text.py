@@ -115,6 +115,23 @@ def test_padded_continuous_validation_preserves_weights_and_document_boundaries(
     np.testing.assert_array_equal(example.attn_mask.segment_ids[0], expected_segments)
 
 
+@pytest.mark.parametrize("token_count", [3, 8, 11])
+def test_validation_corpus_stats_count_padded_sequences(tmp_path, local_gpt2_tokenizer_path, token_count):
+    tokens = np.arange(1, token_count + 1, dtype=np.int32)
+    for split in ("train", "validation"):
+        write_levanter_cache([{"input_ids": tokens}], str(tmp_path / split), metadata={})
+    config = LmDataConfig(
+        components={"tiny": DatasetComponent(cache_dir=str(tmp_path), format=TextLmDatasetFormat(), pack=False)},
+        tokenizer=local_gpt2_tokenizer_path,
+    )
+
+    stats = count_corpus_sizes(config, seq_len=8)
+    validation = config.validation_sets(hax.Axis("position", 8))["tiny"].as_sync_dataset()
+
+    assert stats["data/stats/validation/tiny/total_seqs"] == len(validation) == (token_count + 7) // 8
+    assert stats["data/stats/train/tiny/total_seqs"] == token_count // 8
+
+
 @pytest.mark.asyncio
 async def test_padded_continuous_validation_batches_full_and_partial_sequences(tmp_path):
     tokens = np.arange(11, dtype=np.int32)
@@ -448,6 +465,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
         cache,
         eos_id=None,
         block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
 
     example = ds[0]
@@ -513,6 +531,7 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
         cache,
         eos_id=None,
         block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
 
     example = ds[0]
@@ -558,6 +577,7 @@ def test_dataset_for_component_rejects_preference_format():
             None,  # type: ignore[arg-type]
             eos_id=None,
             block_cross_document_attention=True,
+            remainder="drop",
         )
 
 
@@ -854,7 +874,12 @@ def test_dataset_for_component_chat_unpacked_yields_one_padded_example_per_conve
     cache = _build_train_cache(component, tokenizer)
     Pos = hax.Axis("position", 128)
     ds = dataset_for_component(
-        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
 
     # dummy_chat_data holds two conversations; unpacked mode never merges them
@@ -890,7 +915,12 @@ def test_dataset_for_component_text_unpacked_masks_padding(tmp_path):
     cache = _build_train_cache(component, tokenizer)
     Pos = hax.Axis("position", 16)
     ds = dataset_for_component(
-        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
 
     assert len(ds) == 2
@@ -969,7 +999,12 @@ def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
     assert (cache_path / "shard_ledger.json").exists(), "rebuild should restore the ledger"
     Pos = hax.Axis("position", 4)
     ds = dataset_for_component(
-        component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
+        component,
+        Pos,
+        rebuilt,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+        remainder="drop",
     ).as_sync_dataset()
     np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
 
