@@ -102,7 +102,7 @@ fi
 validate_marin_checkout
 validate_campaign_configs
 prepare_judge_environment
-if [ "${WAIT_FOR_RESULTS:-0}" = "1" ]; then
+if [ "$submit" = 1 ] || [ "${WAIT_FOR_RESULTS:-0}" = "1" ]; then
   resolve_coreweave_credentials
 fi
 
