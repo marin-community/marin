@@ -20,7 +20,8 @@ It must not add every discovered post-train directly to the live graph.
 
 Each graph PR must identify its model IDs, parent evidence, uncertain or inferred
 links, validation results, and whether it changes the public tree. A merge updates
-the source; the nightly publisher releases changed main source at 04:17 UTC.
+the source; once activated, the nightly publisher releases changed main source
+at 04:17 UTC.
 The maintenance guide covers manual dispatch, release records and legacy bootstrap.
 
 ## Record the model and its parent

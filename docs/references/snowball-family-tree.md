@@ -124,7 +124,9 @@ This keeps source review and the public release record linked even for batch rel
 ### Nightly publication
 
 [Marin - Release Snowball Tree](https://github.com/marin-community/marin/actions/workflows/marin-release-snowball-tree.yaml)
-runs daily at 04:17 UTC and supports manual dispatch from `main`. It checks out
+is scheduled daily at 04:17 UTC after activation and supports manual dispatch
+from `main` independently of the schedule switch. Scheduled runs are disabled
+until the repository variable `SNOWBALL_TREE_RELEASE` equals `enabled`. It checks out
 current main, compares committed package source with the selected live revision,
 and skips unchanged source. Changed source runs the layout harness before a
 version-checked `marina release`; the normal clean-current-main guard still applies.
@@ -148,7 +150,9 @@ to confirm `serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gservice
 has `roles/iap.httpsResourceAccessor` on Marina before dispatching a dry-run.
 CI previews IAM changes but does not apply this stack. The run summary
 and `snowball-release-<run>-<attempt>` artifact record the observed previous version,
-published revision URL and source commit. No model discovery or graph editing runs
+published revision URL and source commit. The command saves the publication record
+before verifying the live selection; summary and artifact collection also run if
+verification fails. No model discovery or graph editing runs
 in this job. A source-tree change can trigger a release even if the graph is unchanged.
 
 A legacy live package without source provenance stops normal nightly publication.
@@ -162,9 +166,17 @@ gh workflow run marin-release-snowball-tree.yaml --ref main \
 
 After checking that preview, dispatch with `dry_run=false` and
 `bootstrap_unrecorded=true` to establish the recorded main baseline. Subsequent
-nightly runs need no bootstrap flag. Local reproduction uses the synced Marina
-environment and an authenticated account:
+nightly runs need no bootstrap flag. After the IAM grant, successful preview and
+bootstrap are verified, enable the schedule:
 
 ```bash
-uv run --no-sync python scripts/ci/snowball_release.py --dry-run
+gh variable set SNOWBALL_TREE_RELEASE --repo marin-community/marin --body enabled
+```
+
+Delete that variable to pause scheduled publication; manual dispatch remains
+available. Local reproduction uses the synced Marina environment and an
+authenticated account:
+
+```bash
+uv run --no-sync python scripts/ci/snowball_release.py --dry-run --record /tmp/snowball-release.json
 ```

@@ -24,7 +24,9 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.SNOWBALL_TREE_RELEASE == 'enabled')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -55,18 +57,23 @@ jobs:
           args=()
           if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
           if [[ "$BOOTSTRAP_UNRECORDED" == "true" ]]; then args+=(--bootstrap-unrecorded); fi
-          uv run --no-sync python scripts/ci/snowball_release.py "${args[@]}" > "$RUNNER_TEMP/snowball-release.json"
-          cat "$RUNNER_TEMP/snowball-release.json"
-          {
-            echo '### Snowball family-tree release'
-            echo '```json'
-            cat "$RUNNER_TEMP/snowball-release.json"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          uv run --no-sync python scripts/ci/snowball_release.py \
+            --record "$RUNNER_TEMP/snowball-release.json" "${args[@]}"
+      - name: Summarize the release record
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/snowball-release.json" ]]; then
+            {
+              echo '### Snowball family-tree release'
+              echo '```json'
+              cat "$RUNNER_TEMP/snowball-release.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Retain the release record
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: snowball-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/snowball-release.json
-          if-no-files-found: error
+          if-no-files-found: ignore
