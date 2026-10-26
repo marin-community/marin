@@ -9,7 +9,7 @@ import os
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
-from typing import cast
+from typing import TypeVar, cast
 
 from draccus.utils import DataclassInstance
 from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
@@ -29,22 +29,17 @@ from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 from marin.training.training import (
     DEFAULT_CHECKPOINTS_PATH,
-    DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT,
     DEFAULT_HF_CHECKPOINTS_PATH,
-    DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT,
-    DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME,
-    GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
-    TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV,
-    TENSORSTORE_CURL_LOW_SPEED_TIME_ENV,
-    TrainConfigT,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    TrainOnPodConfigT,
     checkpoint_resume_paths,
     temporary_checkpoint_base_path,
 )
 
 logger = logging.getLogger(__name__)
+
+TrainConfigT = TypeVar("TrainConfigT")
+TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
 
 
 def _cli_helpers_module():
@@ -275,6 +270,22 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
         return
     env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
+# XLA disables the NCCL collective watchdog by default (-1). A positive value
+# makes XLA abort the communicators and raise TimeoutError once a collective is
+# stuck that long, so a hung collective becomes a process crash Iris can retry
+# instead of a silent mesh-wide hang.
+GPU_NCCL_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
+# Counts only time spent inside a collective, so it does not fire during compile
+# or data loading. Set above the longest legitimate collective (cross-rank skew on
+# a cold start, checkpoint/eval barriers). Override per run via XLA_FLAGS.
+DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
+TENSORSTORE_CURL_LOW_SPEED_TIME_ENV = "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"
+TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV = "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME = "60"
+# TensorStore passes this decimal bytes-per-second value directly to libcurl: 1 Mbit/s.
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT = "125000"
 
 
 def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:

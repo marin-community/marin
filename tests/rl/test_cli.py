@@ -4,15 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
-<<<<<<< HEAD
-import subprocess
-import sys
-=======
 import os
 import subprocess
 import sys
 import textwrap
->>>>>>> refs/rewritten/onto
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -146,21 +141,6 @@ def test_execution_requires_a_complete_federated_route() -> None:
         )
 
 
-<<<<<<< HEAD
-def test_rl_cli_import_keeps_training_dependencies_unloaded() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import marin.rl.cli; "
-            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
-            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
-            "assert not loaded, sorted(loaded)",
-        ],
-        timeout=30,
-        capture_output=True,
-        text=True,
-=======
 def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
     module = tmp_path / "spawnable_rl.py"
     module.write_text(
@@ -202,6 +182,22 @@ def test_rl_entrypoint_can_spawn_workers(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=50,
->>>>>>> refs/rewritten/onto
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_cat_count_launcher_import_keeps_training_dependencies_unloaded() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import experiments.post_training.cat_count_canary.launcher; "
+            "heavy = {'levanter', 'transformers', 'torch', 'wandb'}; "
+            "loaded = heavy.intersection(name.split('.')[0] for name in sys.modules); "
+            "assert not loaded, sorted(loaded)",
+        ],
+        timeout=30,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr

@@ -20,6 +20,7 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.levanter import (
+    GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
     _maybe_auto_resolve_dpo_schedule,
     _resolve_run_id,
     apply_output_path,
@@ -27,7 +28,6 @@ from marin.training.levanter import (
     resolve_training_env,
 )
 from marin.training.training import (
-    GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     temporary_checkpoint_base_path,
