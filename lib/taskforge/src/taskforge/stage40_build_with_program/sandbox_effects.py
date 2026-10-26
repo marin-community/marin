@@ -31,7 +31,7 @@ because one slow exec cannot be told from a slow grader; only the second result 
 """
 
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
@@ -303,44 +303,41 @@ async def calibrate_decision_grader(
     """
     if not fluent_wrong_reply.strip() or not hedged_reply.strip():
         raise BuildFailure("calibrate_decision_grader: fluent_wrong_reply and hedged_reply must be non-empty replies")
-    replies = {REFERENCE_CONTROL: grader.reference, **{f"variant:{i}": v for i, v in enumerate(variants, 1)}}
-    levels: dict[str, float] = {}
     candidates: list[GradedCandidate] = []
-    for name, reply in replies.items():
-        grade = await _read(context, grader, reply)
-        candidates.append(graded_candidate(reply, (), grade))
-        levels[name] = _level(grade)
+
+    async def read(grader: DecisionGrader, replies: Mapping[str, str]) -> dict[str, float]:
+        levels = {}
+        for name, reply in replies.items():
+            grade = await grade_candidate(
+                context, draft.NO_MACHINE, grader, AnswerType.TEXT, ANSWER_FORMAT, CALIBRATION_INSTRUCTION, reply
+            )
+            candidates.append(graded_candidate(reply, (), grade))
+            # An unreadable candidate (including the empty answer) reads "missing".
+            levels[name] = (
+                float(grade.detail["level"]) if grade.status is Outcome.GRADED and grade.detail is not None else 0.0
+            )
+        return levels
+
+    levels = await read(
+        grader, {REFERENCE_CONTROL: grader.reference, **{f"variant:{i}": v for i, v in enumerate(variants, 1)}}
+    )
     check = known_correct_check(levels)
     if check.problem is not None:
-        problem = f"{check.problem}. {KNOWN_CORRECT_ADVICE}"
-        return DecisionCalibration(grader, problem, tuple(candidates))
+        return DecisionCalibration(grader, f"{check.problem}. {KNOWN_CORRECT_ADVICE}", tuple(candidates))
     calibrated = DecisionGrader.model_validate(
         {**grader.model_dump(), "acceptance_level": check.acceptance_level, "calibration": levels}
     )
-    candidates.append(graded_candidate("", (), await _read(context, calibrated, "")))
-    fooling: dict[str, float] = {}
-    for negative in fooling_negatives(grader.reference, fluent_wrong_reply, hedged_reply):
-        grade = await _read(context, calibrated, negative.reply)
-        candidates.append(graded_candidate(negative.reply, (), grade))
-        fooling[negative.kind.value] = _level(grade)
+    await read(calibrated, {"empty": ""})
+    fooling = await read(
+        calibrated,
+        {
+            negative.kind.value: negative.reply
+            for negative in fooling_negatives(grader.reference, fluent_wrong_reply, hedged_reply)
+        },
+    )
     calibrated = DecisionGrader.model_validate({**calibrated.model_dump(), "fooling": fooling})
     problem = fooling_problem(calibrated)
-    if problem is not None:
-        return DecisionCalibration(grader, problem, tuple(candidates))
-    return DecisionCalibration(calibrated, None, tuple(candidates))
-
-
-async def _read(context: RLEnvBuildContext, grader: DecisionGrader, reply: str) -> GradeResult:
-    return await grade_candidate(
-        context, draft.NO_MACHINE, grader, AnswerType.TEXT, ANSWER_FORMAT, CALIBRATION_INSTRUCTION, reply
-    )
-
-
-def _level(grade: GradeResult) -> float:
-    """The level a decision grade read; a candidate it could not read (an empty reply) reads "missing"."""
-    if grade.status is not Outcome.GRADED or grade.detail is None:
-        return 0.0
-    return float(grade.detail["level"])
+    return DecisionCalibration(grader if problem else calibrated, problem, tuple(candidates))
 
 
 def _decision_client(services: RLEnvBuildServices) -> DecisionClient:

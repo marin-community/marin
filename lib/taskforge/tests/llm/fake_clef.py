@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Vendored from the WS1 clefclient package (clefclient/fake.py, 2026-10-15); only imports changed.
+# Adapted from the WS1 clefclient test server (clefclient/fake.py, 2026-10-15).
 
 """FakeClef: an in-process /v1/systemone that validates requests and returns canned answers.
 
@@ -21,7 +21,14 @@ from typing import Any
 import httpx
 
 from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, input_tokens, render
-from taskforge.llm.clef.schema import ChoiceQuestion, ClefRequestError, NoulQuestion, Question, SystemOneRequest
+from taskforge.llm.clef.schema import (
+    ChoiceQuestion,
+    ClefRequestError,
+    NoulQuestion,
+    Question,
+    ScoreQuestion,
+    SystemOneRequest,
+)
 
 # Canned distribution for a question: option key -> probability (choice: names; noul: yes/no;
 # score: level index strings). Defaults to 0.7 on the first option.
@@ -78,7 +85,19 @@ class FakeClef:
         """The response body for a request body; raises ClefRequestError for a 400. ``max_length`` is a
         pinned engine window (x-clef-window); the default is the fake's own."""
         max_length = max_length or self.max_length
-        request = SystemOneRequest.from_json(body)
+        assert set(body) == {"model", "state", "questions"}
+        questions: dict[str, Question] = {}
+        for qid, payload in body["questions"].items():
+            assert set(payload) == {"type", "instructions", "criteria"}
+            kind, instructions, criteria = payload["type"], payload["instructions"], payload["criteria"]
+            if kind == "choice":
+                questions[qid] = ChoiceQuestion.of(instructions, criteria)
+            elif kind == "noul":
+                questions[qid] = NoulQuestion(instructions, **(criteria or {}))
+            else:
+                assert kind == "score"
+                questions[qid] = ScoreQuestion(instructions, tuple(criteria))
+        request = SystemOneRequest(state=body["state"], questions=questions, model=body["model"])
         self.seen.append(request)
         answers = {qid: answer_json(q, self.prober(qid, q)) for qid, q in request.questions.items()}
         return {

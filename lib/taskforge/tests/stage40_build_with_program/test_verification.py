@@ -11,7 +11,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import ExactSpec, JudgeSpec
 
 from taskforge.spec import draft
-from taskforge.spec.judge import DEFAULT_JUDGE_MODEL, JUDGE_SPEC_PATH, JudgeStrength
+from taskforge.spec.judge import DEFAULT_JUDGE_MODEL, JUDGE_SPEC_PATH
 from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage10_proposal.model import Verification
 from taskforge.stage40_build_with_program.verification import (
@@ -100,4 +100,4 @@ def test_the_judge_grader_names_the_default_judge_and_carries_the_rubric():
     assert (judge.model, judge.references, judge.context) == (DEFAULT_JUDGE_MODEL, (REFERENCE,), JUDGE_SPEC_PATH)
     (spec_file,) = built.resources.verifier
     spec = json.loads(resource_bytes(spec_file))
-    assert (spec["judge_strength"], spec["rubric"]["deliverable"]) == (JudgeStrength.DEFAULT, RUBRIC.deliverable)
+    assert (spec["judge_strength"], spec["rubric"]["deliverable"]) == ("default", RUBRIC.deliverable)

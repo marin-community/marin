@@ -174,31 +174,27 @@ async def grader(
         "under that scheme (0 without partial credit). The reference reply and files must earn full credit."
     )
     prototyped: list[GradedCandidate] = []
-    calibrated: list[DecisionGrader] = []
-
-    async def decision_problem(submitted: GraderDraft) -> str | None:
-        uncalibrated = grader_package(submitted, fixtures, requirements)
-        assert isinstance(uncalibrated, DecisionGrader)
-        calibration = await calibrate_decision_grader(
-            context,
-            uncalibrated,
-            submitted.equivalent_variants,
-            fluent_wrong_reply=submitted.fluent_wrong_reply,
-            hedged_reply=submitted.hedged_reply,
-        )
-        prototyped.extend(calibration.candidates)
-        if calibration.problem is not None:
-            return calibration.problem
-        calibrated.append(calibration.grader)
-        return None
+    package: GraderPackage | DecisionGrader | None = None
 
     async def problem(submitted: GraderDraft) -> str | None:
+        nonlocal package
         if submitted.kind == "decision_model":
-            return await decision_problem(submitted)
+            package = grader_package(submitted, fixtures, requirements)
+            assert isinstance(package, DecisionGrader)
+            calibration = await calibrate_decision_grader(
+                context,
+                package,
+                submitted.equivalent_variants,
+                fluent_wrong_reply=submitted.fluent_wrong_reply,
+                hedged_reply=submitted.hedged_reply,
+            )
+            prototyped.extend(calibration.candidates)
+            package = calibration.grader
+            return calibration.problem
         if submitted.kind == "llm_as_judge":
             # A judge calls a model and a build has none: validation's controls are its first grades.
             try:
-                grader_package(submitted, fixtures, requirements)
+                package = grader_package(submitted, fixtures, requirements)
             except ValueError as error:
                 return str(error)
             return None
@@ -267,9 +263,9 @@ async def grader(
         return None
 
     submitted = await structured_until(context, task_messages(proposal, request), GraderDraft, problem)
-    decides = submitted.kind == "decision_model"
+    assert package is not None  # structured_until returns only after problem accepts this package.
     return Grader(
-        package=calibrated[-1] if decides else grader_package(submitted, fixtures, requirements),
+        package=package,
         answer_contract=submitted.answer_contract,
         reference_reply=submitted.reference_reply,
         reference_files=tuple(task_file(f) for f in submitted.reference_files),

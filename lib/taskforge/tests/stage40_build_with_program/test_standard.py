@@ -51,6 +51,15 @@ from taskforge.stage50_validate.lowering import lower
 from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.spec.fake_decision import FakeDecisionClient, level_probabilities
 from tests.stage40_build_with_program.conftest import (
+    DECISION_FLUENT_WRONG as FLUENT_WRONG,
+)
+from tests.stage40_build_with_program.conftest import (
+    DECISION_HEDGED as HEDGED,
+)
+from tests.stage40_build_with_program.conftest import (
+    DECISION_REFERENCE,
+    DECISION_RUBRIC,
+    DECISION_VARIANTS,
     FACTORIES,
     IMAGE,
     PROPOSAL,
@@ -419,33 +428,14 @@ async def test_fixtures_list_packages_exactly_for_a_declared_package_machine(pro
     assert await check(submitted.model_copy(update={"packages": matching})) is None
 
 
-DECISION_REFERENCE = "6 * 7 = 42, so the product is 42."
-DECISION_VARIANTS = ["Multiplying six by seven gives 42.", "6 times 7 is forty-two.", "The product is 42 (6 * 7)."]
-FLUENT_WRONG = "6 * 7 = 48, so the product is 48."
-HEDGED = "The product is 42, or possibly 48."
 LENIENT_CRITERION = "The reply states a product."
-DECISION_RUBRIC = {
-    "deliverable": "The product of 6 and 7.",
-    "items": [
-        {
-            "id": "product",
-            "intent": "The reply states the product.",
-            "pass_criterion": "The product is 42.",
-            "equivalences": ["forty-two"],
-            "negation_handling": "A product named only to be rejected does not count.",
-            "weight": 1.0,
-            "role": "scored",
-            "cap_value": None,
-        }
-    ],
-}
 
 
-def decision_call(variants: list[str]) -> dict:
+def decision_call(variants: list[str] | tuple[str, ...]) -> dict:
     return {
         **grader_call(""),
         "kind": "decision_model",
-        "rubric": DECISION_RUBRIC,
+        "rubric": DECISION_RUBRIC.model_dump(mode="json"),
         "equivalent_variants": variants,
         "fluent_wrong_reply": FLUENT_WRONG,
         "hedged_reply": HEDGED,
@@ -503,7 +493,7 @@ class RubricSensitiveClient:
 
 
 async def test_the_grader_step_sends_back_a_rubric_that_credits_a_fooling_answer(context, fake_glm):
-    lenient = json.loads(json.dumps(DECISION_RUBRIC))
+    lenient = DECISION_RUBRIC.model_dump(mode="json")
     lenient["items"][0]["pass_criterion"] = LENIENT_CRITERION
     client = RubricSensitiveClient(
         FakeDecisionClient({DECISION_REFERENCE: 3.9, **dict.fromkeys(DECISION_VARIANTS, 3.2)})

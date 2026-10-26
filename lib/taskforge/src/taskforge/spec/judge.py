@@ -6,12 +6,9 @@
 ``draft.judge_grader`` packages one as a verifyit ``JudgeSpec`` whose context is ``JUDGE_SPEC_PATH``
 (``JudgeRubricSpec``: the rubric and the judge strength) in the task's verifier resources.
 
-Judge strength is a stub. ``JudgeStrength`` has one member, its judge is ``DEFAULT_JUDGE_MODEL``, and the
-authoring model never sees or sets it: ``draft.judge_grader`` takes no strength.
+Judge strength is fixed to "default" and its model is ``DEFAULT_JUDGE_MODEL``; authors cannot select it.
 """
 
-import json
-from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -30,15 +27,6 @@ JUDGE_QUESTION = (
 )
 
 
-class JudgeStrength(StrEnum):
-    """How strong a judge the task gets. A stub: the default is the only strength, and no author chooses it."""
-
-    DEFAULT = "default"
-
-
-JUDGE_MODELS: dict[JudgeStrength, str] = {JudgeStrength.DEFAULT: DEFAULT_JUDGE_MODEL}
-
-
 class JudgeRubricSpec(BaseModel):
     """The verifier artifact of an LLM-as-judge task (``JUDGE_SPEC_PATH``)."""
 
@@ -46,8 +34,4 @@ class JudgeRubricSpec(BaseModel):
 
     format: Literal["taskforge.llm_judge/1"] = JUDGE_SPEC_FORMAT
     rubric: Rubric
-    judge_strength: JudgeStrength
-
-
-def judge_spec_json(spec: JudgeRubricSpec) -> bytes:
-    return json.dumps(spec.model_dump(mode="json"), sort_keys=True, indent=2).encode()
+    judge_strength: Literal["default"] = "default"

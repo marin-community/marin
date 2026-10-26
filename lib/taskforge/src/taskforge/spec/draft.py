@@ -70,12 +70,10 @@ from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost,
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.decision import SOLVER_TURN_STATE, DecisionGrader, StateSource, task_package
 from taskforge.spec.judge import (
-    JUDGE_MODELS,
+    DEFAULT_JUDGE_MODEL,
     JUDGE_QUESTION,
     JUDGE_SPEC_PATH,
     JudgeRubricSpec,
-    JudgeStrength,
-    judge_spec_json,
 )
 from taskforge.spec.rubric import Rubric
 from taskforge.spec.verdict import VERDICT_REWARD
@@ -434,16 +432,17 @@ def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
     """
     if not reference.strip():
         raise ValueError("an LLM-as-judge grader needs a non-empty reference answer")
-    strength = JudgeStrength.DEFAULT
-    spec = JudgeRubricSpec(rubric=rubric, judge_strength=strength)
+    spec = JudgeRubricSpec(rubric=rubric)
     rubric_text = json.dumps(rubric.model_dump(mode="json"), indent=1)
     judge = JudgeSpec(
         references=(reference,),
         question=f"Rubric:\n{rubric_text}\n\n{JUDGE_QUESTION}",
         context=JUDGE_SPEC_PATH,
-        model=JUDGE_MODELS[strength],
+        model=DEFAULT_JUDGE_MODEL,
     )
-    files = (inline_resource(JUDGE_SPEC_PATH, judge_spec_json(spec)),)
+    files = (
+        inline_resource(JUDGE_SPEC_PATH, json.dumps(spec.model_dump(mode="json"), sort_keys=True, indent=2).encode()),
+    )
     return verifyit_package(judge, files, environment=grader_environment(None))
 
 

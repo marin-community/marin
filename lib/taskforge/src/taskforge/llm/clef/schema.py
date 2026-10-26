@@ -4,7 +4,7 @@
 # Copied from the WS1 clefclient package, phase11/ws1-clef-client/clefclient/schema.py in the WS1 scratch
 # workspace (2026-10-15). That package has no repository; the source file's sha256 is
 # b424aed8c3c1fb4038ced1669c5a25a57c4657ac2c266873fdb262ff505ed564.
-# Changed: unused convenience projections are omitted.
+# Changed: unused convenience projections and server-side request parsing are omitted.
 
 """Request and response model for Clef's ``POST /v1/systemone``.
 
@@ -26,8 +26,6 @@ MODEL = "clef"
 MAX_QUESTIONS = 64
 MAX_CHOICE_OPTIONS = 26
 MAX_SCORE_LEVELS = 10
-REQUEST_FIELDS = frozenset({"model", "state", "questions", "cache_salt"})
-QUESTION_FIELDS = frozenset({"type", "instructions", "criteria"})
 # vLLM's Clef proxy: a 200 whose input_tokens is within this many of the window is a truncated read.
 TRUNCATION_SLACK = 8
 
@@ -97,27 +95,6 @@ class ScoreQuestion:
 Question = ChoiceQuestion | NoulQuestion | ScoreQuestion
 
 
-def question_from_json(qid: str, payload: Mapping[str, Any]) -> Question:
-    extra = set(payload) - QUESTION_FIELDS
-    if extra:
-        raise ClefRequestError(f"question {qid!r}: unknown fields {sorted(extra)}")
-    kind = QuestionType(payload["type"])
-    instructions = payload.get("instructions") or ""
-    criteria = payload.get("criteria")
-    if kind is QuestionType.CHOICE:
-        if not isinstance(criteria, Mapping):
-            raise ClefRequestError(f"choice {qid!r}: criteria must map option name to description")
-        return ChoiceQuestion.of(instructions, criteria)
-    if kind is QuestionType.SCORE:
-        if not isinstance(criteria, list):
-            raise ClefRequestError(f"score {qid!r}: criteria must be a list of level names")
-        return ScoreQuestion(instructions, tuple(criteria))
-    criteria = criteria or {}
-    if set(criteria) - {"true", "false"}:
-        raise ClefRequestError(f"noul {qid!r}: criteria keys must be true/false")
-    return NoulQuestion(instructions, criteria.get("true"), criteria.get("false"))
-
-
 @dataclass(frozen=True)
 class SystemOneRequest:
     """One Clef read: a state and up to 64 typed questions, answered in one forward pass."""
@@ -139,18 +116,6 @@ class SystemOneRequest:
             "state": self.state,
             "questions": {qid: q.to_json() for qid, q in self.questions.items()},
         }
-
-    @classmethod
-    def from_json(cls, payload: Mapping[str, Any]) -> SystemOneRequest:
-        if "instructions" in payload:
-            raise ClefRequestError("Clef's prompt is fixed: a top-level 'instructions' field is rejected")
-        extra = set(payload) - REQUEST_FIELDS
-        if extra:
-            raise ClefRequestError(f"unknown request fields {sorted(extra)}")
-        if "state" not in payload or not isinstance(payload.get("questions"), Mapping):
-            raise ClefRequestError("state and questions are required")
-        questions = {qid: question_from_json(qid, q) for qid, q in payload["questions"].items()}
-        return cls(state=payload["state"], questions=questions, model=payload.get("model", MODEL))
 
 
 @dataclass(frozen=True)
