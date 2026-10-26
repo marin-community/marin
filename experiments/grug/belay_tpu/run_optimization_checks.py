@@ -39,6 +39,7 @@ def main():
             "gmm-layout",
             "indexed-up",
             "feature-combine",
+            "streaming-combine",
             "row-gmm",
             "kda-precision",
             "local-movement-kernel",
@@ -98,6 +99,7 @@ def main():
         "gmm-layout": ("gmm_layout_check", []),
         "indexed-up": ("indexed_up_check", []),
         "feature-combine": ("feature_combine_check", []),
+        "streaming-combine": ("streaming_combine_check", []),
         "row-gmm": ("gmm_layout_check", ["--row-partitions"]),
         "kda-precision": ("kda_precision_check", []),
         "local-row-gmm": (
@@ -201,6 +203,7 @@ def main():
             "gmm-layout",
             "indexed-up",
             "feature-combine",
+            "streaming-combine",
             "row-gmm",
             "kda-precision",
         ):
