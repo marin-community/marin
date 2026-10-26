@@ -367,6 +367,9 @@ def concatenate_trajectory_batches(
             for row in (output.get("loop_advantages") or [[0.0] * len(ids) for ids in output["response_ids"]])
         ]
 
+    # Reasoning-span evidence and marker charges; batches that lack them add zeros.
+    has_reasoning_spans = any(output.get("reasoning_span_violations") is not None for output in trajectory_batches)
+
     has_span_tags = [
         "response_span_tags" in output and output.get("response_span_tags") is not None for output in trajectory_batches
     ]
@@ -412,6 +415,22 @@ def concatenate_trajectory_batches(
         result["token_level_shaping"] = token_level_shaping_concat
     if loop_advantages_concat is not None:
         result["loop_advantages"] = loop_advantages_concat
+    if has_reasoning_spans:
+        result["reasoning_span_violations"] = [
+            row
+            for output in trajectory_batches
+            for row in (output.get("reasoning_span_violations") or [0] * len(output["response_ids"]))
+        ]
+        result["reasoning_span_violation_tokens"] = [
+            row
+            for output in trajectory_batches
+            for row in (output.get("reasoning_span_violation_tokens") or [[] for _ in output["response_ids"]])
+        ]
+        result["reasoning_span_token_penalties"] = [
+            row
+            for output in trajectory_batches
+            for row in (output.get("reasoning_span_token_penalties") or [0.0] * len(output["response_ids"]))
+        ]
     if response_span_tags_concat is not None:
         result["response_span_tags"] = response_span_tags_concat
     if unshaped_rewards_concat is not None:

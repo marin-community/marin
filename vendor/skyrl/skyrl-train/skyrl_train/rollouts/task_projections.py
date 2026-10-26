@@ -513,10 +513,8 @@ def _violation_tokens(rollout: TrainingRollout) -> list[int]:
 
 
 def _attach_reasoning_violations(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
-    counts = [len(reasoning_violations(rollout)) for rollout in rollouts]
-    if any(counts):
-        batch["reasoning_span_violations"] = counts
-        batch["reasoning_span_violation_tokens"] = [_violation_tokens(rollout) for rollout in rollouts]
+    batch["reasoning_span_violations"] = [len(reasoning_violations(rollout)) for rollout in rollouts]
+    batch["reasoning_span_violation_tokens"] = [_violation_tokens(rollout) for rollout in rollouts]
 
 
 def _task_error_policies(
