@@ -9,6 +9,11 @@ from typing import Mapping, Protocol, Sequence
 import numpy as np
 
 
+# The fewest eligible responses that define a group baseline.
+MIN_BASELINE_GROUP_SIZE = 2
+# Eligible reward ranges at or below this tolerance contribute no outcome advantage.
+FLAT_GROUP_REWARD_TOLERANCE = 1e-6
+
 _INITIAL_ADMISSION_STALL_TIMEOUT = 1800.0
 _MINIMUM_ADMISSION_STALL_TIMEOUT = 600.0
 _STEP_TIME_MULTIPLIER = 5.0
@@ -57,9 +62,9 @@ class GroupAdvantageInvariant:
         if self.kind is GroupAdvantageKind.MINIMUM_BASELINE_ELIGIBLE:
             if self.minimum_group_size is None:
                 raise ValueError("minimum_baseline_eligible requires minimum_group_size")
-            if not 2 <= self.minimum_group_size <= self.physical_group_size:
+            if not MIN_BASELINE_GROUP_SIZE <= self.minimum_group_size <= self.physical_group_size:
                 raise ValueError(
-                    "minimum_group_size must be between 2 and physical_group_size, got "
+                    f"minimum_group_size must be between {MIN_BASELINE_GROUP_SIZE} and physical_group_size, got "
                     f"{self.minimum_group_size} and {self.physical_group_size}"
                 )
         elif self.minimum_group_size is not None:
@@ -93,6 +98,15 @@ class GroupAdvantageInvariant:
             "physical_group_size": self.physical_group_size,
             "minimum_group_size": self.minimum_group_size,
         }
+
+
+def validate_group_baseline(invariant: GroupAdvantageInvariant) -> None:
+    """Require enough samples per prompt to train a group-relative estimator."""
+    if invariant.kind is not GroupAdvantageKind.NONE and invariant.physical_group_size < MIN_BASELINE_GROUP_SIZE:
+        raise ValueError(
+            f"a group-relative advantage estimator needs at least {MIN_BASELINE_GROUP_SIZE} samples per prompt, "
+            f"got {invariant.physical_group_size}; raise generator.n_samples_per_prompt or use advantage_estimator=reward"
+        )
 
 
 class AdmissionRejection(StrEnum):
@@ -212,6 +226,27 @@ def _aligned_sequence(batch: Mapping[str, object], key: str, row_count: int) -> 
     return value
 
 
+def final_row_mask(trajectory_batch: Mapping[str, object]) -> np.ndarray:
+    """Identify each trial's final response row."""
+    responses = trajectory_batch.get("response_ids")
+    if not isinstance(responses, Sequence) or isinstance(responses, (str, bytes)):
+        raise ValueError("response_ids must be a sequence")
+    final = _aligned_sequence(trajectory_batch, "is_last_step", len(responses))
+    return np.ones(len(responses), dtype=bool) if final is None else np.asarray(final, dtype=bool)
+
+
+def baseline_eligible_mask(trajectory_batch: Mapping[str, object]) -> np.ndarray:
+    """Identify final rows included in their prompt group's baseline."""
+    final = final_row_mask(trajectory_batch)
+    exclusions = _aligned_sequence(trajectory_batch, "exclude_from_baseline", len(final))
+    return final if exclusions is None else final & ~np.asarray(exclusions, dtype=bool)
+
+
+def rewards_are_flat(rewards: Sequence[float]) -> bool:
+    """Return whether the eligible reward range is within the flat-group tolerance."""
+    return max(rewards) - min(rewards) <= FLAT_GROUP_REWARD_TOLERANCE
+
+
 @dataclass(frozen=True)
 class _GroupFacts:
     physical_count: int
@@ -240,17 +275,10 @@ def _inspect_group(group: GeneratedGroup) -> _GroupFacts:
                 f"loss_masks row {row_index} must align with response_ids, got {len(loss_mask)} and {len(response)}"
             )
 
-    is_last_step = _aligned_sequence(batch, "is_last_step", row_count)
-    final_indices = (
-        list(range(row_count)) if is_last_step is None else [i for i, value in enumerate(is_last_step) if value]
-    )
-    if not final_indices:
+    final = final_row_mask(batch)
+    if not final.any():
         raise ValueError("is_last_step must identify at least one final trial row")
-
-    exclusions = _aligned_sequence(batch, "exclude_from_baseline", row_count)
-    baseline_contributor_count = (
-        len(final_indices) if exclusions is None else sum(not bool(exclusions[index]) for index in final_indices)
-    )
+    baseline_contributor_count = int(baseline_eligible_mask(batch).sum())
 
     rollout_logprobs = _aligned_sequence(batch, "rollout_logprobs", row_count)
     has_trainable_rollout_logprobs = rollout_logprobs is not None
@@ -270,7 +298,7 @@ def _inspect_group(group: GeneratedGroup) -> _GroupFacts:
                 has_trainable_rollout_logprobs = False
 
     return _GroupFacts(
-        physical_count=len(final_indices),
+        physical_count=int(final.sum()),
         trainable_count=sum(any(bool(token) for token in loss_mask) for loss_mask in loss_masks),
         baseline_contributor_count=baseline_contributor_count,
         has_rollout_logprobs=has_trainable_rollout_logprobs,

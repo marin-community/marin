@@ -44,9 +44,6 @@ class AdvantageEstimatorRegistry(BaseFunctionRegistry):
     the skyrl_train package. Custom estimators can be registered by calling
     AdvantageEstimatorRegistry.register() directly or by using the @register_advantage_estimator
     decorator.
-
-    See examples/algorithms/custom_advantage_estimator for a simple example of how to
-    register and use custom advantage estimators.
     """
 
     _actor_name = "advantage_estimator_registry"
