@@ -245,7 +245,7 @@ def training_config(
             "gradient_checkpointing": True,
             "offload_optimizer_during_rollouts": False,
             # The feed grows during the run, so max_steps decides the length, not the epoch count.
-            "epochs": 1000,
+            "epochs": 1,
             "max_steps": steps,
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
