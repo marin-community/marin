@@ -3,7 +3,7 @@
 
 """Score Snowball self-identity behavior against any vLLM OpenAI-compatible endpoint.
 
-The shared scorer for task #296 and its tracks (#297 merges, #302 cold-start SFT, #304 edits).
+The shared scorer for the identity work and its tracks (merges, cold-start SFT, edits).
 Prompt sets and the scoring policy live in ``~/Dropbox/marin-notes/snowball-identity/prompts/``.
 
 Two suites:
