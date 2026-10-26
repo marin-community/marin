@@ -901,10 +901,12 @@ def _moe_mlp_ep_ragged_a2a_local(
     mxfp8: bool = False,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
+    capacity_topk: int | None = None,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """``overlap_fn`` (with ``overlap_tokens`` / ``overlap_params``, see ``MoeOverlapWork``) runs under the first
-    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended."""
+    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended.
+    ``capacity_topk`` sizes the receiver buffers for that many valid assignments per token instead of ``K``."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -915,7 +917,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     ep_size = num_experts // local_experts
     tokens_per_shard = x_local.shape[0]
     topk = selected_experts_local.shape[1]
-    assignments_per_shard = tokens_per_shard * topk
+    assignments_per_shard = tokens_per_shard * (topk if capacity_topk is None else capacity_topk)
     physical_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
     physical_capacity = max(local_experts, physical_capacity)
 

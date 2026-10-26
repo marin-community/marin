@@ -69,10 +69,13 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    THRESH_COUNT,
+    THRESH_WEIGHT_SUM,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
     LayerSkip,
+    Routing,
     Transformer,
     forward_flops_per_token,
 )
@@ -629,7 +632,9 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         # Dense blocks have no router (QB routing dropped), so there is no router_bias to set.
         return model
     new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+    if model.config.routing == Routing.TOP_K:
+        # Top-k ranking is shift-invariant; a threshold (``logit + b > 0``) is not, so it keeps the absolute bias.
+        new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
     # qb_betas are in layer order; each stack takes the rows of its own layers.
     # A stack with fewer experts than the widest layer (final_num_experts) takes only its own columns.
     per_stack = [
@@ -652,7 +657,10 @@ def initial_state(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
         opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.full(
+            (model_config.num_layers, model_config.num_experts),
+            model_config.thresh_init_beta if model_config.routing == Routing.THRESHOLD else 0.0,
+        ),
     )
 
 
@@ -1493,6 +1501,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 
 TOKEN_DUMP_BATCHES = 4
+# Re-solve passes of the token dump's held-out thresholds (``Routing.THRESHOLD``).
+THRESH_RESOLVE_PASSES = 2
 
 
 def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequences: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1526,7 +1536,9 @@ def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequence
 
 def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
     """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays: ``next_token_loss``,
-    and with ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers."""
+    and with ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers. ``Routing.THRESHOLD``
+    adds each token's per-layer expert count and total combine weight ``[B, L, S]``, and the batch's per-layer
+    re-solved QB betas and expert assignment counts ``[L, E]`` (``qb_beta``, ``expert_counts``; not per token)."""
 
     @jax.jit
     def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
@@ -1534,6 +1546,13 @@ def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
         weight = jnp.ones(tokens.shape, jnp.float32)
         out = {"next_token_loss": model.next_token_loss(tokens, weight, mask=mask, reduction="none")}
+        if model.config.routing == Routing.THRESHOLD:
+            _, stats = model(tokens, mask=mask)
+            for name, key in (("thresh_count", THRESH_COUNT), ("thresh_weight", THRESH_WEIGHT_SUM)):
+                per_layer = stats[key].reshape(stats[key].shape[0], *tokens.shape)
+                out[name] = jnp.transpose(per_layer, (1, 0, 2))
+            out["qb_beta"] = stats["qb_beta_per_layer"]
+            out["expert_counts"] = stats["routing_counts_per_layer"]
         if skip_layers:
             skip = LayerSkip(skip_layers, jnp.zeros(tokens.shape, jnp.bool_))
             out["skipped_loss"] = model.next_token_loss(tokens, weight, mask=mask, reduction="none", layer_skip=skip)
@@ -1556,19 +1575,43 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     skip_layers = config.trainer.token_dump_skip_layers
     step = _token_dump_step(config.trainer.trainer.mp, skip_layers)
-    parts: list[dict[str, np.ndarray]] = []
-    for start in range(0, num_sequences, batch_size):
-        batch = [
-            jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
-            for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
-        ]
-        # Gather the batch-sharded outputs onto every process (a multi-process run cannot device_get them).
-        outputs = multihost_utils.process_allgather(step(state.params, state.pending_qb_betas, *batch), tiled=True)
-        parts.append({k: np.asarray(v) for k, v in outputs.items()})
+
+    def dump_pass(qb_betas: jax.Array) -> list[dict[str, np.ndarray]]:
+        parts: list[dict[str, np.ndarray]] = []
+        for start in range(0, num_sequences, batch_size):
+            batch = [
+                jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
+                for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
+            ]
+            # Gather the batch-sharded outputs onto every process (a multi-process run cannot device_get them).
+            outputs = multihost_utils.process_allgather(step(state.params, qb_betas, *batch), tiled=True)
+            parts.append({k: np.asarray(v) for k, v in outputs.items()})
+        return parts
+
+    parts = dump_pass(state.pending_qb_betas)
+    per_batch = ("qb_beta", "expert_counts")
+    extra: dict[str, np.ndarray] = {}
+    if cfg.routing == Routing.THRESHOLD:
+        # Thresholds re-solved on the held-out tokens (mean of the batches' QB solutions, a fixed point over
+        # THRESH_RESOLVE_PASSES passes, since each layer's logits depend on the earlier layers' thresholds), so the
+        # held-out mean expert count is num_experts_per_token exactly; the dump keeps both.
+        extra["train_qb_beta"] = np.asarray(state.pending_qb_betas, np.float32)
+        resolved = parts
+        for _ in range(THRESH_RESOLVE_PASSES):
+            betas = np.mean(np.stack([p["qb_beta"] for p in resolved]), axis=0)
+            resolved = dump_pass(jnp.asarray(betas, jnp.float32))
+        extra["resolved_applied_qb_beta"] = betas.astype(np.float32)
+        extra["resolved_expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in resolved]), axis=0)
+        for k in parts[0]:
+            if k in per_batch:
+                continue
+            extra[f"resolved_{k}"] = np.concatenate([p[k] for p in resolved]).astype(np.float16)
+        extra["expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in parts]), axis=0).astype(np.float32)
     if jax.process_index() != 0:
         return
     buffer = io.BytesIO()
-    arrays = {k: np.concatenate([p[k] for p in parts]).astype(np.float16) for k in parts[0]}
+    arrays = {k: np.concatenate([p[k] for p in parts]).astype(np.float16) for k in parts[0] if k not in per_batch}
+    arrays.update(extra)
     np.savez(
         buffer,
         tokens=tokens,
