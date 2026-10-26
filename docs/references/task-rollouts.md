@@ -81,6 +81,8 @@ The selected factory applies network and hardware settings. Memory is advisory o
 preparation omits that allocation because bubblewrap cannot enforce it.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
+Docker, gVisor, and Daytona images must include Python 3 for command teardown;
+the factory rejects images without it before running task commands.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.
 TaskCompendium downloads the lock and the `environment.json` and `files.tar` stored beside it, if any,
 then builds a managed CPython environment with the locked packages, verifyit, and the placed files.

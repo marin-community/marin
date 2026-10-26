@@ -27,9 +27,11 @@ class ProcessScope:
 
     directory: str = field(default_factory=lambda: f"/tmp/.shellbox-process-{uuid.uuid4().hex}")
 
+    python: str = "python3"
+
     def command(self, argv: tuple[str, ...], timeout: float | None) -> tuple[str, ...]:
         return (
-            "python3",
+            self.python,
             "-I",
             "-S",
             "-c",
@@ -41,8 +43,8 @@ class ProcessScope:
         )
 
     def cancel_command(self) -> str:
-        return shlex.join(("python3", "-I", "-S", "-c", SUPERVISOR_SOURCE, "cancel", self.directory))
+        return shlex.join((self.python, "-I", "-S", "-c", SUPERVISOR_SOURCE, "cancel", self.directory))
 
     def status_command(self) -> str:
         """Read the supervisor outcome independently of command output truncation."""
-        return shlex.join(("python3", "-I", "-S", "-c", SUPERVISOR_SOURCE, "status", self.directory))
+        return shlex.join((self.python, "-I", "-S", "-c", SUPERVISOR_SOURCE, "status", self.directory))

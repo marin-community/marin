@@ -63,6 +63,8 @@ def cancel(control: Path) -> None:
         if (control / "done").exists():
             return
         if not (control / "pid").exists():
+            if (control / "started").exists():
+                raise RuntimeError("Command supervisor identity is missing")
             return  # A queued launch observes cancel before creating children.
         os.kill(int((control / "pid").read_text()), signal.SIGTERM)
     deadline = time.monotonic() + CLEANUP_TIMEOUT + 2
@@ -91,6 +93,7 @@ def run(control: Path, budget: str, argv: list[str]) -> int:
             return 143
         if (control / "pid").exists() or (control / "done").exists():
             raise RuntimeError("Command scope has already been started")
+        (control / "started").touch()
         (control / "pid").write_text(str(os.getpid()))
     code = 143
     timed_out = False
