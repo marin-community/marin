@@ -120,8 +120,11 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
     }
     assert list(edited.to_skyrl()["generator"]["engine_init_kwargs"]["user_options"]) == ["math", "code"]
     assert edited.to_skyrl()["trainer"] == {**part.to_skyrl()["trainer"], "ckpt_interval": 4}
-    named_option = edited.with_settings(["generator.engine_init_kwargs.user_options.backend=custom-engine"])
+    named_option = edited.with_settings(
+        ["generator.engine_init_kwargs.user_options.backend=custom-engine", "trainer.run_name=123"]
+    )
     assert named_option.to_skyrl()["generator"]["engine_init_kwargs"]["user_options"]["backend"] == "custom-engine"
+    assert named_option.to_skyrl()["trainer"]["run_name"] == "123"
     with pytest.raises(json.JSONDecodeError):
         edited.with_settings(['generator.engine_init_kwargs.user_options={"items":'])
     structured = expected.with_settings(['context_budget={"max_turns":4}'])
