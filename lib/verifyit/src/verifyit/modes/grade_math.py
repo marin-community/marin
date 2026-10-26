@@ -161,6 +161,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
         if (
             not isinstance(value, Expr)
             or value.free_symbols
+            or not value.is_commutative
             or getattr(value, "is_finite", None) is not True
             or value.has(Float)
         ):

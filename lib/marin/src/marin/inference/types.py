@@ -126,6 +126,7 @@ type BrokerResponse = InferenceResponse | StreamEvent
 class InferenceWorkerMetadata:
     tensor_parallel_size: int
     backend_name: str
+    auxiliary_url: str
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,8 @@ class InferenceRequestProvider(Protocol):
 
 
 class InferenceResponseProvider(Protocol):
+    def ready_workers(self) -> tuple[InferenceWorkerMetadata, ...]: ...
+
     def submit_request(self, request: InferenceRequest) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[BrokerResponse]: ...
