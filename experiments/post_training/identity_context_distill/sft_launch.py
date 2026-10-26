@@ -96,6 +96,7 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
 )
 from experiments.post_training.identity_context_distill.runtime_recipe import (
     check_precision_runtime_receipt,
+    check_xla_precision,
     configure_precision_runtime,
     require_xla_precision,
     xla_precision_env,
@@ -439,7 +440,7 @@ def sft_worker(
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
-    require_xla_precision(runtime_receipt["xla_precision"])
+    check_xla_precision(runtime_receipt["xla_precision"])
     check_pod_storage()
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()

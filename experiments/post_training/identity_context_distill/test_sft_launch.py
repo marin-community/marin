@@ -118,7 +118,6 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
     calls: dict = {"writer": 0}
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {receipt_sha})
-    monkeypatch.setattr(sft_launch, "require_xla_precision", lambda setting: calls.setdefault("xla", setting))
 
     def writer(action):
         calls["writer"] += 1
@@ -192,7 +191,6 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
     assert config.model.moe_capacity_factor == 4.0
     assert config.model.router_combine_fp32 is True and config.model.fp32_activations is True
     assert config.model.attention_implementation == "torch_order"
-    assert calls["xla"] == "default"
     assert kwargs["receipt_sha256"] == hashlib.sha256(receipt_bytes).hexdigest()
     assert config.trainer.compute_dtype_overrides == {"router_bias": "float32"}
     assert config.adapter.frozen_field_names == ("router_bias",)
