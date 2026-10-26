@@ -114,6 +114,11 @@ exactly one `after_prefix` must match. Its `tokens` are inserted immediately aft
 that prefix for teacher scoring. Different entries can handle native thinking
 and nonthinking headers. Ambiguous or unmatched prefixes fail before scoring.
 
+An entry can also set `after_marker: [token IDs]`. The tokens then go after the
+first occurrence of the marker that follows the prefix, so one entry covers a
+header of variable length, such as a system header that lists each row's tools.
+A matched prefix with no following marker fails before scoring.
+
 Student prompts, rollout response IDs, response masks, and route weights are
 unchanged. Teacher capability validation includes the inserted tokens when
 checking the context window. Local teacher engines reserve the largest insertion

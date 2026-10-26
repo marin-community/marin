@@ -6,22 +6,35 @@
 Two arms share one recipe (``recipe.yaml``) and one frozen mix (``build_mix.py``):
 
 - ``dry``: learning rate 0 for 2 updates, with the mismatch probe scoring the probe prompts through vLLM generation,
-  a vLLM re-score and the Megatron trainer before and after each update, and an HF export after update 2 for the
-  weight hashes. It is the trainer's forward-parity check and the step-0 measurement.
+  a vLLM re-score and the Megatron trainer before and after each update, every rollout retained, and an HF export
+  after update 2 for the weight hashes. It is the trainer's forward-parity check and the step-0 measurement.
 - ``train``: the 20-update run.
 
 Both run in the production band with no retries on 8 H100 nodes: 4 policy (PP2 x EP8), 2 rollout engines, 2 teachers.
+
+Usage (prints the plan and output roots; add ``--run`` to submit the coordinator)::
+
+    python -m experiments.post_training.identity_opd.launch --arm dry --version 2026.10.26.1
+
+The storage prefix is pinned to the cluster's region and the mix files to their sha256s; either mismatch stops the
+launch before anything is built.
 """
 
 import copy
+import hashlib
+import os
 from pathlib import Path
 
 import click
 import yaml
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
+from marin.experiment.cli import graph_handles
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
+    SKYRL_TEMPORARY_STORAGE_TTL_DAYS,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
@@ -30,11 +43,19 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
+    skyrl_temporary_run_path,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.cluster_config import marin_prefix
 
 EXPERIMENT_NAME = "snowball-identity-opd-cd16"
+MIX_NAME = "data/snowball-identity-opd-cd16-mix"
 CLUSTER = "cw-rno2a"
+# Every output of this run stays in the cluster's region; a 67B checkpoint must not land in another bucket.
+# The temporary root holds the native checkpoints and attempt state; unset, it would fall to another region's bucket.
+PREFIX = "s3://marin-rno2a/marin"
+TEMP_PREFIX = "s3://marin-rno2a"
 SEED = 20261026
 RECIPE = Path(__file__).with_name("recipe.yaml")
 
@@ -52,6 +73,11 @@ TOKENIZER_REVISION = "adc0078a19a4383bc998fcdb43867b3360baf5f3"
 MIX_ROOT = "s3://marin-rno2a/marin/experiments/snowball-identity/t310/opd-cd16-r1/mix"
 MIX_FILE = "mixed.parquet"
 PROBE_FILE = "probe.parquet"
+# The frozen mix (mix-report.json b4f9ba91); the launch refuses any other bytes.
+MIX_SHA256 = {
+    MIX_FILE: "877a2f60d1f1236585bfa633f6e29460f3f21b0145838e06fae59b9d9e21a26c",
+    PROBE_FILE: "ff9eb3021f9956781f06d8d8d843a4c0573b97bcc9e7f510021f6cb1019df327",
+}
 
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
@@ -80,6 +106,37 @@ DRY_PROBE = {
 }
 
 
+def pin_prefix() -> None:
+    """Make ``PREFIX`` and ``TEMP_PREFIX`` the storage roots, refusing an environment that names others."""
+    for variable, expected in (("MARIN_PREFIX", PREFIX), ("MARIN_TEMP_PREFIX", TEMP_PREFIX)):
+        current = os.environ.get(variable)
+        if current is not None and current.rstrip("/") != expected:
+            raise click.UsageError(f"{variable} is {current!r}; this run writes only under {expected}")
+        os.environ[variable] = expected
+    if marin_prefix() != PREFIX:
+        raise click.UsageError(f"storage prefix resolved to {marin_prefix()!r}, not {PREFIX}")
+
+
+def temporary_root(output_root: str) -> str:
+    """The run's native-checkpoint and attempt root, which must stay under ``TEMP_PREFIX``."""
+    root = skyrl_temporary_run_path(output_root, ttl_days=SKYRL_TEMPORARY_STORAGE_TTL_DAYS)
+    if not root.startswith(f"{TEMP_PREFIX}/"):
+        raise click.UsageError(f"temporary root {root} is outside {TEMP_PREFIX}")
+    return root
+
+
+def verify_mix(root: str = MIX_ROOT) -> None:
+    """Refuse to launch unless each mix file under ``root`` has its pinned sha256."""
+    for name, expected in MIX_SHA256.items():
+        digest = hashlib.sha256()
+        fs, path = filesystem_for(f"{root}/{name}")
+        with fs.open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise click.UsageError(f"{root}/{name} has sha256 {digest.hexdigest()}, expected {expected}")
+
+
 def recipe(arm: str) -> str:
     config = yaml.safe_load(RECIPE.read_text())
     if arm == "dry":
@@ -95,18 +152,20 @@ def recipe(arm: str) -> str:
             {"type": "logging"},
             {"type": "progress"},
         ]
+        # Keep every rollout for the step-0 measures; a failed publish fails the run.
+        config["generator"]["trajectory_retention"] = {"sample_fraction": 1.0, "required": True}
     elif arm != "train":
         raise ValueError(f"unknown arm {arm!r}")
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def build(arm: str, version: str):
-    mix = ArtifactStep.adopt("data/snowball-identity-opd-cd16-mix", version, MIX_ROOT)
-    name = f"checkpoints/{EXPERIMENT_NAME}/{arm}"
+def build(arm: str) -> ArtifactStep:
+    mix = ArtifactStep.adopt(MIX_NAME, resolve_version(MIX_NAME, None), MIX_ROOT)
+    name = user_owned_name(f"checkpoints/{EXPERIMENT_NAME}/{arm}")
     return skyrl_step(
         SkyRLSpec(
-            name=user_owned_name(name),
-            version=version,
+            name=name,
+            version=resolve_version(name, None),
             config_yaml=recipe(arm),
             model=ArtifactHfModel(
                 step=STUDENT, tokenizer_uri=TOKENIZER_URI, tokenizer_revision=TOKENIZER_REVISION, relative_path=""
@@ -135,11 +194,17 @@ def build(arm: str, version: str):
     )
 
 
-@click.command()
+@click.command(help=__doc__)
 @click.option("--arm", type=click.Choice(["dry", "train"]), required=True)
-@click.option("--version", required=True, help="calendar version of the frozen mix and this run, e.g. 2026.10.26.1")
-def main(arm: str, version: str) -> None:
-    click.echo(build(arm, version))
+@rl_build_options
+def main(arm: str) -> ArtifactStep:
+    pin_prefix()
+    verify_mix()
+    step = build(arm)
+    for handle in graph_handles([step]):
+        click.echo(f"output root: {handle.name}@{handle.version} -> {handle.path(PREFIX)}")
+    click.echo(f"temporary root: {temporary_root(step.path(PREFIX))}")
+    return step
 
 
 if __name__ == "__main__":

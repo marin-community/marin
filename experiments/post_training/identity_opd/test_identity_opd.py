@@ -1,13 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+import os
 import random
 import re
 from pathlib import Path
 
+import click
 import pytest
 import yaml
+from click.testing import CliRunner
 
 from experiments.post_training.identity_opd import build_mix, launch
 from experiments.post_training.identity_opd.other_lab import FORMS, PRODUCTS, other_lab_questions
@@ -148,10 +152,59 @@ def test_dry_arm_only_changes_lr_steps_probe_and_saves():
     assert dry["trainer"]["max_steps"] == 2
     assert dry["trainer"]["mismatch_probe"]["updates"] == 2
     dry["trainer"]["policy"]["optimizer_config"]["lr"] = train["trainer"]["policy"]["optimizer_config"]["lr"]
+    assert dry["generator"].pop("trajectory_retention") == {"sample_fraction": 1.0, "required": True}
+    assert "trajectory_retention" not in train["generator"]
     for key in ("max_steps", "ckpt_interval", "hf_save_interval", "callbacks", "mismatch_probe"):
         train["trainer"].pop(key, None)
         dry["trainer"].pop(key, None)
     assert train == dry
+
+
+def test_mix_pin_refuses_other_bytes(tmp_path, monkeypatch):
+    for name in (launch.MIX_FILE, launch.PROBE_FILE):
+        (tmp_path / name).write_bytes(name.encode())
+    monkeypatch.setattr(
+        launch,
+        "MIX_SHA256",
+        {name: hashlib.sha256(name.encode()).hexdigest() for name in (launch.MIX_FILE, launch.PROBE_FILE)},
+    )
+    launch.verify_mix(str(tmp_path))
+    (tmp_path / launch.PROBE_FILE).write_bytes(b"changed")
+    with pytest.raises(click.UsageError, match=r"probe\.parquet has sha256"):
+        launch.verify_mix(str(tmp_path))
+    (tmp_path / launch.PROBE_FILE).unlink()
+    with pytest.raises(FileNotFoundError):
+        launch.verify_mix(str(tmp_path))
+
+
+def test_prefixes_are_pinned_to_the_cluster_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    with pytest.raises(click.UsageError, match="MARIN_PREFIX"):
+        launch.pin_prefix()
+    monkeypatch.delenv("MARIN_PREFIX")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a")
+    with pytest.raises(click.UsageError, match="MARIN_TEMP_PREFIX"):
+        launch.pin_prefix()
+    monkeypatch.delenv("MARIN_TEMP_PREFIX")
+    launch.pin_prefix()
+    assert os.environ["MARIN_PREFIX"] == launch.PREFIX
+    assert launch.temporary_root(f"{launch.PREFIX}/users/u/checkpoints/x/dry/2026.10.26.1").startswith(
+        "s3://marin-rno2a/tmp/"
+    )
+
+
+def test_main_plans_without_submitting_and_prints_region_roots(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    checked = []
+    monkeypatch.setattr(launch, "verify_mix", lambda: checked.append(True))
+    result = CliRunner().invoke(launch.main, ["--arm", "dry", "--version", "2026.10.26.1"])
+    assert result.exit_code == 0, result.output
+    assert checked == [True]
+    roots = [line for line in result.output.splitlines() if line.startswith(("output root:", "temporary root:"))]
+    assert len(roots) == 4
+    assert all(" -> s3://marin-rno2a/" in line or line.startswith("temporary root: s3://marin-rno2a/") for line in roots)
+    assert "submitted" not in result.output
 
 
 V01_TOKENIZER = (
