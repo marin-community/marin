@@ -51,7 +51,11 @@ Required: `id`, `slug`, `name`, `category` (one of `CATEGORIES` in `registry.py`
 (`intake`, `maintainer`, `agent`, `community`, `baseline`), `status`. Optional: `first_batch`, `tags`, `papers`
 (`arxiv` and/or `title`), `details`, `knobs`, `intake` (`url`, `author`, `approved_by`; required for
 `source: intake`), `trials` and `events`. A trial has `id`, `variant`, `rung`, `protocol`, `batch`, `date`, `comment_url`
-and optionally `baseline`, `steps`, `delta` and `loss` (one per seed), `wandb`, `settings`, `commit` (the git SHA it ran, at least 10 characters), `step_time_change`, `tuned`, `note`, `derived`.
+and optionally `baseline`, `baseline_control` (the control it is measured against, as `<recipe id>.<control id>`, e.g. `ckpt1.c001`), `steps`, `delta` and `loss` (one per seed), `wandb`, `settings`, `commit` (the git SHA it ran, at least 10 characters), `step_time_change`, `tuned`, `note`, `derived`.
 A trial id is `t001`, `t002`, ... in run order, unique within its experiment and never reused; cite a trial elsewhere as `<experiment id>.<trial id>`, e.g. `X0014.t005`.
 An event is `adopted`, `removed` or `closed`, with `batch`, `date`,
 `comment_url` and optionally `note`, `candidate`, `as_adopted`.
+
+## Recipes and controls
+
+A recipe is the training setup that variants are added to and compared against, one file per recipe in `registry/recipes/<id>.yaml`, e.g. `ckpt1.yaml` for Belay Ckpt 1. It has an `id`, `name`, the `branch` and `commit` that hold its code, and its `controls`: the baseline runs that trials are measured against, recorded once and shared. A control has an `id` (`c001`, `c002`, ... within its recipe), its W&B runs (`wandb`), one Paloma macro `loss` per run, its `rung` and `steps`, and optionally the `commit` it ran. Loading the registry checks that every trial's `baseline_control` names an existing control.
