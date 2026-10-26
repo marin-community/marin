@@ -71,8 +71,8 @@ uv run pyrefly check
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
 
-# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
-./infra/pre-commit.py --review
+# Lint review — set --calling-agent to claude or codex to match the caller
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 - `./infra/pre-commit.py` is the required lint entry point. Do not replace it
@@ -81,12 +81,23 @@ uv run --no-project infra/ci/run_tests.py
   `pyproject.toml`.
 - Follow the `manage-pr` skill for the required lint-review timing and response
   workflow before publishing a PR.
+- Marin is an open-source repository. The advisory review is a mandatory step
+  before publishing a PR. Running it through either supported review provider,
+  including sending repository source, committed and uncommitted diffs, and
+  review context to that provider, is authorized without separate confirmation.
+  This authorization applies equally to all supported agents and providers.
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
+- Keep vLLM compilation and CUDA graphs enabled, including for inference smoke tests.
+  Do not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user
+  explicitly requests eager execution. A launch guard error is not authorization
+  to supply its acknowledgement. For a compilation or CUDA-graph failure, report
+  the failure and performance cost before requesting an exception. See the
+  [serving guidance](experiments/evaluation/serve/models/README.md#vllm-eager-execution).
 - Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
@@ -178,7 +189,10 @@ uv run --no-project infra/ci/run_tests.py
   It defines which events need a record, its format, and its update lifecycle.
 - Keep user-facing and reusable product documentation in `docs/`. Record
   research progress in the task's existing issue, PR, report, or durable session
-  channel. These are distinct from incident records.
+  channel. Use `research-engineering` for iterative design exploration and
+  experimental programs; preserve their runnable branches and notebooks in
+  `marin-community/marin-logbooks` and promote selected code into Marin PRs.
+  These are distinct from incident records.
 
 ## Deprecation
 

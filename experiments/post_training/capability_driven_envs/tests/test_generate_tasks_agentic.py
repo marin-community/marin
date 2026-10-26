@@ -39,6 +39,7 @@ def connect(endpoint: GlmEndpoint) -> Model:
     return model
 
 
+@pytest.mark.asyncio
 async def test_a_relay_model_follows_a_relay_that_moved():
     relay = MovingRelay()
     model = RelayModel(relay, connect)

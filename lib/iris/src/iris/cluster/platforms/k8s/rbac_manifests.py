@@ -48,6 +48,13 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
+        # Per-attempt Cilium egress policies. The controller writes them by
+        # server-side apply; Kubernetes deletes each with its owning pod.
+        "apiGroups": ["cilium.io"],
+        "resources": ["ciliumnetworkpolicies"],
+        "verbs": ["create", "patch"],
+    },
+    {
         "apiGroups": ["policy"],
         "resources": ["poddisruptionbudgets"],
         "verbs": ["get", "list", "create", "update", "patch", "delete"],

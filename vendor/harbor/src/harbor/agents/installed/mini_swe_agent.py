@@ -466,12 +466,13 @@ class MiniSweAgent(BaseInstalledAgent):
             environment,
             command=(
                 "set -euo pipefail; "
-                "curl -LsSf https://astral.sh/uv/0.13.1/install.sh | sh && "
+                "curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh && "
                 'if ! grep -q \'export PATH="$HOME/.local/bin:$PATH"\' "$HOME/.bashrc" 2>/dev/null; then'
                 '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
                 " fi && "
                 'source "$HOME/.local/bin/env" && '
                 f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} "
+                "--with 'openai>=2' --with 'httpx>=0.27' --with 'tenacity>=9.1.2' "
                 "--excludes <(echo litellm) && "
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
                 "-c 'from mcp.types import CacheableResult' && "
@@ -484,6 +485,14 @@ class MiniSweAgent(BaseInstalledAgent):
             Path(__file__).parents[2] / "llms" / "vllm_tokenization.py",
         ):
             await environment.upload_file(source, f"{_MODEL_DIRECTORY}/{source.name}")
+        await self.exec_as_agent(
+            environment,
+            command=(
+                'source "$HOME/.local/bin/env"; '
+                '"$(uv tool dir)/mini-swe-agent/bin/python" '
+                "-c 'import mini_swe_model'"
+            ),
+        )
 
     @property
     def _mini_swe_agent_trajectory_path(self) -> PurePosixPath:

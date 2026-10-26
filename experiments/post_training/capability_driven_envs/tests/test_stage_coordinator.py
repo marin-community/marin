@@ -62,6 +62,7 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+@pytest.mark.asyncio
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
     proposal = capability_idea_record(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(

@@ -381,8 +381,8 @@ link mode. CoreWeave's task workdirs and shared cache use the same node-local XF
 filesystem, where the copy shares extents with the cache: a 4.3 GB PyTorch
 install added 44 MB of used space. Unlike symlink mode, a copied environment stays
 usable after its cache entries are removed. Clone mode would behave the same, but
-the task image's uv 0.10.3 drops executable bits when it makes XFS reflinks,
-which leaves wheel binaries such as `ptxas` unrunnable.
+uv 0.10.3 dropped executable bits when it made XFS reflinks, which left wheel
+binaries such as `ptxas` unrunnable. Later uv releases have not been rechecked.
 
 If a uv install fails against the shared cache but succeeds with a task-local
 cache, Iris records that recovery on the node. Three distinct recoveries within

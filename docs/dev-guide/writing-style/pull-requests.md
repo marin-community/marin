@@ -91,6 +91,8 @@ Before committing or calling `gh pr create` or `gh pr edit`:
 Use `printf %s '<title>' | wc -m` for the title. Inspect the body file itself
 after drafting it.
 
-The agent prose cleanup workflow applies an agentic editorial pass after
-publication. It preserves technical evidence while removing presentation and
-diff narration. It does not replace the author's exact-payload review.
+The agent prose cleanup workflow defaults to leaving published descriptions
+alone. It makes small edits only for egregious prose or agent attribution, such
+as "written by Claude". A useful 80-character description is fine; length,
+minor style issues, and harmless formatting alone do not warrant a rewrite.
+It does not replace the author's exact-payload review.

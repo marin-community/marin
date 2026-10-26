@@ -173,6 +173,18 @@ class InferenceBroker:
         with self._lock:
             return dict(self._worker_metadata)
 
+    def ready_workers(self) -> tuple[InferenceWorkerMetadata, ...]:
+        """Return endpoints whose workers still hold a live heartbeat lease."""
+        with self._lock:
+            if self._finished:
+                return ()
+            now = self._clock()
+            return tuple(
+                metadata
+                for worker_id, metadata in self._worker_metadata.items()
+                if now - self._worker_heartbeats[worker_id] < WORKER_LEASE_SECONDS
+            )
+
     def submit_request(self, request: InferenceRequest) -> None:
         with self._lock:
             if self._finished:

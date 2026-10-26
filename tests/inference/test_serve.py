@@ -71,7 +71,7 @@ from marin.inference.model_preparation import resolve_model_path, select_tensor_
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
-from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.types import InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
@@ -1212,6 +1212,7 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
         upstream_base_url = f"http://127.0.0.1:{upstream_port}"
         if topology == "brokered":
             broker = InferenceBroker(request_lease_timeout_seconds=30)
+            broker.register_worker("test-worker", InferenceWorkerMetadata(1, "vllm", upstream_base_url))
             worker = InferenceWorker(
                 worker_id="test-worker",
                 broker=broker,

@@ -204,13 +204,39 @@ HTTP MCP headers in place.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
-`roles/secretmanager.secretAccessor` for each reference in
-`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch.
+Create the secret and upload its value before referencing it. The stack imports
+each referenced secret without managing its versions, so preview fails while one
+is missing, and removing the last reference leaves the secret in place. The VM
+account's project-level `roles/secretmanager.secretAccessor` grant in
+`infra/pulumi/src/iac/gcp/loom.py` covers every reference. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
 `app` OS account.
+
+Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
+from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
+profiles, which accept a per-launch agent override, and the Claude automation
+profiles. Strict Codex profiles omit it. The value is a one-year token from
+`claude setup-token`, and the secret's `expires` annotation records its expiry.
+Claude Code prefers this variable to the login stored on the shared session home
+volume, so sessions do not depend on that login. An `ANTHROPIC_API_KEY` would
+take precedence over the token. Keep it out of `LOOM_DOTENV`, whose variables
+reach every session of a profile without `envClear`.
+
+Loom resolves `versions/latest` whenever it starts an agent, so rotation needs
+no deploy. New and resumed sessions use the new version; running agents keep the
+token they started with.
+
+```sh
+claude setup-token  # save the printed token to token.txt
+tr -d '[:space:]' < token.txt | gcloud secrets versions add \
+  LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models --data-file=-
+gcloud secrets update LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models \
+  --update-annotations=expires=YYYY-MM-DD
+rm token.txt
+```
 
 An interactive session always brokers the `loom-oa-dev` GitHub App for its own
 repository, and a stored personal token still takes precedence over it. The
