@@ -1,5 +1,5 @@
 # BF16 reference: v5p-8 / TP4, one host, no expert parallelism.
-# Serving stack: vLLM fb02daf and tpu-inference 1f2efcd; select the TPU
+# Serving stack: vLLM fb02daf and tpu-inference 509d688fa; select the TPU
 # variant in the launcher. The GCS location below is the staged us-east5 copy.
 # The pinned config derives 19 sliding-window layers and 7 full-attention layers;
 # no layer_types override is needed.
