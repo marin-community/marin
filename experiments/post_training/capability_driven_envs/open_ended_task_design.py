@@ -72,6 +72,16 @@ class OpenEndedControl(BaseModel):
         return self
 
 
+def _validate_rubric(rubric: Rubric) -> None:
+    scored = [item for item in rubric.items if item.role is ItemRole.SCORED]
+    weight = sum(item.weight for item in scored)
+    if abs(weight - 1.0) > WEIGHT_TOLERANCE:
+        raise ValueError(f"scored rubric weights sum to {weight}, not 1")
+    nonzero_caps = [item.id for item in rubric.items if item.role is not ItemRole.SCORED and item.weight != 0]
+    if nonzero_caps:
+        raise ValueError(f"gate, cap, and disqualifier rubric items must have zero weight: {nonzero_caps}")
+
+
 class AuthoredControl(BaseModel):
     """A private calibration answer before campaign policy assigns its reward band."""
 
@@ -101,6 +111,7 @@ class AuthoredTaskDesign(BaseModel):
 
     @model_validator(mode="after")
     def complete_controls(self) -> Self:
+        _validate_rubric(self.rubric)
         kinds = [control.kind for control in self.controls]
         if any(kinds.count(kind) != 1 for kind in ControlKind):
             raise ValueError("authored design needs exactly one control of every required kind")
@@ -130,13 +141,7 @@ class OpenEndedTaskDesign(BaseModel):
 
     @model_validator(mode="after")
     def valid_grading_contract(self) -> Self:
-        scored = [item for item in self.rubric.items if item.role is ItemRole.SCORED]
-        weight = sum(item.weight for item in scored)
-        if abs(weight - 1.0) > WEIGHT_TOLERANCE:
-            raise ValueError(f"scored rubric weights sum to {weight}, not 1")
-        nonzero_caps = [item.id for item in self.rubric.items if item.role is not ItemRole.SCORED and item.weight != 0]
-        if nonzero_caps:
-            raise ValueError(f"gate, cap, and disqualifier rubric items must have zero weight: {nonzero_caps}")
+        _validate_rubric(self.rubric)
         kinds = [control.kind for control in self.controls]
         missing = sorted(str(kind) for kind in ControlKind if kind not in kinds)
         if missing:
