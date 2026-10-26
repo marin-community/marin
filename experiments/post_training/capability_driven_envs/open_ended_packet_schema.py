@@ -46,6 +46,24 @@ class PacketSource(BaseModel):
     importer_revision: str = Field(min_length=1)
 
 
+class PacketEnvironment(BaseModel):
+    """Portable no-network Python environment for the initial analysis tasks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    packages: tuple[str, ...] = ()
+    workdir: str = "/workspace"
+
+    @model_validator(mode="after")
+    def valid_workdir(self) -> Self:
+        path = PurePosixPath(self.workdir)
+        if not path.is_absolute() or str(path) != self.workdir or ".." in path.parts:
+            raise ValueError("packet environment workdir must be a normalized absolute POSIX path")
+        if len(set(self.packages)) != len(self.packages) or any(not package.strip() for package in self.packages):
+            raise ValueError("packet environment packages must be unique nonempty requirements")
+        return self
+
+
 class PacketFile(BaseModel):
     """One content-addressed packet file and its eventual resource path."""
 
@@ -81,6 +99,7 @@ class PacketManifest(BaseModel):
     split_group: str = Field(min_length=1)
     brief_path: str = Field(min_length=1)
     source: PacketSource
+    environment: PacketEnvironment
     tags: tuple[str, ...] = ()
     release_status: OpenEndedReleaseStatus
     files: tuple[PacketFile, ...] = Field(min_length=1)

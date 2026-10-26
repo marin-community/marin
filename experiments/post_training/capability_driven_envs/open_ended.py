@@ -13,7 +13,7 @@ additional task data.
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_paths
-from taskcompendium.models import Source, TaskResource
+from taskcompendium.models import EnvironmentRequirements, Source, TaskResource
 from taskforge.content_hash import digest
 
 from experiments.post_training.capability_driven_envs.open_ended_packet_schema import OpenEndedReleaseStatus
@@ -48,6 +48,7 @@ class OpenEndedTaskBundle(BaseModel):
     solver_resources: tuple[TaskResource, ...] = Field(min_length=1)
     author_evidence: tuple[TaskResource, ...] = Field(min_length=1)
     source: Source
+    environment_requirements: EnvironmentRequirements
     release_status: OpenEndedReleaseStatus
     tags: tuple[str, ...] = ()
 
@@ -76,6 +77,7 @@ class OpenEndedTaskBundle(BaseModel):
             split_group=self.split_group,
             solver_resources=self.solver_resources,
             source=self.source,
+            environment_requirements=self.environment_requirements,
             release_status=self.release_status,
             tags=self.tags,
         )
@@ -91,5 +93,6 @@ class OpenEndedBuildInput(BaseModel):
     split_group: str = Field(min_length=1)
     solver_resources: tuple[TaskResource, ...] = Field(min_length=1)
     source: Source
+    environment_requirements: EnvironmentRequirements
     release_status: OpenEndedReleaseStatus
     tags: tuple[str, ...] = ()

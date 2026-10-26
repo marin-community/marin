@@ -33,6 +33,7 @@ from taskforge.stage10_proposal.model import (
     solver_machine_violation,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
+from taskforge.stage40_build_with_program.sdk import solver_machine as requirements_solver_machine
 
 from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBundle
 
@@ -404,6 +405,11 @@ class OpenEndedProposalSource:
 
     async def propose(self, idea: OpenEndedTaskBundle, n: int) -> ProposalBatch:
         """Plan ``n`` slots and write each proposed slot concurrently."""
+        required_machine = requirements_solver_machine(idea.environment_requirements)
+        if required_machine is not self.config.solver_machine:
+            raise ValueError(
+                f"bundle environment requires solver_machine {required_machine}, not {self.config.solver_machine}"
+            )
         planned = await plan_slots(self.model, self.policy, idea, n)
         try:
             async with asyncio.TaskGroup() as group:

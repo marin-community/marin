@@ -435,11 +435,12 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
     return verifyit_package(spec, environment=environment)
 
 
-def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
+def judge_grader(rubric: Rubric, reference: str, *, model: str | None = None) -> GraderPackage:
     """An LLM-as-judge grader: a model judge applies ``rubric`` to the answer, reading ``reference`` beside it.
 
-    For deliverables whose prose is the product. The grader is a verifyit ``JudgeSpec`` naming the judge of
-    the default strength (``spec.judge``, a stub the author never sets), with the rubric spec
+    For deliverables whose prose is the product. The grader is a verifyit ``JudgeSpec`` naming ``model``
+    when supplied, otherwise the judge of the default strength (``spec.judge``, a stub the author never sets),
+    with the rubric spec
     (``JUDGE_SPEC_PATH``) as its context. RolloutEngine grades it on the host through the judge service of
     ``TaskRolloutSpec.judge_connection`` or ``VERIFYIT_JUDGE_BASE_URL``, with no verifier machine: the
     grader-base environment it declares is there because TaskCompendium's ``VerifyitGrader`` requires one
@@ -457,7 +458,7 @@ def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
         references=(reference,),
         question=f"Rubric:\n{rubric_text}\n\n{JUDGE_QUESTION}",
         context=JUDGE_SPEC_PATH,
-        model=JUDGE_MODELS[strength],
+        model=model or JUDGE_MODELS[strength],
     )
     files = (inline_resource(JUDGE_SPEC_PATH, judge_spec_json(spec)),)
     return verifyit_package(judge, files, environment=grader_environment(None))

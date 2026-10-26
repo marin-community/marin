@@ -18,7 +18,7 @@ from experiments.post_training.capability_driven_envs.open_ended_proposal_source
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
 from experiments.post_training.capability_driven_envs.tests.test_open_ended import bundle
 
-CONFIG = OpenEndedProposalConfig(Environment.REASONING, SolverMachine.PACKAGES)
+CONFIG = OpenEndedProposalConfig(Environment.SHELLSIM, SolverMachine.SHELLSIM)
 
 
 def slot(number: int, *, status: str = "propose", question: str | None = None) -> dict[str, object]:
@@ -69,8 +69,8 @@ def test_source_plans_slots_and_writes_only_the_non_null_proposals():
     first, second = batch.proposals
     assert first.header.null_reason == "the bundle cannot support another distinct analysis"
     assert second.header.null_reason is None
-    assert second.header.environment is Environment.REASONING
-    assert second.header.solver_machine is SolverMachine.PACKAGES
+    assert second.header.environment is Environment.SHELLSIM
+    assert second.header.solver_machine is SolverMachine.SHELLSIM
     assert second.header.resources == ("workspace/data/v_gene_counts.csv",)
     assert second.header.source.hash == bundle().content_digest
 

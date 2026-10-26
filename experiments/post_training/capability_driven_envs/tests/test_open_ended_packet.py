@@ -10,6 +10,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from experiments.post_training.capability_driven_envs.open_ended_packet import load_open_ended_packet
 from experiments.post_training.capability_driven_envs.open_ended_packet_schema import (
     OpenEndedReleaseStatus,
+    PacketEnvironment,
     PacketFileDeclaration,
     PacketManifest,
     PacketSource,
@@ -66,6 +67,7 @@ def packet(root: Path) -> None:
             row="synthetic-mait",
             importer_revision="1",
         ),
+        environment=PacketEnvironment(packages=("pandas==3.1.0",)),
         tags=("biology", "synthetic"),
         release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
         files=inventory_files(root, declarations),

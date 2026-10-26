@@ -1,0 +1,236 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""One-map Zephyr port for complete open-ended Taskforge bundle lifecycles."""
+
+import asyncio
+import os
+import tempfile
+from collections.abc import Awaitable, Callable, Iterable, Iterator
+from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+
+from fray.types import ResourceConfig
+from taskforge.llm.agent import ReasoningReplay
+from taskforge.llm.client import ModelClient
+from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, ReasoningEffort
+from taskforge.sandbox.factories import MachineHost, machine_factories
+from taskforge.stage10_proposal.model import Environment, SolverMachine
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
+from taskforge.stage40_build_with_program.sdk import solver_machine
+from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage_coordinator.workpiece_machine import Terminal
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import JudgeSpec
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
+
+from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBundle
+from experiments.post_training.capability_driven_envs.open_ended_coordinator import (
+    manual_open_ended_coordinator,
+    verifyit_control_scorer,
+)
+from experiments.post_training.capability_driven_envs.open_ended_proposal_source import (
+    OpenEndedProposalConfig,
+    OpenEndedProposalSource,
+)
+from experiments.post_training.capability_driven_envs.open_ended_runner import OpenEndedRuntime, run_open_ended_bundle
+
+IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
+
+
+@dataclass(frozen=True)
+class OpenAIModelPort:
+    """Non-secret endpoint configuration serialized to Zephyr workers."""
+
+    base_url: str
+    model: str
+    api_key_env: str
+    pool: Pool = Pool.BULK
+
+    def __post_init__(self) -> None:
+        if not self.base_url.endswith("/v1"):
+            raise ValueError("base_url must end in /v1")
+        if not self.model or not self.api_key_env:
+            raise ValueError("model and api_key_env must be nonempty")
+
+
+@dataclass(frozen=True)
+class OpenEndedZephyrConfig:
+    """Execution policy for one open-ended lifecycle map."""
+
+    port: OpenAIModelPort
+    proposals_per_bundle: int = 1
+    control_concurrency: int = 2
+
+
+def _proposal_config(bundle: OpenEndedTaskBundle) -> OpenEndedProposalConfig:
+    machine = solver_machine(bundle.environment_requirements)
+    if machine is SolverMachine.PACKAGES:
+        return OpenEndedProposalConfig(Environment.REASONING, machine)
+    if machine is SolverMachine.SHELLSIM:
+        return OpenEndedProposalConfig(Environment.SHELLSIM, machine)
+    if machine is SolverMachine.CPYTHON:
+        return OpenEndedProposalConfig(Environment.REASONING, machine)
+    raise ValueError(f"open-ended Zephyr does not support solver machine {machine}")
+
+
+def _provider(port: OpenAIModelPort) -> LLMProviderConfig:
+    return LLMProviderConfig(
+        model=port.model,
+        max_attempts=4,
+        hold_timeout=900,
+        backoff_initial=1,
+        backoff_maximum=30,
+        backoff_factor=2,
+        stall_timeout=300,
+        max_connections=16,
+        structured_repairs=1,
+    )
+
+
+def _policy() -> LLMPolicy:
+    return LLMPolicy(
+        max_tokens=4096,
+        reasoning_effort=ReasoningEffort.LOW,
+        temperature=0.7,
+        top_p=0.95,
+        max_continuations=0,
+    )
+
+
+def _services(controller_url: str) -> RLEnvBuildServices:
+    factories = machine_factories(MachineHost.IRIS, controller_url)
+    return RLEnvBuildServices(
+        host=MachineHost.IRIS,
+        factories=factories,
+        images=None,
+        web_tools=(),
+        ledger=None,
+        reasoning_replay=ReasoningReplay.KEEP,
+        agent_limits=AgentLimits(max_turns=4, max_tokens=4096, max_calls=8),
+        decision=None,
+    )
+
+
+def _accepted_task_json(root: Path, workpiece_id: str) -> str:
+    drafts = sorted((root / "workpieces" / workpiece_id / "rounds").glob(f"*/{DRAFT_DIR}"))
+    if not drafts:
+        raise ValueError(f"accepted workpiece {workpiece_id!r} has no persisted draft")
+    return load_draft(drafts[-1]).task.model_dump_json()
+
+
+async def run_bundle_lifecycle(
+    bundle: OpenEndedTaskBundle,
+    *,
+    model: ModelClient,
+    policy: LLMPolicy,
+    services: RLEnvBuildServices,
+    judge_model: str,
+    control_scorer: Callable[[JudgeSpec, str], Awaitable[float]],
+    root: Path,
+    proposals_per_bundle: int = 1,
+    control_concurrency: int = 2,
+) -> dict[str, object]:
+    """Run proposal through calibrated review and return portable accepted-task rows."""
+    source = OpenEndedProposalSource(model, policy, _proposal_config(bundle))
+    runtime = OpenEndedRuntime(
+        proposal_source=source,
+        coordinator=lambda hydrated: manual_open_ended_coordinator(
+            root=root / "coordinator",
+            bundle=hydrated,
+            model=model,
+            sampling=policy,
+            services=services,
+            judge_model=judge_model,
+            control_scorer=control_scorer,
+            control_concurrency=control_concurrency,
+        ),
+    )
+    result = await run_open_ended_bundle(
+        bundle,
+        runtime,
+        slot_count=proposals_per_bundle,
+        root=root,
+    )
+    slots: list[dict[str, object]] = []
+    for slot in result.slots:
+        item = slot.model_dump(mode="json")
+        if slot.terminal is Terminal.ACCEPTED and slot.workpiece_id is not None:
+            item["task_json"] = _accepted_task_json(root / "coordinator", slot.workpiece_id)
+        slots.append(item)
+    return {
+        "bundle_id": result.bundle_id,
+        "bundle_digest": result.bundle_digest,
+        "proposal_key": result.proposal_cache_key,
+        "model": judge_model,
+        "slots": slots,
+    }
+
+
+async def _run_bundle(row: dict[str, object], config: OpenEndedZephyrConfig) -> dict[str, object]:
+    bundle = OpenEndedTaskBundle.model_validate_json(str(row["bundle_json"]))
+    token = os.environ.get(config.port.api_key_env)
+    if not token:
+        raise RuntimeError(f"worker lacks required API credential environment variable {config.port.api_key_env}")
+    controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
+    if not controller_url:
+        raise RuntimeError(f"worker lacks {IRIS_CONTROLLER_URL_ENV}; this port runs inside an Iris task")
+    endpoint = GlmEndpoint(config.port.base_url, token, config.port.pool)
+    connection = JudgeConnection(config.port.base_url, token)
+    policy = _policy()
+    with tempfile.TemporaryDirectory(prefix=f"open-ended-{bundle.bundle_id}-") as temporary:
+        root = Path(temporary)
+        async with GlmClient(FixedEndpoint(endpoint), _provider(config.port)) as model:
+            return await run_bundle_lifecycle(
+                bundle,
+                model=model,
+                policy=policy,
+                services=_services(controller_url),
+                judge_model=config.port.model,
+                control_scorer=verifyit_control_scorer(connection),
+                root=root,
+                proposals_per_bundle=config.proposals_per_bundle,
+                control_concurrency=config.control_concurrency,
+            )
+
+
+def run_bundle_shard(
+    rows: Iterable[dict[str, object]],
+    shard_info: object,
+    *,
+    config: OpenEndedZephyrConfig,
+) -> Iterator[dict[str, object]]:
+    """Run each bundle's complete lifecycle sequentially inside one Zephyr shard."""
+    del shard_info
+    for row in rows:
+        yield asyncio.run(_run_bundle(row, config))
+
+
+def run_open_ended_zephyr(
+    bundles: Iterable[OpenEndedTaskBundle],
+    *,
+    config: OpenEndedZephyrConfig,
+    output: str,
+    max_workers: int = 32,
+    logical_shards: int = 128,
+    region: str = "us-central1",
+) -> object:
+    """Execute one outer Zephyr map over fully hydrated bundle rows."""
+    rows = [{"bundle_json": bundle.model_dump_json()} for bundle in bundles]
+    if not rows:
+        raise ValueError("at least one bundle is required")
+    shards = min(logical_shards, len(rows))
+    dataset = Dataset.from_list(rows)
+    if shards > 1:
+        dataset = dataset.reshard(shards)
+    pipeline = dataset.map_shard(partial(run_bundle_shard, config=config)).write_jsonl(output)
+    with ZephyrContext(
+        max_workers=min(max_workers, shards),
+        resources=ResourceConfig(cpu=1, ram="4g", disk="16g", regions=[region], preemptible=True),
+        name="open-ended-taskforge",
+        heartbeat_timeout=900,
+    ) as context:
+        return context.execute(pipeline, name="open-ended-taskforge")

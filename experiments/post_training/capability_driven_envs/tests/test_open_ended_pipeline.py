@@ -106,6 +106,7 @@ def synthetic_bundle() -> OpenEndedTaskBundle:
             row="synthetic-mait-gene-usage",
             importer_revision="1",
         ),
+        environment_requirements=requirements(image=None),
         release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
         tags=("biology", "synthetic"),
     )
@@ -240,11 +241,16 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("an accepted workpiece must not run another stage")
 
 
-def coordinator(root: Path, bundle: OpenEndedTaskBundle, build=run_build) -> StageCoordinator:
+def coordinator(
+    root: Path,
+    bundle: OpenEndedTaskBundle,
+    build=run_build,
+    program=PROGRAM,
+) -> StageCoordinator:
     stages = StageFunctions(
         triage=preflight,
         repair=no_call,
-        author=static_author(PROGRAM),
+        author=static_author(program),
         load_program=load_program,
         build=build,
         validate=validate,

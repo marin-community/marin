@@ -9,6 +9,7 @@ from typing import Any
 
 from taskcompendium.models import Source
 from taskcompendium.runtime.resources import inline_resource
+from taskforge.spec.draft import requirements
 
 from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBrief, OpenEndedTaskBundle
 from experiments.post_training.capability_driven_envs.open_ended_packet_schema import (
@@ -75,6 +76,11 @@ def load_open_ended_packet(root: Path, *, expected_bundle_digest: str | None = N
         solver_resources=tuple(solver_resources),
         author_evidence=tuple(author_evidence),
         source=Source.model_validate(manifest.source.model_dump()),
+        environment_requirements=requirements(
+            image=None,
+            packages=manifest.environment.packages,
+            workdir=manifest.environment.workdir,
+        ),
         release_status=manifest.release_status,
         tags=manifest.tags,
     )
