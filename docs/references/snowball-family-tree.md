@@ -133,8 +133,20 @@ a checkout that is stale at its main check and conflicts with another publisher;
 the job does not retry publication blindly. Rerun after inspecting the new state.
 
 The workflow uses the existing main-only Cloud Run deployment service account via
-GitHub OIDC. Its Marina IAP access is declared in the shared `marin` IAM stack;
-that grant must be deployed before the workflow can access Marina. The run summary
+GitHub OIDC. An IAM operator must deploy its Marina IAP grant from the shared
+`marin` stack in `infra/pulumi/` before activating publication. Follow the
+[deployment environment setup and IAM review procedure](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants),
+then preview and apply the reviewed main checkout from the repository root:
+
+```bash
+pulumi -C infra/pulumi preview --stack marin
+pulumi -C infra/pulumi up --stack marin
+```
+
+Use the [Cloud Run IAP access check](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#cloud-run-iap-access)
+to confirm `serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com`
+has `roles/iap.httpsResourceAccessor` on Marina before dispatching a dry-run.
+CI previews IAM changes but does not apply this stack. The run summary
 and `snowball-release-<run>-<attempt>` artifact record the observed previous version,
 published revision URL and source commit. No model discovery or graph editing runs
 in this job. A source-tree change can trigger a release even if the graph is unchanged.
