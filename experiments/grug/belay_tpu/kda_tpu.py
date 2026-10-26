@@ -17,6 +17,7 @@ from jaxtyping import Array, Float, Int
 
 from experiments.grug.belay_tpu.kda_chunk_prep import chunk_prep_midpoint
 from experiments.grug.belay_tpu.kda_fused_prep_tpu import chunk_prep_fused
+from experiments.grug.belay_tpu.kda_fused_state_tpu import fused_chunk_state
 from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
 from experiments.grug.belay_tpu.kda_state_tpu import state_pass
 from experiments.grug.belay_tpu.kda_triangular_tpu import chunk_prep_solve
@@ -39,6 +40,7 @@ def chunk_kda_tpu(
     chunk_size: int = 16,
     solve_groups: int = 0,
     fused_prep: bool = False,
+    fused_recurrence: bool = False,
     state_precision: jax.lax.Precision = jax.lax.Precision.HIGHEST,
 ) -> tuple[jax.Array, jax.Array]:
     """Evaluate packed KDA with a 128-wide saved state and bounded decay tiles."""
@@ -82,10 +84,28 @@ def chunk_kda_tpu(
         raise ValueError("Fused preparation requires one/four solve groups")
     if solve_groups:
         prepare = functools.partial(chunk_prep_fused if fused_prep else chunk_prep_solve, groups=solve_groups)
-    prep = prepare(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
     initial = jnp.zeros((b * h, d, d), jnp.float32)
     if initial_state is not None:
         initial = initial_state.astype(jnp.float32).reshape(b * h, d, d)
+
+    if fused_recurrence:
+        if not fused_prep or state_tile != 1 or solve_groups != state_head_group:
+            raise ValueError("Fused recurrence requires fused preparation and matching solve/head groups")
+        out, final = fused_chunk_state(
+            qc,
+            kc,
+            ec,
+            vc,
+            gc,
+            beta.reshape(b, h, n, c),
+            masks,
+            initial,
+            dtype=matmul_dtype,
+            precision=state_precision,
+            heads=state_head_group,
+        )
+        return out.reshape(b, h, n * c, d)[..., :length, :], final.reshape(b, h, d, d)
+    prep = prepare(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
 
     def flatten(x):
         return x.reshape(b * h, n, *x.shape[-2:])

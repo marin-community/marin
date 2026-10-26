@@ -49,22 +49,24 @@ def _factors(q, k, e, v, cumulative, beta, masks, dtype):
     return _prep_factors(q, k, e, v, cumulative, beta[..., 0], mm, q.shape[-2], masks)
 
 
-def _forward(*refs, dtype):
-    q, k, e, v, g, beta, same, carry, last, through = (r[...] for r in refs[:10])
-    outputs = refs[10:]
+def _forward_values(q, k, e, v, g, beta, same, carry, last, through, *, dtype):
     lower = same & jnp.tril(jnp.ones(same.shape[-2:], dtype=bool))
     cumulative = _prefix_product(lower, g)
     qi, attention, kw, decay, a, rhs = _factors(q, k, e, v, cumulative, beta, _masks(same, carry, last, through), dtype)
     inverse = _inverse(a, dtype)
     solved = _product(inverse, rhs, dtype)
-    values = (qi, solved[..., 128:], solved[..., :128], attention, kw, decay[:, None, :], inverse, cumulative)
-    for ref, value in zip(outputs, values, strict=True):
+    return qi, solved[..., 128:], solved[..., :128], attention, kw, decay[:, None, :], inverse, cumulative
+
+
+def _forward(*refs, dtype):
+    values = _forward_values(*(r[...] for r in refs[:10]), dtype=dtype)
+    for ref, value in zip(refs[10:], values, strict=True):
         ref[...] = value
 
 
-def _backward(*refs, dtype):
-    q, k, e, v, cumulative, beta, same, carry, last, through, inverse, kcd, vp = (r[...] for r in refs[:13])
-    dqi, dkcd, dvp, dattention, dkw, ddecay = (r[...] for r in refs[13:19])
+def _backward_values(*inputs, dtype):
+    q, k, e, v, cumulative, beta, same, carry, last, through, inverse, kcd, vp = inputs[:13]
+    dqi, dkcd, dvp, dattention, dkw, ddecay = inputs[13:]
     da, drhs = _solve_gradients(inverse, jnp.concatenate((vp, kcd), -1), jnp.concatenate((dvp, dkcd), -1), dtype)
     masks = _masks(same, carry, last, through)
     function = functools.partial(_factors, masks=masks, dtype=dtype)
@@ -74,7 +76,12 @@ def _backward(*refs, dtype):
     dq, dk, de, dv, dcumulative, dbeta = backward((dqi, dattention, dkw, ddecay[:, 0, :], da, drhs))
     lower = same & jnp.tril(jnp.ones(same.shape[-2:], dtype=bool))
     dg = _prefix_product(_transpose(lower), dcumulative)
-    for ref, value in zip(refs[19:], (dq, dk, de, dv, dg, dbeta), strict=True):
+    return dq, dk, de, dv, dg, dbeta
+
+
+def _backward(*refs, dtype):
+    values = _backward_values(*(r[...] for r in refs[:19]), dtype=dtype)
+    for ref, value in zip(refs[19:], values, strict=True):
         ref[...] = value
 
 

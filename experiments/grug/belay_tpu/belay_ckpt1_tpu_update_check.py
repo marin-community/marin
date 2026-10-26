@@ -157,6 +157,7 @@ def main():
     parser.add_argument("--kda-chunk-size", type=int, choices=(16, 32, 64), default=16)
     parser.add_argument("--kda-solve-groups", type=int, choices=(0, 1, 4), default=0)
     parser.add_argument("--kda-fused-prep", action="store_true")
+    parser.add_argument("--kda-fused-recurrence", action="store_true")
     parser.add_argument("--kda-state-head-group", type=int, choices=(1, 4), default=1)
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
     parser.add_argument("--route-counts", choices=("source", "factorized"), default="source")
@@ -193,12 +194,15 @@ def main():
     state_precision = jax.lax.Precision[args.kda_state_precision.upper()]
     if (args.kda_chunk_size != 16 or args.kda_fused_prep) and not args.kda_solve_groups:
         parser.error("Larger chunks and fused preparation require one/four causal saved-solve groups")
+    if args.kda_fused_recurrence and (not args.kda_fused_prep or args.kda_solve_groups != args.kda_state_head_group):
+        parser.error("Fused recurrence requires fused preparation and matching solve/head groups")
     model.chunk_kda_tpu = functools.partial(
         model.chunk_kda_tpu,
         state_precision=state_precision,
         chunk_size=args.kda_chunk_size,
         solve_groups=args.kda_solve_groups,
         fused_prep=args.kda_fused_prep,
+        fused_recurrence=args.kda_fused_recurrence,
         state_head_group=args.kda_state_head_group,
     )
     if args.initial_checkpoint and args.reference_step1:
@@ -306,6 +310,7 @@ def main():
             "diagnostic/kda_chunk_size": args.kda_chunk_size,
             "diagnostic/kda_solve_groups": args.kda_solve_groups,
             "diagnostic/kda_fused_prep": args.kda_fused_prep,
+            "diagnostic/kda_fused_recurrence": args.kda_fused_recurrence,
             "diagnostic/kda_state_head_group": args.kda_state_head_group,
             "diagnostic/attention_kernel": args.attention_kernel,
             "diagnostic/saved_relu2": args.saved_relu2,
@@ -323,6 +328,7 @@ def main():
         chunk_size=args.kda_chunk_size,
         solve_groups=args.kda_solve_groups,
         fused_prep=args.kda_fused_prep,
+        fused_recurrence=args.kda_fused_recurrence,
         state_head_group=args.kda_state_head_group,
     )
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()

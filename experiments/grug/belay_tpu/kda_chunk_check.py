@@ -25,7 +25,10 @@ def main():
     parser.add_argument("--saved-solve", action="store_true")
     parser.add_argument("--fused-prep", action="store_true")
     parser.add_argument("--state-heads", action="store_true")
+    parser.add_argument("--fused-recurrence", action="store_true")
     args = parser.parse_args()
+    if args.fused_recurrence and (args.state_heads or not (args.saved_solve and args.fused_prep)):
+        parser.error("Fused recurrence comparison requires --saved-solve --fused-prep without --state-heads")
     if args.state_heads and not (args.saved_solve and args.fused_prep):
         parser.error("Head batching comparison requires --saved-solve --fused-prep")
     if args.fused_prep and not args.saved_solve:
@@ -43,20 +46,30 @@ def main():
         variants = [(16, 0, False, 1)] + [(c, group, False, 1) for c in (16, 32, 64) for group in (1, 4)]
     else:
         variants = [(c, 0, False, 1) for c in (16, 32, 64, 128)]
-    seed = 431 if args.state_heads else 426
+    variants = [(*variant, False) for variant in variants]
+    if args.fused_recurrence:
+        variants = [(16, 0, False, 1, False)] + [
+            (c, h, True, h, combined) for c in (16, 32, 64) for h in (1, 4) for combined in (False, True)
+        ]
+    seed = 432 if args.fused_recurrence else 431 if args.state_heads else 426
     tracker.log_summary(
         {
             "kernel_check/input_seed": seed,
             "kernel_check/saved_solve": args.saved_solve,
             "kernel_check/fused_prep": args.fused_prep,
             "kernel_check/state_heads": args.state_heads,
+            "kernel_check/fused_recurrence": args.fused_recurrence,
         }
     )
     failures = []
     cases = (("packed", 57), ("strong_decay", 128), ("long", 128), ("target", 4096), ("weak_decay", 4096))
     with jax.default_device(jax.local_devices()[0]), jax.default_matmul_precision("highest"):
         for case, length in cases:
-            shape = (8, 4, length, 128) if length == 4096 else (1, 4 if args.state_heads else 2, length, 128)
+            shape = (
+                (8, 4, length, 128)
+                if length == 4096
+                else (1, 4 if args.state_heads or args.fused_recurrence else 2, length, 128)
+            )
             for dtype, tolerance in ((jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)):
                 if length == 4096 and dtype == jnp.float32:
                     continue
@@ -80,13 +93,14 @@ def main():
                 )
                 expected = None
                 head_reference = None
+                separate_reference = None
                 oracle = (
                     jax.jit(functools.partial(evaluate, recurrent_kda))(inputs, segments, cotangents)
                     if dtype == jnp.float32
                     else None
                 )
                 precision = jax.lax.Precision.HIGHEST if dtype == jnp.float32 else jax.lax.Precision.HIGH
-                for chunk_size, solve_groups, fused_prep, state_head_group in variants:
+                for chunk_size, solve_groups, fused_prep, state_head_group, fused_recurrence in variants:
                     kernel = functools.partial(
                         chunk_kda_tpu,
                         matmul_dtype=dtype,
@@ -94,6 +108,7 @@ def main():
                         chunk_size=chunk_size,
                         solve_groups=solve_groups,
                         fused_prep=fused_prep,
+                        fused_recurrence=fused_recurrence,
                         state_head_group=state_head_group,
                     )
                     function = jax.jit(functools.partial(evaluate, kernel))
@@ -106,14 +121,21 @@ def main():
                     if state_head_group == 1:
                         head_reference = actual
                     head_errors = measure_errors(actual, head_reference, tolerance) if args.state_heads else None
+                    if not fused_recurrence:
+                        separate_reference = actual
+                    separate_errors = (
+                        measure_errors(actual, separate_reference, tolerance) if args.fused_recurrence else None
+                    )
                     deviations = measure_errors(actual, expected, tolerance)
                     oracle_errors = measure_errors(actual, oracle, tolerance) if oracle is not None else None
                     passed = all(
                         np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1
-                        for row in [*deviations, *(oracle_errors or []), *(head_errors or [])]
+                        for row in [*deviations, *(oracle_errors or []), *(head_errors or []), *(separate_errors or [])]
                     )
                     if not passed:
-                        failures.append((case, str(dtype), chunk_size, solve_groups, fused_prep, state_head_group))
+                        failures.append(
+                            (case, str(dtype), chunk_size, solve_groups, fused_prep, state_head_group, fused_recurrence)
+                        )
                     samples = []
                     for _ in range(9):
                         start = time.perf_counter()
@@ -125,12 +147,14 @@ def main():
                         "implementation": (
                             f"chunk_{chunk_size}_solve_{solve_groups}"
                             + ("_fused" if fused_prep else "")
-                            + (f"_heads_{state_head_group}" if args.state_heads else "")
+                            + (f"_heads_{state_head_group}" if args.state_heads or args.fused_recurrence else "")
+                            + ("_combined" if fused_recurrence else "")
                             if args.saved_solve
                             else f"chunk_{chunk_size}"
                         ),
                         "solve_groups": solve_groups,
                         "fused_prep": fused_prep,
+                        "fused_recurrence": fused_recurrence,
                         "state_head_group": state_head_group,
                         "state_precision": precision.name,
                         "case": case,
@@ -151,6 +175,7 @@ def main():
                         "errors": deviations,
                         "oracle_errors": oracle_errors,
                         "one_head_errors": head_errors,
+                        "separate_preparation_errors": separate_errors,
                         "tolerance": tolerance,
                         "compile_time": compile_seconds,
                         "steady_state_time": float(np.median(samples[2:])),
