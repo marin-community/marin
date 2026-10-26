@@ -443,6 +443,10 @@ generator:
 
   chat_template_kwargs: {}
 
+  # tool_choice sent with every chat rollout request; null leaves vLLM's default
+  # ("auto" when the prompt carries tools, which needs a tool-call parser on the server).
+  tool_choice: null
+
   engine_init_kwargs: {}
 
   # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
