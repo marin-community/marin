@@ -1,0 +1,22 @@
+id: X0220
+slug: remoe-relu-routing
+name: ReMoE ReLU routing (adaptive load-aware L1)
+category: MoE and routing
+summary: 'Replace top-10 routing with ReMoE (arXiv 2412.14711): unnormalized relu(router logit) gates, a variable expert count
+  per token (cap 20), and an L1 penalty on the gates (load-aware f_e weighting) whose coefficient adapts x1.2 per step from
+  1e-8 to hold 10 active experts on average.'
+source: intake
+status: running
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6408728864
+  author: armorfaye
+  approved_by: ClassicLarry
+papers:
+- arxiv: '2412.14711'
+  title: 'ReMoE: Fully Differentiable Mixture-of-Experts with ReLU Routing'
+knobs:
+- routing
+- thresh_candidates
+- relu_l1
+- relu_l1_init
+- relu_l1_alpha
