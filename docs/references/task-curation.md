@@ -133,7 +133,7 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/snowball-rl.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:

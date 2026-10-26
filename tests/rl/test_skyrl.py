@@ -395,8 +395,14 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
 
 @pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
-    # Evaluation previously passed preflight, then failed in the GPU engine factory.
     spec = _spec()
+    if entrypoint == "generate":
+        spec = dataclasses.replace(
+            spec,
+            topology=dataclasses.replace(
+                spec.topology, role_plan=dataclasses.replace(spec.topology.role_plan, generate_only=True)
+            ),
+        )
     recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
     with pytest.raises(ValueError, match="expert_block requires non-colocated"):
         dataclasses.replace(spec, config_yaml=recipe)

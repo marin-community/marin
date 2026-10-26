@@ -224,4 +224,4 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/snowball-rl.md).
