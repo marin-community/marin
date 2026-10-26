@@ -608,12 +608,13 @@ class TaggedEvaluator(Generic[Ex, M]):
 
         micro_avg_loss = state.token_avg_loss.mean.item()
         tag_avg_loss = state.loss_per_tag.mean
-        macro_avg_loss = jnp.mean(tag_avg_loss).item()
+        scored_tags = state.loss_per_tag.total > 0
+        macro_avg_loss = jnp.mean(tag_avg_loss, where=scored_tags).item()
 
         if self.bytes_per_token is not None:
             micro_bpb = state.bpb.mean.item()
             tag_avg_bpb = state.bpb_per_tag.mean
-            macro_avg_bpb = jnp.mean(tag_avg_bpb).item()
+            macro_avg_bpb = jnp.mean(tag_avg_bpb, where=scored_tags).item()
         else:
             micro_bpb = None
             macro_avg_bpb = None

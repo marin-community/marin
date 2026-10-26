@@ -32,6 +32,8 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 # The hero started at 4K context with 1024 sequences per rack. Every later context keeps those tokens
 # per rack per update.
 HERO_INITIAL_SEQ_LEN = 4096
+# Longer packing drops the shortest Paloma validation subsets entirely.
+HERO_MAX_EVAL_SEQ_LEN = 65_536
 HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4

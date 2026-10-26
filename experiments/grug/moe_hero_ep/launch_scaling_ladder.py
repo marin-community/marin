@@ -71,6 +71,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
+    HERO_MAX_EVAL_SEQ_LEN,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -393,6 +394,7 @@ def build_ladder_run(
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
                 eval_batch_size=eval_batch_size,
+                max_seq_len=min(model.max_seq_len, HERO_MAX_EVAL_SEQ_LEN),
                 # The capacity-limited eval breaks the ragged train step at d6144 (#8861). The
                 # dropless eval is the reported metric.
                 eval_current=False,
