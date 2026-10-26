@@ -12,8 +12,8 @@ import pytest
 from pydantic import BaseModel
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
-from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.models import AnswerType, PlainText, TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -43,12 +43,11 @@ from taskforge.stage_coordinator.workpiece_machine import Stage, Terminal, deriv
 
 from experiments.post_training.capability_driven_envs.open_ended import (
     OpenEndedBuildInput,
-    OpenEndedTaskBrief,
     OpenEndedTaskBundle,
 )
-from experiments.post_training.capability_driven_envs.open_ended_packet_schema import OpenEndedReleaseStatus
+from experiments.post_training.capability_driven_envs.tests.test_open_ended import bundle
 
-WORKPIECE = "synthetic-mait--01"
+WORKPIECE = "synthetic-groups--01"
 SAMPLING = LLMPolicy()
 
 
@@ -69,56 +68,15 @@ class UnusedModel:
 
 
 def synthetic_bundle() -> OpenEndedTaskBundle:
-    rows = ["donor_id,cell_type_coarse,n_cells,n_primary_vj_called,n_trav1_2"]
-    for donor in range(1, 7):
-        rows.extend(
-            (
-                f"donor_{donor:03d},MAIT,40,36,{24 + donor}",
-                f"donor_{donor:03d},CD8,50,44,{donor % 3}",
-                f"donor_{donor:03d},CD4,45,39,{(donor + 1) % 2}",
-            )
-        )
-    return OpenEndedTaskBundle(
-        bundle_id="synthetic-mait-gene-usage",
-        split_group="synthetic-immune-repertoire",
-        brief=OpenEndedTaskBrief(
-            goal="Assess whether receptor usage supports a cell annotation.",
-            expected_deliverable="A donor-aware quantitative comparison and qualified interpretation.",
-            question_family="annotation_validation",
-            avoid=("Reveal the expected enrichment in the task instruction.",),
-        ),
-        solver_resources=(
-            inline_resource(
-                "workspace/README.md",
-                b"Compare TRAV1-2 usage across cell types using both available denominators.\n",
-            ),
-            inline_resource("workspace/data/v_gene_counts.csv", ("\n".join(rows) + "\n").encode()),
-        ),
-        author_evidence=(
-            inline_resource(
-                "private/reference.json",
-                b'{"expected": "MAIT is enriched; missing calls and donor variation qualify the conclusion"}\n',
-            ),
-        ),
-        source=Source(
-            dataset="synthetic/open-ended-pipeline",
-            revision="1",
-            row="synthetic-mait-gene-usage",
-            importer_revision="1",
-        ),
-        environment_requirements=requirements(image=None),
-        release_status=OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH,
-        tags=("biology", "synthetic"),
-    )
+    return bundle()
 
 
 def proposal(bundle: OpenEndedTaskBundle) -> TaskProposal:
     resources = "\n".join(f'  - "{resource.path}"' for resource in bundle.solver_resources)
     section = (
-        "Build a reproducible analysis from the supplied count table. The solver must compare pooled and "
-        "donor-level patterns, discuss both denominators and missing calls, and avoid claiming that enrichment "
-        "proves every annotation. The builder creates a private reference and weighted rubric from the hydrated "
-        "author evidence, while keeping that evidence out of the solver workspace."
+        "Build a reproducible comparison from the supplied count table. The solver must compute both rates, "
+        "report a transparent effect measure, and avoid causal claims. The builder creates a private reference "
+        "and weighted rubric from hydrated author evidence while keeping that evidence out of the workspace."
     )
     body = "\n\n".join(
         f"## {heading}\n{section}"
@@ -158,13 +116,13 @@ resources:
 async def task(context: RLEnvBuildContext, proposal: TaskProposal, build_input: object) -> TaskSpec:
     hydrated = OpenEndedBuildInput.model_validate(build_input)
     rubric = Rubric(
-        deliverable="A donor-aware comparison of TRAV1-2 usage and a qualified interpretation.",
+        deliverable="A transparent rate comparison and qualified interpretation.",
         items=[
             RubricItem(
                 id="quantitative_comparison",
-                intent="The response compares receptor usage across the supplied cell types.",
-                pass_criterion="Reports the strong MAIT enrichment and materially lower CD4 and CD8 usage.",
-                equivalences=["Equivalent pooled fractions or percentages are accepted."],
+                intent="The response computes and compares both supplied rates.",
+                pass_criterion="Reports A=80%, B=20%, and a correct difference or ratio.",
+                equivalences=["Equivalent fractions or decimal forms are accepted."],
                 negation_handling="A retracted or hypothetical comparison does not count.",
                 weight=0.55,
                 role=ItemRole.SCORED,
@@ -172,10 +130,10 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal, build_input: 
             ),
             RubricItem(
                 id="calibrated_interpretation",
-                intent="The biological conclusion respects the limits of the count table.",
-                pass_criterion="Discusses donor variation and missing calls and does not claim proof of every label.",
-                equivalences=["Equivalent cautions about annotation support are accepted."],
-                negation_handling="A caution followed by an unqualified proof claim does not count.",
+                intent="The conclusion respects the descriptive limits of the count table.",
+                pass_criterion="Notes the small sample and does not claim a causal effect.",
+                equivalences=["Equivalent sample-size or descriptive-design cautions are accepted."],
+                negation_handling="A caution followed by an unqualified causal claim does not count.",
                 weight=0.45,
                 role=ItemRole.SCORED,
                 cap_value=None,
@@ -200,8 +158,8 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal, build_input: 
     )
     grader = judge_grader(
         rubric,
-        "TRAV1-2 is strongly enriched in MAIT-labelled cells across donors, while missing calls and donor "
-        "variation limit the conclusion to support for the annotation rather than proof for every cell.",
+        "Group A is 80% and group B is 20%, a 60 percentage-point difference; these small descriptive samples "
+        "do not establish causality.",
     )
     return assemble(
         context.workpiece_id,

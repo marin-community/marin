@@ -70,12 +70,14 @@ class OpenEndedTaskBundle(BaseModel):
         return digest(self)
 
     def build_input(self) -> "OpenEndedBuildInput":
-        """Return the public immutable input available to a Taskforge build program."""
+        """Return the immutable curator input available to the generic authoring program."""
         return OpenEndedBuildInput(
             bundle_id=self.bundle_id,
             bundle_digest=self.content_digest,
             split_group=self.split_group,
+            brief=self.brief,
             solver_resources=self.solver_resources,
+            author_evidence=self.author_evidence,
             source=self.source,
             environment_requirements=self.environment_requirements,
             release_status=self.release_status,
@@ -84,15 +86,24 @@ class OpenEndedTaskBundle(BaseModel):
 
 
 class OpenEndedBuildInput(BaseModel):
-    """The public part of a bundle that a build program may place in a TaskSpec."""
+    """The complete private curator input consumed by the generic authoring program.
+
+    This object is internal build state, not a solver resource. The program may use
+    ``author_evidence`` to derive a reference, rubric, and controls, but only
+    ``solver_resources`` may be copied into the resulting task workspace.
+    ``judge_model`` is campaign configuration rather than bundle content.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bundle_id: str = Field(min_length=1)
     bundle_digest: str = Field(min_length=1)
     split_group: str = Field(min_length=1)
+    brief: OpenEndedTaskBrief
     solver_resources: tuple[TaskResource, ...] = Field(min_length=1)
+    author_evidence: tuple[TaskResource, ...] = Field(min_length=1)
     source: Source
     environment_requirements: EnvironmentRequirements
     release_status: OpenEndedReleaseStatus
     tags: tuple[str, ...] = ()
+    judge_model: str | None = Field(default=None, min_length=1)

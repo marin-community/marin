@@ -4,6 +4,7 @@
 import json
 
 from taskcompendium.models import TaskSpec
+from taskforge.content_hash import canonical_json
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import Environment, SolverMachine
 from verifyit.spec import JudgeSpec
@@ -12,29 +13,28 @@ from experiments.post_training.capability_driven_envs.open_ended_proposal_source
     OpenEndedProposalConfig,
     document_template,
 )
-from experiments.post_training.capability_driven_envs.open_ended_task_design import load_task_designs
 from experiments.post_training.capability_driven_envs.open_ended_zephyr import run_bundle_lifecycle
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
+from experiments.post_training.capability_driven_envs.tests.test_open_ended import bundle
 from experiments.post_training.capability_driven_envs.tests.test_open_ended_pipeline import SERVICES
-from experiments.post_training.capability_driven_envs.tests.test_open_ended_task_design import designed_bundle
+from experiments.post_training.capability_driven_envs.tests.test_open_ended_task_design import design
 
 CONFIG = OpenEndedProposalConfig(Environment.SHELLSIM, SolverMachine.SHELLSIM)
 
 
 async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
-    hydrated = designed_bundle()
-    designs = load_task_designs(hydrated, "private/task_designs.json")
-    design = designs.designs[0]
+    hydrated = bundle()
+    authored = design()
     model = ScriptedModel()
     model.reply(
         json.dumps(
             {
-                "coverage_rationale": "one manually supported question",
+                "coverage_rationale": "one supported question",
                 "slots": [
                     {
                         "slot": 1,
-                        "title": "MAIT receptor support",
-                        "scientific_question": "Does TRAV1-2 usage support the supplied MAIT annotation?",
+                        "title": "Receptor support",
+                        "scientific_question": "Does receptor usage support the supplied annotation?",
                         "analysis_obligations": ["compute a donor-aware comparison"],
                         "distinctive_challenge": "separate pooled and donor-level evidence",
                         "status": "propose",
@@ -46,18 +46,18 @@ async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
     )
     document = document_template(hydrated, 1, CONFIG).replace(
         "<...>",
-        "Use the supplied sufficient counts for a donor-aware receptor analysis. Preserve both denominators, "
-        "missing-call semantics, provenance, and cautious biological interpretation. The private author applies "
-        "the frozen weighted rubric and reference, then validates positive, partial, severe-negative, verbosity, "
-        "and evaluator-injection controls without exposing any private evidence to the solver.",
+        "Use the supplied sufficient counts for a donor-aware analysis. Preserve both denominators, missing-call "
+        "semantics, provenance, and cautious interpretation. The generic author derives a weighted rubric, private "
+        "reference, and calibration controls from the curator input without exposing private evidence to the solver.",
     )
     model.reply(document)
+    model.reply(canonical_json(authored))
     reward_by_answer = {
-        control.answer: (control.minimum_reward + control.maximum_reward) / 2 for control in design.controls
+        control.answer: (control.minimum_reward + control.maximum_reward) / 2 for control in authored.controls
     }
 
     async def score(judge: JudgeSpec, answer: str) -> float:
-        assert judge.model == "fixture-judge"
+        assert judge.model == "scripted"
         return reward_by_answer[answer]
 
     result = await run_bundle_lifecycle(
@@ -65,16 +65,17 @@ async def test_complete_lifecycle_port_returns_an_accepted_taskspec(tmp_path):
         model=model,
         policy=LLMPolicy(),
         services=SERVICES,
-        judge_model="fixture-judge",
         control_scorer=score,
         root=tmp_path,
     )
 
     assert result["bundle_digest"] == hydrated.content_digest
+    assert result["release_status"] == "unreviewed_do_not_publish"
     slots = result["slots"]
     assert isinstance(slots, list) and len(slots) == 1
     assert slots[0]["terminal"] == "accepted"
     assert slots[0]["validation"]["calibration"]["passed"] is True
+    assert slots[0]["design"]["reference"] == authored.reference
     task = TaskSpec.model_validate_json(slots[0]["task_json"])
     assert task.resources.worker == hydrated.solver_resources
-    assert task.context.events[-1].content == design.instruction
+    assert task.context.events[-1].content == authored.instruction

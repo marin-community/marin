@@ -49,10 +49,10 @@ def test_planning_view_contains_solver_inputs_but_no_private_evidence():
     record = planning_record(bundle())
     rendered = json.dumps(record)
 
-    assert "workspace/data/v_gene_counts.csv" in rendered
-    assert "donor_id,cell_type" in rendered
+    assert "workspace/data/counts.csv" in rendered
+    assert "group,success,total" in rendered
     assert "reference/expected.json" not in rendered
-    assert "MAIT enrichment" not in rendered
+    assert "A=80%" not in rendered
     assert "author_evidence" not in record
 
 
@@ -71,7 +71,7 @@ def test_source_plans_slots_and_writes_only_the_non_null_proposals():
     assert second.header.null_reason is None
     assert second.header.environment is Environment.SHELLSIM
     assert second.header.solver_machine is SolverMachine.SHELLSIM
-    assert second.header.resources == ("workspace/data/v_gene_counts.csv",)
+    assert second.header.resources == ("workspace/data/counts.csv",)
     assert second.header.source.hash == bundle().content_digest
 
 

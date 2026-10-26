@@ -15,7 +15,7 @@ from taskforge.stage_coordinator.coordinator import StageCoordinator, run_workpi
 from taskforge.stage_coordinator.event_log import InMemoryEventLog
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 
-from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBundle
+from experiments.post_training.capability_driven_envs.open_ended import OpenEndedBuildInput, OpenEndedTaskBundle
 from experiments.post_training.capability_driven_envs.open_ended_proposal_source import OpenEndedProposalSource
 from experiments.post_training.capability_driven_envs.open_ended_proposal_store import (
     load_or_propose,
@@ -85,8 +85,9 @@ async def run_open_ended_bundle(
     batch_path = root / "proposal-batches" / bundle.content_digest / f"{identity.cache_key}.json"
     batch = await load_or_propose(batch_path, runtime.proposal_source, bundle, slot_count)
     coordinator = runtime.coordinator(bundle)
-    expected_build_input = bundle.build_input().model_dump(mode="json")
-    if digest(coordinator.build_input) != digest(expected_build_input):
+    actual_build_input = OpenEndedBuildInput.model_validate(coordinator.build_input)
+    bundle_input = actual_build_input.model_copy(update={"judge_model": None})
+    if digest(bundle_input) != digest(bundle.build_input()):
         raise ValueError("open-ended coordinator build_input does not match the bundle")
 
     results = []

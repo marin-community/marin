@@ -21,10 +21,10 @@ from taskforge.llm.glm_client import API_ROOT, EndpointSource, FixedEndpoint, Gl
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, ReasoningEffort
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.stage10_proposal.model import Environment, SolverMachine
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft, step_output
 from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
-from taskforge.stage_coordinator.coordinator import VALIDATION_FILE
+from taskforge.stage_coordinator.coordinator import STORE_DIR, VALIDATION_FILE
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
@@ -33,7 +33,7 @@ from zephyr.dataset import Dataset
 
 from experiments.post_training.capability_driven_envs.open_ended import OpenEndedTaskBundle
 from experiments.post_training.capability_driven_envs.open_ended_coordinator import (
-    manual_open_ended_coordinator,
+    open_ended_coordinator,
     verifyit_control_scorer,
 )
 from experiments.post_training.capability_driven_envs.open_ended_proposal_source import (
@@ -41,6 +41,7 @@ from experiments.post_training.capability_driven_envs.open_ended_proposal_source
     OpenEndedProposalSource,
 )
 from experiments.post_training.capability_driven_envs.open_ended_runner import OpenEndedRuntime, run_open_ended_bundle
+from experiments.post_training.capability_driven_envs.open_ended_task_design import OpenEndedTaskDesign
 
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 
@@ -145,7 +146,7 @@ def _services(controller_url: str) -> RLEnvBuildServices:
     )
 
 
-def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object]:
+def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object, object]:
     rounds = sorted((root / "workpieces" / workpiece_id / "rounds").glob("*"))
     if not rounds:
         raise ValueError(f"accepted workpiece {workpiece_id!r} has no persisted round")
@@ -153,7 +154,9 @@ def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object]:
     validation = rounds[-1] / VALIDATION_FILE
     if not draft.is_dir() or not validation.is_file():
         raise ValueError(f"accepted workpiece {workpiece_id!r} lacks its draft or validation evidence")
-    return load_draft(draft).task.model_dump_json(), json.loads(validation.read_bytes())
+    loaded = load_draft(draft)
+    design = step_output(loaded, str(root / STORE_DIR), "design", OpenEndedTaskDesign)
+    return loaded.task.model_dump_json(), design.model_dump(mode="json"), json.loads(validation.read_bytes())
 
 
 async def run_bundle_lifecycle(
@@ -162,7 +165,6 @@ async def run_bundle_lifecycle(
     model: ModelClient,
     policy: LLMPolicy,
     services: RLEnvBuildServices,
-    judge_model: str,
     control_scorer: Callable[[JudgeSpec, str], Awaitable[float]],
     root: Path,
     proposals_per_bundle: int = 1,
@@ -172,13 +174,13 @@ async def run_bundle_lifecycle(
     source = OpenEndedProposalSource(model, policy, _proposal_config(bundle))
     runtime = OpenEndedRuntime(
         proposal_source=source,
-        coordinator=lambda hydrated: manual_open_ended_coordinator(
+        coordinator=lambda hydrated: open_ended_coordinator(
             root=root / "coordinator",
             bundle=hydrated,
             model=model,
             sampling=policy,
             services=services,
-            judge_model=judge_model,
+            judge_model=model.model,
             control_scorer=control_scorer,
             control_concurrency=control_concurrency,
         ),
@@ -193,15 +195,18 @@ async def run_bundle_lifecycle(
     for slot in result.slots:
         item = slot.model_dump(mode="json")
         if slot.terminal is Terminal.ACCEPTED and slot.workpiece_id is not None:
-            task_json, validation = _accepted_artifacts(root / "coordinator", slot.workpiece_id)
+            task_json, design, validation = _accepted_artifacts(root / "coordinator", slot.workpiece_id)
             item["task_json"] = task_json
+            item["design"] = design
             item["validation"] = validation
         slots.append(item)
     return {
         "bundle_id": result.bundle_id,
         "bundle_digest": result.bundle_digest,
         "proposal_key": result.proposal_cache_key,
-        "model": judge_model,
+        "release_status": str(bundle.release_status),
+        "source": bundle.source.model_dump(mode="json"),
+        "model": model.model,
         "slots": slots,
     }
 
@@ -230,7 +235,6 @@ async def _run_bundle(row: dict[str, object], config: OpenEndedZephyrConfig) -> 
                 model=model,
                 policy=policy,
                 services=_services(controller_url),
-                judge_model=config.port.model,
                 control_scorer=verifyit_control_scorer(connection),
                 root=root,
                 proposals_per_bundle=config.proposals_per_bundle,

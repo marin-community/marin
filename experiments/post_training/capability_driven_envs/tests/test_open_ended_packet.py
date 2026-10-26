@@ -35,8 +35,8 @@ def packet(root: Path) -> None:
         },
     )
     (root / "solver").mkdir()
-    (root / "solver/counts.csv").write_text("donor_id,cell_type,n_cells,n_trav1_2\ndonor_001,MAIT,40,30\n")
-    write_json(root / "private/reference.json", {"expected": "MAIT enrichment"})
+    (root / "solver/counts.csv").write_text("group,success,total\nA,8,10\nB,2,10\n")
+    write_json(root / "private/reference.json", {"expected": "A=80%, B=20%; descriptive only"})
     write_json(root / "provenance.json", {"row_rule": "all declared rows"})
     declarations = (
         PacketFileDeclaration(packet_path="brief.json", resource_path=None, visibility=PacketVisibility.METADATA),
@@ -57,14 +57,14 @@ def packet(root: Path) -> None:
         ),
     )
     manifest = PacketManifest(
-        packet_id="synthetic-mait-v1",
-        bundle_id="synthetic-mait",
+        packet_id="synthetic-rates-v1",
+        bundle_id="synthetic-rates",
         split_group="synthetic-immune-repertoire",
         brief_path="brief.json",
         source=PacketSource(
             dataset="synthetic/open-ended-packet",
             revision="1",
-            row="synthetic-mait",
+            row="synthetic-rates",
             importer_revision="1",
         ),
         environment=PacketEnvironment(packages=("pandas==3.1.0",)),
@@ -82,16 +82,16 @@ def test_packet_loads_a_hydrated_bundle_with_explicit_resource_paths(tmp_path):
     restored = load_open_ended_packet(tmp_path, expected_bundle_digest=bundle.content_digest)
 
     assert restored == bundle
-    assert bundle.bundle_id == "synthetic-mait"
-    assert bundle.source.row == "synthetic-mait"
+    assert bundle.bundle_id == "synthetic-rates"
+    assert bundle.source.row == "synthetic-rates"
     assert bundle.release_status is OpenEndedReleaseStatus.UNREVIEWED_DO_NOT_PUBLISH
     assert [resource.path for resource in bundle.solver_resources] == ["workspace/data/counts.csv"]
     assert [resource.path for resource in bundle.author_evidence] == [
         "private/reference.json",
         "private/provenance.json",
     ]
-    assert resource_bytes(bundle.solver_resources[0]).startswith(b"donor_id,")
-    assert b"MAIT enrichment" in resource_bytes(bundle.author_evidence[0])
+    assert resource_bytes(bundle.solver_resources[0]).startswith(b"group,")
+    assert b"A=80%" in resource_bytes(bundle.author_evidence[0])
 
 
 def test_packet_rejects_content_changed_after_manifest_creation(tmp_path):
