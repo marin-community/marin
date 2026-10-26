@@ -48,14 +48,14 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
         from experiments.grug.moe_hero_ep import model, train
 
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 1, 4, 1),
+            np.asarray(jax.devices()).reshape(1, 1, 2, 2, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
         config = model.GrugModelConfig(
             vocab_size=128, hidden_dim=32, intermediate_dim=16, shared_expert_intermediate_dim=16,
             num_shared_experts=1, num_experts=4, num_experts_per_token=2, num_layers=2, num_heads=4,
-            num_kv_heads=2, local_kv_heads=2, global_kv_heads=2, head_dim=8, max_seq_len=4,
+            num_kv_heads=2, local_kv_heads=2, global_kv_heads=2, head_dim=8, max_seq_len=16,
             sliding_window=4, global_every=2, capacity_factor=4.0, initializer_std=0.1,
             attention_implementation="reference", moe_implementation="fixed_all_to_all",
         )
@@ -78,13 +78,13 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
                 tokenizer=directory,
             )
             transformer = model.Transformer.init(config, key=jax.random.key(0))
-            tokens = jnp.asarray(np.tile([1, 2, 3, 4], (4, 1)).astype(np.int32))
+            tokens = jnp.asarray(np.tile([1, 2, 3, 4], (2, 4)).astype(np.int32))
             logits = jax.jit(lambda params, ids: params.logits(ids))
             before = np.asarray(logits(transformer, tokens))
             hooks = train.build_eval_hooks(
-                data_config=data, train_seq_len=4, mesh=mesh,
+                data_config=data, train_seq_len=16, mesh=mesh,
                 eval_cfg=train.GrugEvalConfig(
-                    eval_batch_size=4, seq_lens=(2, 4, 8, 16, 4), compute_bpb=False,
+                    eval_batch_size=2, seq_lens=(2, 4, 8, 16, 4), compute_bpb=False,
                     eval_current=False, eval_ema=False, dropless_eval=True,
                     dropless_eval_moe_implementation="scatter",
                 ),
@@ -103,7 +103,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
         assert all(record["step"] == 10 for record in logs)
         training_length_logs = [record for record in logs if "eval_dropless/loss" in record["metrics"]]
         assert len(training_length_logs) == 1
-        assert "eval_dropless/seq_len_4/loss" in training_length_logs[0]["metrics"]
+        assert "eval_dropless/seq_len_16/loss" in training_length_logs[0]["metrics"]
         metrics = {key: value for record in logs for key, value in record["metrics"].items()}
         for length in (2, 4, 8, 16):
             prefix = f"eval_dropless/seq_len_{length}"
@@ -113,7 +113,7 @@ def test_dropless_multilength_evaluation_preserves_short_corpora_and_training_me
             [metrics[f"eval_dropless/seq_len_{length}/loss"] for length in (8, 16)],
             metrics["eval_dropless/seq_len_4/loss"], rtol=1e-5, atol=1e-5,
         )
-        assert metrics["eval_dropless/loss"] == metrics["eval_dropless/seq_len_4/loss"]
+        assert metrics["eval_dropless/loss"] == metrics["eval_dropless/seq_len_16/loss"]
         np.testing.assert_array_equal(after, before)
         assert events == [ProgressEvent.EVALUATION_STARTED, ProgressEvent.EVALUATION_FINISHED] * 4
     """

@@ -582,22 +582,6 @@ def _move_tree_to_eval_mesh(tree, train_mesh: Mesh):
     return jax.tree.map(move, tree)
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
-
-    The train and eval meshes name the same axes (only the ``expert``/``data``/``context`` sizes
-    differ), so a leaf's PartitionSpec is valid on both. Non-array leaves pass through.
-    """
-
-    def move(leaf):
-        if not isinstance(leaf, jax.Array):
-            return leaf
-        spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
-
-    return jax.tree.map(move, tree)
-
-
 def _to_dropless_local(
     model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 ) -> Transformer:
@@ -708,32 +692,16 @@ def _eval_batch_size(mesh: Mesh, *, seq_len: int, token_budget: int) -> int:
     batch_shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
     batch_size = token_budget // seq_len // batch_shards * batch_shards
     if batch_size == 0:
-        raise ValueError(f"Eval length {seq_len} needs more context shards to fit the {token_budget}-token batch budget")
-    return batch_size
-
-
-def _dropless_eval_mesh(mesh: Mesh, *, seq_len: int, token_budget: int) -> Mesh:
-    """Trade batch shards for context shards so a long eval fits the same token budget."""
-    replica = mesh.shape["replica_dcn"]
-    model = mesh.shape["model"]
-    rack_devices = math.prod(mesh.shape[axis] for axis in ("data", "context", "expert"))
-    for context in range(mesh.shape["context"], rack_devices + 1):
-        if rack_devices % context or seq_len % context:
-            continue
-        data = rack_devices // context
-        if replica * data * seq_len > token_budget:
-            continue
-        return Mesh(
-            mesh.devices.reshape(replica, data, 1, context, model),
-            mesh.axis_names,
-            axis_types=mesh.axis_types,
+        raise ValueError(
+            f"Eval length {seq_len} cannot fit one sequence per batch shard in the {token_budget}-token budget"
         )
-    raise ValueError(f"Eval length {seq_len} cannot fit the {token_budget}-token batch budget on this mesh")
+    return batch_size
 
 
 def _mesh_eval_hook(
     evaluator: TaggedEvaluator,
     *,
+    train_mesh: Mesh,
     mesh: Mesh,
     prefix: str,
     training_length_prefix: str | None,
@@ -763,7 +731,7 @@ def _mesh_eval_hook(
                 sources.append((step.eval_model, "/ema"))
             for source, suffix in sources:
                 # Release the resharded copy before the next evaluator or training step.
-                model = _reshard_tree_to_mesh(source, mesh)
+                model = source if mesh == train_mesh else _move_tree_to_eval_mesh(source, train_mesh)
                 metrics = eval_model(evaluator, model, prefix=prefix + suffix)
                 del model
                 if training_length_prefix is not None:
@@ -793,14 +761,15 @@ def build_eval_hooks(
     if not seq_lens or any(length < 2 for length in seq_lens):
         raise ValueError("Evaluation sequence lengths must contain at least two tokens")
     token_budget = eval_cfg.eval_batch_size * train_seq_len
+    dropless_mesh = expert_collapsed_eval_mesh(mesh) if eval_cfg.dropless_eval and mesh.shape["expert"] > 1 else None
     hooks = []
     for seq_len in seq_lens:
+        if seq_len % mesh.shape["context"]:
+            raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
+        length_cfg = replace(
+            eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
+        )
         if eval_cfg.eval_current or eval_ema:
-            if seq_len % mesh.shape["context"]:
-                raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
-            length_cfg = replace(
-                eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
-            )
             with set_mesh(mesh):
                 evaluator = build_tagged_evaluator(
                     data_config=data_config, max_seq_len=seq_len, mesh=mesh, eval_cfg=length_cfg, mp=mp
@@ -809,6 +778,7 @@ def build_eval_hooks(
                 hooks.append(
                     _mesh_eval_hook(
                         evaluator,
+                        train_mesh=mesh,
                         mesh=mesh,
                         prefix=f"{eval_cfg.prefix}/seq_len_{seq_len}",
                         training_length_prefix=eval_cfg.prefix if seq_len == train_seq_len else None,
@@ -816,17 +786,13 @@ def build_eval_hooks(
                         eval_ema=eval_ema,
                     )
                 )
-        if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
-            eval_mesh = _dropless_eval_mesh(mesh, seq_len=seq_len, token_budget=token_budget)
-            length_cfg = replace(
-                eval_cfg, eval_batch_size=_eval_batch_size(eval_mesh, seq_len=seq_len, token_budget=token_budget)
-            )
+        if dropless_mesh is not None:
             # Constants captured by the eval jit must be constructed under its explicit mesh.
-            with set_mesh(eval_mesh):
+            with set_mesh(dropless_mesh):
                 evaluator = build_tagged_evaluator(
                     data_config=data_config,
                     max_seq_len=seq_len,
-                    mesh=eval_mesh,
+                    mesh=dropless_mesh,
                     eval_cfg=length_cfg,
                     mp=mp,
                     model_transform=functools.partial(
@@ -838,7 +804,8 @@ def build_eval_hooks(
                 hooks.append(
                     _mesh_eval_hook(
                         evaluator,
-                        mesh=eval_mesh,
+                        train_mesh=mesh,
+                        mesh=dropless_mesh,
                         prefix=f"{prefix}/seq_len_{seq_len}",
                         training_length_prefix=prefix if seq_len == train_seq_len else None,
                         eval_current=True,
