@@ -315,9 +315,12 @@ def _statement(node: ast.stmt) -> str:
             f"the async function `{node.name}`, which is not a single-decorator "
             f"`@{STEP_DECORATOR}` step or `@{SINK_DECORATOR}` sink"
         )
-    if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign | ast.TypeAlias):
-        return f"an assignment (`{ast.unparse(node).splitlines()[0][:80]}`)"
-    return f"a statement (`{ast.unparse(node).splitlines()[0][:80]}`)"
+    kind = (
+        "an assignment"
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign | ast.TypeAlias)
+        else "a statement"
+    )
+    return f"{kind} (`{ast.unparse(node).splitlines()[0][:80]}`)"
 
 
 def _check_module_level(tree: ast.Module) -> None:
