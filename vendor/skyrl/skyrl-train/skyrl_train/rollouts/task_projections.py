@@ -16,7 +16,11 @@ from skyrl_gym.verification import (
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
 from rolloutengine.models import RolloutContractError
-from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.rollouts.training_record import (
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    TrainingRollout,
+    reasoning_violations,
+)
 
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
@@ -361,6 +365,7 @@ def _training_batch(
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
     _attach_span_tags(batch, rollouts)
+    _attach_reasoning_violations(batch, rollouts)
     metrics = None
     if env_metric_classes is not None:
         metrics = [
@@ -495,6 +500,23 @@ def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout
     tags = _token_channels(batch, rollouts, RESPONSE_SPAN_TAGS_KEY, np.int64)
     if tags is not None:
         batch["response_span_tags"] = [row.tolist() for row in tags]
+
+
+def _violation_tokens(rollout: TrainingRollout) -> list[int]:
+    """Response positions of the violations located on one marker token in the optimized conversation."""
+    positions = []
+    for step in rollout.steps:
+        token = step.turn.metadata.get(REASONING_VIOLATION_TOKEN_METADATA_KEY)
+        if token is not None:
+            positions.append(step.response_end + 1 - len(step.turn.response_token_ids) + token)
+    return positions
+
+
+def _attach_reasoning_violations(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
+    counts = [len(reasoning_violations(rollout)) for rollout in rollouts]
+    if any(counts):
+        batch["reasoning_span_violations"] = counts
+        batch["reasoning_span_violation_tokens"] = [_violation_tokens(rollout) for rollout in rollouts]
 
 
 def _task_error_policies(
