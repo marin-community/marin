@@ -62,6 +62,24 @@ for their respective runs. Update or add an extract when new token accounting
 changes an estimate, and link it from the node's evidence. Run records link to the
 public campaign archive.
 
+### Reviewed contributions
+
+`graph-data.json` on Marin's `main` branch is the tree's source of truth. All model
+additions and lineage changes require a reviewed Marin PR, including outside
+contributions from a fork or a PR opened on an author's behalf. Keep model selection
+curated: explain the checkpoint's significance and provide the author's or experiment's
+assessment. Each node needs public `source` and `evidence` links; qualified ancestry
+keeps `confidence: "inferred"`. Runs without published weights use `model: null`.
+Follow the contributor README for field details and aliases for retained checkpoints.
+
+Each tree PR states whether it needs a public release. Related changes can be
+published in one batch after their PRs merge. Publish corrections to public lineage
+or time-sensitive additions promptly after merge. Automated discovery can prepare
+PRs for review; it does not select or publish models directly. Do not distribute
+graph updates as loose files or ZIPs for manual incorporation into a release.
+
+### Validate and release
+
 Build and validate from the repository root:
 
 ```bash
@@ -72,8 +90,8 @@ uv run marina release infra/marina/applets/snowball_family_tree --local --json
 
 The local command starts a disposable Marina/Postgres instance and prints its
 revision URL. Ctrl-C removes it. The manifest declares the existing applet UUID.
-For production updates, use a clean checkout at current remote main and inspect
-the release status and live revision:
+For production updates, release only from a clean checkout at current remote main.
+Inspect the release status and live revision before publishing:
 
 ```bash
 uv run marina release-status infra/marina/applets/snowball_family_tree --json
@@ -89,3 +107,16 @@ CSS, graph and token-count extracts. Release packages that output and restores
 previous local build output afterward. Generated files are ignored by Git. Asset
 URLs are relative, and executable scripts use packaged files to satisfy Marina's
 content security policy.
+
+Do not use `--allow-dirty` for a public tree release. Marina's default release
+checks reject dirty checkouts and commits other than current remote main. Moving
+this package from `applets/` to `apps/` would use the same release mechanism;
+merging source or deploying Marina does not publish either kind of package.
+
+If the selected live package differs from main, record the difference and its
+reason in the relevant tree PR or tracking issue before publishing. Resolve
+unrecorded source provenance by comparing the live package with checked-in source.
+After release, record the published version, immutable revision URL and main commit
+in the PR or issue, and confirm the stable tree URL serves that revision. A version
+conflict requires inspecting the newly selected revision before deciding to retry.
+This keeps source review and the public release record linked even for batch releases.
