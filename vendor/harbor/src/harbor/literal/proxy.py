@@ -47,6 +47,7 @@ _RETURN_TOKEN_IDS_KEY = "return_token_ids"
 # identical-seed ambiguity). Absent (datagen / non-RL) → recorded as ``None`` and
 # ignored, so those paths are unaffected.
 TASK_AGENT_HEADER = "x-ot-task-agent"
+PI_EXECUTED_TEACHER_HEADER = "x-harbor-pi-executed-teacher"
 TOKENIZE_ENDPOINT = "/tokenize"
 LITERAL_LOG_FILENAME = "literal.jsonl"
 
@@ -130,13 +131,16 @@ def extract_literal_from_response(resp_json: dict[str, Any]) -> dict[str, Any]:
         prompt_ids = first.get("prompt_token_ids")
     if not isinstance(prompt_ids, list):
         prompt_ids = None
+    message = first.get("message") if isinstance(first, dict) else None
     return {
         "prompt_token_ids": prompt_ids,
         "completion_token_ids": completion_ids,
         "logprobs": logprobs,
         "model": resp_json.get("model"),
         "response_id": resp_json.get("id"),
-        "assistant_message": first.get("message"),
+        "assistant_message": message
+        if isinstance(message, dict) and message.get("role") == "assistant"
+        else None,
     }
 
 
@@ -148,6 +152,9 @@ def _new_stream_accumulator() -> dict[str, Any]:
         "logprobs": [],
         "model": None,
         "response_id": None,
+        "assistant_tool_calls": {},
+        "assistant_complete": False,
+        "assistant_invalid": False,
     }
 
 
@@ -177,9 +184,7 @@ def accumulate_stream_chunk(state: dict[str, Any], chunk: dict[str, Any]) -> Non
     shape.
     """
     if chunk.get("choices"):
-        message = state.setdefault(
-            "assistant_message", {"role": "assistant", "content": None}
-        )
+        message = state.setdefault("assistant_message", {"role": "assistant", "content": None})
         merge_chat_delta(message, chunk["choices"][0].get("delta", {}))
     if state["prompt_token_ids"] is None:
         prompt_ids = chunk.get("prompt_token_ids")
@@ -199,6 +204,46 @@ def accumulate_stream_chunk(state: dict[str, Any], chunk: dict[str, Any]) -> Non
         lp = _extract_logprobs(choice)
         if lp:
             state["logprobs"].extend(lp)
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if content is not None and not isinstance(content, str):
+                state["assistant_invalid"] = True
+            for call in delta.get("tool_calls") or []:
+                if (
+                    not isinstance(call, dict)
+                    or type(call.get("index")) is not int
+                    or call["index"] < 0
+                ):
+                    state["assistant_invalid"] = True
+                    continue
+                accumulated = state["assistant_tool_calls"].setdefault(
+                    call["index"],
+                    {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    },
+                )
+                if "id" in call:
+                    if not isinstance(call["id"], str):
+                        state["assistant_invalid"] = True
+                    else:
+                        accumulated["id"] += call["id"]
+                if "type" in call and call["type"] != "function":
+                    state["assistant_invalid"] = True
+                function = call.get("function") or {}
+                if not isinstance(function, dict):
+                    state["assistant_invalid"] = True
+                    continue
+                for field in ("name", "arguments"):
+                    if field in function:
+                        if not isinstance(function[field], str):
+                            state["assistant_invalid"] = True
+                        else:
+                            accumulated["function"][field] += function[field]
+        if choice.get("finish_reason") is not None:
+            state["assistant_complete"] = True
 
     if chunk.get("model"):
         state["model"] = chunk["model"]
@@ -212,13 +257,28 @@ def finalize_stream_literal(state: dict[str, Any]) -> dict[str, Any]:
     Empty accumulations collapse to ``None`` so the record mirrors the
     non-streaming path (where absent fields are ``None``, not ``[]``).
     """
+    assistant_message = None
+    if state["assistant_complete"] and not state["assistant_invalid"]:
+        calls = state["assistant_tool_calls"]
+        message = state.get("assistant_message")
+        if (
+            all(call["id"] and call["function"]["name"] for call in calls.values())
+            and isinstance(message, dict)
+            and message.get("role") == "assistant"
+        ):
+            assistant_message = {
+                key: value
+                for key, value in message.items()
+                if key in ("role", "content", "tool_calls", "reasoning_content")
+            }
+            assistant_message.setdefault("content", None)
     return {
         "prompt_token_ids": state["prompt_token_ids"],
         "completion_token_ids": state["completion_token_ids"] or None,
         "logprobs": state["logprobs"] or None,
         "model": state["model"],
         "response_id": state["response_id"],
-        "assistant_message": state.get("assistant_message"),
+        "assistant_message": assistant_message,
     }
 
 
@@ -314,6 +374,7 @@ class RecordProxy:
         *,
         trial_id: str | None = None,
         task_agent: str | None = None,
+        pi_executed_teacher: str | None = None,
     ) -> tuple[int, dict[str, Any] | None, float]:
         """Inject, forward, and record one request.
 
@@ -330,6 +391,8 @@ class RecordProxy:
         headers = {CORRELATION_ID_HEADER: trial_id} if trial_id is not None else {}
         if task_agent is not None:
             headers[TASK_AGENT_HEADER] = task_agent
+        if pi_executed_teacher is not None:
+            headers[PI_EXECUTED_TEACHER_HEADER] = pi_executed_teacher
         resp = await client.request(method, url, json=enriched, headers=headers)
         elapsed_ms = (time.monotonic() - start) * 1000.0
         try:
@@ -354,6 +417,7 @@ class RecordProxy:
         *,
         trial_id: str | None = None,
         task_agent: str | None = None,
+        pi_executed_teacher: str | None = None,
     ) -> tuple[dict[str, Any], httpx.Response]:
         """Inject params and open a streaming upstream request.
 
@@ -369,6 +433,8 @@ class RecordProxy:
         headers = {CORRELATION_ID_HEADER: trial_id} if trial_id is not None else {}
         if task_agent is not None:
             headers[TASK_AGENT_HEADER] = task_agent
+        if pi_executed_teacher is not None:
+            headers[PI_EXECUTED_TEACHER_HEADER] = pi_executed_teacher
         request = client.build_request(method, url, json=enriched, headers=headers)
         resp = await client.send(request, stream=True)
         return enriched, resp
@@ -472,12 +538,18 @@ class RecordProxy:
             # completion request header so a shared log splits back per trial.
             trial_id = request.headers.get(CORRELATION_ID_HEADER)
             task_agent = request.headers.get(TASK_AGENT_HEADER)
+            pi_executed_teacher = request.headers.get(PI_EXECUTED_TEACHER_HEADER)
+            if pi_executed_teacher is not None and (
+                path != "/v1/chat/completions" or pi_executed_teacher not in {"0", "1"}
+            ):
+                return JSONResponse({"error": "Invalid Pi execution marker"}, status_code=400)
             # Streaming clients (opencode always sends stream=true) get a tee'd
             # SSE relay: the native text/event-stream is passed through unchanged
             # while the proxy accumulates the literal record from each chunk.
             if body.get("stream"):
                 enriched, resp = await self.open_upstream_stream(
-                    path, body, request.method, trial_id=trial_id, task_agent=task_agent
+                    path, body, request.method, trial_id=trial_id, task_agent=task_agent,
+                    pi_executed_teacher=pi_executed_teacher,
                 )
                 return StreamingResponse(
                     self.relay_and_record(enriched, resp, trial_id=trial_id),
@@ -485,7 +557,8 @@ class RecordProxy:
                     media_type="text/event-stream",
                 )
             status, resp_json, _ = await self.forward(
-                path, body, request.method, trial_id=trial_id, task_agent=task_agent
+                path, body, request.method, trial_id=trial_id, task_agent=task_agent,
+                pi_executed_teacher=pi_executed_teacher,
             )
             if resp_json is None:
                 return JSONResponse(
