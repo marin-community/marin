@@ -307,7 +307,6 @@ def resolve_training_env(
         base_env or {},
         default_launch_config.env_for_accel(resources.device.variant),
     )
-
     env = add_run_env_variables(env)
 
     if isinstance(resources.device, GpuConfig):
