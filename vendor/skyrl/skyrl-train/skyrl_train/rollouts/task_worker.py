@@ -30,6 +30,7 @@ from rolloutengine.models import (
     RolloutFailure,
     RolloutOperation,
     Prompt,
+    Rollout,
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
@@ -38,6 +39,7 @@ from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
+from skyrl_train.dataset.task_feed import graded_group, write_graded_group, write_skipped
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
@@ -102,6 +104,10 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
     for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
     for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
 ) | {"retry-after"}
+
+
+class TaskSpecRejected(ValueError):
+    """The rollout engine refuses a task spec before any attempt starts."""
 
 
 class InstalledAgentWorker(Protocol):
@@ -343,8 +349,10 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        feed_root: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
+        self.feed_root = feed_root
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
@@ -448,7 +456,10 @@ class TaskRolloutWorker:
             selected_harnesses.append(harnesses)
         engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
-            engine.check(lowered)
+            try:
+                engine.check(lowered)
+            except (ValueError, NotImplementedError) as error:
+                raise TaskSpecRejected(f"{type(error).__name__}: {error}") from error
         tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
@@ -591,9 +602,40 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            if self.feed_root is not None:
+                return await self._run_feed_task(task, writer)
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
             return await write_trajectory_batch(task, writer, batch)
+
+    async def _run_feed_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+        """Skip a row whose spec the engine refuses; let every other error fail training, as ``run_task`` does."""
+        assert self.feed_root is not None
+        uid = task.prompt["uid"]
+        try:
+            rollouts = await self.generate(task.request)
+        except TaskSpecRejected as error:
+            await asyncio.to_thread(write_skipped, self.feed_root, uid, f"the engine refuses the task: {error}")
+            await writer.skip_rollout(task.lease, task.prompt)
+            return 0
+        trajectory_ids = task.request.trajectory_ids
+        graded = [
+            GradedRollout(
+                Rollout(
+                    trajectory_ids[index].to_string() if trajectory_ids is not None else f"{uid}_{index}",
+                    rollout.conversations,
+                    rollout.stop_reason,
+                    rollout.metrics,
+                    rollout.outputs,
+                    rollout.failure,
+                ),
+                rollout.grade,
+            )
+            for index, rollout in enumerate(rollouts)
+        ]
+        await asyncio.to_thread(write_graded_group, self.feed_root, graded_group(uid, task.lease.policy_step, graded))
+        batch = await self.training_batch(task.request, rollouts)
+        return await write_trajectory_batch(task, writer, batch)
 
 
 @dataclass(frozen=True)
@@ -668,4 +710,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            feed_root=self.config.data.feed.root,
         )

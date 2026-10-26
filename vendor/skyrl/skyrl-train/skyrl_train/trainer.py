@@ -463,7 +463,15 @@ class RayPPOTrainer:
         self._domain_balancer = runtime.domain_balancer
 
     def _configure_training_schedule(self):
-        """Count steps in batches of prompt groups; one pass over the dataset is one epoch."""
+        """Count steps in batches of prompt groups; one pass over the dataset is one epoch.
+
+        A task feed grows while training runs, so its one epoch is ``trainer.max_steps`` steps.
+        """
+        if self.cfg.data.feed.root is not None:
+            steps = int(self.cfg.trainer.max_steps)
+            self.num_steps_per_epoch = self.total_training_steps = self.available_training_steps = steps
+            logger.info(f"Task feed: {steps} training steps")
+            return
         batch_size = self.cfg.trainer.train_batch_size
         self.num_steps_per_epoch = len(self.train_dataset) // batch_size
         if self.num_steps_per_epoch == 0:
