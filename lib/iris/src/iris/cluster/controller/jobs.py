@@ -635,6 +635,15 @@ def _validate_launch_profile(
             "host docker socket); this cluster's backend does not support it. Use a privileged "
             "profile with an in-pod runtime, or submit to a docker-worker cluster.",
         )
+    if (
+        resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
+        and BackendCapability.WORKER_FLEET in dependencies.runtime.backend.descriptor.capabilities
+    ):
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "Container profile bubblewrap requires the Kubernetes backend; "
+            "docker workers do not support nested bubblewrap.",
+        )
     if request.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and (
         request.resources.device.WhichOneof("device") in ("gpu", "tpu")
     ):
