@@ -50,9 +50,8 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next as AxumNext;
 use axum::response::{IntoResponse, Response};
-use connectrpc::{
-    async_trait, ConnectError, Interceptor, Next, RequestContext, UnaryRequest, UnaryResponse,
-};
+use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
+use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 

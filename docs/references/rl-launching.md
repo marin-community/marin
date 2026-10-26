@@ -96,6 +96,22 @@ Iris task
   stage immutable inputs -> patch task-local paths -> run(cfg.skyrl)
 ```
 
+Before submitting the GPU job, the CPU coordinator mirrors each Hub policy,
+`local_inference` teacher, and Hub draft model into the regional bucket. It reuses
+the existing cache and its retention period without refreshing object ages.
+Resolved mirror locators are recorded in `inputs.hugging_face_models`.
+
+GPU nodes restore policy and teacher snapshots from the mirror into their local
+HF cache before Ray starts. A missing mirror marker or file falls back to the
+existing direct-Hub download. Draft locators are rewritten to the mirror before
+submission; warm drafts read it without a cache lock. If any listed draft file or
+the completion marker is missing, node preparation repairs the mirror through
+the existing Hub cache path. Local and object-store inputs keep their loading paths.
+
+`prepare` only validates the config. Submitting Hub models requires Iris job
+context; run the [experiment entry point](#experiment-entry-point) with `--run`
+to start its CPU coordinator. A local launcher fails before downloading weights.
+
 The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
 cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and
 temporary outputs, and `skyrl` is the trainer's Hydra subtree. `launch_config` means the complete
@@ -111,7 +127,7 @@ allocation, task bootstrap, training, checkpoint export, and the persisted run m
                     +-> derive Iris resources
 resolved launch.yaml +-> configure Ray and staging
                     +-> call the registered run(cfg.skyrl)
-                    +-> derive checkpoint-export launch.yaml
+                    +-> derive checkpoint-export launch.yaml (only when requested)
 ```
 
 This shape keeps validation mechanical. Adding a launch setting means adding one structured field and
@@ -161,7 +177,11 @@ The preflight requires positive role dimensions, checks batch divisibility, and 
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
 rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
-the GPUs assigned to each role.
+the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
+must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
+parallelism. An omitted or null ETP inherits the role's TP before these checks.
+Context-parallel ranks participate in the expert grid, so EP need not divide dense
+data parallelism.
 
 ## Artifact and runtime boundaries
 
@@ -188,7 +208,25 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. Each successful Marin run also produces a durable terminal export.
+rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
+model and a separate export job. The structured launch config defaults `run.export_hf`
+to false as well. Without export, successful runs retain native recovery checkpoints,
+in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
+is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+
+The `best_checkpoint` callback accepts a `selection_metric` whose values must be
+finite normalized scores in [0, 1], with larger values preferred. Set
+`save_after_fraction` to delay trained-checkpoint selection until that fraction
+of the total steps has elapsed. Step-zero evaluation still records the initial
+model as a candidate without saving weights; if it remains best, load the
+`model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
+entries map metric names to allowed absolute drops from their step-zero values;
+all gates must pass before a candidate can replace the best checkpoint. The
+step-zero evaluation must meet the configured coverage and eligibility checks
+when preservation gates are set; otherwise the callback fails immediately. The
+baseline and selection policy are recorded in `best_checkpoint.json` and the
+baseline is restored on resume. Keep metric definitions and the selection policy
+unchanged on resume.
 
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old

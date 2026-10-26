@@ -5,7 +5,8 @@ layer spec cannot express through configuration alone:
 
 * every norm (embedding, per-layer, final) is followed by a low-rank sigmoid
   gate (``GrugGatedRMSNorm``);
-* queries and keys use a weightless RMS norm and a per-layer query scale;
+* queries and keys use a weightless RMS norm and a per-layer query scale, and
+  global layers can multiply each query by a log-scaling factor of its position;
 * attention output is projected away from the value direction (XSA) and
   scaled by a per-head sigmoid gate computed from the attention input;
 * the router selects the top-(k+1) experts on biased logits, drops the last
@@ -49,6 +50,7 @@ from megatron.core.transformer.utils import make_sharded_tensors_for_checkpoint,
 from megatron.core.typed_torch import apply_module
 from torch import nn
 
+from skyrl_train.models.grug_log_scaling import grug_log_scaling_factor, thd_visible_keys
 from skyrl_train.models.megatron_router_replay import RouterScoreType
 from skyrl_train.models.grug_shortconv import causal_short_conv
 from skyrl_train.models.grug_moe import (
@@ -124,6 +126,7 @@ class GrugSelfAttention(SelfAttention):
         )
         is_long = grug_long_layer_flags(config.num_layers, config.grug_global_every)[layer_number - 1]
         self.query_scale = config.grug_qk_mult * (config.grug_qk_mult_long_scale if is_long else 1.0)
+        self.log_scaling = is_long and config.grug_log_scaling_n_floor is not None
         self.skip_rope = bool(config.no_rope_freq[layer_number - 1])
         self.logical_kv_heads = config.grug_global_kv_heads if is_long else config.grug_local_kv_heads
         self.sconv_k = None
@@ -199,6 +202,8 @@ class GrugSelfAttention(SelfAttention):
             )
 
         query = query * self.query_scale
+        if self.log_scaling:
+            query = query * self._log_scaling_factor(query, packed_seq_params, is_thd).to(query.dtype)
 
         # Grug is causal-only and the trainer removes left padding, so right-padded keys sit after
         # every valid query and the causal (or causal sliding-window) mask alone is exact.
@@ -234,6 +239,25 @@ class GrugSelfAttention(SelfAttention):
         if self.sconv_attn is not None:
             output = self.sconv_attn(output, packed_seq_params)
         return output, bias
+
+    def _log_scaling_factor(self, query, packed_seq_params, is_thd: bool) -> torch.Tensor:
+        """Return each query's log-scaling factor, broadcastable over its heads and channels.
+
+        Positions restart at each packed document, and context parallelism maps local
+        tokens back to their global position in the document.
+        """
+        cp_group = self.pg_collection.cp
+        if is_thd:
+            cu_seqlens = _first_present(packed_seq_params.cu_seqlens_q_padded, packed_seq_params.cu_seqlens_q)
+            visible_keys = thd_visible_keys(cu_seqlens, query.shape[0], cp_group.size(), cp_group.rank())
+        else:
+            # Unpacked rows start at their first token once the trainer removes left padding.
+            visible_keys = torch.arange(1, query.shape[0] + 1, device=query.device)[:, None]
+        config = self.config
+        factor = grug_log_scaling_factor(
+            visible_keys, config.grug_log_scaling_n_floor, config.grug_log_scaling_alpha, config.grug_log_scaling_power
+        )
+        return factor[..., None, None]
 
     def _logical_kv(self, tensor):
         # The checkpoint stores max(local, global) heads. Retain unused rows for
@@ -331,6 +355,21 @@ class GrugGPTModel(GPTModel):
             self.embed_norm = GrugGatedRMSNorm(
                 config=config, hidden_size=config.hidden_size, eps=config.layernorm_epsilon
             )
+
+    def forward(self, *args, **kwargs):
+        # GPTModel constructs TransformerBlock directly, so its spec cannot
+        # select a different decoder class. Scope host storage at the model.
+        # The final stage keeps its uncheckpointed norm and head on device.
+        offload = (
+            self.config.grug_checkpoint_cpu_offload
+            and not self.post_process
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        if offload:
+            with torch.autograd.graph.save_on_cpu(pin_memory=True):
+                return super().forward(*args, **kwargs)
+        return super().forward(*args, **kwargs)
 
     def _preprocess(
         self,

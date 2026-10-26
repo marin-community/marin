@@ -50,8 +50,12 @@ MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 EXCLUDE_PATTERNS = [
     # Vendored runtimes retain upstream formatting and license notices.
     "vendor/skyrl/**",
-    "vendor/evalchemy/**",
     "vendor/harbor/**",
+    # Canonical instruction checkers retain upstream style and license notices.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
+    # Benchmark prompts retain source whitespace byte for byte.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",
@@ -61,6 +65,7 @@ EXCLUDE_PATTERNS = [
     "**/*_connect.py",
     "**/*_pb2.py",
     "**/*.gz",
+    "**/*.zip",
     "**/*.pb",
     "**/*.index",
     "**/*.ico",
@@ -878,6 +883,7 @@ PRECOMMIT_CONFIGS = [
             "lib/fray/src/**/*.py",
             "lib/iris/src/**/*.py",
             "lib/rigging/src/**/*.py",
+            "lib/skyrlrecipe/src/**/*.py",
             "lib/zephyr/src/**/*.py",
             "infra/marina/src/**/*.py",
             "infra/marina/apps/**/*.py",

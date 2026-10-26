@@ -5,6 +5,7 @@ requires-python = "==3.12.*"
 dependencies = ["evalchemy"]
 
 [tool.uv]
+constraint-dependencies = ["nltk>=3.10.4"]
 package = false
 exclude-dependencies = ["litellm"]
 

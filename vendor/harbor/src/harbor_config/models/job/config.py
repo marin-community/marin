@@ -23,11 +23,26 @@ from harbor_config.models.trial.config import (
     DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
     EnvironmentConfig,
     TaskConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
 
 HF_DATASET_PREFIX = "hf://"
+
+
+class SotopiaCohortSource(BaseModel):
+    model: str
+    results_path: str
+
+
+class SotopiaCohort(BaseModel):
+    version: str
+    models: list[SotopiaCohortSource]
+
+    @model_validator(mode="after")
+    def unique_models(self):
+        if len(self.models) != len({source.model for source in self.models}):
+            raise ValueError("SOTOPIA cohort contains duplicate models")
+        return self
 
 
 class DatasetConfig(BaseModel):
@@ -387,11 +402,7 @@ class JobConfig(BaseModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)
-    agents: list[AgentConfig] = Field(default_factory=lambda: [AgentConfig()])
-    user_agent: UserAgentConfig | None = Field(
-        default=None,
-        description="Optional simulated-user agent and bridge applied to every trial.",
-    )
+    agents: list[AgentConfig] = Field(min_length=1)
     datasets: list[DatasetConfig] = Field(default_factory=list)
     tasks: list[TaskConfig] = Field(default_factory=list)
     artifacts: list[str | ArtifactConfig] = Field(default_factory=list)

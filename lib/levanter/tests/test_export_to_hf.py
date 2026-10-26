@@ -16,7 +16,7 @@ import pytest
 from jax.sharding import AxisType
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast
 from transformers import GPT2Config as HfGpt2Config
 
 import haliax
@@ -65,6 +65,7 @@ def test_export_lm_to_hf():
         trainer = SimpleNamespace(
             device_mesh=contextlib.nullcontext(),
             parameter_axis_mapping={},
+            field_dtype_overrides={},
         )
         output_dir = f"{tmpdir}/output"
         config = export_lm_to_hf.ConvertLmConfig(
@@ -73,6 +74,7 @@ def test_export_lm_to_hf():
             output_dir=output_dir,
             model=model_config,
             use_cpu=True,
+            hf_generation_eos_token_ids=[1, 2],
         )
         export_lm_to_hf.main(config)
 
@@ -87,6 +89,9 @@ def test_export_lm_to_hf():
         # the exported config must round-trip our model shape, not just be present
         assert hf_config["n_layer"] == 2
         assert hf_config["n_head"] == 2
+        generation = GenerationConfig.from_pretrained(output_dir)
+        exported_tokenizer = AutoTokenizer.from_pretrained(output_dir)
+        assert generation.eos_token_id == sorted({1, 2, exported_tokenizer.eos_token_id})
 
         if has_torch():
             reloaded = AutoModelForCausalLM.from_pretrained(output_dir)
@@ -113,6 +118,7 @@ def test_export_lm_to_hf_custom_subpath_without_tokenizer():
         trainer = SimpleNamespace(
             device_mesh=contextlib.nullcontext(),
             parameter_axis_mapping={},
+            field_dtype_overrides={},
         )
         output_dir = f"{tmpdir}/output"
         config = export_lm_to_hf.ConvertLmConfig(
@@ -176,7 +182,9 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path, model_kind):
     output_dir = str(tmp_path / "output")
     export_lm_to_hf.main(
         export_lm_to_hf.ConvertLmConfig(
-            trainer=SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}),
+            trainer=SimpleNamespace(
+                device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}, field_dtype_overrides={}
+            ),
             checkpoint_path=checkpoint_path,
             checkpoint_subpath="model/policy",
             output_dir=output_dir,
@@ -195,6 +203,69 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path, model_kind):
     for name, value in exported.items():
         assert value.dtype == jnp.bfloat16
         np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))
+
+
+def test_export_lm_to_hf_keeps_field_dtype_overrides(tmp_path):
+    """export_dtype rounds the model to bfloat16 except the overridden float32 router biases."""
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel({f"t{i}": i for i in range(64)})))
+    tokenizer.save_pretrained(tmp_path / "tokenizer")
+    model_config = SnowballConfig(
+        vocab_size=64,
+        hidden_dim=32,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=32,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+        tokenizer=str(tmp_path / "tokenizer"),
+    )
+    Vocab = haliax.Axis("vocab", 64)
+    with local_cpu_mesh(AxisType.Explicit):
+        model = model_config.build(Vocab, key=jax.random.PRNGKey(0))
+        model = eqx.tree_at(
+            lambda value: tuple(block.mlp.router_bias for block in value.transformer.blocks),
+            model,
+            tuple(jnp.full((8,), 0.1234567, jnp.float32) for _ in range(2)),
+        )
+    params, _ = eqx.partition(model, is_inexact_arrayish)
+    checkpoint_path = str(tmp_path / "checkpoint")
+    save_checkpoint({"model": params}, 1, checkpoint_path)
+    output_dir = str(tmp_path / "output")
+    export_lm_to_hf.main(
+        export_lm_to_hf.ConvertLmConfig(
+            trainer=SimpleNamespace(
+                device_mesh=contextlib.nullcontext(),
+                parameter_axis_mapping={},
+                field_dtype_overrides={"router_bias": jnp.dtype("float32")},
+            ),
+            checkpoint_path=checkpoint_path,
+            output_dir=output_dir,
+            model=model_config,
+            save_tokenizer=False,
+            override_vocab_size=Vocab.size,
+            export_dtype="bfloat16",
+            use_cpu=True,
+        )
+    )
+    with local_cpu_mesh(AxisType.Explicit):
+        exported = model_config.hf_checkpoint_converter().load_state_dict(output_dir)
+    expected = to_state_dict(flatten_modules_for_export(params))
+    router_keys = {f"model.layers.{layer}.mlp.router.bias" for layer in range(2)}
+    assert router_keys <= exported.keys() and exported.keys() == expected.keys()
+    for name, value in exported.items():
+        if name in router_keys:
+            assert value.dtype == jnp.float32
+            np.testing.assert_array_equal(value, expected[name])
+            assert not np.array_equal(value, expected[name].astype(jnp.bfloat16).astype(jnp.float32))
+        else:
+            assert value.dtype == jnp.bfloat16
+            np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))
 
 
 def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
@@ -218,7 +289,9 @@ def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
     output_dir = str(tmp_path / "output")
     export_lm_to_hf.main(
         export_lm_to_hf.ConvertLmConfig(
-            trainer=SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}),
+            trainer=SimpleNamespace(
+                device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}, field_dtype_overrides={}
+            ),
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
             model=model_config,

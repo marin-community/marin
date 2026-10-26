@@ -31,6 +31,8 @@
 !lib/shellbox/pyproject.toml
 !lib/shellbox/README.md
 !lib/shellbox/src
+!lib/rolloutengine/pyproject.toml
+!lib/rolloutengine/src
 !lib/taskcompendium/pyproject.toml
 !lib/taskcompendium/src
 !lib/verifyit/pyproject.toml

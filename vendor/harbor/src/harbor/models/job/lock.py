@@ -14,7 +14,6 @@ from urllib.request import url2pathname
 
 from pydantic import BaseModel, Field, field_validator
 
-from harbor.bridges.base import bridge_input_files
 from harbor.models.job.config import JobConfig, RetryConfig
 from harbor.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 from harbor.models.trial.config import (
@@ -23,7 +22,6 @@ from harbor.models.trial.config import (
     EnvironmentConfig,
     TaskConfig,
     TrialConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
 from harbor.tasks.packager import Packager
@@ -34,23 +32,6 @@ _DIGEST_PREFIX = "sha256:"
 _ENV_ARG_FLAGS = {"--ae", "--agent-env", "--ve", "--verifier-env"}
 TaskIdType = GitTaskId | LocalTaskId | PackageTaskId
 
-# Agent-kwarg keys that are per-ALLOCATION runtime endpoints, not replay-affecting
-# trial identity: the served-model URL + auth key. A legitimate resume re-runs the
-# SAME trials against a NEW serve node (a fresh SLURM allocation gets a different
-# MASTER_ADDR, and the eval sbatch rewrites config.json's `api_base` to it before
-# `harbor jobs resume`). Including these in the lock equality key made every
-# cross-allocation resume spuriously fail `_write_job_lock` with FileExistsError
-# ("lock.json does not match the resolved job lock") — same class of false-reject the
-# created_at/harbor/invocation/n_concurrent_trials carry-overs in Job._write_job_lock
-# already guard against, but at the per-trial agent.kwargs level. Excluded from the
-# equality key ONLY.
-_VOLATILE_AGENT_KWARG_KEYS = frozenset({"api_base", "key"})
-# Agent environment variables that carry the same per-allocation endpoint as
-# ``api_base``. Marin rewrites these when a resume lands on a new Iris serve
-# node, so they must not make the otherwise-identical resolved lock conflict.
-_VOLATILE_AGENT_ENV_KEYS = frozenset(
-    {"HARBOR_PI_API_BASE", "OPENAI_API_BASE", "OPENAI_BASE_URL"}
-)
 # Environment cache-acquisition kwargs (the Daytona snapshot trio) are defined
 # alongside the resume identity fingerprint they must stay in sync with: see
 # ``TrialConfig._PROVISIONING_ENV_KWARG_KEYS`` in harbor_config.
@@ -177,14 +158,8 @@ class TrialLock(BaseModel):
     trial_cleanup_grace_sec: float = DEFAULT_TRIAL_CLEANUP_GRACE_SEC
     extra_instructions: list[ExtraInstructionLock] | None = None
     agent: AgentConfig
-    user_agent: UserAgentConfig | None = None
-    user_persona: ExtraInstructionLock | None = None
-    user_prompt_template: ExtraInstructionLock | None = None
-    bridge_prompt: ExtraInstructionLock | None = None
-    bridge_inputs: dict[str, ExtraInstructionLock] = Field(default_factory=dict)
     skills: list[AgentSkillLock] = Field(default_factory=list)
     environment: EnvironmentConfig
-    extra_docker_compose: list["ExtraDockerComposeLock"] | None = None
     verifier: VerifierConfig
 
     def __eq__(self, other):
@@ -204,45 +179,14 @@ class TrialLock(BaseModel):
             self.trial_cleanup_grace_sec,
             _lock_list_equality_key(self.extra_instructions),
             _agent_equality_key(self.agent),
-            _user_agent_equality_key(
-                self.user_agent, bridge_input_names=set(self.bridge_inputs)
-            ),
-            self.user_persona._equality_key() if self.user_persona else None,
-            (
-                self.user_prompt_template._equality_key()
-                if self.user_prompt_template
-                else None
-            ),
-            self.bridge_prompt._equality_key() if self.bridge_prompt else None,
-            tuple(
-                sorted(
-                    (name, lock._equality_key())
-                    for name, lock in self.bridge_inputs.items()
-                )
-            ),
             tuple(skill._equality_key() for skill in self.skills),
-            _environment_equality_key(self.environment),
-            _lock_list_equality_key(self.extra_docker_compose),
+            _environment_equality_key(
+                self.environment,
+                candidate_model_identity=self.agent.model_name,
+                judge_model_identity=self.verifier.model_name,
+            ),
             _frozen_value(self.verifier.identity_fingerprint()),
         )
-
-
-class ExtraDockerComposeLock(BaseModel):
-    path: Path
-    digest: str
-
-    @field_validator("digest")
-    @classmethod
-    def validate_digest(cls, value: str) -> str:
-        return _validate_digest(value)
-
-    def __eq__(self, other):
-        if not isinstance(other, ExtraDockerComposeLock):
-            return NotImplemented
-        return self._equality_key() == other._equality_key()
-
-    def _equality_key(self) -> tuple[str]:
-        return (self.digest,)
 
 
 class JobLock(BaseModel):
@@ -305,79 +249,25 @@ def _frozen_value(value: Any, exclude: set[str] | None = None) -> Any:
     return value
 
 
-def _kwargs_stripped_frozen_key(
-    model: AgentConfig | EnvironmentConfig,
-    strip_keys: frozenset[str],
-    exclude: set[str],
-) -> Any:
-    """Frozen equality key for a config model, ignoring selected ``kwargs`` keys
-    that are non-replay runtime/provisioning knobs (``_VOLATILE_AGENT_KWARG_KEYS``
-    for the agent, ``TrialConfig._PROVISIONING_ENV_KWARG_KEYS`` for the
-    environment). Those keys change how a trial is served or provisioned, not
-    what it evaluates, so a resume must re-resolve the same lock. The real
-    values still serialize into lock.json; only the comparison ignores them.
-    """
-    if not (model.kwargs and strip_keys.intersection(model.kwargs)):
-        return _frozen_value(model, exclude=exclude)
-    sanitized = model.model_copy(
-        update={
-            "kwargs": {k: v for k, v in model.kwargs.items() if k not in strip_keys}
-        }
-    )
-    return _frozen_value(sanitized, exclude=exclude)
-
-
 def _agent_equality_key(agent: AgentConfig) -> Any:
-    sanitized = agent.model_copy(
-        update={
-            "kwargs": {
-                key: value
-                for key, value in agent.kwargs.items()
-                if key not in _VOLATILE_AGENT_KWARG_KEYS
-            },
-            "env": {
-                key: value
-                for key, value in agent.env.items()
-                if key not in _VOLATILE_AGENT_ENV_KEYS
-            },
-        }
-    )
-    return _frozen_value(sanitized, exclude={"skills", "model_alias"})
-
-
-def _environment_equality_key(environment: EnvironmentConfig) -> Any:
-    return _kwargs_stripped_frozen_key(
-        environment,
-        TrialConfig._PROVISIONING_ENV_KWARG_KEYS,
-        {"extra_docker_compose"},
-    )
-
-
-def _user_agent_equality_key(
-    user_agent: UserAgentConfig | None,
-    *,
-    bridge_input_names: set[str],
-) -> Any:
-    if user_agent is None:
-        return None
-    value = user_agent.model_dump(
-        mode="python",
-        exclude={
-            "skills",
-            "model_alias",
-            "user_persona_path",
-            "user_prompt_template_path",
-        },
-        exclude_none=True,
-    )
-    bridge = value.get("bridge")
-    if isinstance(bridge, dict):
-        bridge.pop("prompt_path", None)
-        kwargs = bridge.get("kwargs")
-        if isinstance(kwargs, dict):
-            for name in bridge_input_names:
-                kwargs.pop(name, None)
+    value = agent.identity_fingerprint()
+    value.pop("skills", None)
     return _frozen_value(value)
+
+
+def _environment_equality_key(
+    environment: EnvironmentConfig,
+    *,
+    candidate_model_identity: str | None,
+    judge_model_identity: str | None,
+) -> Any:
+    fingerprint = environment.identity_fingerprint(
+        candidate_model_identity=candidate_model_identity,
+        judge_model_identity=judge_model_identity,
+    )
+    for key in TrialConfig._PROVISIONING_ENV_KWARG_KEYS:
+        fingerprint["kwargs"].pop(key, None)
+    return _frozen_value(fingerprint)
 
 
 def build_job_lock(
@@ -427,42 +317,8 @@ def _build_lock_trial(
             else None
         ),
         agent=trial_config.agent,
-        user_agent=trial_config.user_agent,
-        user_persona=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.user_persona_path,
-                digest=_file_sha256_digest(trial_config.user_agent.user_persona_path),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.user_persona_path is not None
-            else None
-        ),
-        user_prompt_template=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.user_prompt_template_path,
-                digest=_file_sha256_digest(
-                    trial_config.user_agent.user_prompt_template_path
-                ),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.user_prompt_template_path is not None
-            else None
-        ),
-        bridge_prompt=(
-            ExtraInstructionLock(
-                path=trial_config.user_agent.bridge.prompt_path,
-                digest=_file_sha256_digest(trial_config.user_agent.bridge.prompt_path),
-            )
-            if trial_config.user_agent is not None
-            and trial_config.user_agent.bridge.prompt_path is not None
-            else None
-        ),
-        bridge_inputs=_build_bridge_input_locks(trial_config),
         skills=_build_agent_skill_locks(trial_config.agent.skills),
         environment=trial_config.environment,
-        extra_docker_compose=_build_extra_docker_compose_locks(
-            trial_config.environment.extra_docker_compose
-        ),
         verifier=trial_config.verifier,
     )
 
@@ -475,28 +331,6 @@ def _build_agent_skill_locks(skills: list[Path]) -> list[AgentSkillLock]:
             digest=compute_skill_digest(skill.source),
         )
         for skill in resolve_skills(skills)
-    ]
-
-
-def _build_bridge_input_locks(
-    trial_config: TrialConfig,
-) -> dict[str, ExtraInstructionLock]:
-    if trial_config.user_agent is None:
-        return {}
-    return {
-        name: ExtraInstructionLock(path=path, digest=_file_sha256_digest(path))
-        for name, path in bridge_input_files(trial_config.user_agent.bridge).items()
-    }
-
-
-def _build_extra_docker_compose_locks(
-    paths: Sequence[Path],
-) -> list[ExtraDockerComposeLock] | None:
-    if not paths:
-        return None
-    return [
-        ExtraDockerComposeLock(path=path, digest=_file_sha256_digest(path))
-        for path in paths
     ]
 
 

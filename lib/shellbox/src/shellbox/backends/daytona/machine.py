@@ -27,14 +27,17 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     DaytonaRateLimitError,
     Image,
     Resources,
 )
+from daytona.common.snapshot import Snapshot
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import (
@@ -46,14 +49,18 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+CONTROL_CWD = "/"
+COUNT_PREFIX = "SHELLBOX_COUNT="
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
 )
@@ -88,25 +95,51 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
+def snapshot_identity(source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    """The snapshot name :class:`DaytonaMachineFactory` would create for this pair.
+
+    Validates the source the way ``_prepare`` does (rejecting ADD and Dockerfiles
+    outside the context root) and derives the deterministic name from the build
+    context contents or registry reference plus the resource shape. Measurement
+    code calls this to count snapshots through the production naming path.
+    """
+    source = _validated_source(source)
+    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
+    return f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+
+
+async def _snapshot_metadata(client: AsyncDaytona, name: str) -> Snapshot:
+    """Retry transient snapshot metadata reads within the caller's startup deadline."""
+    backoff = ExponentialBackoff(initial=1, maximum=2, factor=2, jitter=0)
+    attempts = 0
+    while True:
+        try:
+            return await client.snapshot.get(name)
+        except DaytonaError as error:
+            attempts += 1
+            if error.status_code not in (502, 503, 504) or attempts == 3:
+                raise
+            await sleep(backoff.next_interval())
+
+
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
     """Build or await a snapshot identified by its source and resource requirements."""
-    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
-    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+    name = snapshot_identity(source, resources)
     try:
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     except DaytonaNotFoundError:
         image = source.reference if isinstance(source, RegistryImage) else Image.from_dockerfile(source.dockerfile)
         try:
             snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
         except DaytonaConflictError:
             # Another rollout can create this image through a separate client or event loop.
-            snapshot = await client.snapshot.get(name)
+            snapshot = await _snapshot_metadata(client, name)
     backoff = ExponentialBackoff(initial=1, maximum=10)
     while snapshot.state != SnapshotState.ACTIVE:
         if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
             raise RuntimeError(f"Daytona snapshot {name} is {snapshot.state}: {snapshot.error_reason}")
         await asyncio.sleep(backoff.next_interval())
-        snapshot = await client.snapshot.get(name)
+        snapshot = await _snapshot_metadata(client, name)
     return name
 
 
@@ -177,19 +210,92 @@ class DaytonaMachine:
         self.spec = spec
         self.resources = resources
         self._closed = False
+        self._sessions: set[DaytonaProcessSession] = set()
+        self._acquisitions: set[asyncio.Task[None]] = set()
+        self._closing: asyncio.Task[None] | None = None
+
+    async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
+        if user in (None, "root", "0"):
+            return argv
+        assert user is not None
+        if user.isdecimal():
+            account = await self.sandbox.process.exec(
+                _control_command(f"getent passwd {shlex.quote(user)}"), cwd=CONTROL_CWD
+            )
+            if account.exit_code or not account.result.strip():
+                raise ValueError(f"Execution user {user} has no guest account")
+            user = account.result.split(":", 1)[0]
+        capabilities = await self.sandbox.process.exec(_control_command("su --help"), cwd=CONTROL_CWD)
+        if capabilities.exit_code or "--session-command" not in capabilities.result:
+            raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
+        return ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+
+    async def open_process(self, command: Command) -> DaytonaProcessSession:
+        """Attach persistent binary pipes through one provider session and log stream."""
+        if self._closed:
+            raise RuntimeError("Machine is closed")
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+
+        async def cleanup_failed() -> None:
+            if not self._closed:
+                await self.close()
+
+        session = DaytonaProcessSession(
+            self.sandbox.process,
+            f"shellbox-{uuid.uuid4().hex}",
+            stderr_limit=command.output_limit_bytes,
+            release=self._sessions.discard,
+            failed_cleanup=cleanup_failed,
+        )
+        self._sessions.add(session)
+
+        async def start() -> None:
+            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                argv = await self._user_argv(command.argv, command.user)
+                await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
+
+        acquisition = asyncio.create_task(start())
+        self._acquisitions.add(acquisition)
+        try:
+            await asyncio.shield(acquisition)
+            if self._closed:
+                raise RuntimeError("Machine was closed while opening a process session")
+            return session
+        except BaseException as error:
+            try:
+                await finish_owned(acquisition)
+            except BaseException as acquisition_error:
+                if acquisition_error is not error:
+                    error.add_note(f"Daytona process acquisition failed ({type(acquisition_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(session.close()))
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona process cleanup failed ({type(cleanup_error).__name__})")
+            raise
+        finally:
+            self._acquisitions.discard(acquisition)
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
-        count = await self.sandbox.process.exec(_control_command(f"wc -c < {shlex.quote(path)}"))
+        count = await self.sandbox.process.exec(
+            _control_command(f"size=$(wc -c < {shlex.quote(path)}) || exit; printf '{COUNT_PREFIX}%s\\n' \"$size\""),
+            cwd=CONTROL_CWD,
+        )
         if count.exit_code:
             raise RuntimeError(f"Failed to measure command output: {count.result}")
-        size = int(count.result.strip())
+        match = re.search(rf"(?m)^{COUNT_PREFIX}([0-9]+)$", count.result)
+        if match is None:
+            raise RuntimeError(f"Invalid command output size: {count.result!r}")
+        size = int(match.group(1))
         if size <= limit:
             data = await self.sandbox.fs.download_file(path)
             assert isinstance(data, bytes)
             return data, False
         clipped = f"{path}.limited"
         result = await self.sandbox.process.exec(
-            _control_command(f"head -c {limit} {shlex.quote(path)} > {shlex.quote(clipped)}")
+            _control_command(f"head -c {limit} {shlex.quote(path)} > {shlex.quote(clipped)}"), cwd=CONTROL_CWD
         )
         if result.exit_code:
             raise RuntimeError(f"Failed to limit command output: {result.result}")
@@ -198,7 +304,41 @@ class DaytonaMachine:
             assert isinstance(data, bytes)
             return data, True
         finally:
-            await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"))
+            await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
+
+    async def _stop_command(self, pidfile: str, completed_path: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            stopped = await self.sandbox.process.exec(
+                _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))),
+                cwd=CONTROL_CWD,
+            )
+            if stopped.exit_code:
+                raise RuntimeError(stopped.result)
+
+    async def _remove_command_files(self, prefix: str) -> None:
+        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"), cwd=CONTROL_CWD)
+            if removed.exit_code:
+                raise RuntimeError("Cannot remove Daytona command files")
+
+    async def _cleanup_cancelled_command(
+        self, prefix: str, pidfile: str, completed_path: str, started: bool, cancellation: asyncio.CancelledError
+    ) -> None:
+        try:
+            if started:
+                await finish_owned(own_cleanup(self._stop_command(pidfile, completed_path)))
+                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+            else:
+                await finish_owned(own_cleanup(self.close()))
+        except BaseException as cleanup_error:
+            cancellation.add_note(f"Daytona command cancellation cleanup failed ({type(cleanup_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(self.close()))
+            except BaseException as close_error:
+                cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:
@@ -223,18 +363,7 @@ class DaytonaMachine:
                     "shellbox-agent",
                     *command.argv,
                 )
-                if command.user not in (None, "root", "0"):
-                    user = command.user
-                    # su accepts names. Resolve a numeric UID in the guest's account database.
-                    if user.isdecimal():
-                        account = await self.sandbox.process.exec(_control_command(f"getent passwd {shlex.quote(user)}"))
-                        if account.exit_code or not account.result.strip():
-                            raise ValueError(f"Execution user {user} has no guest account")
-                        user = account.result.split(":", 1)[0]
-                    capabilities = await self.sandbox.process.exec(_control_command("su --help"))
-                    if capabilities.exit_code or "--session-command" not in capabilities.result:
-                        raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
-                    argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+                argv = await self._user_argv(argv, command.user)
                 argv = (
                     "/bin/sh",
                     "-c",
@@ -252,7 +381,9 @@ class DaytonaMachine:
                     f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
                     f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
                 )
-                prepared = await self.sandbox.process.exec(_control_command(f"umask 077; mkdir {shlex.quote(prefix)}"))
+                prepared = await self.sandbox.process.exec(
+                    _control_command(f"umask 077; mkdir {shlex.quote(prefix)}"), cwd=CONTROL_CWD
+                )
                 if prepared.exit_code:
                     raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
                 if command.stdin:
@@ -286,31 +417,26 @@ class DaytonaMachine:
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             try:
-                async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                    stopped = await self.sandbox.process.exec(
-                        _control_command(
-                            shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))
-                        )
-                    )
-                    if stopped.exit_code:
-                        raise RuntimeError(stopped.result)
+                await self._stop_command(pidfile, completed_path)
+            except asyncio.CancelledError as cancellation:
+                primary_error = cancellation
+                await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
+                raise
             except Exception as error:
                 await self.close()
                 raise RuntimeError("Cannot stop the Daytona command process group") from error
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-        except asyncio.CancelledError:
-            await self.close()
+        except asyncio.CancelledError as cancellation:
+            primary_error = cancellation
+            await self._cleanup_cancelled_command(prefix, pidfile, completed_path, started, cancellation)
             raise
         except BaseException as error:
             primary_error = error
             raise
         finally:
-            if not self._closed:
+            if not self._closed and not isinstance(primary_error, asyncio.CancelledError):
                 try:
-                    async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                        removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
-                        if removed.exit_code:
-                            raise RuntimeError("Cannot remove Daytona command files")
+                    await self._remove_command_files(prefix)
                 except asyncio.CancelledError:
                     await self.close()
                     raise
@@ -333,27 +459,32 @@ class DaytonaMachine:
                 _control_command(
                     f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
                     f"; status=$?; rm -f {shlex.quote(remote_archive)}; exit $status"
-                )
+                ),
+                cwd=CONTROL_CWD,
             )
         else:
             parent = str(PurePosixPath(target).parent)
-            result = await self.sandbox.process.exec(_control_command(f"mkdir -p {shlex.quote(parent)}"))
+            result = await self.sandbox.process.exec(
+                _control_command(f"mkdir -p {shlex.quote(parent)}"), cwd=CONTROL_CWD
+            )
             if result.exit_code:
                 raise RuntimeError(f"Failed to create {parent}: {result.result}")
             await self.sandbox.fs.upload_file_stream(source.read_bytes(), target)
             mode = stat.S_IMODE(source.stat().st_mode)
-            result = await self.sandbox.process.exec(_control_command(f"chmod {mode:o} {shlex.quote(target)}"))
+            result = await self.sandbox.process.exec(
+                _control_command(f"chmod {mode:o} {shlex.quote(target)}"), cwd=CONTROL_CWD
+            )
         if result.exit_code:
             raise RuntimeError(f"Failed to upload {source}: {result.result}")
 
     async def download(self, source: str, target: Path) -> None:
         if self._closed:
             raise RuntimeError("Machine is closed")
-        probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"))
+        probe = await self.sandbox.process.exec(_control_command(f"test -d {shlex.quote(source)}"), cwd=CONTROL_CWD)
         if probe.exit_code == 0:
             remote_archive = f"/tmp/.shellbox-{uuid.uuid4().hex}.tar.gz"
             result = await self.sandbox.process.exec(
-                _control_command(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} .")
+                _control_command(f"tar czf {shlex.quote(remote_archive)} -C {shlex.quote(source)} ."), cwd=CONTROL_CWD
             )
             if result.exit_code:
                 raise RuntimeError(f"Failed to archive {source}: {result.result}")
@@ -366,7 +497,9 @@ class DaytonaMachine:
                     with tarfile.open(archive.name, "r:gz") as tar:
                         tar.extractall(target, filter="data")
             finally:
-                await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(remote_archive)}"))
+                await self.sandbox.process.exec(
+                    _control_command(f"rm -f {shlex.quote(remote_archive)}"), cwd=CONTROL_CWD
+                )
             return
         data = await self.sandbox.fs.download_file(source)
         assert isinstance(data, bytes)
@@ -374,10 +507,29 @@ class DaytonaMachine:
         target.write_bytes(data)
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        await self.resources.aclose()
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._close())
+        try:
+            await asyncio.shield(self._closing)
+        except asyncio.CancelledError as error:
+            try:
+                await finish_owned(self._closing)
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _close(self) -> None:
+        try:
+            await asyncio.gather(*tuple(self._acquisitions), return_exceptions=True)
+            results = await asyncio.gather(
+                *(session.close() for session in tuple(self._sessions)), return_exceptions=True
+            )
+        finally:
+            await self.resources.aclose()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 class DaytonaMachineFactory:
@@ -470,7 +622,9 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            prepared = await sandbox.process.exec(_control_command("command -v setsid"), timeout=INTERRUPT_TIMEOUT)
+            prepared = await sandbox.process.exec(
+                _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
+            )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
             machine = DaytonaMachine(sandbox, spec, lifetime)

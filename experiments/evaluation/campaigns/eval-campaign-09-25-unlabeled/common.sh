@@ -9,7 +9,7 @@ CANONICAL_CONFIG_ROOT="$SCRIPT_DIR"
 CAMPAIGN_CONFIG="$CANONICAL_CONFIG_ROOT/campaign.yaml"
 MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/model-configs"
 CHAT_TEMPLATE_DIR="$CANONICAL_CONFIG_ROOT/chat-templates"
-EVALCHEMY_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/evalchemy-configs"
+EVALUATION_CONFIG="$CANONICAL_CONFIG_ROOT/evalchemy.yaml"
 HARBOR_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/harbor-configs"
 JUDGE_MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/judge-model-configs"
 JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG_DIR/MiniMaxAI-MiniMax-M3-MXFP8.yaml"
@@ -25,18 +25,16 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
+CAMPAIGN_DATASET_REGISTRY_REVISION="38742b0f9f411c95e0c01468785cac7bb77c9894"
 eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor
+from rigging.provenance import launch_provenance
 
-print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_hash())}")
-print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR_SOURCE.commit)}")
-print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
+print(f"CAMPAIGN_SOURCE_TREE={shlex.quote(launch_provenance().dedup_key)}")
 PY
 )"
-export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
+export CAMPAIGN_SHA_MARIN CAMPAIGN_SOURCE_TREE
 
 die() {
   echo "error: $*" >&2
@@ -225,12 +223,11 @@ validate_campaign_configs() {
   (cd "$MARIN_DIR" && \
   MODEL_CONFIG_DIR="$MODEL_CONFIG_DIR" \
   CHAT_TEMPLATE_DIR="$CHAT_TEMPLATE_DIR" \
-  EVALCHEMY_CONFIG_DIR="$EVALCHEMY_CONFIG_DIR" \
-  CANONICAL_EVALCHEMY_CONFIG_DIR="$MARIN_DIR/experiments/evaluation/configs/evalchemy" \
+  EVALUATION_CONFIG="$EVALUATION_CONFIG" \
   HARBOR_CONFIG_DIR="$HARBOR_CONFIG_DIR" \
   CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" \
   JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG" \
-  CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
+  CAMPAIGN_DATASET_REGISTRY_REVISION="$CAMPAIGN_DATASET_REGISTRY_REVISION" \
   uv run python - <<'PY'
 import os
 import re
@@ -238,14 +235,14 @@ from pathlib import Path
 
 import yaml
 
-from experiments.evaluation.evals import EvalchemyDefinition
-from marin.evaluation.evalchemy.config import load_evalchemy_config
+from experiments.evaluation.curated import load_evaluations, corpus_steps, resolve_selection
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 from marin.evaluation.model_config import load_model_config
 
 models = Path(os.environ["MODEL_CONFIG_DIR"])
 chat_templates = Path(os.environ["CHAT_TEMPLATE_DIR"])
-evalchemy = Path(os.environ["EVALCHEMY_CONFIG_DIR"])
-canonical_evalchemy = Path(os.environ["CANONICAL_EVALCHEMY_CONFIG_DIR"])
+evalchemy = Path(os.environ["EVALUATION_CONFIG"])
+
 harbor = Path(os.environ["HARBOR_CONFIG_DIR"])
 campaign_config = Path(os.environ["CAMPAIGN_CONFIG"])
 
@@ -301,69 +298,9 @@ for path in models.glob("*.yaml"):
         actual_thinking_format,
         expected_thinking_format,
     )
-mrcr_variants = {"mrcr-32k": 32704, "mrcr-65k": 65472}
-evalchemy_names = {path.stem for path in evalchemy.glob("*.yaml")}
-assert len(evalchemy_names) == 20
-assert len(list(harbor.glob("*.yaml"))) == 8
-sotopia = yaml.safe_load((harbor / "sotopia-hard.yaml").read_text())
-assert sotopia["datasets"] == [
-    {
-        "name": "hf://open-athena/sotopia-hard-harbor",
-        "ref": "b388b6634d82b25811afa431997b3dbfee9c17cf",
-    }
-]
+for selection in load_evaluations(evalchemy):
+    corpus_steps(resolve_selection(selection, None), CampaignRuntime())
 
-thinking_on = {"aime24", "math500", "olympiadbench", "mmlu-pro", "gpqa-diamond"}
-thinking_off = {
-    "humanevalplus",
-    "mbppplus",
-    "gsm8k-0shot",
-    "triviaqa",
-    "cruxeval",
-    "financebench",
-    "ifbench",
-    "mrcr",
-}
-model_default = {"nupa"}
-not_applicable = {"piqa", "winogrande", "boolq", "truthfulqa"}
-assert thinking_on | thinking_off | model_default | not_applicable == evalchemy_names - set(mrcr_variants)
-mrcr = yaml.safe_load((evalchemy / "mrcr.yaml").read_text())
-for name, max_length in mrcr_variants.items():
-    expected = dict(mrcr, max_length=max_length)
-    assert yaml.safe_load((evalchemy / f"{name}.yaml").read_text()) == expected
-for name in thinking_on | thinking_off:
-    expected = {"enable_thinking": name in thinking_on}
-    artifact_document = yaml.safe_load((evalchemy / f"{name}.yaml").read_text())
-    canonical_document = yaml.safe_load((canonical_evalchemy / f"{name}.yaml").read_text())
-    assert artifact_document.get("chat_template_kwargs") == expected, (name, artifact_document)
-    assert canonical_document.get("chat_template_kwargs") == expected, (name, canonical_document)
-
-# Exercise the same model/config merge used by the launcher. The benchmark setting must win over
-# model defaults for every tracked model, not merely be present in the source YAML.
-for model_path in models.glob("*.yaml"):
-    model = load_model_config(model_path)
-    if model.location == "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38":
-        assert model.generation.max_gen_toks == 16384, model.generation
-    for name in thinking_on | thinking_off:
-        config_path = evalchemy / f"{name}.yaml"
-        source = load_evalchemy_config(config_path)
-        resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(
-            source, model, None
-        )
-        expected = {"enable_thinking": name in thinking_on}
-        if name in thinking_off and model.generation.thinking_off_template_kwargs:
-            expected = dict(model.generation.thinking_off_template_kwargs)
-        assert resolved.chat_template_kwargs == expected, (
-            model.location,
-            name,
-            resolved.chat_template_kwargs,
-        )
-    nupa_path = evalchemy / "nupa.yaml"
-    nupa_source = load_evalchemy_config(nupa_path)
-    nupa = EvalchemyDefinition(name="nupa", config_path=nupa_path).config_for(
-        nupa_source, model, None
-    )
-    assert "enable_thinking" not in nupa.chat_template_kwargs, (model.location, nupa.chat_template_kwargs)
 fallbacks = {
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
     "IFM/K2-Horizon-MoVA-36B-A4B": {"reasoning_effort": "low"},
@@ -373,14 +310,6 @@ fallbacks = {
 for model_path in models.glob("*.yaml"):
     model = load_model_config(model_path)
     assert dict(model.generation.thinking_off_template_kwargs) == fallbacks.get(model.location, {}), model.location
-for name in model_default | not_applicable:
-    artifact_document = yaml.safe_load((evalchemy / f"{name}.yaml").read_text())
-    assert "chat_template_kwargs" not in artifact_document, (name, artifact_document)
-    canonical_path = canonical_evalchemy / f"{name}.yaml"
-    if canonical_path.exists():
-        canonical_document = yaml.safe_load(canonical_path.read_text())
-        assert "chat_template_kwargs" not in canonical_document, (name, canonical_document)
-
 for path in models.glob("*.yaml"):
     revision = yaml.safe_load(path.read_text()).get("revision", "")
     assert re.fullmatch(r"[0-9a-f]{40}", revision), f"unpinned model revision in {path}"
@@ -393,16 +322,10 @@ assert judge.serve.object_store_load_mode.value == "stage_local"
 assert "--enforce-eager" not in judge.serve.vllm_extra_args
 assert "--model-loader-extra-config" not in judge.serve.vllm_extra_args
 
-for name in ("aime24", "olympiadbench", "gpqa-diamond"):
-    document = yaml.safe_load((evalchemy / f"{name}.yaml").read_text())
-    assert document.get("seed") == 42, f"{name} must use explicit seed 42"
-    assert document.get("gen_kwargs") == "do_sample=true,temperature=0.7", (
-        f"{name} must use seeded temperature sampling"
-    )
-assert yaml.safe_load((evalchemy / "nupa.yaml").read_text())["tasks"] == ["NUPA5K-Loose"]
-nupa = yaml.safe_load((evalchemy / "nupa.yaml").read_text())
-assert nupa["max_length"] == 73664
-assert "max_tokens" not in nupa
+
+nupa = yaml.safe_load(evalchemy.read_text())["evaluations"]["nupa"]
+assert nupa["benchmark"] == "nupa5k-loose"
+assert "max_tokens" not in nupa.get("run", {})
 
 terminal_bench = yaml.safe_load((harbor / "tb2-recovery.yaml").read_text())
 assert terminal_bench["n_attempts"] == 3
@@ -429,7 +352,7 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/registry.json",
     }
 ]
 for name in (
@@ -446,7 +369,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
@@ -469,11 +392,9 @@ PY
 snapshot_launch_configs() {
   mkdir -p "$CONFIG_SNAPSHOT_DIR"
   CAMPAIGN_SHA_MARIN="$CAMPAIGN_SHA_MARIN" \
-  CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
-  CAMPAIGN_HARBOR_RUNTIME="$CAMPAIGN_HARBOR_RUNTIME" \
-  CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
+  CAMPAIGN_SOURCE_TREE="$CAMPAIGN_SOURCE_TREE" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
-  python3 - "$@" <<'PY'
+  uv run --project "$MARIN_DIR" python - "$@" <<'PY'
 import hashlib
 import json
 import os
@@ -481,20 +402,24 @@ import shutil
 import sys
 from pathlib import Path
 
-config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evalchemy-config"}
+import yaml
+
+config_flags = {"--model-config", "--judge-model-config", "--harbor-config", "--evaluation-config", "--policy-finalization-config"}
 arguments = sys.argv[1:]
 files = []
 for index, argument in enumerate(arguments[:-1]):
     if argument in config_flags:
         files.append((argument.removeprefix("--"), Path(arguments[index + 1]).resolve()))
+        if argument == "--policy-finalization-config":
+            path = Path(arguments[index + 1]).resolve()
+            config = yaml.safe_load(path.read_text())
+            files.extend((kind, path.parent / config[kind]) for kind in ("judge_model_config",))
 
 payload = {
     "argv": arguments,
     "pins": {
         "marin": os.environ["CAMPAIGN_SHA_MARIN"],
-        "harbor": os.environ["CAMPAIGN_SHA_HARBOR"],
-        "harbor_runtime": os.environ["CAMPAIGN_HARBOR_RUNTIME"],
-        "evalchemy_source_hash": os.environ["CAMPAIGN_EVALCHEMY_SOURCE_HASH"],
+        "source_tree": os.environ["CAMPAIGN_SOURCE_TREE"],
     },
     "files": [
         {"kind": kind, "source": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}

@@ -231,12 +231,12 @@ affected-test runner use `infra/ci/run_harbor_tests.py` to check its standalone
 lock before running offline runtime tests. Changes to its local Rigging and
 FineStore dependencies also select this lane.
 
-Evalchemy is maintained under `vendor/evalchemy` with its own lock and dedicated
-`evalchemy-unit` lane. Both vendored evaluators use local Rigging and FineStore.
+Curated TaskSpec evaluation runs in the Marin unit lane. Harbor uses local
+Rigging and FineStore.
 
 `ops-external-dependencies.yaml` is manual: it regenerates packaged external
 requirements and opens an update only when generated state changes. Vendored
-SkyRL, Evalchemy and Harbor source updates land directly in Marin.
+SkyRL and Harbor source updates land directly in Marin.
 
 `ops-native-package-dependencies.yaml` applies the same policy to Marin's
 published native wheels. A successful non-PR `Marin - Release Packages` run
@@ -246,6 +246,14 @@ Finelog, and Iris native versions from PyPI, advances their compatibility floors
 and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
 pass. Manual dispatch retries a failed or missed update without republishing the
 wheels.
+
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` publishes the Snowball family-tree app from
+`main` with `scripts/ci/snowball_release.py`. Scheduled runs require the
+repository variable `SNOWBALL_TREE_RELEASE=enabled`. The
+[tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+covers activation and manual runs.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 

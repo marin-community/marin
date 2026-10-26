@@ -34,7 +34,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
+from marin.datakit.download.terminus import TerminusParseMode, ThinkTokens, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -1155,7 +1155,9 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
                 return []
             messages, metadata = converted
         else:
-            messages = terminus_protocol_messages(conversations, THINK_TOKENS_BY_COHORT[dataset.cohort_name])
+            messages = terminus_protocol_messages(
+                conversations, THINK_TOKENS_BY_COHORT[dataset.cohort_name], mode=TerminusParseMode.STRICT
+            )
             if messages is None:
                 return []
             metadata = {}

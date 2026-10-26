@@ -4,9 +4,15 @@
 """The eval statistics engine: intervals under attrition, panel aggregates, and result selection."""
 
 import math
+from dataclasses import replace
 
 import pytest
-from marin.evaluation.eval_measurements import measurement_from_record, task_item_count
+from marin.evaluation.eval_measurements import (
+    declared_metric_rows,
+    measurement_from_record,
+    task_item_count,
+    undeclared_metric_rows,
+)
 from marin.evaluation.eval_stats import (
     AggregationProtocol,
     CohortMode,
@@ -405,7 +411,60 @@ def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
     selection = select([legacy, declared], SelectionRequest())
 
     assert selection.cells["m"]["drop"].run_id == "declared"
-    assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+    assert {rejection.run_id for rejection in selection.rejections} == {"legacy"}
+
+
+@pytest.mark.parametrize(
+    "identity,shots,metric,kind,admitted",
+    [
+        (None, 5, "accuracy", MetricKind.BINARY, True),
+        (None, None, "accuracy", MetricKind.BINARY, True),
+        (None, 0, "accuracy", MetricKind.BINARY, False),
+        (None, 5, "normalized_accuracy", MetricKind.BINARY, False),
+        (None, 5, "accuracy", MetricKind.CONTINUOUS, False),
+        ("previous-corpus", 5, "accuracy", MetricKind.BINARY, False),
+        ("current-corpus", 5, "accuracy", MetricKind.BINARY, True),
+    ],
+)
+def test_historical_comparisons_preserve_known_protocol_differences(identity, shots, metric, kind, admitted):
+    current = replace(
+        _measurement(
+            model="native", run_id="native", declared=True, protocol_metric="accuracy", created_at="2026-11-05T00:00:00Z"
+        ),
+        protocol_identity="current-corpus",
+        num_fewshot=5,
+    )
+    previous = replace(
+        current,
+        model="historical",
+        run_id="historical",
+        created_at="2026-10-01T00:00:00Z",
+        protocol_identity=identity,
+        num_fewshot=shots,
+        protocol_metric=metric,
+        protocol_kind=kind,
+    )
+    selection = select([previous, current], SelectionRequest())
+    assert ("historical" in selection.cells) is admitted
+    assert selection.cells["native"]["gsm8k"].run_id == "native"
+    assert bool(selection.rejections) is not admitted
+
+
+def test_newer_unknown_corpus_does_not_merge_distinct_known_protocols():
+    measurements = [
+        replace(
+            _measurement(model=name, run_id=name, declared=True, protocol_metric="accuracy", created_at=date),
+            protocol_identity=identity,
+        )
+        for name, identity, date in (
+            ("old", "corpus-a", "2026-11-01T00:00:00Z"),
+            ("current", "corpus-b", "2026-11-02T00:00:00Z"),
+            ("unknown", None, "2026-11-03T00:00:00Z"),
+        )
+    ]
+    selection = select(measurements, SelectionRequest())
+    assert set(selection.cells) == {"current", "unknown"}
+    assert {rejection.run_id for rejection in selection.rejections} == {"old"}
 
 
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():
@@ -504,6 +563,8 @@ def _record(
     metric_kind: MetricKind | None = None,
     source_metric: str | None = None,
     canonical_metrics: dict[str, dict[str, float]] | None = None,
+    declared_metrics: tuple[BenchmarkMetricRef, ...] | None = None,
+    tasks: tuple[EvalTaskRef, ...] | None = None,
 ) -> EvalRunRecord:
     benchmark = None
     if primary_metric is not None and metric_kind is not None:
@@ -512,7 +573,8 @@ def _record(
             task=eval_name,
             primary_metric=primary_metric,
             metric_kind=metric_kind,
-            metrics=(
+            metrics=declared_metrics
+            or (
                 BenchmarkMetricRef(
                     name=primary_metric,
                     source_name=source_metric or primary_metric,
@@ -532,7 +594,8 @@ def _record(
         eval=EvalRef(
             name=eval_name,
             mechanism=mechanism,
-            tasks=(
+            tasks=tasks
+            or (
                 EvalTaskRef(
                     name=eval_name,
                     num_fewshot=5,
@@ -900,3 +963,170 @@ def test_record_adapter_reads_the_standard_error_of_a_repeated_sample_task():
     interval = measurement_interval(measurement)
     assert interval.low > 0.1
     assert interval.high < 0.25
+
+
+@pytest.mark.parametrize(
+    "name,metrics,metric,value,kind,correct",
+    [
+        ("piqa", {"acc": 0.25, "acc_norm": 0.75}, "normalized_accuracy", 0.75, MetricKind.BINARY, 3),
+        (
+            "ifbench",
+            {"strict_prompt_accuracy": 0.25, "loose_prompt_accuracy": 0.75},
+            "strict_prompt_accuracy",
+            0.25,
+            MetricKind.BINARY,
+            1,
+        ),
+        ("truthfulqa", {"acc": 1.0}, "accuracy", 1.0, MetricKind.CONTINUOUS, None),
+    ],
+)
+def test_publication_metric_projects_score_and_coverage_without_changing_record(
+    name, metrics, metric, value, kind, correct
+):
+    record = _record(
+        eval_name=name,
+        metrics={name: metrics},
+        coverage={name: TaskCoverage(n_benchmark=5, n_attempted=5, n_scored=4, n_correct=2, errors={"ungraded": 1})},
+    )
+    original = record.model_dump()
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert (measurement.metric, measurement.value, measurement.kind) == (metric, value, kind)
+    assert measurement.n_correct == correct
+    assert measurement.coverage.n_correct == correct
+    assert measurement.coverage.n_scored == 4
+    assert measurement.coverage.n_attempted == 5
+    assert measurement.coverage.errors == {"ungraded": 1}
+    assert record.model_dump() == original
+
+
+def test_historical_mrcr_normalization_preserves_continuous_uncertainty():
+    record = _record(
+        eval_name="mrcr",
+        metrics={"mrcr": {"mrcr_accuracy": 0.5, "mrcr_accuracy_stderr": 0.1, "sample_len": 4}},
+        coverage={"mrcr": TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4)},
+    )
+    original = record.model_dump()
+    measurement = measurement_from_record(record)
+    assert measurement is not None
+    assert (measurement.metric, measurement.value, measurement.kind) == ("accuracy", 0.5, MetricKind.CONTINUOUS)
+    assert measurement.n_correct is None
+    assert measurement.recorded_stderr == 0.1
+    interval = measurement_interval(measurement)
+    assert 0.3 < interval.low < interval.high < 0.7
+    assert record.model_dump() == original
+
+
+def test_publication_metric_uses_canonical_results_without_rewriting_evaluator_metadata():
+    record = _record(
+        eval_name="piqa",
+        metrics={"piqa": {"acc": 0.25, "acc_norm": 0.75}},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        source_metric="acc",
+        canonical_metrics={"piqa": {"accuracy": 0.25, "normalized_accuracy": 0.75}},
+        coverage={"piqa": TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4, n_correct=1)},
+    )
+    original = record.model_dump()
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert measurement.metric == "normalized_accuracy"
+    assert measurement.value == 0.75
+    assert measurement.n_correct == 3
+    assert record.model_dump() == original
+
+
+def test_missing_publication_metric_does_not_fall_back_to_another_score():
+    record = _record(eval_name="piqa", metrics={"piqa": {"acc": 1.0}})
+    assert measurement_from_record(record) is None
+
+
+def test_declared_metric_rows_list_the_primary_first_and_prefer_the_filter_priority():
+    record = _record(
+        eval_name="gsm8k",
+        metrics={
+            "gsm8k_5shot": {
+                "exact_match,strict-match": 0.2,
+                "exact_match,flexible-extract": 0.42,
+                "f1,strict-match": 0.3,
+                "f1,flexible-extract": 0.6,
+                "f1_stderr,flexible-extract": 0.03,
+                "sample_len": 100,
+            }
+        },
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        source_metric="exact_match",
+        declared_metrics=(
+            BenchmarkMetricRef(name="f1", source_name="f1", kind=MetricKind.CONTINUOUS, higher_is_better=True),
+            BenchmarkMetricRef(
+                name="accuracy", source_name="exact_match", kind=MetricKind.BINARY, higher_is_better=True
+            ),
+        ),
+        canonical_metrics={"gsm8k_5shot": {"accuracy": 0.42}},
+    )
+
+    rows = declared_metric_rows(record)
+
+    assert [(row.task, row.metric, row.value, row.declared) for row in rows] == [
+        ("gsm8k", "accuracy", 0.42, True),
+        ("gsm8k", "f1", 0.6, True),
+    ]
+
+
+def test_declared_metric_rows_match_task_directories_and_keep_undeclared_tasks_raw():
+    def declared(task: str, source_metric: str) -> BenchmarkMetadataRef:
+        return BenchmarkMetadataRef(
+            schema_version=1,
+            task=task,
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            metrics=(
+                BenchmarkMetricRef(
+                    name="accuracy", source_name=source_metric, kind=MetricKind.BINARY, higher_is_better=True
+                ),
+            ),
+            n_benchmark=10,
+            n_attempted=10,
+        )
+
+    record = _record(
+        eval_name="mixed",
+        metrics={
+            "AIME24_0shot": {"accuracy": 0.5},
+            "swe/bench_a": {"accuracy": 0.25},
+            "tmpabc12345/AIME24_0shot": {"accuracy": 0.9},
+            "legacy_3shot": {"acc,none": 0.6, "acc_norm,none": 0.7},
+        },
+        tasks=(
+            EvalTaskRef(name="AIME24", num_fewshot=0, benchmark=declared("aime24", "accuracy")),
+            EvalTaskRef(name="swe", num_fewshot=0, benchmark=declared("bench_a", "accuracy")),
+            EvalTaskRef(name="legacy", num_fewshot=3, task_alias="legacy_alias"),
+        ),
+    )
+
+    declared_rows = declared_metric_rows(record)
+    assert [(row.task, row.metric, row.value) for row in declared_rows] == [
+        ("AIME24", "accuracy", 0.5),
+        ("swe", "accuracy", 0.25),
+    ]
+
+    undeclared_rows = undeclared_metric_rows(record)
+    assert [(row.task, row.metric, row.value, row.declared) for row in undeclared_rows] == [
+        ("legacy_3shot", "acc,none", 0.6, False),
+        ("legacy_3shot", "acc_norm,none", 0.7, False),
+    ]
+
+
+def test_metric_rows_cover_a_record_without_any_declaration():
+    record = _record(metrics={"legacy_5shot": {"acc,none": 0.6, "acc_norm,none": 0.7}})
+
+    assert declared_metric_rows(record) == []
+    assert [(row.task, row.metric, row.value) for row in undeclared_metric_rows(record)] == [
+        ("legacy_5shot", "acc,none", 0.6),
+        ("legacy_5shot", "acc_norm,none", 0.7),
+    ]

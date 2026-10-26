@@ -68,6 +68,12 @@ class StepResult(BaseModel):
     verifier: TimingInfo | None = None
 
 
+class TrialCompletion(BaseModel):
+    """Output manifest recorded only after the attempt's resources have closed."""
+
+    trajectory_present: bool
+
+
 class TrialResult(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     task_name: str
@@ -85,6 +91,7 @@ class TrialResult(BaseModel):
     secondary_exception_info: list[ExceptionInfo] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    completion: TrialCompletion | None = None
     environment_setup: TimingInfo | None = None
     agent_setup: TimingInfo | None = None
     agent_execution: TimingInfo | None = None

@@ -12,18 +12,17 @@ This module is import-light on purpose -- the filesystem layer plus Pydantic, wi
 marin/levanter/iris imports -- so it can be vendored into the dashboard image that reads records back.
 """
 
+import json
 import logging
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
-
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+DEFAULT_EVALUATION_CONCURRENCY = 64
 EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
@@ -123,6 +123,7 @@ class BenchmarkMetadataRef(BaseModel):
     reducers: tuple[BenchmarkReducerRef, ...] = ()
     prompt_length: BenchmarkPromptLengthRef | None = None
     requires_judge: bool = False
+    identity: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -242,7 +243,7 @@ class ModelConfigRef(BaseModel):
     serve: ModelServeConfig
     generation: ModelGenerationConfig
     agent: ModelAgentConfig
-    evalchemy_num_concurrent: int | None = None
+    evaluation_num_concurrent: int | None = None
 
 
 class ModelRef(BaseModel):
@@ -330,12 +331,6 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
-    harbor_config_commit: str | None = Field(
-        default=None,
-        description="Upstream Harbor import base; eval_runtime identifies the vendored source and dependency lock",
-        pattern=FULL_GIT_COMMIT_PATTERN,
-        exclude_if=lambda value: value is None,
-    )
     max_input_tokens: int | None = Field(
         default=None,
         description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
@@ -346,6 +341,107 @@ class HarborRef(BaseModel):
         description="Agent generation budget resolved from the served model, the policy, and Harbor's defaults",
         exclude_if=lambda value: value is None,
     )
+
+
+class JudgeIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    deployment: str = Field(min_length=1)
+    models: dict[str, str]
+    default_model: str | None = None
+
+
+class EvaluationOverrides(BaseModel):
+    """Run policy supplied by a suite or campaign."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    judge_endpoint: str | None = None
+    judge_api_key: tuple[str, ...] = ()
+
+
+class PromptFormat(StrEnum):
+    COMPLETION = "completion"
+    CHAT = "chat"
+
+
+class ResolvedEvaluationSelection(BaseModel):
+    """The explicit protocol choice bound to published corpora."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    protocol: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+
+
+class EvaluationSelection(BaseModel):
+    """Select a benchmark protocol without exposing its compiled artifact names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    benchmark: str
+    label: str | None = None
+    protocol: str | None = None
+    num_fewshot: int | None = Field(default=None, ge=0)
+    prompt_format: PromptFormat | None = None
+    partitions: tuple[str, ...] = ()
+    run: EvaluationOverrides = Field(default_factory=EvaluationOverrides)
+
+    @property
+    def name(self) -> str:
+        if self.label is not None:
+            return self.label
+        parts = [self.benchmark]
+        if self.protocol is not None:
+            parts.append(self.protocol)
+        if self.num_fewshot is not None:
+            parts.append(f"{self.num_fewshot}shot")
+        if self.prompt_format is not None:
+            parts.append(self.prompt_format)
+        return "-".join(parts)
+
+
+class CuratedSettings(BaseModel):
+    """Recorded selection and execution settings shared by launch and dashboard readers."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    max_tokens: int | None = Field(default=None, gt=0)
+    source_limit: int | None = Field(default=None, gt=0)
+    seed: int | None = None
+    judge: JudgeIdentity | None = None
+    concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
+
+
+def scoring_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate request scheduling from settings that govern saved observations."""
+    return {key: value for key, value in settings.items() if key != "concurrency"}
+
+
+class CuratedRef(BaseModel):
+    """Pinned corpus selection and typed TaskSpec driver settings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    datasets: tuple[str, ...]
+    settings: CuratedSettings
+    selection: ResolvedEvaluationSelection | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_initial_native_records(cls, value: Any) -> Any:
+        # Initial native smoke records encoded the settings as JSON inside record.json.
+        if isinstance(value, dict) and "settings_json" in value:
+            value = dict(value)
+            value["settings"] = json.loads(value.pop("settings_json"))
+        return value
 
 
 class EvalRef(BaseModel):
@@ -369,7 +465,10 @@ class EvalRef(BaseModel):
     )
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
+    curated: CuratedRef | None = Field(default=None, exclude_if=lambda value: value is None)
     harbor: HarborRef | None = None
+    postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    """Named final-score protocols and their frozen JSON configurations."""
 
 
 class HardwareRef(BaseModel):
@@ -394,18 +493,16 @@ class HostedJudgeRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
-
-    ``eval_runtime`` identifies Evalchemy's pinned package, vendored Harbor's upstream revision
-    and runtime digests, or a historical Harbor environment's pinned packages.
-    Records written before external evaluators used ``eval_image`` or
-    ``evalchemy_image`` for the same value.
-    """
+    """Launch-time Marin revision, host, and an optional external evaluator runtime."""
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
+    eval_runtime: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"),
+        exclude_if=lambda value: value is None,
+    )
     launch_host: str
 
 
@@ -476,6 +573,8 @@ class TaskCoverage(BaseModel):
     ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
     ``n_scored`` how many have a usable score. ``errors`` counts errors by type, including errors
     on scored outcomes when the harness permits them. Completion uses the item counts.
+    A repeated aggregate counts distinct benchmark problems as items and records scored trials
+    separately in ``repeat_aggregates``. Extraction filters for one trial are not new items.
 
     ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
     to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
@@ -500,6 +599,29 @@ class TaskCoverage(BaseModel):
     n_correct: int | None = None
     n_unanswered: int = 0
     errors: dict[str, int] = Field(default_factory=dict)
+
+
+class RepeatCoverageBasis(StrEnum):
+    """Whether projected coverage counts items, bounds them, or retains source units."""
+
+    ITEMS = "items"
+    ITEM_LOWER_BOUND = "item_lower_bound"
+    SOURCE = "source"
+
+
+class RepeatAggregate(BaseModel):
+    """A repeated score's item and trial counts, publication uncertainty, and source coverage."""
+
+    model_config = ConfigDict(frozen=True)
+
+    n_items: int
+    n_repeats: int
+    n_trials: int
+    n_scored_trials: int | None = None
+    coverage_basis: RepeatCoverageBasis
+    stderr: float
+    stderr_basis: str
+    source_coverage: TaskCoverage | None = None
 
 
 class EvalRunRecord(BaseModel):
@@ -546,6 +668,8 @@ class EvalRunRecord(BaseModel):
     """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
     count. Empty when the mechanism reports none and on every record written before coverage existed;
     a reader treats an empty entry as unknown coverage, never as complete coverage."""
+    repeat_aggregates: dict[str, RepeatAggregate] = Field(default_factory=dict)
+    """Serving projections for repeated scores. Raw evaluator metrics and coverage remain available."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
