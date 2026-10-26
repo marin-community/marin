@@ -2,6 +2,9 @@ from importlib import import_module
 
 import pytest
 
+from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
+from eval.graders.math_specs import nupa
+
 scorer = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
 
 
@@ -55,6 +58,62 @@ def test_stored_step92_answers_are_extracted_without_changing_exact_match():
 )
 def test_extract_answer_uses_final_content(prediction, answer_format, expected):
     assert scorer.extract_answer(prediction, answer_format) == expected
+
+
+@pytest.mark.parametrize(
+    ("prediction", "answer_format", "expected"),
+    [
+        ("The calculation ends here.42", scorer.INTEGER, "42"),
+        ("The calculation ends here.486.612", scorer.FLOAT, "486.612"),
+        ("The calculation ends here.43/20", scorer.FRACTION, "43/20"),
+        ("The calculation ends here.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
+    ],
+)
+def test_extract_answer_accepts_typed_terminal_suffix(prediction, answer_format, expected):
+    assert scorer.extract_answer(prediction, answer_format) == expected
+
+
+@pytest.mark.parametrize(
+    ("prediction", "gold", "answer_format"),
+    [
+        ("Thus the final answer is 1818", "18", scorer.INTEGER),
+        ("Thus the final answer is 486.612486.612", "486.612", scorer.FLOAT),
+        ("Thus the final answer is 43/2043/20", "43/20", scorer.FRACTION),
+        ("Thus the final answer is 5.09786549e525.09786549e52", "5.09786549e52", scorer.SCIENTIFIC),
+    ],
+)
+def test_score_prediction_accepts_exact_repeated_terminal_reference(prediction, gold, answer_format):
+    score = scorer.score_prediction(prediction, gold, answer_format)
+
+    assert score.extracted_answer == gold
+    assert score.exact_match == 1.0
+
+
+@pytest.mark.parametrize(
+    ("prediction", "gold"),
+    [("Thus the final answer is 1818", "19"), ("Thus the final answer is 11818", "18")],
+)
+def test_score_prediction_does_not_credit_repeated_nonreference_answer(prediction, gold):
+    score = scorer.score_prediction(prediction, gold, scorer.INTEGER)
+
+    assert score.exact_match == 0.0
+
+
+def test_nupa_grade_records_the_answer_used_for_scoring():
+    spec = EvalSpec(
+        task="NUPA5K-Loose",
+        source=SourceRef("fixture"),
+        source_id="1",
+        ordinal=0,
+        requests=(),
+        grader=GraderSpec("nupa", {"format": scorer.INTEGER}),
+        target="18",
+    )
+
+    grade = nupa(spec, ["Thus the final answer is 1818"])
+
+    assert grade.metrics["exact_match"] == 1.0
+    assert grade.filtered_resps == ["18"]
 
 
 def test_score_prediction_preserves_numeric_representation():

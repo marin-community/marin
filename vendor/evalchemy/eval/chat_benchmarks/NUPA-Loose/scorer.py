@@ -40,6 +40,7 @@ _READ_FROM_RIGHT = {
 
 @dataclass(frozen=True)
 class ExampleScore:
+    extracted_answer: str | None
     exact_match: float
     digit_match: float
     dlength: float
@@ -77,8 +78,20 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)
     match = _ANSWER_PATTERNS[answer_format].match(direct)
     if match is None:
-        return _full_answer(tail.splitlines()[-1].strip() if tail else "", answer_format)
+        final_line = tail.splitlines()[-1].strip() if tail else ""
+        return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
     return _normalize_answer(match.group())
+
+
+def _answer_after_terminal_period(text: str, answer_format: str) -> str | None:
+    """Extract a typed answer appended after sentence-ending punctuation."""
+    for boundary in range(len(text) - 1, -1, -1):
+        if text[boundary] != ".":
+            continue
+        answer = _full_answer(text[boundary + 1 :].strip(), answer_format)
+        if answer is not None:
+            return answer
+    return None
 
 
 def _full_answer(candidate: str, answer_format: str) -> str | None:
@@ -94,16 +107,33 @@ def _normalize_answer(answer: str) -> str:
 def score_prediction(prediction: str | None, gold: str, answer_format: str) -> ExampleScore:
     """Score a completion with permissive extraction and exact numeric components."""
     extracted = extract_answer(prediction, answer_format)
+    if extracted != _normalize_answer(gold):
+        repeated_reference = _repeated_terminal_reference(prediction, gold)
+        if repeated_reference is not None:
+            extracted = repeated_reference
     gold_parts = _digit_parts(gold, answer_format)
     prediction_parts = _digit_parts(extracted or "", answer_format)
     format_valid = extracted is not None
     return ExampleScore(
+        extracted_answer=extracted,
         exact_match=1.0 if format_valid and prediction_parts == gold_parts else 0.0,
         digit_match=_digit_match(prediction_parts, gold_parts, answer_format),
         dlength=float(abs(_total_part_length(prediction_parts) - _total_part_length(gold_parts))),
         format_valid=1.0 if format_valid else 0.0,
         no_answer=0.0 if format_valid else 1.0,
     )
+
+
+def _repeated_terminal_reference(prediction: str | None, gold: str) -> str | None:
+    """Recover an exact reference answer emitted twice without a separator."""
+    if prediction is None:
+        return None
+    tail = prediction.strip().rstrip(" \t\r\n.,;:!?$")
+    terminal_token = tail.rsplit(maxsplit=1)[-1] if tail else ""
+    normalized_gold = _normalize_answer(gold)
+    if _normalize_answer(terminal_token) == normalized_gold * 2:
+        return normalized_gold
+    return None
 
 
 def length_bucket(digit: int, *, max_digit: int | None = None) -> str:

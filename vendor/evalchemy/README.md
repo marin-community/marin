@@ -13,6 +13,10 @@ graders, streaming execution, FineStore output and resume support. Marin owns
 serving and evaluation orchestration. A local GraphWalks adapter adds the pinned
 `openai/graphwalks` dataset to the shared execution and grading flow, selecting
 examples with the served tokenizer and preserving their output budgets.
+The NUPA Loose grader incorporates the upstream
+[terminal-suffix](https://github.com/marin-community/evalchemy/commit/abe104f405e7e964f9f5a27f96e622744d4ca076)
+and [repeated-answer](https://github.com/marin-community/evalchemy/commit/2baaab1b9c0c9c8caffcd8f6df45355539aef436)
+corrections adapted to the vendored grader contract.
 Database tracking, Curator dispatch,
 W&B reporting, standalone serving launchers, benchmark websites and unused
 leaderboard outputs have been removed. Nested benchmark packages retain only

@@ -14,8 +14,13 @@ extracts a numeric prefix after its answer delimiter or marker.
 
 Evalchemy's [permissive extraction change](https://github.com/marin-community/evalchemy/pull/187)
 also accepts trailing boxed numbers, inline math, equations, explicit answer
-lines, and a bare number on the last line. It discards content before the last
-`<|end_think|>` marker and rejects an unfinished `<|start_think|>` block.
+lines, a bare number on the last line, and a type-valid numeric suffix after a
+sentence-ending period. It also recovers a terminal numeric token that exactly
+repeats the reference answer twice without a separator; a larger number that
+merely ends with that repetition does not qualify. The extracted answer stored
+with each sample is the one actually used for scoring. The grader discards
+content before the last `<|end_think|>` marker and rejects an unfinished
+`<|start_think|>` block.
 These rules can credit a correct number after a reasoning response even when the
 model did not follow the direct-answer instruction. They measure numeracy with
 less dependence on output formatting and instruction following.
