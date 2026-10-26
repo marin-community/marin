@@ -458,7 +458,7 @@ def _publish_checkpoint(root: Path, config: DraftTrainingConfig, record: _Traini
     _write_json(prefix_join(config.output, "run.json"), asdict(record))
 
 
-def restore_training_run(output: str, destination: Path) -> tuple[DraftTrainingConfig, _TrainingRun]:
+def _restore_training_run(output: str, destination: Path) -> tuple[DraftTrainingConfig, _TrainingRun]:
     """Stage a completed training checkpoint and restore its native best pointer.
 
     ``destination`` must be absent. Serving exports alone are not resumable.
@@ -559,6 +559,9 @@ def _train(
     published = {int(path.name) for path in (root / "checkpoints").glob("[0-9]*") if path.is_dir()}
 
     def publish_completed() -> None:
+        # The pinned entrypoint writes validation metadata after checkpoint,
+        # scheduler and completed progress files. With checkpoint_freq=1 and
+        # save_best=False those files are then stable; partial JSON is retried.
         for checkpoint in sorted((root / "checkpoints").glob("[0-9]*"), key=lambda path: int(path.name)):
             if int(checkpoint.name) not in published and all((checkpoint / name).is_file() for name in CHECKPOINT_FILES):
                 _publish_checkpoint(root, config, record, int(checkpoint.name))
@@ -644,6 +647,8 @@ def train_draft(config: DraftTrainingConfig) -> ResolvedModelLocator:
                 shutil.copyfile(initial / destination.name, destination)
             initializer = _initializer(initial, root, toolkit)
             record.initial_draft_sha256 = _sha256(initial / "model.safetensors")
+            _write_json(str(root / "run.json"), asdict(record))
+            _write_json(prefix_join(config.output, "run.json"), asdict(record))
         _train(root, config, record, toolkit, initializer)
         return _export(root, config, record, toolkit)
 
@@ -658,7 +663,7 @@ def resume_draft(output: str) -> ResolvedModelLocator:
     with tempfile.TemporaryDirectory(prefix="marin-draft-resume-") as temporary:
         workspace = Path(temporary)
         root = workspace / "run"
-        config, record = restore_training_run(output, root)
+        config, record = _restore_training_run(output, root)
         toolkit = _toolkit(workspace)
         assert record.checkpoint is not None
         epoch = record.checkpoint.epoch

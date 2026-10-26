@@ -54,6 +54,7 @@ def main() -> None:
                     ),
                     endpoint_name=arguments["endpoint"],
                     timeout_hours=arguments["timeout_hours"],
+                    port_name=None,
                 )
             )
 

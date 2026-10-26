@@ -13,9 +13,9 @@ from marin.drafting import (
     DraftTrainingConfig,
     _CompletedEpoch,
     _publish_checkpoint,
+    _restore_training_run,
     _TrainingRun,
     prepare_coding_sample,
-    restore_training_run,
 )
 
 
@@ -68,7 +68,7 @@ def test_completed_epoch_survives_object_store_roundtrip(tmp_path, training_run)
     (remote / "checkpoints/1/model.safetensors").write_bytes(b"unfinished upload")
     (remote / "checkpoints/1/val_metrics.json").write_text('{"loss_epoch": 1.0}')
     restored = tmp_path / "new-worker"
-    restored_config, restored_record = restore_training_run(str(remote), restored)
+    restored_config, restored_record = _restore_training_run(str(remote), restored)
     assert restored_config == config
     assert restored_record.checkpoint == _CompletedEpoch(0, 0, 3, 2.5)
     assert sorted(path.name for path in (restored / "checkpoints").iterdir()) == ["0", "checkpoint_best"]
@@ -96,7 +96,7 @@ def test_resume_requires_optimizer_state(tmp_path, training_run):
     (checkpoint / "config.json").write_text("{}")
     (checkpoint / "model.safetensors").write_bytes(b"serving weights alone")
     with pytest.raises(ValueError, match=r"optimizer_state_dict\.pt"):
-        restore_training_run(str(source), tmp_path / "worker")
+        _restore_training_run(str(source), tmp_path / "worker")
 
 
 def test_coding_sample_ignores_answers_and_corpus_order(tmp_path, monkeypatch):
