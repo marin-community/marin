@@ -272,6 +272,9 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     """
     resolved = resolve_container_profile(profile)
 
+    if resolved == job_pb2.CONTAINER_PROFILE_BUBBLEWRAP:
+        raise ValueError("BUBBLEWRAP container profile is only supported on Kubernetes")
+
     # gVisor runs the whole container under the runsc runtime: the host worker's
     # dockerd (root) builds the sandbox, and the intercepted guest kernel gives
     # in-container root the docker default capability set (so setuid/apt work)
