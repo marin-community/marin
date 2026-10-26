@@ -20,7 +20,7 @@ Plan or run one arm::
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 
 import click
@@ -54,6 +54,14 @@ SNOWBALL_V0_1 = ArtifactStep.adopt(
     "models/marin-snowball-67b-a2b-v0.1",
     "2026.10.18.1",
     "s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run32-step14/2026.10.18.1/hf",
+    kind=LevanterCheckpoint,
+)
+# Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23: the SFT of Grug-67B-A2B-Datakit-SFT-262K on GLM 5.3 RLVR conversations. Same
+# architecture, chat template and tokenizer as Snowball; its pad token falls back to EOS, which is Snowball's.
+GRUG_RLVR_SFT = ArtifactStep.adopt(
+    "models/grug-67b-a2b-glm53-rlvr-sft",
+    "2026.09.23",
+    "s3://marin-us-east-02a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
     kind=LevanterCheckpoint,
 )
 # The feed, the Snowball weights and the loop's other jobs are in US-EAST-02A.
@@ -142,6 +150,35 @@ class PolicyProfile:
         return self.policy_nodes * GPUS_PER_NODE // model_parallel
 
 
+# The 40-GPU geometry of experiments/post_training/async_rl.py: four policy nodes (Megatron TP1, PP2, EP8,
+# so DP16) and one node-sized engine that shards the 256 experts over its eight ranks (DP8, EP8).
+SNOWBALL_PROFILE = PolicyProfile(
+    step=SNOWBALL_V0_1,
+    tokenizer_uri="open-athena/Marin-Snowball-67B-A2B-v0.1",
+    tokenizer_revision="adc0078a19a4383bc998fcdb43867b3360baf5f3",
+    policy_nodes=4,
+    megatron=MegatronGeometry(1, 2, 1, 8, 1),
+    num_engines=1,
+    engine_tensor_parallel=1,
+    engine_data_parallel=GPUS_PER_NODE,
+    engine_expert_parallel=GPUS_PER_NODE,
+    request_window_tokens=32768,
+    max_new_tokens_per_turn=8192,
+    host_memory="1800GB",
+    disk="2TB",
+    max_num_seqs=256,
+    generator=MappingProxyType(
+        {
+            "gpu_memory_utilization": 0.75,
+            # Each expert matrix goes from the Megatron rank that holds it to the vLLM ranks that serve it.
+            "weight_sync_transport": "expert_block",
+            "expert_block_sync": {"timeout_seconds": 600, "verify": False},
+            "engine_init_kwargs": {"moe_backend": "triton", **TOOL_CALLS},
+        }
+    ),
+)
+
+
 PROFILES: Mapping[str, PolicyProfile] = MappingProxyType(
     {
         # One policy node (Megatron TP1, DP8) and one node of eight TP1 vLLM engines.
@@ -162,32 +199,12 @@ PROFILES: Mapping[str, PolicyProfile] = MappingProxyType(
             max_num_seqs=128,
             generator=MappingProxyType({"gpu_memory_utilization": 0.8, "engine_init_kwargs": dict(TOOL_CALLS)}),
         ),
-        # The 40-GPU geometry of experiments/post_training/async_rl.py: four policy nodes (Megatron TP1, PP2, EP8,
-        # so DP16) and one node-sized engine that shards the 256 experts over its eight ranks (DP8, EP8).
-        "snowball": PolicyProfile(
-            step=SNOWBALL_V0_1,
-            tokenizer_uri="open-athena/Marin-Snowball-67B-A2B-v0.1",
-            tokenizer_revision="adc0078a19a4383bc998fcdb43867b3360baf5f3",
-            policy_nodes=4,
-            megatron=MegatronGeometry(1, 2, 1, 8, 1),
-            num_engines=1,
-            engine_tensor_parallel=1,
-            engine_data_parallel=GPUS_PER_NODE,
-            engine_expert_parallel=GPUS_PER_NODE,
-            request_window_tokens=32768,
-            max_new_tokens_per_turn=8192,
-            host_memory="1800GB",
-            disk="2TB",
-            max_num_seqs=256,
-            generator=MappingProxyType(
-                {
-                    "gpu_memory_utilization": 0.75,
-                    # Each expert matrix goes from the Megatron rank that holds it to the vLLM ranks that serve it.
-                    "weight_sync_transport": "expert_block",
-                    "expert_block_sync": {"timeout_seconds": 600, "verify": False},
-                    "engine_init_kwargs": {"moe_backend": "triton", **TOOL_CALLS},
-                }
-            ),
+        "snowball": SNOWBALL_PROFILE,
+        "grug": replace(
+            SNOWBALL_PROFILE,
+            step=GRUG_RLVR_SFT,
+            tokenizer_uri="open-athena/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23",
+            tokenizer_revision="f1aebb65b4d0f0437a6bfd3d7bea9357641b201c",
         ),
     }
 )
