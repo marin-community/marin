@@ -21,10 +21,10 @@ some frozen Qwen3 runs.
 
 Aggregates follow `tables.add_aggregates`: recomputed from a run's components where it has them all, else the
 registry's recorded aggregate where that used the fixed rule. Every run whose recorded Uncheatable aggregate uses other
-weights (the Llama panels' legacy weights, or the BPB-schema-2 pooled value of the 14 path-midpoint and RegMix-reference
-runs) has its Uncheatable components: the registry's, or for one archived Llama 160M run, which the registry scores by
-its pooled aggregate only, those of its W&B run summary (WANDB_PULLS). The registry records no Uncheatable values for 17
-Llama 200M runs; their components also come from their W&B run summaries, and their aggregate from those components.
+weights (the Llama panels' legacy weights) has its Uncheatable components: the registry's, or for one archived Llama
+160M run, which the registry scores by its pooled aggregate only, those of its W&B run summary (WANDB_PULLS). The
+registry records no Uncheatable values for 17 Llama 200M runs; their components also come from their W&B run
+summaries, and their aggregate from those components.
 """
 
 from pathlib import Path
@@ -57,14 +57,9 @@ META = {
     "phase_tv": "phase_tv",
 }
 SEEDS = ["data_seed", "trainer_seed"]
-# The panel whose recorded Uncheatable aggregates use the paper's fixed byte shares, which the frozen registry's builder
-# checked to 3e-6; the Llama panels' use the archived swarms' legacy weights. Every panel records the OlmoBaseEval Easy
-# mean.
+# The panel whose recorded Uncheatable aggregates use the paper's fixed byte shares, which the registry's builders check
+# to 3e-6; the Llama panels' use the archived swarms' legacy weights. Every panel records the OlmoBaseEval Easy mean.
 FIXED_RULE_PANEL = "delphi_3e18_39bucket"
-# These launches ran after the evaluator moved to BPB schema 2 (about 12 September 2026). Their recorded Uncheatable
-# aggregate is its pooled one, 0.008 to 0.011 BPB above the fixed weighting of the same runs' components
-# (two_phase_many/uncheatable_objective.py); the expanded registry copied it unchecked.
-POOLED_SOURCES = ("validation::path_midpoints", "validation::regmix_reference")
 # Uncheatable components and data seeds that the registry lacks, frozen from W&B run summaries and configs
 # (`wandb_pulls.read`): those of the archived Llama 160M run that the registry scores by its pooled Uncheatable aggregate
 # only, and those of the 17 Llama 200M runs that it records without Uncheatable values.
@@ -328,9 +323,7 @@ def export(ctx: ExportContext) -> dict[str, pd.DataFrame]:
     out = _with_pulled_components(out, runs, run_ids)
     out["components_available"] = out[[f"bpb__{t}" for t in ctx.tasks]].notna().all(axis=1)
     recorded = pd.DataFrame({"uncheatable": runs.uncheatable_bpb, "obe_easy": runs.table9_macro_bpb})
-    fixed_rule = pd.DataFrame(
-        {"uncheatable": (runs.panel == FIXED_RULE_PANEL) & ~runs.source.isin(POOLED_SOURCES), "obe_easy": True}
-    )
+    fixed_rule = pd.DataFrame({"uncheatable": runs.panel == FIXED_RULE_PANEL, "obe_easy": True})
     # Raises for a run that would need a recorded aggregate under other weights; null where neither exists.
     out = tables.add_aggregates(out, ctx.weights, recorded, fixed_rule)
     return {"heldout": tables.order_columns(out, ctx.buckets, ctx.tasks)}

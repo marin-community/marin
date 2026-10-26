@@ -118,7 +118,7 @@ def test_manifest_and_figure_index_name_nothing_internal(build, manifest):
 
 def test_figures_tables_lists_every_figure_and_table_of_the_paper(manifest):
     index = tables.read_csv(export_dataset.FIGURES_TABLES, keep_default_na=False)
-    assert index.label.is_unique and index.kind.value_counts().to_dict() == {"figure": 26, "table": 20}
+    assert index.label.is_unique and index.kind.value_counts().to_dict() == {"figure": 27, "table": 20}
     configs = {t["config"] for t in manifest["tables"]}
     assert {c for cell in index.configs for c in cell.split(";")} <= configs | SPECIAL_CONFIGS
     sections = paths.DRIVE / "sections"

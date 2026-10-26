@@ -130,13 +130,11 @@ def test_labels_are_kept(table):
 
 
 def test_aggregates_recompute_the_recorded_values(table):
-    # The registry records each run's aggregates, row for row with the table. The Qwen3 panel recorded Uncheatable
-    # under the fixed rule, except the path-midpoint and RegMix-reference launches, which recorded the BPB-schema-2
-    # pooled aggregate, about 0.01 BPB above the fixed weighting of the same components; the Llama panels recorded it
-    # under the legacy weights, within 1e-4 of the fixed rule for the registry's components, and no row copies a legacy
-    # record. The Llama 160M run whose components come from W&B pooled its record 3.6e-4 away from the fixed rule; its
-    # own test checks its pull. OlmoBaseEval Easy is a plain mean in every panel, so it checks each swarm's component
-    # join.
+    # The registry records each run's aggregates, row for row with the table. The Qwen3 panel records Uncheatable under
+    # the fixed rule; the Llama panels recorded it under the legacy weights, within 1e-4 of the fixed rule for the
+    # registry's components, and no row copies a legacy record. The Llama 160M run whose components come from W&B
+    # pooled its record 3.6e-4 away from the fixed rule; its own test checks its pull. OlmoBaseEval Easy is a plain mean
+    # in every panel, so it checks each swarm's component join.
     runs = tables.read_csv(SRC / "heldout_runs.csv")
     pulls = pd.concat([tables.read_csv(path, comment="#") for path in heldout.WANDB_PULLS])
     pulled = table.observation_id.isin(pulls.training_wandb_run_id)
@@ -144,12 +142,8 @@ def test_aggregates_recompute_the_recorded_values(table):
         objective: table[[f"bpb__{t}" for t in weights]].notna().all(axis=1)
         for objective, weights in naming.task_weights().items()
     }
-    pooled = runs.source.isin(heldout.POOLED_SOURCES)
-    assert pooled.sum() == 14 and set(table.proposal_method[pooled]) == {"path_midpoints", "regmix_reference"}
-    assert complete["uncheatable"][pooled].all()
-    assert (runs.uncheatable_bpb - table.bpb__uncheatable)[pooled].between(0.008, 0.0115).all()
     qwen = table.swarm == "qwen3_360m_1p6b"
-    fixed = qwen & ~pooled & runs.uncheatable_bpb.notna()
+    fixed = qwen & runs.uncheatable_bpb.notna()
     assert np.allclose(
         table.bpb__uncheatable[fixed], runs.uncheatable_bpb[fixed], rtol=0, atol=tables.FIXED_RULE_TOLERANCE
     )
