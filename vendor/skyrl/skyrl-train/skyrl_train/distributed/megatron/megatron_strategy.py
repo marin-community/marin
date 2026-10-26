@@ -41,6 +41,7 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
 from skyrl_train.distributed.megatron.master_records import model_space_masters
+from skyrl_train.host_memory import log_host_memory, reset_peak
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
@@ -404,6 +405,9 @@ class MegatronStrategy(DistributedStrategy):
             save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
         )
 
+        rank = dist.get_rank()
+        log_host_memory("before_save_write", rank)
+        reset_peak()
         with io.local_work_dir(ckpt_dir) as work_dir:
             # TODO(tgriggs): Support configurable async saves.
             async_save_request = dist_checkpointing.save(
@@ -428,6 +432,7 @@ class MegatronStrategy(DistributedStrategy):
                 with io.open_file(marker_path, "w") as f:
                     f.write(json.dumps({"optimizer_state": optimizer_state.value}))
 
+        log_host_memory("save_peak", rank)
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
@@ -548,6 +553,7 @@ class MegatronStrategy(DistributedStrategy):
             states = extra_state.get("client_state", {}) or {}
             self.log("Loaded client state from checkpoint.")
 
+        log_host_memory("after_load", dist.get_rank())
         return ckpt_dir, states
 
     def save_fp32_master_hf_model(

@@ -63,7 +63,7 @@ def test_every_optimized_parameter_gets_a_master_record_under_its_model_key(sing
     weight_master = torch.arange(6, dtype=torch.float32) + 0.25
     bias_master = torch.arange(4, dtype=torch.float32) - 0.5
     model_state = {
-        "decoder.weight": FakeShardedTensor("decoder.layers.0.linear.weight", weight, torch.bfloat16, (0, 0, 0)),
+        "decoder.weight": FakeShardedTensor("decoder.layers.0.linear.weight", weight, torch.bfloat16, (0, 2, 3)),
         "decoder.bias": FakeShardedTensorFactory("decoder.layers.0.linear.bias", bias, (0, 0, 0)),
     }
     optimizer = FakeDistributedOptimizer([weight, bias], [range(0, 6), range(0, 4)], [weight_master, bias_master])
@@ -75,7 +75,11 @@ def test_every_optimized_parameter_gets_a_master_record_under_its_model_key(sing
         entry.key for entry in model_state.values()
     }
     assert records["decoder.weight"].key == master_record_key("decoder.layers.0.linear.weight")
-    assert records["decoder.weight"].dtype == torch.float32 and records["decoder.weight"].replica_id == (0, 0, 0)
+    assert records["decoder.weight"].dtype == torch.float32 and records["decoder.weight"].replica_id == (
+        0,
+        2,
+        0,
+    )  # the writer is the DP main replica
     assert torch.equal(records["decoder.weight"].data, weight_master.view(2, 3))
     assert torch.equal(records["decoder.bias"].data, bias_master)
 
@@ -104,10 +108,11 @@ def _free_port() -> int:
 
 
 @pytest.mark.timeout(120)
-def test_slices_spread_over_the_dp_group_assemble_bit_for_bit(tmp_path, monkeypatch):
+def test_slices_spread_over_the_dp_group_assemble_bit_for_bit_on_the_writer_only(tmp_path, monkeypatch):
     if platform.system() == "Darwin":  # Gloo cannot pick macOS's loopback interface on its own
         monkeypatch.setenv("GLOO_SOCKET_IFNAME", "lo0")
     mp.spawn(_assemble, args=(3, _free_port(), str(tmp_path)), nprocs=3, join=True)
     expected = torch.arange(10, dtype=torch.float32) * 1.5
-    for rank in range(3):
-        assert torch.equal(torch.load(tmp_path / f"rank{rank}.pt"), expected)
+    assert torch.equal(torch.load(tmp_path / "rank0.pt"), expected)  # the writer holds the whole master
+    for rank in (1, 2):
+        assert torch.load(tmp_path / f"rank{rank}.pt") is None  # no other rank keeps a copy
