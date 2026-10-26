@@ -32,7 +32,6 @@ from shellbox.process import CLEANUP_TIMEOUT, ProcessScope
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
 
-INTERRUPT_TIMEOUT = CLEANUP_TIMEOUT
 OUTPUT_READ_CHUNK_BYTES = 64 * 1024
 
 
@@ -190,7 +189,7 @@ class DockerMachine:
                 "/bin/sh",
                 "-c",
                 scope.status_command(),
-                timeout=INTERRUPT_TIMEOUT,
+                timeout=CLEANUP_TIMEOUT,
             )
             not_started = status.exit_code == 126 and completed.exit_code in (126, 127)
             if status.exit_code not in (0, 124) and not not_started:
@@ -210,7 +209,7 @@ class DockerMachine:
         )
 
     async def _interrupt(self, scope: ProcessScope, user: str | None) -> None:
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(CLEANUP_TIMEOUT):
             result = await docker(
                 "exec",
                 *(("--user", user) if user is not None else ()),
@@ -255,7 +254,7 @@ class DockerMachine:
         try:
             await self._commands.close()
         finally:
-            result = await finish_cleanup(docker("rm", "-f", self.name, timeout=INTERRUPT_TIMEOUT))
+            result = await finish_cleanup(docker("rm", "-f", self.name, timeout=CLEANUP_TIMEOUT))
             if result.exit_code:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
 

@@ -54,7 +54,6 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 from shellbox.process import CLEANUP_TIMEOUT, ProcessScope
 
-INTERRUPT_TIMEOUT = CLEANUP_TIMEOUT
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -131,7 +130,7 @@ async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapsho
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+    async with asyncio.timeout(CLEANUP_TIMEOUT):
         try:
             sandbox = await client.get(name)
         except DaytonaNotFoundError:
@@ -213,7 +212,7 @@ class DaytonaMachine:
         self._sessions.add(session)
 
         async def start() -> None:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
                 argv = await self._user_argv(command.argv, command.user)
                 await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
 
@@ -261,7 +260,7 @@ class DaytonaMachine:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"))
 
     async def _remove_command_files(self, prefix: str) -> None:
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        async with asyncio.timeout(CLEANUP_TIMEOUT):
             removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
             if removed.exit_code:
                 raise RuntimeError("Cannot remove Daytona command files")
@@ -328,7 +327,7 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
@@ -577,7 +576,7 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            prepared = await sandbox.process.exec(_control_command("command -v python3"), timeout=INTERRUPT_TIMEOUT)
+            prepared = await sandbox.process.exec(_control_command("command -v python3"), timeout=CLEANUP_TIMEOUT)
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require Python 3 for command teardown")
             machine = DaytonaMachine(sandbox, spec, lifetime)

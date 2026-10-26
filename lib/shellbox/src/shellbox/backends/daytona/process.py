@@ -15,7 +15,7 @@ from daytona._async.process import AsyncProcess
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
-from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
+from shellbox.process import CLEANUP_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_framing import CHUNK_BYTES, EXIT, STDERR, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
 from shellbox.process_session import BoundedByteBuffer, StreamProcessSession, own_cleanup
@@ -67,8 +67,8 @@ class DaytonaProcessSession(StreamProcessSession):
 
     async def start(self, argv: tuple[str, ...], cwd: str | None, environment: dict[str, str]) -> None:
         config = base64.b64encode(json.dumps({"argv": argv, "cwd": cwd, "environment": environment}).encode()).decode()
-        async with asyncio.timeout(INTERRUPT_TIMEOUT):
-            await self._process.create_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
+        async with asyncio.timeout(CLEANUP_TIMEOUT):
+            await self._process.create_session(self.name, request_timeout=CLEANUP_TIMEOUT)
             result = await self._process.execute_session_command(
                 self.name,
                 SessionExecuteRequest(
@@ -76,7 +76,7 @@ class DaytonaProcessSession(StreamProcessSession):
                     run_async=True,
                     suppress_input_echo=True,
                 ),
-                timeout=INTERRUPT_TIMEOUT,
+                timeout=CLEANUP_TIMEOUT,
             )
         self._command = result.cmd_id
         self._logs = asyncio.create_task(self._follow())
@@ -129,7 +129,7 @@ class DaytonaProcessSession(StreamProcessSession):
                 raise MachineTerminated("Daytona process session is closed")
             text = encode_frame(STDIN, data[offset : offset + CHUNK_BYTES]).decode("ascii")
             await self._process.send_session_command_input(
-                self.name, self._command, text, request_timeout=INTERRUPT_TIMEOUT
+                self.name, self._command, text, request_timeout=CLEANUP_TIMEOUT
             )
 
     async def _wait_provider(self) -> int:
@@ -144,9 +144,9 @@ class DaytonaProcessSession(StreamProcessSession):
         self._release(self)
         await self._output.finish()
         try:
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
                 try:
-                    await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
+                    await self._process.delete_session(self.name, request_timeout=CLEANUP_TIMEOUT)
                 except DaytonaNotFoundError:
                     pass
         except BaseException:
