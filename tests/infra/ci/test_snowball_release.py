@@ -54,7 +54,15 @@ def test_changed_source_releases_observed_version_and_records_provenance(marina_
     record = json.loads(result.output)
     assert record == {"action": "released", "before": before, "release": published, "after": after}
     assert commands[2] == [
-        "uv", "run", "--no-sync", "marina", "release", snowball_release.APP_DIR, "--base-version", "6", "--json"
+        "uv",
+        "run",
+        "--no-sync",
+        "marina",
+        "release",
+        snowball_release.APP_DIR,
+        "--base-version",
+        "6",
+        "--json",
     ]
     assert commands[1][0] == "node"
 
@@ -96,11 +104,13 @@ def test_concurrent_release_conflict_is_not_retried(marina_process):
 
 def test_post_release_selection_change_is_reported(marina_process):
     replies, _ = marina_process
-    replies.extend([
-        {"state": "different", "version": 6},
-        {"version": 7},
-        {"state": "different", "version": 8},
-    ])
+    replies.extend(
+        [
+            {"state": "different", "version": 6},
+            {"version": 7},
+            {"state": "different", "version": 8},
+        ]
+    )
 
     result = CliRunner().invoke(snowball_release.main)
 
