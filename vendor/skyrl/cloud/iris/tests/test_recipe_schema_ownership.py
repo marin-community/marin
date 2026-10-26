@@ -8,7 +8,6 @@ from omegaconf import OmegaConf
 from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
 from cloud.iris.rl_data import resolve_rl_train_data_with_sources
-import skyrlrecipe as schema
 from skyrlrecipe.declared import Callback, Teacher
 from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
 from marinskyrl import speculative_decoding
@@ -41,12 +40,6 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
         "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
     )
     parsed = launcher.parse_rl_config(str(source))
-    parsed = replace(
-        parsed,
-        context_budget=schema.ContextBudget(
-            **{name: getattr(parsed.context_budget, name) for name in schema.ContextBudget.model_fields}
-        ),
-    )
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
     full["terminal_bench"] = full.pop("terminal_bench_config")
