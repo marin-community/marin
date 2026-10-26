@@ -61,7 +61,6 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.algorithm_registry import AdvantageEstimator
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
@@ -1392,6 +1391,11 @@ class RayPPOTrainer:
             if self._control.should_log:
                 log_payload = {
                     **self.all_metrics,
+                    "generate/prompts_dropped_too_long": sum(
+                        dataset.prompts_dropped_too_long
+                        for dataset in (self.train_dataset, self.eval_dataset)
+                        if dataset is not None
+                    ),
                     **{f"timing/{k}": v for k, v in self.all_timings.items()},
                     **get_system_memory_metrics(),
                 }
@@ -2648,6 +2652,7 @@ class RayPPOTrainer:
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2680,6 +2685,7 @@ class RayPPOTrainer:
                 exclude_from_baseline=exclude_from_baseline,
                 token_level_shaping=token_level_shaping,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
             )
         data["returns"] = returns
         data["advantages"] = advantages
@@ -2689,13 +2695,13 @@ class RayPPOTrainer:
         num_samples = len(token_level_rewards)
 
         return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        if (
-            self.cfg.trainer.algorithm.advantage_estimator == AdvantageEstimator.GRPO
-            and not self.cfg.trainer.step_wise_training
-        ):
-            self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(
-                data.metadata["uids"][: num_samples - pad_size], return_sums
-            )
+        reward_groups = np.asarray(data.metadata["uids"][: num_samples - pad_size])
+        group_rewards = return_sums
+        if self.cfg.trainer.step_wise_training:
+            final_steps = data["is_last_step"][: num_samples - pad_size].bool()
+            reward_groups = reward_groups[final_steps.cpu().numpy()]
+            group_rewards = group_rewards[final_steps]
+        self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(reward_groups, group_rewards)
         if self.cfg.trainer.step_wise_training:
             avg_rewards: float = return_sums[data["is_last_step"][: num_samples - pad_size]].mean().item()
         else:

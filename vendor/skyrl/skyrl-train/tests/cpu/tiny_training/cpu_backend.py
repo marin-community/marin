@@ -25,6 +25,13 @@ from skyrl_train.inference_engines.base import (
 )
 from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
+from skyrl_train.inference_engines.vllm.stats import (
+    IntervalReadMode,
+    VLLMCumulativeStats,
+    VLLMCurrentStats,
+    VLLMEngineStatsSnapshot,
+    VLLMIntervalStats,
+)
 from skyrl_train.io import io
 from skyrl_train.utils.torch_utils import chunked_entropy_from_logits, logprobs_from_logits
 from skyrl_train.workers.worker import PolicyWorkerBase
@@ -242,6 +249,8 @@ class CPUInferenceEngine(InferenceEngineInterface):
         self._policy_steps = PolicyStepStamps()
         self._request_ids = itertools.count()
         self._live_requests: set[str] = set()
+        self._generated_tokens = 0
+        self._finished_requests = 0
 
     async def generate(self, input_batch: InferenceEngineInput) -> InferenceEngineOutput:
         await self._resumed.wait()
@@ -256,6 +265,8 @@ class CPUInferenceEngine(InferenceEngineInterface):
             )
         )
         response_ids, response_logprobs, stop_reasons, policy_steps = map(list, zip(*results, strict=True))
+        self._generated_tokens += sum(len(ids) for ids in response_ids)
+        self._finished_requests += len(response_ids)
         return InferenceEngineOutput(
             responses=[self.tokenizer.decode(ids, skip_special_tokens=True) for ids in response_ids],
             response_ids=response_ids,
@@ -301,11 +312,15 @@ class CPUInferenceEngine(InferenceEngineInterface):
             groups = {}
             for item in batch:
                 sampling_params = item[1]
-                key = (float(sampling_params["temperature"]), int(sampling_params.get("min_tokens", 1)))
+                key = (
+                    float(sampling_params["temperature"]),
+                    int(sampling_params.get("min_tokens", 1)),
+                    bool(sampling_params.get("ignore_eos", False)),
+                )
                 groups.setdefault(key, []).append(item)
-            for (temperature, min_tokens), items in groups.items():
+            for (temperature, min_tokens, ignore_eos), items in groups.items():
                 try:
-                    results = await self._decode_batch(items, temperature, min_tokens)
+                    results = await self._decode_batch(items, temperature, min_tokens, ignore_eos)
                     for (_, _, future, _, _), result in zip(items, results):
                         if not future.done():
                             future.set_result(result)
@@ -314,7 +329,7 @@ class CPUInferenceEngine(InferenceEngineInterface):
                         if not future.done():
                             future.set_exception(error)
 
-    async def _decode_batch(self, items, temperature, min_tokens):
+    async def _decode_batch(self, items, temperature, min_tokens, ignore_eos):
         batch_size = len(items)
         max_response_tokens = [int(sampling_params["max_tokens"]) for _, sampling_params, _, _, _ in items]
         prompt_lengths = [len(prompt_ids) for prompt_ids, _, _, _, _ in items]
@@ -364,7 +379,7 @@ class CPUInferenceEngine(InferenceEngineInterface):
                 response_ids[index].append(int(token_ids[index]))
                 response_logprobs[index].append(float(token_logprobs[index]))
                 self._policy_steps.observe(request_ids[index], 1, sampled_at)
-                if int(token_ids[index]) == self.eos_token_id:
+                if int(token_ids[index]) == self.eos_token_id and not ignore_eos:
                     stop_reasons[index] = "stop"
                     live_sequences[index] = False
                 elif len(response_ids[index]) >= max_response_tokens[index]:
@@ -376,6 +391,18 @@ class CPUInferenceEngine(InferenceEngineInterface):
             position_ids = position_ids[:, -1:] + 1
             await asyncio.sleep(0)
         return [(response_ids[index], response_logprobs[index], stop_reasons[index]) for index in range(batch_size)]
+
+    async def get_stats(self, read_mode: IntervalReadMode = IntervalReadMode.RESET) -> VLLMEngineStatsSnapshot:
+        snapshot = VLLMEngineStatsSnapshot(
+            engine_id="cpu",
+            timestamp=time.time(),
+            current=VLLMCurrentStats(),
+            cumulative=VLLMCumulativeStats(generation_tokens=self._generated_tokens),
+            interval=VLLMIntervalStats(finished_requests=self._finished_requests),
+        )
+        if read_mode is IntervalReadMode.RESET:
+            self._finished_requests = 0
+        return snapshot
 
     async def pause_generation(self) -> None:
         self._resumed.clear()

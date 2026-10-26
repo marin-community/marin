@@ -143,3 +143,4 @@ class TrajectoryBatch(TypedDict):
     exclude_from_baseline: Optional[List[bool]]
     # DPO pairing evidence: +1 chosen / -1 rejected per row, emitted as adjacent pairs.
     pair_roles: NotRequired[List[int]]
+    task_ids: NotRequired[List[str]]

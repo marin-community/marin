@@ -354,6 +354,7 @@ def _training_batch(
         rollout_metrics={},
         rollout_logprobs=logprobs if logprobs_required else None,
         exclude_from_baseline=[not decision.disposition.baseline_eligible for decision in decisions],
+        task_ids=[rollout.task_id for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
     _attach_failure_channels(batch, decisions)
@@ -508,6 +509,13 @@ def _task_error_policies(
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
+    metrics.update(
+        {
+            f"generate/outcome/{outcome.value}": float(sum(rollout.grade.status == outcome for rollout in rollouts))
+            for outcome in Outcome
+        }
+    )
+    metrics["generate/outcome/rollout_failure"] = float(sum(rollout.failure is not None for rollout in rollouts))
     failed = [
         rollout
         for rollout in rollouts

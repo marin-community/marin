@@ -3,6 +3,7 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,6 +19,8 @@ from skyrl_train.entrypoints.main_base import (
     config_dir,
 )
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
+from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
+from skyrl_train.inference_observability import trainer_metrics
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
@@ -44,6 +47,12 @@ async def load_initial_policy_adapter(inference_engine_client: PolicyAdapterClie
 
 
 class EvalOnlyEntrypoint(BasePPOExp):
+    def get_colocate_pg(self, timeout: int | None = None) -> None:
+        return None
+
+    def get_policy_pg(self, timeout: int | None = None) -> None:
+        return None
+
     def get_train_dataset(self):
         """Override to avoid requiring a train dataset for eval-only runs."""
         return None
@@ -71,6 +80,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
         trajectory_runner.set_trajectory_sink(trajectory_sink)
         try:
             await trajectory_runner.startup()
+            started = time.perf_counter()
             results: dict[str, Any] = await evaluate(
                 eval_dataloader=build_eval_dataloader(self.cfg, self.eval_dataset),
                 trajectory_runner=trajectory_runner,
@@ -78,6 +88,30 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 global_step=None,
                 tokenizer=self.tokenizer,
                 trajectory_sink=trajectory_sink,
+            )
+            elapsed = time.perf_counter() - started
+            tokens = results["eval/all/response_tokens"]
+            engine_gpus = (
+                self.cfg.generator.num_inference_engines
+                * self.cfg.generator.inference_engine_tensor_parallel_size
+                * self.cfg.generator.inference_engine_pipeline_parallel_size
+                * self.cfg.generator.inference_engine_data_parallel_size
+            )
+            results.update(
+                {
+                    "generate/wall_seconds": elapsed,
+                    "generate/response_tokens": tokens,
+                    "generate/prompts_dropped_too_long": self.eval_dataset.prompts_dropped_too_long,
+                    "generate/tokens_per_second_per_gpu": tokens / elapsed / engine_gpus,
+                }
+            )
+            snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+            results.update(
+                {
+                    f"generate/{key}": value
+                    for key, value in trainer_metrics(snapshot).items()
+                    if key.startswith("vllm/")
+                }
             )
         finally:
             try:

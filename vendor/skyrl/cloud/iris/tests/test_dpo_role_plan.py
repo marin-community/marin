@@ -1,6 +1,7 @@
 import pytest
 
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_num_nodes, derive_role_plan
+from cloud.iris.launch_config import validate_iris_allocation
 
 
 def skyrl_config(**overrides) -> dict:
@@ -60,6 +61,44 @@ def test_generation_launch_keeps_its_rollout_role():
     rollout = plan.claim(ModelRoleKind.ROLLOUT)
     assert rollout.execution is RoleExecution.LOCAL
     assert derive_num_nodes(plan) == 2
+
+
+@pytest.mark.parametrize("colocate_all", [False, True])
+def test_generate_launch_allocates_only_one_engine_node(colocate_all):
+    config = skyrl_config(
+        **{
+            "trainer.placement.colocate_all": colocate_all,
+            "trainer.placement.policy_num_nodes": 4,
+            "trainer.algorithm.use_kl_loss": True,
+            "environment.env_class": "gsm8k",
+            "generator.num_inference_engines": 1,
+        }
+    )
+    config["entrypoint"] = "generate"
+    config["generator"].update(inference_engine_data_parallel_size=8, inference_engine_expert_parallel_size=8)
+    plan = derive_role_plan(config)
+    assert [claim.kind for claim in plan.claims] == [ModelRoleKind.ROLLOUT]
+    assert derive_num_nodes(plan) == 1
+    config.pop("entrypoint")
+
+    allocation = validate_iris_allocation(
+        {
+            "skyrl": config,
+            "run": {"mode": "train"},
+            "runtime": {"entrypoint": "skyrl_train.entrypoints.main_generate"},
+            "iris": {
+                "allocation": {
+                    "num_nodes": 1,
+                    "gpus_per_node": 8,
+                    "gpu_variant": "H100",
+                    "cpu": 48,
+                    "memory": "700GB",
+                    "disk": "4TB",
+                }
+            },
+        }
+    )
+    assert (allocation.num_nodes, allocation.gpus_per_node) == (1, 8)
 
 
 @pytest.mark.parametrize("runner", ["task", "harbor"])

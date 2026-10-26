@@ -216,6 +216,13 @@ def _calculate_eval_metrics(
         if average is not None:
             metrics["eval/all/avg_verifier_score"] = average
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
+    metrics.update(
+        {
+            key: value
+            for key, value in (batch.get("rollout_metrics") or {}).items()
+            if key.startswith("generate/outcome/")
+        }
+    )
     return metrics
 
 

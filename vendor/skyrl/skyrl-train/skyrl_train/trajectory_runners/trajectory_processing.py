@@ -500,7 +500,12 @@ def concatenate_trajectory_batches(
     for output in trajectory_batches:
         for name, value in (output.get("rollout_metrics") or {}).items():
             if name.startswith(
-                (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
+                (
+                    RETENTION_METRIC_PREFIX,
+                    IDENTITY_AWARE_REWARD_METRIC_PREFIX,
+                    TASK_ROLLOUT_METRIC_PREFIX,
+                    "generate/outcome/",
+                )
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
 
