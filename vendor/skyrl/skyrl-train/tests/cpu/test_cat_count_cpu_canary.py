@@ -89,10 +89,12 @@ def train(
     eval_interval: int | None = None,
     seed: int = 0,
     callbacks: list[dict] | None = None,
+    check_every_weight_syncs: int = 0,
 ):
     cfg = cat_count_config(
         root, model, steps=steps, staleness=staleness, resume=resume, eval_interval=eval_interval, seed=seed
     )
+    cfg.trainer.numerics.check.every_weight_syncs = check_every_weight_syncs
     if callbacks is not None:
         OmegaConf.update(cfg, "trainer.callbacks", callbacks, force_add=True)
     if flipped:
@@ -215,6 +217,12 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert any(row["policy/ppo_clip_ratio"] > 0 for row in training)
     assert all("environment/exact" in row for row in training)
     assert any("environment/exact_n20" in row for row in training)
+    # The exactness check follows the first weight sync and every second training sync; the next step scores it.
+    checks = [row for row in training if "exactness_check/tokens" in row]
+    assert [row["trainer/global_step"] for row in checks] == [1, 3, 5, 7, 9]
+    assert all(row["exactness_check/engines"] == 1 and row["exactness_check/tokens"] > 0 for row in checks)
+    # The CPU engine and the CPU trainer differ by float32 rounding; a score of the wrong positions differs by nats.
+    assert all(row["exactness_check/log_ratio_abs_max"] < 0.1 for row in checks)
     checkpoint = torch.load(root / f"ckpts/global_step_{FAST_STEPS}/policy/rank_0.pt", weights_only=False)
     optimizer_steps = [state["step"].item() for state in checkpoint["optimizer"]["state"].values()]
     assert optimizer_steps and set(optimizer_steps) == {2 * FAST_STEPS}
@@ -262,6 +270,7 @@ def train_positive(forkserver_context, root, model, seed=0):
         seed=seed,
         steps=FAST_STEPS + 2,
         eval_interval=FAST_STEPS,
+        check_every_weight_syncs=2,
         callbacks=[
             {"type": "checkpoint", "save_steps": FAST_STEPS},
             {

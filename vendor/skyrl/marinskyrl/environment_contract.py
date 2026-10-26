@@ -78,6 +78,10 @@ VLLM_USE_V1_ENV = "VLLM_USE_V1"
 VLLM_USE_V2_MODEL_RUNNER_ENV = "VLLM_USE_V2_MODEL_RUNNER"
 VLLM_USE_DEEP_GEMM_ENV = "VLLM_USE_DEEP_GEMM"
 VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+# This module runs as a standalone script that imports only the standard library (cloud/iris/bootstrap_runtime.sh), so
+# it repeats marinskyrl.runtime_options.NUMERICS_MODE_PATH and NumericsMode.BATCH_INVARIANT.
+NUMERICS_MODE_SETTING = "trainer.numerics.mode"
+BATCH_INVARIANT_NUMERICS_MODE = "batch_invariant"
 VLLM_ALLOW_INSECURE_SERIALIZATION_ENV = "VLLM_ALLOW_INSECURE_SERIALIZATION"
 RUNAI_STREAMER_LOG_TO_STDERR_ENV = "RUNAI_STREAMER_LOG_TO_STDERR"
 RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
@@ -191,7 +195,7 @@ ENV_VAR_SPECS = (
     ),
     EnvVarSpec(
         VLLM_BATCH_INVARIANT_ENV,
-        "trainer.algorithm.batch_invariant",
+        NUMERICS_MODE_SETTING,
         EnvVarSource.CONFIG,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
@@ -513,7 +517,7 @@ class EnvVarManager:
         for name in passthrough_names:
             if value := ambient.get(name):
                 values[name] = value
-        if _config_value(config, "trainer.algorithm.batch_invariant", False):
+        if _config_value(config, NUMERICS_MODE_SETTING) == BATCH_INVARIANT_NUMERICS_MODE:
             values[VLLM_BATCH_INVARIANT_ENV] = "1"
         if _config_value(config, "generator.fuse_weights", False):
             values[VLLM_ALLOW_INSECURE_SERIALIZATION_ENV] = "1"

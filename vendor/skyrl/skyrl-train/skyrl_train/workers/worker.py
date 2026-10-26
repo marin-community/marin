@@ -6,7 +6,7 @@ import os
 import socket
 from typing import Dict, Optional, Type, List, Any, Callable
 from skyrl_train.utils.progress import configure_progress, tqdm
-from marinskyrl.runtime_options import R3Transport
+from marinskyrl.runtime_options import NumericsMode, R3Transport
 from collections import defaultdict
 
 import ray
@@ -320,7 +320,8 @@ class Worker(DistributedTorchRayActor):
         telemetry_config = TelemetryConfig.from_environment()
         if telemetry_config.endpoint is not None:
             self._telemetry.enter_context(ProcessTelemetry(telemetry_config, WORKER_ROLE))
-        enable_trainer_batch_invariance(cfg.trainer.algorithm.batch_invariant)
+        if NumericsMode(cfg.trainer.numerics.mode) is NumericsMode.BATCH_INVARIANT:
+            enable_trainer_batch_invariance()
 
     @property
     def device(self) -> torch.device:

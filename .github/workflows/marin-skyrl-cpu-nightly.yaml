@@ -26,6 +26,10 @@ jobs:
           python-version: "3.12"
       - name: Install CPU trainer
         run: uv sync --frozen --group dev --group harbor-test --extra cpu --extra telemetry
+      - name: Check trainer-engine numerics
+        env:
+          PYTHONPATH: ${{ github.workspace }}/vendor/skyrl/skyrl-train:${{ github.workspace }}/vendor/skyrl/skyrl-gym
+        run: uv run --frozen --extra cpu --extra telemetry --group dev --group harbor-test pytest skyrl-train/tests/cpu/test_exactness_check.py skyrl-train/tests/cpu/test_numerics_config.py skyrl-train/tests/cpu/inf_engines/test_inference_engine_client.py -n 0
       - name: Check learning, reversed rewards and async checkpoint resume
         env:
           PYTHONPATH: ${{ github.workspace }}/vendor/skyrl/skyrl-train:${{ github.workspace }}/vendor/skyrl/skyrl-gym
