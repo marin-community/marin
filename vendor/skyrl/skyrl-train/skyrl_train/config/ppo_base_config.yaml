@@ -182,6 +182,7 @@ trainer:
     mode: native # native | batch_invariant | exact
     check:
       every_weight_syncs: 0 # 0 disables the trainer-engine log-probability check (skyrl_train/exactness_check.py)
+      on_failure: log # log | stop (raise when a token's log-probability differs or an engine dies during the check)
   algorithm:
     advantage_estimator: "grpo"
     group_advantage_min_size: null

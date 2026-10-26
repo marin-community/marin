@@ -34,9 +34,12 @@ from skyrl_train.distributed.megatron.optimizer import (
 from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state
 from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
+from skyrl_train.models.grug_exact.engine_regions import prepare_exact_process
+from skyrl_train.models.grug_exact.model_wrapper import ExactMegatronModelWrapper
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
 from skyrl_train.timing_observability import PhaseBreakdown
-from marinskyrl.runtime_options import PolicyLossType
+from skyrl_train.trajectory_runners.types import ROLLOUT_ENGINE_DP_RANKS_KEY
+from marinskyrl.runtime_options import NumericsMode, PolicyLossType
 from skyrl_train.training_batch import (
     TrainingBatchIterator,
     TrainingOutputBatch,
@@ -111,6 +114,7 @@ class MegatronWorker:
         transformer_config_kwargs,
         tokenizer_path: str,
         tokenizer_revision: str | None,
+        numerics: NumericsMode,
         bf16=True,
         flash_attn=False,
         model_revision: str | None = None,
@@ -121,6 +125,7 @@ class MegatronWorker:
         """
         hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True, revision=model_revision)
         validate_grug_training_strategy(getattr(hf_config, "model_type", None), "megatron")
+        self.numerics = numerics
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_path,
             trust_remote_code=True,
@@ -161,6 +166,9 @@ class MegatronWorker:
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
+        if self.numerics is NumericsMode.EXACT:
+            prepare_exact_process(self.cfg.generator.max_num_batched_tokens)
+            provider.grug_numerics = self.numerics
         provider.finalize()
 
         self.provider = provider
@@ -219,6 +227,8 @@ class MegatronWorker:
                     num_actions=num_actions,
                     ftpo_chosen_mask=micro.get("ftpo_chosen_mask"),
                     rollout_routed_experts=micro.routed_experts_tensor(),
+                    rollout_engine_dp_ranks=micro.get(ROLLOUT_ENGINE_DP_RANKS_KEY),
+                    loss_mask=micro.get("loss_mask"),
                     probe_row_indices=micro.get("probe_row_indices"),
                 )
             )
@@ -455,6 +465,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             model_source_uri=self.cfg.trainer.policy.model.get("source_uri"),
             tokenizer_path=self.cfg.trainer.policy.model.get("tokenizer_path"),
             tokenizer_revision=self.cfg.trainer.policy.model.get("tokenizer_revision"),
+            numerics=NumericsMode(self.cfg.trainer.numerics.mode),
         )
 
         ddp_config = self.cfg.trainer.policy.megatron_config.ddp_config if for_training else None
@@ -509,7 +520,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         )
 
         # create worker model
-        self.model = MegatronModelWrapper(
+        wrapper = ExactMegatronModelWrapper if self.numerics is NumericsMode.EXACT else MegatronModelWrapper
+        self.model = wrapper(
             config=self.cfg,
             vocabulary_size=self.strategy.hf_config.vocab_size,
             actor_module=self.actor_module,
@@ -603,6 +615,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         distillation=experience.distillation,
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
+                        rollout_engine_dp_ranks=experience.rollout_engine_dp_ranks,
                         pair_roles=experience.pair_roles,
                     )
                 )
@@ -962,6 +975,7 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
             model_source_uri=self.cfg.trainer.ref.model.get("source_uri"),
             tokenizer_path=self.cfg.trainer.ref.model.get("tokenizer_path"),
             tokenizer_revision=self.cfg.trainer.ref.model.get("tokenizer_revision"),
+            numerics=NumericsMode.NATIVE,
         )
 
         self.actor_module = self.make_megatron_module(

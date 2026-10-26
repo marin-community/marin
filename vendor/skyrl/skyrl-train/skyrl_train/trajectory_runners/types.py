@@ -14,6 +14,12 @@ TrainingPhase = Literal["train", "eval"]
 REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", "successful_length")
 ROUTED_EXPERTS_KEY = "routed_experts"
 RESPONSE_POLICY_STEPS_KEY = "response_policy_steps"
+# The data-parallel rank of the inference engine that served each response: the batched engine-output key (one rank
+# per response; ModelTurn.metadata holds a turn's rank under ENGINE_DP_RANK_KEY), and the trajectory and training batch
+# key (one rank per row). Under expert parallelism an engine adds the experts' partial outputs in an order that depends
+# on its rank, so the exact trainer adds them in the serving engine's order.
+ENGINE_DP_RANKS_KEY = "engine_dp_ranks"
+ROLLOUT_ENGINE_DP_RANKS_KEY = "rollout_engine_dp_ranks"
 RESPONSE_SPAN_TAGS_KEY = "response_span_tags"
 
 
@@ -133,6 +139,8 @@ class TrajectoryBatch(TypedDict):
     behavior_topk_logprobs: Optional[List[np.ndarray]]
     rollout_routed_experts: Optional[List[np.ndarray]]
     rollout_policy_steps: Optional[List[np.ndarray]]
+    # The rank of the engine that served every model turn of each row, or UNKNOWN_ENGINE_DP_RANK.
+    rollout_engine_dp_ranks: Optional[List[int]]
     teacher_evidence: Optional[TeacherEvidenceBatch]
     distillation: Optional[PreparedTeacherInput]
     token_level_shaping: Optional[List[List[float]]]

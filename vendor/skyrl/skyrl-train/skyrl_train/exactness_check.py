@@ -12,11 +12,13 @@ from loguru import logger
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizerBase
 
+from skyrl_train.config.numerics import CheckFailure
 from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.training_batch import TrainingInputBatch
+from skyrl_train.trajectory_runners.types import ROLLOUT_ENGINE_DP_RANKS_KEY
 from skyrl_train.weight_sync.base import WeightSyncReason
 
 # The fixed prompt and response length of every check: a few decode steps on each engine.
@@ -39,8 +41,15 @@ class EngineSample:
 class ExactnessCheck:
     """Engine responses to a fixed prompt after a weight sync, and their comparison with the trainer's scores."""
 
-    def __init__(self, every_weight_syncs: int, sampling_params: DictConfig, tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self,
+        every_weight_syncs: int,
+        on_failure: CheckFailure,
+        sampling_params: DictConfig,
+        tokenizer: PreTrainedTokenizerBase,
+    ):
         self.every_weight_syncs = every_weight_syncs
+        self.on_failure = on_failure
         self.tokenizer = tokenizer
         self.prompt_token_ids = tokenizer.encode(CHECK_TEXT, add_special_tokens=False)
         self.sampling_params = {
@@ -57,8 +66,8 @@ class ExactnessCheck:
 
     async def after_weight_sync(self, reason: WeightSyncReason, client: InferenceEngineClient) -> dict[str, float]:
         """After the first sync, the re-sync after a checkpoint save and every ``every_weight_syncs``-th training-step
-        sync, take every live engine's response to the check prompt for ``score``. A generation during which an engine
-        died is skipped and counted in ``exactness_check/generate_failures``."""
+        sync, take every live engine's response to the check prompt for ``score``. Under ``on_failure=log``, a
+        generation during which an engine died is skipped and counted in ``exactness_check/generate_failures``."""
         if not self._checks_after(reason):
             return {}
         self._samples = None
@@ -66,6 +75,8 @@ class ExactnessCheck:
         try:
             outputs = await client.generate_on_live_engines(self.prompt_token_ids, self.sampling_params)
         except ray.exceptions.RayActorError as error:
+            if self.on_failure is CheckFailure.STOP:
+                raise
             self._generate_failures += 1
             logger.warning("Exactness check skipped: an engine died while generating the check responses: {}", error)
             return {f"{METRIC_PREFIX}/generate_failures": float(self._generate_failures)}
@@ -94,7 +105,8 @@ class ExactnessCheck:
     ) -> dict[str, float]:
         """Score the engines' responses with ``forward``, the policy's ``[rows, response_length]`` log-probabilities of
         a batch, and count the response tokens whose float32 bits differ from the engine's, in total and per engine
-        data-parallel rank. Returns no metrics when no response waits to be scored."""
+        data-parallel rank; under ``on_failure=stop`` a mismatch raises. Returns no metrics when no response waits to
+        be scored."""
         if self._samples is None:
             return {}
         samples, self._samples = self._samples, None
@@ -122,10 +134,16 @@ class ExactnessCheck:
         for rank, count in tokens.items():
             metrics[f"{METRIC_PREFIX}/dp_rank_{rank}/tokens"] = float(count)
             metrics[f"{METRIC_PREFIX}/dp_rank_{rank}/mismatched_tokens"] = float(mismatched[rank])
+        if self.on_failure is CheckFailure.STOP and mismatched.total():
+            raise RuntimeError(
+                f"Exactness check: {mismatched.total()} of {tokens.total()} log-probabilities the trainer computed for "
+                f"{len(samples)} engines' check responses differ from the engines' (log_ratio_abs_max {largest:.3g})"
+            )
         return metrics
 
     def _batch(self, samples: list[EngineSample], dp_size: int, num_experts: int | None) -> TrainingInputBatch:
-        """The responses as a policy forward batch, repeated to a multiple of ``dp_size`` rows."""
+        """The responses as a policy forward batch, repeated to a multiple of ``dp_size`` rows, with each row's response
+        tokens as its loss mask and its engine data-parallel rank."""
         rows = [samples[index % len(samples)] for index in range(-(-len(samples) // dp_size) * dp_size)]
         responses = [row.response_token_ids for row in rows]
         sequences, attention_mask, action_mask, *_ = convert_prompts_responses_to_batch_tensors(
@@ -137,7 +155,12 @@ class ExactnessCheck:
         )
         routes = tuple(row.routed_experts for row in rows)
         batch = TrainingInputBatch(
-            {"sequences": sequences, "attention_mask": attention_mask},
+            {
+                "sequences": sequences,
+                "attention_mask": attention_mask,
+                "loss_mask": action_mask,
+                ROLLOUT_ENGINE_DP_RANKS_KEY: torch.tensor([row.engine_dp_rank for row in rows], dtype=torch.long),
+            },
             routed_expert_rows=(
                 None if routes[0] is None else RoutedExpertRows(routes, action_mask.shape[1], num_experts)
             ),

@@ -1,4 +1,5 @@
 import pytest
+from transformers import LlamaConfig
 
 import skyrl_train.inference_engines.ray_wrapped_inference_engine as rwie
 from skyrl_train.config.numerics import validate_numerics_config
@@ -9,6 +10,7 @@ from skyrl_train.inference_engines.vllm.decode_invariant.engine import (
     DECODE_INVARIANT_ENGINE_ENVIRONMENT,
     decode_invariant_engine_init_kwargs,
 )
+from skyrl_train.models.grug_moe import GrugMoeConfig
 
 
 def test_numerics_validation_refuses_batch_invariant_numerics_on_sglang_engines():
@@ -20,7 +22,7 @@ def test_numerics_validation_refuses_batch_invariant_numerics_on_sglang_engines(
         validate_numerics_config(cfg)
 
 
-def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_config(monkeypatch):
+def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_config(monkeypatch, tmp_path):
     captured = {}
 
     def fake_create(**engine_kwargs):
@@ -33,11 +35,15 @@ def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_
     assert captured["vllm_attention_backend"] is None
     assert captured["engine_environment"] == {}
 
-    # trainer.numerics.mode=exact with the Snowball engine settings validates, builds decode-invariant rollout engines
-    # and leaves the config as written.
+    # trainer.numerics.mode=exact with a Snowball-shaped Grug policy and Snowball's exact settings validates with
+    # on_failure=stop, builds decode-invariant rollout engines and leaves the config as written.
     captured.clear()
     cfg = get_default_config()
     cfg.trainer.numerics.mode = "exact"
+    cfg.trainer.numerics.check.on_failure = "stop"
+    cfg.trainer.use_sample_packing = False
+    GrugMoeConfig().save_pretrained(tmp_path / "policy")
+    cfg.trainer.policy.model.path = str(tmp_path / "policy")
     cfg.generator.enforce_eager = False
     cfg.generator.inference_engine_tensor_parallel_size = 1
     cfg.generator.vllm_attention_backend = "FLASH_ATTN"
@@ -52,3 +58,14 @@ def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_
     )
     assert cfg.generator.vllm_attention_backend == "FLASH_ATTN"
     assert "additional_config" not in cfg.generator.engine_init_kwargs
+
+    # The same settings with a policy the exact trainer does not cover, another model family, another Grug shape or
+    # Hero, fail validation.
+    for policy in (
+        LlamaConfig(num_hidden_layers=1),
+        GrugMoeConfig(num_key_value_heads=4),
+        GrugMoeConfig(sconv=True, grugmoe_artifact_schema_version=2),
+    ):
+        policy.save_pretrained(tmp_path / "policy")
+        with pytest.raises(ValueError):
+            validate_numerics_config(cfg)
