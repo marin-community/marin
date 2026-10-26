@@ -148,7 +148,8 @@ def source_row_task(
         row=str(index),
         importer_revision="skyrl-task-session-v2",
     )
-    prompt = row.pop("prompt")
+    # Arrow gives every message in a column every field; drop the absent ones so chat validation sees the source.
+    prompt = [{key: value for key, value in message.items() if value is not None} for message in row.pop("prompt")]
     session_name = row.pop("env_class")
     if not isinstance(session_name, str):
         raise ValueError("The source session identifier must be a string")
