@@ -91,8 +91,7 @@ Logs expose logical payload sizes and host stage durations:
 `timing/score_centering_probe_summary` separate driver work. Stage sums can overlap
 training and cannot establish added cycle time. No extra device synchronization
 is added. Increase `interval` when capture is expensive, then check observation
-spacing and fresh/stale, length and position coverage. A roughly 1% overhead
-ceiling remains an aspiration.
+spacing and fresh/stale, length and position coverage.
 
 ## Enable SC
 
@@ -171,13 +170,20 @@ TIS. These stage measurements do not estimate a full production update.
 | --- | --- | --- | --- |
 | TIS, heads off | 5.235 ± 0.019 | baseline | 45.44 |
 | SC, K128 | 5.298 ± 0.051 | +1.20% [−0.06%, 2.45%] | 45.60 |
+| TIS with probes | 5.267 ± 0.061 | +0.61% [−0.65%, 1.86%] | 45.44 |
 
 Memory is the maximum PyTorch tensor allocation across all 80 learners.
 Reserved memory was 56.69 GiB in every arm because the allocator cache was
-retained. These counters do not measure physical GPU headroom. The overhead
-interval includes zero. SC copied 72 MiB of input evidence per learner
+retained. These counters do not measure physical GPU headroom. Both overhead
+intervals include zero. SC copied 72 MiB of input evidence per learner
 in 22.0 ms and returned a 24 MiB head per response; the host round trip
 averaged 554 ms, including chosen scores and pipeline transport.
+
+The controlled probe arm sampled up to 32 positions in every replayed response,
+which is denser than the live one-group schedule. After masking, 248 positions
+per repeat spanned every CP response shard. Probe input copies averaged
+0.225 ms, returned heads used 16 KiB per response, and CPU summaries averaged
+1.45 ms. The table includes the summaries.
 
 The live workload used eight prompts with four responses each, compared with
 512 prompts and 16 responses in the reference recipe. Inference used eight
@@ -186,6 +192,15 @@ entropy, frozen-reference KL and optimizer updates; the first update was warmup.
 The short CatCount workloads and response lengths differed between arms. The
 record includes end-to-end timings and capture payloads; their differences
 cannot establish causal overhead or learning benefit.
+
+Live probes requested interval 1, leaving the runtime default of 10 unchanged.
+They consumed 512 positions after warmup, across three of five measured
+updates: 0.165% of 310,435 loss tokens. Of those positions, 192 came from
+responses of at least 2,048 tokens; sampled responses reached 11,892 tokens.
+Capture produced 41.35 MiB before selection and exported 514 KiB. Collated
+learner inputs used 3.04 MiB and returned heads used 1.50 MiB, including padding.
+These are logical payload sizes. Scheduled groups can be rejected or arrive in
+a later update, so interval 1 does not guarantee an observation in every update.
 
 ## Runtime and evidence
 
@@ -199,9 +214,9 @@ floor. Abort continuations preserve exact token alignment and policy stamps.
 
 The [dated Snowball report][snowball-report] retains cost measurements and full
 experimental records. Those measurements qualify their pinned source, not later
-code changes. Natural async probes sampled no responses of at least 2,048
-tokens, although controlled long-response checks passed. No Snowball learning
-benefit is established. Continuous capture without SC, training-time microbatch
+code changes. That report's async probes sampled no responses of at least 2,048
+tokens; the CP5 qualification above includes live observations from longer
+responses. No Snowball learning benefit is established. Continuous capture without SC, training-time microbatch
 diagnostics and variable head/position sizes were retired from the runtime;
 matched research controls remain at the report's immutable revisions.
 
