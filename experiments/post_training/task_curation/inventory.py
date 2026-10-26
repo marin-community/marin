@@ -5,7 +5,7 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,7 +19,15 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.structure_closure import structure_closure_task
-from taskcompendium.models import SCHEMA_VERSION, Source, TaskSpec
+from taskcompendium.models import (
+    SCHEMA_VERSION,
+    EnvironmentRequirements,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    VerifyitGrader,
+    grades_with_judge,
+)
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -30,6 +38,7 @@ from zephyr.writers import write_parquet_file
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
+TASK_MANIFEST_FILENAME = "task_manifest.parquet"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_JSON_COLUMN = "task_json"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
@@ -42,6 +51,25 @@ HELDOUT_FAMILIES = MappingProxyType(
         "ultra_sft_step3200_reasoning_gym": "reasoning_gym",
         "ultra_sft_step3200_stem_mcqa": "stem",
     }
+)
+AAII_CATEGORIES = MappingProxyType(
+    {
+        "calendar": "format",
+        "competitive_coding": "Coding",
+        "reasoning_gym": "Scientific reasoning",
+        "stem": "Scientific reasoning",
+        "structural": "format",
+    }
+)
+TASK_MANIFEST_SCHEMA = pa.schema(
+    [
+        pa.field("task_id", pa.string(), nullable=False),
+        pa.field("family", pa.string(), nullable=False),
+        pa.field("aaii_category", pa.string(), nullable=False),
+        pa.field("agentic", pa.bool_(), nullable=False),
+        pa.field("grader_kind", pa.string(), nullable=False),
+        pa.field("upstream_pass_rate", pa.float64()),
+    ]
 )
 
 
@@ -108,7 +136,7 @@ class SourceCounts:
     selected: int = 0
 
 
-def validation_task(row: dict[str, Any]) -> TaskSpec:
+def validation_task(row: dict[str, Any], grader_environments: Mapping[str, EnvironmentRequirements]) -> TaskSpec:
     """Import a pinned original Snowball development task into the current schema."""
     raw = row["lowered_task_spec"]
     document = json.loads(raw, object_pairs_hook=unique_object)
@@ -127,6 +155,15 @@ def validation_task(row: dict[str, Any]) -> TaskSpec:
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
         raise ValueError("The heldout source must use the one-turn Shellbox contract")
+    if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
+        config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
+        dataset = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]["dataset"]
+        component = f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}"
+        if component not in grader_environments:
+            raise ValueError(f"No admitted grader environment for {component}")
+        task = task.model_copy(
+            update={"grader": task.grader.model_copy(update={"environment": grader_environments[component]})}
+        )
     return task
 
 
@@ -138,9 +175,11 @@ def validation_family(task: TaskSpec) -> str:
     return HELDOUT_FAMILIES[contract["dataset"]]
 
 
-def select_heldout(rows: list[dict[str, Any]], recipe: SelectionRecipe) -> HeldoutSelection:
+def select_heldout(
+    rows: list[dict[str, Any]], recipe: SelectionRecipe, grader_environments: Mapping[str, EnvironmentRequirements]
+) -> HeldoutSelection:
     """Retain the full exclusion set and choose a seeded panel within each family."""
-    full = tuple(validation_task(row) for row in rows)
+    full = tuple(validation_task(row, grader_environments) for row in rows)
     if len({task.id for task in full}) != len(full):
         raise ValueError("Heldout task IDs are not unique")
     families = {task.id: validation_family(task) for task in full}
@@ -166,6 +205,71 @@ def task_records(tasks: Iterator[TaskSpec]) -> Iterator[dict[str, str]]:
         yield {TASK_SPEC_COLUMN: task.model_dump_json()}
 
 
+def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
+    root = StoragePath(source.root)
+    manifest = json.loads((root / "manifest.json").read_text())
+    if manifest["mode"] != "full":
+        raise ValueError(f"Selection requires FULL curation: {source.source_id}")
+    if manifest["intended_use"] != IntendedUse.TRAIN:
+        raise ValueError(f"Selection source is not a training population: {source.source_id}")
+    for path in sorted((root / "final" / "*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
+                yield from batch.to_pylist()
+
+
+def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
+    components = {f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}" for dataset in HELDOUT_FAMILIES}
+    environments = {}
+    for source in sources:
+        if source.source_id not in components:
+            continue
+        record = next(_admitted_records(source), None)
+        if record is None:
+            raise ValueError(f"No admitted grader environment for {source.source_id}")
+        task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
+        if not isinstance(task.grader, ScriptGrader) or task.grader.environment.docker_image is not None:
+            raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
+        environments[source.source_id] = task.grader.environment
+    return environments
+
+
+def _grader_kind(task: TaskSpec) -> str:
+    if grades_with_judge(task.grader):
+        return "remote_judge"
+    if not isinstance(task.grader, ScriptGrader | VerifyitGrader):
+        raise ValueError(f"Task has no runnable grader: {task.id}")
+    environment = task.grader.environment
+    if environment is None:
+        return "in_process"
+    return "image" if environment.docker_image is not None else "package"
+
+
+def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
+    for task in tasks:
+        family = validation_family(task)
+        passed = None
+        if task.source.dataset != STRUCTURE_CLOSURE_DATASET:
+            config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
+            contract = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
+            passed = contract.get("pass_rate_passed")
+        yield {
+            "task_id": task.id,
+            "family": family,
+            "aaii_category": AAII_CATEGORIES[family],
+            "agentic": "agentic" in task.tags,
+            "grader_kind": _grader_kind(task),
+            "upstream_pass_rate": None if passed is None else passed / 8,
+        }
+
+
+def _grader_counts(path: Path) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for batch in pq.ParquetFile(path).iter_batches(batch_size=256, columns=[TASK_SPEC_COLUMN]):
+        counts.update(_grader_kind(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])) for row in batch.to_pylist())
+    return {kind: counts[kind] for kind in ("package", "image", "remote_judge", "in_process")}
+
+
 def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destination: Path) -> dict[str, SourceCounts]:
     """Filter admitted tasks before seeded sampling without replacement."""
     heldout_ids = {task.id for task in full}
@@ -179,39 +283,30 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
         seen_ids: set[str] = set()
         seen_contracts: set[str] = set()
         for source in sources:
-            root = StoragePath(source.root)
-            manifest = json.loads((root / "manifest.json").read_text())
-            if manifest["mode"] != "full":
-                raise ValueError(f"Selection requires FULL curation: {source.source_id}")
-            if manifest["intended_use"] != IntendedUse.TRAIN:
-                raise ValueError(f"Selection source is not a training population: {source.source_id}")
-            for path in sorted((root / "final" / "*.parquet").glob(), key=str):
-                with path.open("rb") as stream:
-                    for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
-                        for row in batch.to_pylist():
-                            task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
-                            source_counts = counts[source.source_id]
-                            source_counts.input += 1
-                            if (
-                                task.id in heldout_ids
-                                or semantic_digest(task, False) in heldout_public
-                                or task.context.model_dump_json() in heldout_contexts
-                            ):
-                                source_counts.heldout_overlap += 1
-                                continue
-                            contract = deduplication_key(task)
-                            if (
-                                task.id in selected_ids
-                                or contract in selected_contracts
-                                or task.id in seen_ids
-                                or contract in seen_contracts
-                            ):
-                                source_counts.duplicate += 1
-                                continue
-                            seen_ids.add(task.id)
-                            seen_contracts.add(contract)
-                            source_counts.eligible += 1
-                            yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
+            for row in _admitted_records(source):
+                task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
+                source_counts = counts[source.source_id]
+                source_counts.input += 1
+                if (
+                    task.id in heldout_ids
+                    or semantic_digest(task, False) in heldout_public
+                    or task.context.model_dump_json() in heldout_contexts
+                ):
+                    source_counts.heldout_overlap += 1
+                    continue
+                contract = deduplication_key(task)
+                if (
+                    task.id in selected_ids
+                    or contract in selected_contracts
+                    or task.id in seen_ids
+                    or contract in seen_contracts
+                ):
+                    source_counts.duplicate += 1
+                    continue
+                seen_ids.add(task.id)
+                seen_contracts.add(contract)
+                source_counts.eligible += 1
+                yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
 
     def selected_records() -> Iterator[dict[str, str]]:
         groups = (
@@ -244,7 +339,7 @@ def prepare(config: SelectionConfig) -> None:
         heldout = pq.read_table(source).to_pylist()
     if len(heldout) != config.recipe.heldout.rows:
         raise ValueError("Heldout source row count changed")
-    selection = select_heldout(heldout, config.recipe)
+    selection = select_heldout(heldout, config.recipe, _grader_environments(config.sources))
     with TemporaryDirectory(prefix="task-selection-") as temporary:
         directory = Path(temporary)
         counts = write_training(config, selection.full, directory / TRAIN_FILENAME)
@@ -253,6 +348,9 @@ def prepare(config: SelectionConfig) -> None:
         )
         write_parquet_file(
             task_records(iter(selection.full)), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
+        )
+        write_parquet_file(
+            _manifest_records(selection.full), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA
         )
         summary = {
             "recipe": config.recipe.model_dump(mode="json"),
@@ -267,10 +365,14 @@ def prepare(config: SelectionConfig) -> None:
             "full_validation_rows": len(selection.full),
             "validation_family_counts": selection.family_counts,
             "validation_task_ids": [task.id for task in selection.sample],
+            "grader_kind_counts": {
+                name.removesuffix(".parquet"): _grader_counts(directory / name)
+                for name in (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME)
+            },
         }
         destination = StoragePath(config.output_path)
         destination.mkdirs()
-        for name in (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME):
+        for name in (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME):
             (destination / name).upload_from(str(directory / name))
         (destination / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
