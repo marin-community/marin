@@ -343,11 +343,12 @@ def test_snowball_route_observer_is_output_identical():
 
 
 def test_hf_reload_keeps_requested_runtime_settings():
-    requested = _tiny_config(router_dot_fp32=True, moe_implementation="ring")
+    requested = _tiny_config(router_dot_fp32=True, moe_implementation="ring", moe_capacity_factor=4.0)
     reloaded = _tiny_config(moe_implementation=None)
     restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
     assert restored.router_dot_fp32
     assert restored.moe_implementation == "ring"
+    assert restored.moe_capacity_factor == 4.0
 
 
 @pytest.mark.parametrize(
