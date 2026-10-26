@@ -218,18 +218,42 @@ def accept_candidate_metadata(
     }
 
 
-def preflight_arm(arm: str, run_root: str | None) -> dict:
+def bind_merge(model: str, audit_path: str, readback_path: str) -> dict:
+    """A declared non-SFT candidate: a merged export, bound by its audit and readback receipts.
+
+    It replaces only the SFT binding. The export is then checked like an SFT candidate (headers, metadata
+    acceptance), served with the same SERVE_ARGS and scored by the same ``score_arm``; ``decide`` is unchanged.
+    """
+    receipts = {}
+    for key, path in (("merge_audit", audit_path), ("merge_readback", readback_path)):
+        try:
+            data = read(path)
+        except FileNotFoundError:
+            raise click.ClickException(f"{key} receipt not found") from None
+        receipts[key] = path
+        receipts[f"{key}_sha256"] = hashlib.sha256(data).hexdigest()
+    return {"candidate_kind": "merge", "hf_path": model.rstrip("/"), **receipts}
+
+
+def preflight_arm(arm: str, run_root: str | None, merge: dict | None = None) -> dict:
     baseline, baseline_bytes = model_receipt(BASELINE_MODEL)
     if baseline["file_sha256"] != BASELINE_FILE_HASHES:
         raise click.ClickException("Baseline mirror metadata differs from the LR0 source hashes")
     if arm == "baseline":
         return {"arm": arm, "revision": BASELINE_REVISION, **baseline, "vllm": VLLM, "serve_args": SERVE_ARGS}
-    if run_root is None:
+    if arm == "merge":
+        if not merge:
+            raise click.ClickException("--model, --merge-audit and --merge-readback are required for a merge arm")
+        binding = bind_merge(merge["model"], merge["audit"], merge["readback"])
+    elif run_root is None:
         raise click.ClickException("--run-root is required for the candidate arm")
-    binding = bind_candidate(run_root.rstrip("/"))
+    else:
+        binding = bind_candidate(run_root.rstrip("/"))
     candidate, candidate_bytes = model_receipt(binding["hf_path"])
     accepted = accept_candidate_metadata(baseline, candidate, baseline_bytes, candidate_bytes)
-    return {"arm": arm, "binding": binding, **candidate, **accepted, "vllm": VLLM, "serve_args": SERVE_ARGS}
+    kind = "merge" if arm == "merge" else "sft"
+    provenance = {"arm": "candidate", "candidate_kind": kind, "binding": binding, **candidate, **accepted}
+    return {**provenance, "vllm": VLLM, "serve_args": SERVE_ARGS}
 
 
 def idle_whole_h100_nodes() -> int:
@@ -256,33 +280,52 @@ def cli():
     pass
 
 
+def merge_options(fn):
+    fn = click.option("--model", default=None, help="Merged export path (merge arm).")(fn)
+    fn = click.option("--merge-audit", default=None, help="Merge audit receipt (merge arm).")(fn)
+    fn = click.option("--merge-readback", default=None, help="Merge readback receipt (merge arm).")(fn)
+    return click.option("--label", default=None, help="Output label for a merge arm.")(fn)
+
+
+def merge_spec(arm: str, model, merge_audit, merge_readback, label) -> dict | None:
+    if arm != "merge":
+        return None
+    if not (model and merge_audit and merge_readback and label):
+        raise click.ClickException("a merge arm needs --model, --merge-audit, --merge-readback and --label")
+    return {"model": model, "audit": merge_audit, "readback": merge_readback, "label": label}
+
+
 @cli.command()
-@click.option("--arm", type=click.Choice(["baseline", "candidate"]), required=True)
+@click.option("--arm", type=click.Choice(["baseline", "candidate", "merge"]), required=True)
 @click.option("--run-root", default=None, help="SFT run root (candidate arm).")
+@merge_options
 @click.option("--out", required=True, type=click.Path(path_type=Path))
-def preflight(arm, run_root, out):
+def preflight(arm, run_root, model, merge_audit, merge_readback, label, out):
     """Bind the arm and write its provenance; no GPU."""
-    m16_gate.write_json(out, preflight_arm(arm, run_root))
+    m16_gate.write_json(out, preflight_arm(arm, run_root, merge_spec(arm, model, merge_audit, merge_readback, label)))
     print(json.dumps({"arm": arm, "provenance": str(out), "status": "ok"}))
 
 
 @cli.command()
-@click.option("--arm", type=click.Choice(["baseline", "candidate"]), required=True)
+@click.option("--arm", type=click.Choice(["baseline", "candidate", "merge"]), required=True)
 @click.option("--run-root", default=None)
+@merge_options
 @click.option("--gate", "gate_path", required=True, type=click.Path(path_type=Path, exists=True))
 @click.option("--prompt-dir", required=True, type=click.Path(path_type=Path, exists=True))
 @click.option("--tokenizer", required=True)
 @click.option("--out-dir", required=True, type=click.Path(path_type=Path))
-def run(arm, run_root, gate_path, prompt_dir, tokenizer, out_dir):
+def run(arm, run_root, model, merge_audit, merge_readback, label, gate_path, prompt_dir, tokenizer, out_dir):
     """Serve one arm in the production band, score it and release the serve."""
     gate = m16_gate.load_gate(gate_path)
     tok = AutoTokenizer.from_pretrained(tokenizer)
     m16_gate.check_frozen_inputs(prompt_dir, tok)
-    provenance = preflight_arm(arm, run_root)
+    merge = merge_spec(arm, model, merge_audit, merge_readback, label)
+    provenance = preflight_arm(arm, run_root, merge)
+    tag = f"merge-{label}" if merge else arm
     idle = idle_whole_h100_nodes()
     if idle < 1:
         raise click.ClickException("No idle whole H100 node on cw-rno2a; not submitting")
-    name = f"m16gate-{arm}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
+    name = f"m16gate-{tag}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
     endpoint_name = f"/serve/{name}"
     argv = [sys.executable, "-m", "marin.inference.iris_cli", provenance["model"], *SERVE_ARGS]
     argv += ["--name", name, "--endpoint-name", endpoint_name]
@@ -300,7 +343,7 @@ def run(arm, run_root, gate_path, prompt_dir, tokenizer, out_dir):
                     f.write(token.capability_url.rstrip("/") + "\n")
         provenance["serve"]["ready_utc"] = time.time()
         endpoint = shared.Endpoint(cap.read_text().strip())
-        receipt = m16_gate.score_arm(endpoint, tok, prompt_dir, gate, arm, provenance)
+        receipt = m16_gate.score_arm(endpoint, tok, prompt_dir, gate, provenance["arm"], provenance)
     except Exception as exc:
         print(json.dumps({"status": "failed", "arm": arm, "error_type": type(exc).__name__}))
         raise SystemExit(1) from None
@@ -316,7 +359,7 @@ def run(arm, run_root, gate_path, prompt_dir, tokenizer, out_dir):
         )  # fmt: skip
     receipt["provenance"]["engine_log_markers"] = {marker: marker in logs for marker in ENGINE_LOG_MARKERS}
     receipt["provenance"]["serve"]["cancelled_after_scoring"] = True
-    m16_gate.write_json(out_dir / f"m16-gate-{arm}.json", receipt)
+    m16_gate.write_json(out_dir / f"m16-gate-{tag}.json", receipt)
     print(json.dumps({"arm": arm, "primary_wins": receipt["primary_wins"]["won"], "status": "scored"}))
 
 

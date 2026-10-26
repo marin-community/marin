@@ -312,6 +312,13 @@ def bf16_byte_unchanged(candidate_audit: dict, reference_audit: dict) -> bool:
     return candidate == reference
 
 
+def has_export_hashes(audit: dict) -> bool:
+    """Whether a candidate audit carries a per-tensor ``export_sha256``; a merge audit without them leaves the
+    byte-unchanged clause unknown (null)."""
+    tensors = audit.get("tensors")
+    return isinstance(tensors, dict) and bool(tensors) and all("export_sha256" in v for v in tensors.values())
+
+
 def too_weak_value(
     improvement: dict[str, float], cand_wins: int, base_wins: int, byte_unchanged: bool | None, threshold: float
 ) -> bool | None:
@@ -324,6 +331,8 @@ def too_weak_value(
 SHARED_MODEL_FILES = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
 # The one metadata difference the candidate preflight may accept (an embedded copy of the baseline template).
 TEMPLATE_ADDITION = "tokenizer_config.json.chat_template"
+# A candidate is an SFT export bound by its run root, or a merged export bound by its audit and readback.
+CANDIDATE_KINDS = ("sft", "merge")
 # The one shared file the preflight may accept when only its JSON formatting differs from the baseline's.
 REFORMATTED_FILE = "generation_config.json"
 
@@ -368,7 +377,7 @@ def matched_model_files(base_prov: dict, cand_prov: dict) -> dict[str, list[str]
     return {"accepted_metadata_additions": additions, "accepted_metadata_reformatted": reformatted}
 
 
-def check_matched(base: dict, candidate: dict) -> dict[str, list[str] | None]:
+def check_matched(base: dict, candidate: dict) -> dict:
     """Refuse to compare arms scored with different code, inputs or serves; returns the metadata acceptance."""
     if base["arm"] != "baseline" or candidate["arm"] != "candidate":
         raise ValueError("decide takes the baseline receipt, then the candidate receipt")
@@ -386,8 +395,10 @@ def check_matched(base: dict, candidate: dict) -> dict[str, list[str] | None]:
     if (base_files is None) != (cand_files is None):
         raise ValueError("Only one arm records model file hashes")
     if base_files is None:
-        return {"accepted_metadata_additions": None, "accepted_metadata_reformatted": None}
-    return matched_model_files(base_prov, cand_prov)
+        return {"candidate_kind": None, "accepted_metadata_additions": None, "accepted_metadata_reformatted": None}
+    if cand_prov.get("candidate_kind") not in CANDIDATE_KINDS:
+        raise ValueError(f"The candidate receipt has no valid candidate_kind: {cand_prov.get('candidate_kind')!r}")
+    return {"candidate_kind": cand_prov["candidate_kind"], **matched_model_files(base_prov, cand_prov)}
 
 
 def deciding_families(improvement: dict[str, float], too_weak: bool | None, threshold: float) -> list[str]:
@@ -524,7 +535,9 @@ def decide_cmd(gate_path, baseline, candidate, candidate_audit, reference_audit,
     gate = load_gate(gate_path)
     unchanged = None
     if candidate_audit and reference_audit:
-        unchanged = bf16_byte_unchanged(json.loads(candidate_audit.read_text()), json.loads(reference_audit.read_text()))
+        audit = json.loads(candidate_audit.read_text())
+        if has_export_hashes(audit):
+            unchanged = bf16_byte_unchanged(audit, json.loads(reference_audit.read_text()))
     result = decide(gate, json.loads(baseline.read_text()), json.loads(candidate.read_text()), unchanged)
     write_json(out, result)
     print(json.dumps({k: result[k] for k in ("family_improvement", "too_weak")}, indent=2))

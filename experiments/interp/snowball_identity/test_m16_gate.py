@@ -149,8 +149,12 @@ def test_serve_changes_are_refused():
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, "file_sha256": files}}
     serve = {**serve, "accepted_metadata_additions": [], "accepted_metadata_reformatted": []}
-    own_weights = {**STRONG, "provenance": {**serve, "file_sha256": {**files, "config.json": "candidate"}}}
+    own_weights = {
+        **STRONG,
+        "provenance": {**serve, "candidate_kind": "sft", "file_sha256": {**files, "config.json": "candidate"}},
+    }
     assert m16_gate.decide(GATE, base, own_weights, byte_unchanged=False)["label"] == "NOT_TOO_WEAK"
+    serve = {**serve, "candidate_kind": "sft"}
     changed = [
         {**serve, "serve_args": ["--dtype", "float16"], "file_sha256": files},
         {**serve, "vllm": {"source_commit": "b"}, "file_sha256": files},
@@ -277,7 +281,7 @@ def test_decide_rechecks_the_recorded_metadata_acceptance():
     accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, **baseline}}
-    good = {**serve, **candidate, **accepted}
+    good = {**serve, **candidate, **accepted, "candidate_kind": "sft"}
     decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": good}, byte_unchanged=False)
     assert decision["accepted_metadata_additions"] == ["tokenizer_config.json.chat_template"]
     files = good["file_sha256"]
@@ -324,7 +328,7 @@ def test_reformatted_generation_config_is_accepted_and_rechecked():
     assert acceptance["accepted_generation_config_sha256"] == candidate["file_sha256"]["generation_config.json"]
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, **baseline}}
-    good = {**serve, **candidate, **accepted}
+    good = {**serve, **candidate, **accepted, "candidate_kind": "sft"}
     decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": good}, byte_unchanged=False)
     assert decision["accepted_metadata_reformatted"] == ["generation_config.json"]
     files = good["file_sha256"]
@@ -345,3 +349,71 @@ def test_generation_config_with_a_different_parsed_value_is_refused():
     baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
     with pytest.raises(click.ClickException, match="generation_config"):
         m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+
+
+def test_decide_requires_and_reports_the_candidate_kind():
+    files = {name: name for name in m16_gate.SHARED_MODEL_FILES}
+    serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
+    base = {**BASE, "provenance": {**serve, "file_sha256": files}}
+    cand = {**serve, "file_sha256": files, "accepted_metadata_additions": [], "accepted_metadata_reformatted": []}
+    for kind in ("sft", "merge"):
+        decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": {**cand, "candidate_kind": kind}}, False)
+        assert decision["candidate_kind"] == kind
+    for provenance in (cand, {**cand, "candidate_kind": "other"}):
+        with pytest.raises(ValueError, match="candidate_kind"):
+            m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)
+
+
+def test_byte_unchanged_is_unknown_without_per_tensor_export_hashes():
+    names = [f"model.layers.{i}.w" for i in range(476)]
+    assert m16_gate.has_export_hashes({"tensors": {n: {"export_sha256": n} for n in names}})
+    assert not m16_gate.has_export_hashes({"tensors": {n: {"sha256": n} for n in names}})
+    assert not m16_gate.has_export_hashes({"slice": ["model.layers.18.self_attn.q_proj.weight"]})
+
+
+def merge_world(monkeypatch, receipts):
+    metadata = r7_metadata("source")
+    files = {n: hashlib.sha256(b).hexdigest() for n, b in metadata.items()}
+    files = {**m16_gate_run.BASELINE_FILE_HASHES, **files}
+
+    def receipt(model):
+        return {"model": model, "file_sha256": dict(files), "shards": {}, "header_dtypes": {}}, dict(metadata)
+
+    def read(path):
+        if path not in receipts:
+            raise FileNotFoundError(path)
+        return receipts[path]
+
+    monkeypatch.setattr(m16_gate_run, "BASELINE_FILE_HASHES", dict(files))
+    monkeypatch.setattr(m16_gate_run, "model_receipt", receipt)
+    monkeypatch.setattr(m16_gate_run, "read", read)
+
+
+def test_merge_arm_replaces_only_the_sft_binding(monkeypatch):
+    receipts = {"s3://b/merge/audit.json": b'{"a": 1}', "s3://b/merge/readback.json": b'{"r": 1}'}
+    merge_world(monkeypatch, receipts)
+    spec = {"model": "s3://b/merge/hf/", "audit": "s3://b/merge/audit.json", "readback": "s3://b/merge/readback.json"}
+    provenance = m16_gate_run.preflight_arm("merge", None, spec)
+    assert provenance["arm"] == "candidate" and provenance["candidate_kind"] == "merge"
+    assert provenance["model"] == "s3://b/merge/hf"
+    assert provenance["binding"] == {
+        "candidate_kind": "merge",
+        "hf_path": "s3://b/merge/hf",
+        "merge_audit": "s3://b/merge/audit.json",
+        "merge_audit_sha256": hashlib.sha256(b'{"a": 1}').hexdigest(),
+        "merge_readback": "s3://b/merge/readback.json",
+        "merge_readback_sha256": hashlib.sha256(b'{"r": 1}').hexdigest(),
+    }
+    assert provenance["accepted_metadata_additions"] == [] and provenance["serve_args"] == m16_gate_run.SERVE_ARGS
+    with pytest.raises(click.ClickException, match="merge_readback"):
+        m16_gate_run.preflight_arm("merge", None, {**spec, "readback": "s3://b/merge/missing.json"})
+    with pytest.raises(click.ClickException, match="required for a merge arm"):
+        m16_gate_run.preflight_arm("merge", None, None)
+
+
+def test_sft_arm_records_its_candidate_kind(monkeypatch):
+    merge_world(monkeypatch, {})
+    monkeypatch.setattr(m16_gate_run, "bind_candidate", lambda root: {"hf_path": f"{root}/hf/step-15"})
+    provenance = m16_gate_run.preflight_arm("candidate", "s3://b/run")
+    assert provenance["arm"] == "candidate" and provenance["candidate_kind"] == "sft"
+    assert provenance["binding"] == {"hf_path": "s3://b/run/hf/step-15"}
