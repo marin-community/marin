@@ -558,9 +558,9 @@ def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
 def _reshard_tree_to_mesh(tree, train_mesh: Mesh, eval_mesh: Mesh):
     """Move each array leaf from ``train_mesh`` onto its expert-collapsed ``eval_mesh``.
 
-    Each leaf's spec is renamed by ``_expert_folded_spec``; when training ``data`` has size one, every
-    device keeps exactly the shard it already holds. The model's own ``reshard`` calls fix the layout the
-    forward needs, so any valid placement on the eval mesh suffices here. Non-array leaves pass through.
+    With training data of size one, every device retains its parameter shards. With larger training
+    data, leaves sharded on expert without data are replicated over eval data. Non-array leaves are
+    returned unchanged.
     """
 
     def move(leaf):
