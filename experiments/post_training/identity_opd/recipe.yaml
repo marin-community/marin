@@ -71,7 +71,6 @@ trainer:
   max_steps: 20
   ckpt_interval: 20
   hf_save_interval: 20
-  hf_export_checkpoint: latest
   callbacks:
     - type: checkpoint
       save_steps: 20

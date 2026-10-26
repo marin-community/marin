@@ -147,10 +147,9 @@ def recipe(arm: str) -> str:
         trainer["ckpt_interval"] = 2
         trainer["hf_save_interval"] = 2
         trainer["mismatch_probe"] = DRY_PROBE
+        # The terminal HF export reads the native checkpoint at the last step, so both saves move to step 2.
         trainer["callbacks"] = [
-            {"type": "hf_model_save", "save_steps": 2, "save_on_train_end": True},
-            {"type": "logging"},
-            {"type": "progress"},
+            {**callback, "save_steps": 2} if "save_steps" in callback else callback for callback in trainer["callbacks"]
         ]
         # Keep every rollout for the step-0 measures; a failed publish fails the run.
         config["generator"]["trajectory_retention"] = {"sample_fraction": 1.0, "required": True}

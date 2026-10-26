@@ -6,12 +6,15 @@ import json
 import os
 import random
 import re
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 import pytest
 import yaml
 from click.testing import CliRunner
+from marin.rl import skyrl
 
 from experiments.post_training.identity_opd import build_mix, launch
 from experiments.post_training.identity_opd.other_lab import FORMS, PRODUCTS, other_lab_questions
@@ -154,6 +157,10 @@ def test_dry_arm_only_changes_lr_steps_probe_and_saves():
     dry["trainer"]["policy"]["optimizer_config"]["lr"] = train["trainer"]["policy"]["optimizer_config"]["lr"]
     assert dry["generator"].pop("trajectory_retention") == {"sample_fraction": 1.0, "required": True}
     assert "trajectory_retention" not in train["generator"]
+    assert dry["trainer"]["callbacks"] == [
+        {**callback, "save_steps": 2} if "save_steps" in callback else callback
+        for callback in train["trainer"]["callbacks"]
+    ]
     for key in ("max_steps", "ckpt_interval", "hf_save_interval", "callbacks", "mismatch_probe"):
         train["trainer"].pop(key, None)
         dry["trainer"].pop(key, None)
@@ -238,3 +245,62 @@ def test_identity_teacher_sees_the_template_system_message_on_plain_and_tool_row
     assert header.startswith("<|begin_of_text|><|start_header_id|>system<|end_header_id|>Reasoning: /think")
     assert '"name": "get_price"' in header
     assert rest.startswith("<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball")
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
+    """The coordinator's launcher composes the recipe against SkyRL's declared keys and export rules."""
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    spec = SimpleNamespace(
+        config_yaml=launch.recipe(arm),
+        topology=skyrl.SkyRLTopology(
+            num_nodes=launch.NUM_NODES, gpus_per_node=8, gpu_variant="H100", role_plan=launch.ROLE_PLAN
+        ),
+        retention=skyrl.SkyRLRetentionPolicy(resume_checkpoint_count=1),
+        seed=launch.SEED,
+    )
+    execution = SimpleNamespace(
+        cluster=launch.CLUSTER,
+        cluster_config=f"lib/iris/config/{launch.CLUSTER}.yaml",
+        cpu=32,
+        memory="1800GB",
+        disk="2TB",
+        priority="production",
+        max_retries=0,
+        target_cluster=launch.CLUSTER,
+        parent_cluster_config=launch.IRIS_HUB_CLUSTER_CONFIG,
+        wandb_entity="marin-community",
+        job_timeout_seconds=launch.JOB_TIMEOUT_SECONDS[arm],
+        container_profile=None,
+    )
+    out, tmp = f"{launch.PREFIX}/users/u/checkpoints/x/{arm}/v", f"{launch.TEMP_PREFIX}/tmp/x/{arm}/v"
+    source = skyrl.ResolvedDirectoryDataSource(uri=f"{out}/mix", identity="mix", local_path="/tmp/mix", relative_path="")
+    text = skyrl._launch_config_yaml(
+        spec,
+        execution,
+        export_hf=True,
+        run_id=f"x-{arm}",
+        attempt_id="a",
+        model=skyrl.ResolvedModelLocator(
+            uri=f"{out}/model",
+            identity="model",
+            local_path="/tmp/model",
+            tokenizer_uri=launch.TOKENIZER_URI,
+            tokenizer_revision=launch.TOKENIZER_REVISION,
+        ),
+        train_data=(replace(source, relative_path=launch.MIX_FILE),),
+        validation_data=(replace(source, relative_path=launch.PROBE_FILE),) if arm == "dry" else (),
+        output=skyrl.SkyRLOutputPaths(
+            checkpoint_root=f"{tmp}/checkpoints",
+            export_root=f"{out}/exports",
+            attempts_root=f"{tmp}/attempts",
+            resolved_config_uri=f"{out}/resolved-launch.yaml",
+            terminal_manifest_uri=f"{out}/terminal.json",
+        ),
+    )
+    (tmp_path / "launch.yaml").write_text(text)
+    trainer = launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl.trainer
+    steps = 2 if arm == "dry" else 20
+    assert trainer.max_steps == trainer.hf_save_interval == steps
+    assert trainer.export_hf_artifact
+    assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
