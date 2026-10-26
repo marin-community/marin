@@ -49,6 +49,7 @@ Implementation: TypeAlias = Literal[
     "batched_xla",
     "xla",
     "xla_fast_bwd",
+    "xla_fast_bwd_stable",
     "reference",
 ]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
@@ -72,6 +73,9 @@ IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     # ~30% CLOSER to a float32 reference than the "xla" path. Opt in explicitly;
     # "xla" is unchanged for every other caller.
     "xla_fast_bwd": partial(linear_softmax_cross_entropy_loss_xla, fast_backward=True),
+    # "xla_fast_bwd" with the target excluded from the logsumexp (softplus form, arXiv:2610.31642): the same loss,
+    # but the target's gradient cannot round to 0 when its probability rounds to 1 (softmax collapse).
+    "xla_fast_bwd_stable": partial(linear_softmax_cross_entropy_loss_xla, fast_backward=True, stable_target=True),
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
@@ -812,7 +816,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         user_requested_impls = True
 
     needs_inferred_block_sizes = not explicit_block_sizes and any(
-        not isinstance(impl, str) or impl not in ("xla", "xla_fast_bwd", "reference") for impl in impls
+        not isinstance(impl, str) or impl not in ("xla", "xla_fast_bwd", "xla_fast_bwd_stable", "reference")
+        for impl in impls
     )
     if needs_inferred_block_sizes:
         inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
@@ -855,7 +860,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
-        elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
+        elif impl_for_call in ("xla", "xla_fast_bwd", "xla_fast_bwd_stable", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
             assert inferred is not None

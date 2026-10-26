@@ -210,3 +210,67 @@ def linear_softmax_cross_entropy_loss_streaming(
     if return_argmax:
         return loss, logsumexp, argmax
     return loss, logsumexp
+
+
+def linear_softmax_cross_entropy_loss_streaming_stable(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_size: int,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float | tuple[float, float, float]] = None,
+    precision: jax.lax.PrecisionLike = None,
+) -> tuple[Float[Array, "B"], Float[Array, "B"], Float[Array, "B"], Float[Array, "B"]]:
+    """Streaming cross-entropy with the target excluded from the logsumexp (arXiv:2610.31642).
+
+    ``neg_margin = logsumexp_{j != t}(z_j) - z_t`` and ``loss = softplus(neg_margin)``: the same value as
+    ``logsumexp(z) - z_t``, but the target's probability never rounds to exactly 1.
+
+    Returns:
+        loss, lse (the full logsumexp, ``z_t + loss``), label_logit ``z_t`` and ``neg_margin``, each [B].
+    """
+    if block_size <= 0:
+        raise ValueError(f"block_size must be positive, got {block_size}.")
+
+    b_dim = x.shape[0]
+    v_dim = w.shape[1]
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
+
+    pad = (-v_dim) % block_size
+    if pad:
+        w = jnp.pad(w, ((0, 0), (0, pad)), mode="constant", constant_values=0)
+    num_blocks = (v_dim + pad) // block_size
+
+    others_lse_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
+    label_logit_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
+    columns = jnp.arange(block_size, dtype=jnp.int32)
+
+    def body(block_idx, state):
+        others_lse, label_logit = state
+        start = block_idx * block_size
+        w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
+        logits = jax.lax.dot_general(
+            x,
+            w_block,
+            (((1,), (0,)), ((), ())),
+            precision=precision,
+            preferred_element_type=jnp.float32,
+        )
+        if dtype is not None:
+            logits = logits.astype(dtype)
+        logits = _apply_logit_soft_cap(logits, logit_soft_cap)
+
+        valid = (start + columns) < v_dim
+        is_target = columns[None, :] == (labels.astype(jnp.int32) - start)[:, None]
+        block_others_lse = _cross_entropy_logsumexp(jnp.where(valid[None, :] & ~is_target, logits, -jnp.inf))
+        others_lse = _cross_entropy_logaddexp(others_lse, block_others_lse)
+        in_block = (labels >= start) & (labels < start + block_size)
+        safe_idx = jnp.where(in_block, labels - start, 0)
+        label_logit = jnp.where(in_block, logits[jnp.arange(b_dim), safe_idx], label_logit)
+        return others_lse, label_logit
+
+    others_lse, label_logit = jax.lax.fori_loop(0, num_blocks, body, (others_lse_init, label_logit_init))
+    neg_margin = others_lse - label_logit
+    loss = jax.nn.softplus(neg_margin)
+    return loss, label_logit + loss, label_logit, neg_margin

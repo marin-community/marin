@@ -15,6 +15,7 @@ from .reference import (
     logit_soft_cap_and_deriv,
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
+    linear_softmax_cross_entropy_loss_streaming_stable,
 )
 from .tuned_block_sizes import (
     infer_block_sizes_with_tuned_match,
@@ -208,6 +209,49 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
         return loss, lse
 
     return jax.lax.fori_loop(0, num_b_blocks, body, (loss_init, lse_init))
+
+
+def _linear_softmax_cross_entropy_loss_streaming_fwd_stable(
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_size: int,
+    dtype: Optional[jnp.dtype],
+    batch_block_size: int,
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
+    precision: jax.lax.PrecisionLike,
+) -> tuple[Float[Array, "B"], Float[Array, "B"], Float[Array, "B"], Float[Array, "B"]]:
+    """Batch-tiled ``linear_softmax_cross_entropy_loss_streaming_stable``: (loss, lse, label_logit, neg_margin)."""
+    b_dim, h_dim = x.shape
+    if batch_block_size <= 0 or b_dim % batch_block_size != 0:
+        raise ValueError(f"batch_block_size must be positive and divide B={b_dim}, got {batch_block_size}.")
+
+    def block_outputs(x_block, labels_block):
+        return linear_softmax_cross_entropy_loss_streaming_stable(
+            x_block,
+            labels_block,
+            w,
+            block_size=block_size,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+
+    if batch_block_size >= b_dim:
+        return block_outputs(x, labels)
+
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
+    init = tuple(jnp.zeros((b_dim,), dtype=out_dtype) for _ in range(4))
+
+    def body(block_idx, state):
+        start = block_idx * batch_block_size
+        x_block = jax.lax.dynamic_slice(x, (start, 0), (batch_block_size, h_dim))
+        labels_block = jax.lax.dynamic_slice(labels, (start,), (batch_block_size,))
+        outputs = block_outputs(x_block, labels_block)
+        return tuple(jax.lax.dynamic_update_slice(acc, out, (start,)) for acc, out in zip(state, outputs))
+
+    return jax.lax.fori_loop(0, b_dim // batch_block_size, body, init)
 
 
 def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
@@ -407,6 +451,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     batch_block_size: int,
     logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
+    stable: tuple[jax.Array, jax.Array] | None = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward pass over vocab blocks, structured for GPU tensor cores.
 
@@ -430,6 +475,11 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     ``batch_block_size`` still bounds the live logits tile to
     ``batch_block_size x block_size``; pass ``>= B`` to disable batch tiling
     entirely (fewest kernels, largest peak memory).
+
+    ``stable`` = ``(label_logit, neg_margin)`` from the stable forward selects the softmax-collapse-free gradient
+    (arXiv:2610.31642): non-targets get ``exp((z_j - z_t) - softplus(neg_margin))`` and the target gets
+    ``-sigmoid(neg_margin)`` for the loss term (``sigmoid(-neg_margin)`` for the logsumexp term), so the target
+    gradient never rounds to 0 while the others stay nonzero.
     """
     if block_size <= 0:
         raise ValueError(f"block_size must be positive, got {block_size}.")
@@ -445,6 +495,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
         lse = jnp.pad(lse, ((0, padding_rows),))
         dout_loss = jnp.pad(dout_loss, ((0, padding_rows),))
         dout_lse = jnp.pad(dout_lse, ((0, padding_rows),))
+        if stable is not None:
+            stable = (jnp.pad(stable[0], ((0, padding_rows),)), jnp.pad(stable[1], ((0, padding_rows),)))
     b_dim = x.shape[0]
     num_b_blocks = b_dim // b_block
 
@@ -463,6 +515,19 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     g_loss_f32 = dout_loss.astype(jnp.float32)
     g_softmax_f32 = g_loss_f32 + dout_lse.astype(jnp.float32)
     v_offsets = jnp.arange(block_size, dtype=jnp.int32)
+    if stable is None:
+        # Standard path: probabilities relative to the full logsumexp; the row "shift" is the lse.
+        row_shift_f32 = lse_f32
+        row_target_f32 = jnp.zeros_like(lse_f32)
+    else:
+        label_logit_f32 = stable[0].astype(jnp.float32)
+        neg_margin_f32 = stable[1].astype(jnp.float32)
+        row_shift_f32 = label_logit_f32
+        # d/dz_t of softplus(neg_margin) is -sigmoid(neg_margin); of the lse it is sigmoid(-neg_margin).
+        row_target_f32 = -jax.nn.sigmoid(neg_margin_f32) * g_loss_f32 + jax.nn.sigmoid(
+            -neg_margin_f32
+        ) * dout_lse.astype(jnp.float32)
+        row_softplus_f32 = jax.nn.softplus(neg_margin_f32)
 
     def _dlogits_tile(
         x_blk: jax.Array,
@@ -472,6 +537,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
         g_softmax_blk: jax.Array,
         w_block: jax.Array,
         v_start: jax.Array,
+        softplus_blk: jax.Array | None = None,
+        target_blk: jax.Array | None = None,
     ) -> jax.Array:
         logits = jax.lax.dot_general(
             x_blk,
@@ -489,14 +556,20 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
             logits, cap_deriv = logit_soft_cap_and_deriv(logits, logit_soft_cap)
 
         in_vocab = (v_start + v_offsets) < v_dim
-        probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(logits - lse_blk[:, None]), 0.0)
-        dlogits = probs * g_softmax_blk[:, None]
-
-        # Dense one-hot label subtraction. ``labels - v_start`` lands in
+        # Dense one-hot label compare. ``labels - v_start`` lands in
         # ``[0, block_size)`` exactly when the label belongs to this vocab block,
         # so the equality compare alone is the in-block mask.
         label_hit = v_offsets[None, :] == (labels_blk - v_start)[:, None]
-        dlogits = dlogits - jnp.where(label_hit, g_loss_blk[:, None], 0.0)
+        if softplus_blk is None:
+            probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(logits - lse_blk[:, None]), 0.0)
+            dlogits = probs * g_softmax_blk[:, None]
+            dlogits = dlogits - jnp.where(label_hit, g_loss_blk[:, None], 0.0)
+        else:
+            # Stable path: ``lse_blk`` holds the target logit; probabilities are taken relative to it.
+            assert target_blk is not None
+            rel = (logits - lse_blk[:, None]) - softplus_blk[:, None]
+            probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(rel), 0.0)
+            dlogits = jnp.where(label_hit, target_blk[:, None], probs * g_softmax_blk[:, None])
 
         if cap_deriv is not None:
             dlogits = dlogits * cap_deriv
@@ -507,7 +580,16 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
         w_block = jax.lax.dynamic_slice(w_padded, (0, v_start), (h_dim, block_size))
 
         if num_b_blocks == 1:
-            dlogits = _dlogits_tile(x, labels_i32, lse_f32, g_loss_f32, g_softmax_f32, w_block, v_start)
+            dlogits = _dlogits_tile(
+                x,
+                labels_i32,
+                row_shift_f32,
+                g_loss_f32,
+                g_softmax_f32,
+                w_block,
+                v_start,
+                *((None, None) if stable is None else (row_softplus_f32, row_target_f32)),
+            )
             grad_x = grad_x + jax.lax.dot_general(
                 dlogits,
                 w_block,
@@ -531,11 +613,19 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
             dlogits = _dlogits_tile(
                 x_blk,
                 jax.lax.dynamic_slice(labels_i32, (b_start,), (b_block,)),
-                jax.lax.dynamic_slice(lse_f32, (b_start,), (b_block,)),
+                jax.lax.dynamic_slice(row_shift_f32, (b_start,), (b_block,)),
                 jax.lax.dynamic_slice(g_loss_f32, (b_start,), (b_block,)),
                 jax.lax.dynamic_slice(g_softmax_f32, (b_start,), (b_block,)),
                 w_block,
                 v_start,
+                *(
+                    (None, None)
+                    if stable is None
+                    else (
+                        jax.lax.dynamic_slice(row_softplus_f32, (b_start,), (b_block,)),
+                        jax.lax.dynamic_slice(row_target_f32, (b_start,), (b_block,)),
+                    )
+                ),
             )
             grad_x_blk = jax.lax.dot_general(
                 dlogits,
@@ -565,7 +655,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     return grad_x[:original_rows].astype(x.dtype), grad_w[:, :v_dim]
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7))
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 8))
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     block_size: int,
     batch_block_size: int,
@@ -575,11 +665,24 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     fast_backward: bool,
     bwd_batch_block_size: int | None,
     bwd_v_block_size: int | None,
+    stable_target: bool,
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     del fast_backward, bwd_batch_block_size, bwd_v_block_size
+    if stable_target:
+        loss, lse, _, _ = _linear_softmax_cross_entropy_loss_streaming_fwd_stable(
+            x,
+            labels,
+            w,
+            block_size=block_size,
+            dtype=dtype,
+            batch_block_size=batch_block_size,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+        return loss, lse
     loss, lse = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
@@ -602,11 +705,24 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     fast_backward: bool,
     bwd_batch_block_size: int | None,
     bwd_v_block_size: int | None,
+    stable_target: bool,
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
     w: Float[Array, "H V"],
-) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+) -> tuple[tuple[Float[Array, "B"], Float[Array, "B"]], tuple]:
     del fast_backward, bwd_batch_block_size, bwd_v_block_size
+    if stable_target:
+        loss, lse, label_logit, neg_margin = _linear_softmax_cross_entropy_loss_streaming_fwd_stable(
+            x,
+            labels,
+            w,
+            block_size=block_size,
+            dtype=dtype,
+            batch_block_size=batch_block_size,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        )
+        return (loss, lse), (x, labels, w, lse, (label_logit, neg_margin))
     loss, lse = _linear_softmax_cross_entropy_loss_streaming_fwd(
         x,
         labels,
@@ -617,7 +733,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
         logit_soft_cap=logit_soft_cap,
         precision=precision,
     )
-    return (loss, lse), (x, labels, w, lse)
+    return (loss, lse), (x, labels, w, lse, None)
 
 
 def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
@@ -629,12 +745,15 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     fast_backward: bool,
     bwd_batch_block_size: int | None,
     bwd_v_block_size: int | None,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    stable_target: bool,
+    residuals: tuple,
     cotangents: tuple[
         jax.Array | jax.custom_derivatives.SymbolicZero, jax.Array | jax.custom_derivatives.SymbolicZero
     ],
 ) -> tuple[jax.Array, None, jax.Array]:
-    x, labels, w, lse = residuals
+    x, labels, w, lse, stable = residuals
+    if stable_target and not fast_backward:
+        raise ValueError("stable_target needs fast_backward (the scan backward).")
     dout_loss, dout_lse = cotangents
     dout_loss_arr = _materialize_cotangent(dout_loss, lse)
     dout_lse_arr = _materialize_cotangent(dout_lse, lse)
@@ -651,6 +770,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
             batch_block_size=(bwd_batch_block_size if bwd_batch_block_size is not None else x.shape[0]),
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            stable=stable,
         )
         return gx, None, gw
     gx, gw = _linear_softmax_cross_entropy_loss_streaming_bwd(
@@ -688,6 +808,7 @@ def linear_softmax_cross_entropy_loss_xla(
     fast_backward: bool | None = None,
     bwd_batch_block_size: int | None = None,
     bwd_v_block_size: int | None = None,
+    stable_target: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """Streaming linear-softmax cross-entropy on plain XLA.
 
@@ -707,8 +828,13 @@ def linear_softmax_cross_entropy_loss_xla(
         bwd_v_block_size: Vocab tile for the fast backward only. ``None`` reuses the
             forward's ``v_block_size``. The backward's optimal tile is typically
             larger than the forward's, so this is worth tuning separately.
+        stable_target: Softmax-collapse-free loss and gradient (arXiv:2610.31642): the target is excluded from
+            the logsumexp and the loss is ``softplus(logsumexp_{j != t}(z_j) - z_t)``. Needs the fast backward
+            and a vocab tiled into more than one block; ``lse`` is still the full logsumexp (for the z-loss).
     """
     fast_backward = _resolve_fast_backward(fast_backward)
+    if stable_target and (return_argmax or not fast_backward):
+        raise ValueError("stable_target needs fast_backward and no return_argmax.")
     if block_sizes is None:
         v_block_size = infer_xla_v_block_size(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         b_block_size = _resolve_xla_batch_block_size(
@@ -728,6 +854,8 @@ def linear_softmax_cross_entropy_loss_xla(
         v_block_size = block_sizes.v_block_size
         b_block_size = _resolve_xla_batch_block_size(x.shape[0], v_block_size, block_sizes.b_block_size, strict=True)
     if v_block_size >= w.shape[1]:
+        if stable_target:
+            raise ValueError(f"stable_target needs v_block_size < V, got {v_block_size} >= {w.shape[1]}.")
         return linear_softmax_cross_entropy_loss_reference(
             x,
             labels,
@@ -771,6 +899,7 @@ def linear_softmax_cross_entropy_loss_xla(
         bool(fast_backward),
         bwd_batch_block_size,
         bwd_v_block_size,
+        stable_target,
         x,
         labels,
         w,

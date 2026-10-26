@@ -104,6 +104,20 @@ FINAL_NORM_INPUT_RMS_KEY = "_final_norm_input_rms"
 SCONV_SITES = ("k", "attn", "mlp")
 
 
+class CeImpl(StrEnum):
+    """Final cross-entropy form; both are the fused streaming XLA kernel with the scan backward."""
+
+    STANDARD = "standard"  # loss = lse(z) - z_t; target gradient p_t - 1
+    # loss = softplus(lse_{j != t}(z_j) - z_t) (arXiv:2610.31642): no softmax collapse of the target gradient
+    STABLE_SOFTPLUS = "stable_softplus"
+
+
+_CE_IMPLEMENTATIONS = {CeImpl.STANDARD: "xla_fast_bwd", CeImpl.STABLE_SOFTPLUS: "xla_fast_bwd_stable"}
+# Margins m = z_t - lse_{j != t}(z_j) above log(2^8) / log(2^24) make 1 + e^-m round to 1 in bf16 / fp32.
+_BF16_COLLAPSE_MARGIN = 8 * math.log(2.0)
+_FP32_COLLAPSE_MARGIN = 24 * math.log(2.0)
+
+
 class GradProbeSite(StrEnum):
     """Where ``lm_head_grad_probe`` reads per-token gradient norms."""
 
@@ -402,6 +416,11 @@ class GrugModelConfig:
     channels come from the previous token (within documents), enabling one-layer induction."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
+    ce_impl: CeImpl = CeImpl.STANDARD
+    """Final cross-entropy form (``CeImpl``). The z-loss uses the full logsumexp either way."""
+    ce_collapse_stats_stride: int = 0
+    """Every train step, log softmax-collapse statistics (``train/aux/ce_*``) on every this-many-th position of
+    each sequence (stop-gradient, an extra lm_head GEMM on 1/stride of the tokens); 0: off."""
     lm_head_grad_probe: bool = False
     """Log each token's gradient norm w.r.t. the lm_head input (the final normed hidden state) every step
     (``lm_head_grad_probe``; train-step stats under ``train/lm_head_grad/``). Without ``lm_head_grad_clip`` the
@@ -1524,6 +1543,48 @@ def _fused_projection_bwd(residuals, d_parts: tuple[jax.Array, ...]):
 _fused_projection.defvjp(_fused_projection_fwd, _fused_projection_bwd)
 
 
+def _ce_collapse_stats(
+    head_in: Float[Array, "B S E"],
+    lm_head: Float[Array, "E V"],
+    labels: Int[Array, "B S"],
+    weight: Float[Array, "B S"],
+    cap: float | None,
+) -> dict[str, jax.Array]:
+    """Stop-gradient softmax-collapse statistics of the final cross-entropy on the given positions.
+
+    The margin is ``m = z_t - lse_{j != t}(z_j)`` (fp32). ``frac_collapse_fp32`` is the fraction of tokens whose
+    standard fp32 ``exp(z_t - lse(z))`` is exactly 1 (target gradient exactly 0), and ``target_grad_relerr`` the
+    relative error of the standard fp32 target gradient ``1 - p_t`` against the exact ``sigmoid(-m)``.
+    """
+    head_in = jax.lax.stop_gradient(head_in)
+    weights = reshard(jax.lax.stop_gradient(lm_head), P(None, None))
+    z = jnp.einsum("bse,ev->bsv", head_in, weights.astype(head_in.dtype), preferred_element_type=jnp.float32)
+    z = reshard(z, P(_BATCH_AXES, None, None))
+    if cap is not None:
+        z = cap * jnp.tanh(z / cap)
+    is_target = jnp.arange(z.shape[-1], dtype=jnp.int32)[None, None, :] == labels[..., None]
+    z_t = jnp.sum(jnp.where(is_target, z, 0.0), axis=-1)
+    margin = z_t - jax.nn.logsumexp(jnp.where(is_target, -jnp.inf, z), axis=-1)
+    p_t = jnp.exp(z_t - jax.nn.logsumexp(z, axis=-1))
+    exact = jax.nn.sigmoid(-margin)
+    relerr = jnp.abs((1.0 - p_t) - exact) / exact
+    w = weight.astype(jnp.float32)
+    count = jnp.maximum(jnp.sum(w), 1.0)
+
+    def mean(x):
+        return jnp.sum(w * x.astype(jnp.float32)) / count
+
+    return {
+        "train/aux/ce_margin_mean": mean(margin),
+        "train/aux/ce_margin_max": jnp.max(jnp.where(w > 0, margin, -jnp.inf)),
+        "train/aux/ce_frac_margin_gt_bf16_cliff": mean(margin > _BF16_COLLAPSE_MARGIN),
+        "train/aux/ce_frac_margin_gt_fp32_cliff": mean(margin > _FP32_COLLAPSE_MARGIN),
+        "train/aux/ce_frac_collapse_fp32": mean(p_t == 1.0),
+        "train/aux/ce_target_grad_relerr_mean": mean(relerr),
+        "train/aux/ce_target_grad_relerr_max": jnp.max(jnp.where(w > 0, relerr, 0.0)),
+    }
+
+
 def _vocab_entropy(
     head_in: Float[Array, "B S E"], lm_head: Float[Array, "E V"], cap: float | None
 ) -> Float[Array, "B S"]:
@@ -2242,13 +2303,24 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla_fast_bwd",
+            implementation=_CE_IMPLEMENTATIONS[self.config.ce_impl],
             block_sizes=_CE_BLOCK_SIZES,
             logit_soft_cap=self.config.logit_soft_cap,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
         entropy_metrics: dict[str, jax.Array] = {}
+        stride = self.config.ce_collapse_stats_stride
+        if stride and train_terms:
+            ce_collapse_metrics = _ce_collapse_stats(
+                hidden[:, ::stride],
+                self.output_proj,
+                labels[:, ::stride],
+                loss_weight[:, ::stride],
+                self.config.logit_soft_cap,
+            )
+        else:
+            ce_collapse_metrics = {}
         if entropy_pred is not None and train_terms:
             target = _vocab_entropy(hidden, self.output_proj, self.config.logit_soft_cap)
             weight = loss_weight.astype(jnp.float32)
@@ -2283,6 +2355,7 @@ class Transformer(eqx.Module):
         summarized_metrics = summarize_router_metrics(router_metrics)
         summarized_metrics.update(final_gate_metrics)
         summarized_metrics.update(entropy_metrics)
+        summarized_metrics.update(ce_collapse_metrics)
         summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
         summarized_metrics.update(probe_metrics)
         for name, per_layer in outstats.items():
