@@ -3,7 +3,7 @@
 
 """Exercise the bound SFT startup through its first training boundary.
 
-Seams: local synthetic HF/data receipts and their hash pins; a tiny 26-layer
+Seams: local synthetic HF/data, r3-result and authorization receipts and their hash pins; a tiny 26-layer
 Snowball checkpoint; an eight-row ListAsyncDataset in place of cached chats;
 the factory's CPU/data options; CPU slice metadata standing in for four hosts;
 an external Iris endpoint-registry/client fake; a local alias for routing evidence; and
@@ -74,13 +74,13 @@ def example_arrays():
 
 @dataclass(frozen=True)
 class StartupDataConfig(LmDataConfig):
-    def train_set(self, position, batch_schedule, *, key):
+    def train_set(self, Pos, batch_schedule, *, key):
         tokens, weights, segments = example_arrays()
         examples = [
             LmExample(
-                hax.named(tokens[index], position),
-                hax.named(weights[index].astype(np.float32), position),
-                AttentionMask.causal().with_segment_ids(hax.named(segments[index], position)),
+                hax.named(tokens[index], Pos),
+                hax.named(weights[index].astype(np.float32), Pos),
+                AttentionMask.causal().with_segment_ids(hax.named(segments[index], Pos)),
             )
             for index in range(8)
         ]
@@ -241,6 +241,23 @@ def write_fixture(root):
         },
     }
     freeze_sha = write_json(freeze / "freeze.json", frozen)
+    reference_updates = [
+        {
+            **summary(8),
+            "update": update,
+            "ids": [f"row-{index}" for index in range(8)],
+            "coefficient_mass_not_gradient_share": True,
+        }
+        for update in range(64)
+    ]
+    write_json(
+        root / "reference.json",
+        {
+            "completed_updates": 16,
+            "dataset_audit": {"updates": reference_updates},
+            "updates": [{**entry, "loss": 0.25} for entry in reference_updates[:16]],
+        },
+    )
     rounding = {
         "positions_sha256": runtime_recipe.POSITIONS_SHA256,
         "sequences": 465,
@@ -338,6 +355,7 @@ def child(root, rank, port, mode):
             generation_bytes,
             data_bytes,
             {"runtime_model_config": {"attention_implementation": "torch_order"}},
+            sft_launch.SftRun(16, None, None, None),
         )
         _, receipt = runtime_recipe.configure_precision_runtime(
             base,
@@ -350,6 +368,18 @@ def child(root, rank, port, mode):
         )
         receipt_bytes = json.dumps(receipt).encode()
         patch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest(receipt_bytes)})
+        horizon = 64 if mode == "normal64" else 16
+        run = sft_launch.SftRun(16, None, None, None)
+        if horizon == 64:
+            reference = json.loads((root / "reference.json").read_bytes())
+            reference["runtime_receipt_sha256"] = digest(receipt_bytes)
+            reference_bytes = json.dumps(reference).encode()
+            decision = b"fixture owner decision"
+            supplement = b"fixture owner supplement 2"
+            patch.setattr(sft_launch, "R3_RESULT_SHA256", digest(reference_bytes))
+            patch.setattr(sft_launch, "FRESH64_DECISION_SHA256", digest(decision))
+            patch.setattr(sft_launch, "FRESH64_SUPPLEMENT_SHA256", digest(supplement))
+            run = sft_launch.SftRun(64, reference_bytes, decision, supplement)
 
         class BeforeTrainStep(Exception):
             pass
@@ -358,6 +388,7 @@ def child(root, rank, port, mode):
             assert int(state.step) == 0 and xla_bridge.backends_are_initialized()
             assert jax.distributed.is_initialized() and jax.process_count() == 4
             assert jax.process_index() == rank
+            assert trainer.config.num_train_steps == horizon
             assert batch.tokens.array.shape == (8, 8192)
             runtime_recipe.check_xla_precision("default")
             os.environ["XLA_FLAGS"] = "--xla_allow_excess_precision=false"
@@ -395,13 +426,24 @@ def child(root, rank, port, mode):
                     data_bytes,
                     {"path": str(root / "source-receipt.json"), "sha256": pins["source_receipt_sha"]},
                     {"path": str(root / "objects.json"), "sha256": pins["objects_sha"]},
+                    run,
                 )
         except BeforeTrainStep:
             report = json.loads((root / "run/audits/dataset-step-0.json").read_bytes())
             assert len(report["updates"]) == report["same_iterator_batches_buffered"] == 64
             masters = json.loads((root / "run/audits/master-step-0.json").read_bytes())
             assert masters["tensor_count"] == 502
-            print(json.dumps({"process": rank, "before_train_step": True, "buffered_updates": 64}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "process": rank,
+                        "before_train_step": True,
+                        "buffered_updates": 64,
+                        "horizon": horizon,
+                    }
+                ),
+                flush=True,
+            )
         else:
             raise AssertionError("Startup did not reach the first train_step boundary")
     jax.distributed.shutdown()
@@ -450,14 +492,16 @@ def run_children(root, *, workdir, mode):
 
 
 @pytest.mark.timeout(900)
-def test_bound_sft_startup_reaches_training_after_the_real_frozen_input_gather(tmp_path):
+@pytest.mark.parametrize("mode", ["normal", "normal64"])
+def test_bound_sft_startup_reaches_training_after_the_real_frozen_input_gather(tmp_path, mode):
     write_fixture(tmp_path)
-    results = run_children(tmp_path, workdir=Path.cwd(), mode="normal")
+    results = run_children(tmp_path, workdir=Path.cwd(), mode=mode)
     ranks = set()
     for code, output, error in results:
         assert code == 0, error[-6000:]
         report = json.loads(output.strip().splitlines()[-1])
         assert report["before_train_step"] is True and report["buffered_updates"] == 64
+        assert report["horizon"] == (64 if mode == "normal64" else 16)
         ranks.add(report["process"])
     assert ranks == set(range(4))
     assert json.loads((tmp_path / "coordinator.json").read_bytes())["name"] == "jax_coordinator-attempt-0"

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind and submit the #310 identity SFT to its 16-update milestone: one finite 4 x H100x8 RNO2a job, no retries.
+"""Bind a fresh #310 identity SFT run to an explicit 16- or 64-update horizon, with no retries.
 
 ``sft_worker`` runs on every replica. It builds the source-derived recipe with the measured router policy, replaces
 the factory's data with the frozen mixture (``mixture-seed310-v1``, data config checked by hash) and calls
@@ -16,11 +16,11 @@ binds:
 - router biases equal the loaded source before and after training (they are frozen)
 
 Then the dataset audit reads the same iterator the loop consumes (64 updates, the frozen 512 sequences) before any
-update; each of the 16 updates checks its consumed batch against the frozen order immediately before its
+update; each update checks its consumed batch against the frozen order immediately before its
 ``train_step``. The loss uses query segment IDs for dispatch validity and reports unique dropped assignments from
 that same forward. Missing metrics or nonzero drops stop the run before the next update. Counts are gathered as
-global per-layer totals, without summing replicated copies. After update 16 the native checkpoint is written and
-committed first (the resume source for 64), then
+global per-layer totals, without summing replicated copies. At the configured horizon the native checkpoint is
+committed first, then
 the BF16 + FP32-router-bias HF export and its save audit. Process 0 writes ``sft-result.json`` last. The milestone-16
 spending gate is evaluated afterwards on the export, not here.
 
@@ -122,7 +122,11 @@ INVENTORY_PATH = f"{T310}/mixture-seed310-v1-supplement-v1/native-token-inventor
 ACCOUNTING_TEST = "tests/training/test_chat_token_accounting.py"
 SPENDING_GATE_SHA256 = "d854803cee2f53f77ffa45b7850cb060ad1c6cfd1fb6c128a1674c3c37b518ad"
 """milestone16-spending-gate-v1.json: evaluated on the step-16 export after the job, not inside it."""
-STOP_AFTER_UPDATES = 16
+TRAINING_HORIZONS = (16, 64)
+FRESH64_DECISION_SHA256 = "a36790d35432902ea3bf34961c4c8d997514120938a330d0cf49b0302da61ac4"
+FRESH64_SUPPLEMENT_SHA256 = "47878cd192adc37d186994d370ecbf6f6c10fb20323e7e115013297f0423dda2"
+R3_RESULT_SHA256 = "7133c366bb04818378a2d38f6636c3f3aa9e2cb06c74d03932cf90b4cd20c293"
+R3_RESULT_PATH = f"{T310}/sft-m16-r3/sft-result.json"
 AUDITED_UPDATES = 64
 """The dataset audit pre-reads the frozen 512 sequences: 64 updates of 8."""
 SOURCE_SHARDS = 39
@@ -199,6 +203,58 @@ class SftAudits:
     """Checks the written HF export against the in-memory masters and the frozen source router biases."""
 
 
+@dataclass(frozen=True)
+class SftRun:
+    """Explicit fresh-run horizon and the reviewed evidence required beyond the milestone."""
+
+    stop_after_updates: int
+    reference_result_bytes: bytes | None
+    decision_bytes: bytes | None
+    supplement_bytes: bytes | None
+
+
+def checked_run_reference(run: SftRun) -> dict | None:
+    """Validate authorization bytes without touching JAX or loading model/data payloads."""
+    if run.stop_after_updates not in TRAINING_HORIZONS:
+        raise ValueError("The fresh SFT horizon must be 16 or 64")
+    if run.stop_after_updates == 16:
+        if any(value is not None for value in (run.reference_result_bytes, run.decision_bytes, run.supplement_bytes)):
+            raise ValueError("The 16-update run does not consume 64-update authorization")
+        return None
+    if run.reference_result_bytes is None or run.decision_bytes is None or run.supplement_bytes is None:
+        raise ValueError("64 updates requires the r3 result, owner decision and supplement 2")
+    if sha256(run.decision_bytes) != FRESH64_DECISION_SHA256:
+        raise ValueError("64-update owner decision differs from the reviewed record")
+    if sha256(run.supplement_bytes) != FRESH64_SUPPLEMENT_SHA256:
+        raise ValueError("64-update decision supplement differs from the reviewed record")
+    if sha256(run.reference_result_bytes) != R3_RESULT_SHA256:
+        raise ValueError("64-update reference differs from the reviewed r3 result")
+    return json.loads(run.reference_result_bytes)
+
+
+def run_provenance(run: SftRun) -> dict:
+    return {
+        "initialization": "fresh_hf",
+        "initial_completed_updates": 0,
+        "stop_after_updates": run.stop_after_updates,
+        "reference_sft_result": (
+            {"path": R3_RESULT_PATH, "sha256": R3_RESULT_SHA256} if run.reference_result_bytes is not None else None
+        ),
+        "owner_decision_sha256": sha256(run.decision_bytes) if run.decision_bytes is not None else None,
+        "owner_decision_supplement_sha256": sha256(run.supplement_bytes) if run.supplement_bytes is not None else None,
+    }
+
+
+def check_reference_batch(receipt: dict, update: int, reference: dict) -> None:
+    expected = reference["dataset_audit"]["updates"][update]
+    if any(receipt[name] != expected[name] for name in ("ids", "supervised_tokens")):
+        raise ValueError(f"Update {update} differs from r3's frozen ids or supervised tokens")
+    if update < 16:
+        consumed = reference["updates"][update]
+        if any(receipt[name] != consumed[name] for name in ("ids", "supervised_tokens")):
+            raise ValueError(f"Update {update} differs from r3's consumed ids or supervised tokens")
+
+
 def frozen_data_config(data_config_bytes: bytes) -> LmDataConfig:
     if hashlib.sha256(data_config_bytes).hexdigest() != DATA_CONFIG_SHA256:
         raise ValueError("Data config differs from the frozen mixture's data-config.json")
@@ -218,8 +274,10 @@ def sft_config(
     generation_bytes: bytes,
     data_config_bytes: bytes,
     runtime_receipt: dict,
+    run: SftRun,
 ) -> TrainLmConfig:
-    """The factory recipe at ``hosts=4`` and 16 updates, with its data replaced by the frozen mixture."""
+    """Bind a fresh factory recipe to its explicit horizon and frozen mixture."""
+    checked_run_reference(run)
     data = frozen_data_config(data_config_bytes)
     identity = data.components["identity"]
     base = identity_sft_config(
@@ -235,7 +293,7 @@ def sft_config(
         router_combine_fp32=True,
         fp32_activations=True,
         attention_implementation=runtime_receipt["runtime_model_config"]["attention_implementation"],
-        stop_after_updates=STOP_AFTER_UPDATES,
+        stop_after_updates=run.stop_after_updates,
     )
     return replace(base, data=data)
 
@@ -274,6 +332,8 @@ def train_checked_updates(
     batches: Iterator[LmExample],
     check_batch: Callable[[LmExample, int], dict],
     count: int,
+    *,
+    reference: dict | None,
 ) -> tuple[TrainerState, list[dict]]:
     """Run ``count`` updates, checking each consumed batch immediately before its update."""
     first = int(state.step)
@@ -281,6 +341,8 @@ def train_checked_updates(
     for update in range(first, first + count):
         batch = next(batches)
         receipt = check_batch(batch, update)
+        if reference is not None:
+            check_reference_batch(receipt, update, reference)
         dispatch = DispatchMetrics()
         with current_tracker(dispatch):
             info = trainer.train_step(state, batch)
@@ -288,7 +350,11 @@ def train_checked_updates(
         state = info.state
         if int(state.step) != update + 1 or not np.isfinite(info.loss):
             raise ValueError(f"Update {update} did not complete with a finite loss")
-        updates.append({**receipt, "update": update, "loss": float(info.loss), "dispatch": counts})
+        comparison = {}
+        if reference is not None and update < 16:
+            previous_loss = reference["updates"][update]["loss"]
+            comparison = {"r3_loss": previous_loss, "loss_delta_vs_r3": float(info.loss) - previous_loss}
+        updates.append({**receipt, "update": update, "loss": float(info.loss), "dispatch": counts, **comparison})
     return state, updates
 
 
@@ -301,16 +367,21 @@ def run_identity_sft(
     source_objects: dict,
     run_root: str,
     load_audits: Callable[[], SftAudits],
+    run: SftRun,
 ) -> dict:
-    """Load the pinned source, bind the cheap checks, run 16 checked updates, checkpoint, export and audit.
+    """Load the pinned source, run the checked fresh horizon, checkpoint, export and audit.
 
     Call on every JAX rank. Relies on a passing LR0 run of the same pin for the precision gate.
     """
-    if config.trainer.num_train_steps != STOP_AFTER_UPDATES or config.trainer.load_checkpoint_path is not None:
-        raise ValueError("The milestone run is a fresh 16-update run from the pinned source")
+    reference = checked_run_reference(run)
+    horizon = run.stop_after_updates
+    if config.trainer.num_train_steps != horizon or config.trainer.load_checkpoint_path is not None:
+        raise ValueError("The SFT config must match its explicit fresh-run horizon")
+    if reference is not None and reference["runtime_receipt_sha256"] != receipt_sha256:
+        raise ValueError("The fresh run and r3 must use the same runtime receipt")
     if config.z_loss_weight != 0.0:
         raise ValueError("The checked SFT loss requires the frozen zero auxiliary-loss recipe")
-    export_path = f"{config.hf_save_path}/step-{STOP_AFTER_UPDATES - 1}"
+    export_path = f"{config.hf_save_path}/step-{horizon - 1}"
     if (StoragePath(export_path) / "config.json").exists():
         raise FileExistsError("SFT export path already holds a model; refusing to reuse it")
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
@@ -382,16 +453,17 @@ def run_identity_sft(
         pos = config.model.max_Pos.resize(config.train_seq_len)
         train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=jrandom.PRNGKey(config.data_seed))
         batches, dataset_report = audits.audit_iterator(trainer.data_loader(train_dataset).iter_from_step(0), config)
+        if reference is not None and dataset_report["updates"] != reference["dataset_audit"]["updates"]:
+            raise ValueError("The full 64-update dataset plan differs from r3")
         train_started = time.monotonic()
-        state, updates = train_checked_updates(trainer, state, batches, audits.check_batch, STOP_AFTER_UPDATES)
+        state, updates = train_checked_updates(trainer, state, batches, audits.check_batch, horizon, reference=reference)
         memory = device_memory_report(gather_host_rows(local_device_memory()))
         train_seconds = time.monotonic() - train_started
-        check_restored_progress(config, state, completed_updates=STOP_AFTER_UPDATES)
+        check_restored_progress(config, state, completed_updates=horizon)
         for name, value in router_values(state.model).items():
             np.testing.assert_array_equal(value, source_biases[name])
 
-        # The native checkpoint is the resume source for 64 updates: commit it before the export.
-        label = STOP_AFTER_UPDATES - 1
+        label = horizon - 1
         checkpointer = config.trainer.checkpointer.create(trainer.run_id)
         checkpointer.on_step(tree=state.saveable_state, step=label, force=True)
         checkpointer.wait_until_finished()
@@ -412,6 +484,7 @@ def run_identity_sft(
         )
         audits.save_audit(state, export_path)
         return {
+            **run_provenance(run),
             "completed_updates": int(state.step),
             "next_data_offset": config.trainer.batch_schedule.global_data_offset_by_step(int(state.step)),
             "updates": updates,
@@ -442,6 +515,7 @@ def sft_worker(
     lr0_source: dict,
     source_objects: dict,
     load_audits: Callable[[], SftAudits],
+    run: SftRun,
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
@@ -450,7 +524,7 @@ def sft_worker(
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
+    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes, runtime_receipt, run)
     config, observed = configure_precision_runtime(
         base,
         config_bytes=config_bytes,
@@ -473,6 +547,7 @@ def sft_worker(
         source_objects=source_objects,
         run_root=run_root,
         load_audits=load_audits,
+        run=run,
     )
     # Collective: every rank calls it; process 0 writes.
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "sft-result.json", result))
@@ -509,10 +584,12 @@ def bound_sft_worker(
     data_config_bytes: bytes,
     lr0_source: dict,
     source_objects: dict,
+    run: SftRun,
 ) -> None:
     """Check flags before backend startup; defer collective inputs to trainer initialization."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
     require_xla_precision(runtime_receipt["xla_precision"])
+    checked_run_reference(run)
     check_pod_storage()
     sft_worker(
         run_root,
@@ -523,6 +600,7 @@ def bound_sft_worker(
         lr0_source,
         source_objects,
         partial(load_sft_audits, run_root, lr0_source),
+        run,
     )
 
 
@@ -596,6 +674,7 @@ def plan(
     config: TrainLmConfig,
     receipt_sha256: str,
     xla_precision: str,
+    run: SftRun,
 ) -> dict:
     assert isinstance(config.model, SnowballConfig)
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
@@ -605,9 +684,10 @@ def plan(
         "commit": head.stdout.strip(),
         "clean": not dirty.stdout,
         "run_root": run_root,
-        "stop_after_updates": STOP_AFTER_UPDATES,
+        **run_provenance(run),
         "optimizer": {
             "learning_rate": config.optimizer.learning_rate,
+            "lr_schedule": config.optimizer.lr_schedule,
             "warmup": config.optimizer.warmup,
             "weight_decay": config.optimizer.weight_decay,
             "max_grad_norm": config.optimizer.max_grad_norm,
@@ -648,6 +728,10 @@ def main() -> None:
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
     parser.add_argument("--runtime-receipt", required=True, help="local reviewed schema-6 runtime receipt")
     parser.add_argument("--runtime-receipt-sha256", required=True)
+    parser.add_argument("--stop-after-updates", type=int, choices=TRAINING_HORIZONS, required=True)
+    parser.add_argument("--reference-sft-result", help="reviewed r3 result; required for 64 updates")
+    parser.add_argument("--decision-record", help="local owner authorization record; required for 64 updates")
+    parser.add_argument("--decision-supplement", help="local owner supplement 2; required for 64 updates")
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
     parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
@@ -668,6 +752,13 @@ def main() -> None:
         raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
     runtime_receipt = sft_runtime_receipt(receipt_bytes, args.runtime_receipt_sha256)
+    run = SftRun(
+        args.stop_after_updates,
+        read_remote(args.reference_sft_result) if args.reference_sft_result else None,
+        Path(args.decision_record).read_bytes() if args.decision_record else None,
+        Path(args.decision_supplement).read_bytes() if args.decision_supplement else None,
+    )
+    checked_run_reference(run)
     config_bytes = read_remote(f"{BASE_MODEL}config.json")
     generation_bytes = read_remote(f"{BASE_MODEL}generation_config.json")
     if sha256(config_bytes) != SOURCE_FILE_HASHES["config.json"]:
@@ -675,7 +766,7 @@ def main() -> None:
     if sha256(generation_bytes) != SOURCE_FILE_HASHES["generation_config.json"]:
         raise SystemExit("source generation_config.json differs from the pinned hash")
     data_config_bytes, mixture = frozen_mixture()
-    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
+    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes, runtime_receipt, run)
     lr0 = lr0_pass(args.lr0_run_root.rstrip("/"), runtime_receipt) if args.lr0_run_root else None
     source_objects = source_object_list(args.source_object_list) if args.source_object_list else None
     job_plan = {
@@ -687,6 +778,7 @@ def main() -> None:
             config,
             args.runtime_receipt_sha256,
             runtime_receipt["xla_precision"],
+            run,
         ),
         "mixture": mixture,
         "spending_gate_sha256": SPENDING_GATE_SHA256,
@@ -734,6 +826,7 @@ def main() -> None:
         data_config_bytes,
         lr0["source_receipt"],
         source_objects,
+        run,
     )
     job_id = submit_entrypoint(
         args.job_name, entrypoint, args.timeout_seconds, args.priority, runtime_receipt["xla_precision"]

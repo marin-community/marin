@@ -114,7 +114,25 @@ def frozen(monkeypatch, data_bytes: bytes) -> bytes:
     return data_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes, data_bytes):
+def fresh64_run(monkeypatch, receipt_sha, planned=None):
+    if planned is None:
+        planned = [{"update": update, "ids": [f"row-{update}"], "supervised_tokens": 8} for update in range(64)]
+    reference = {
+        "completed_updates": 16,
+        "runtime_receipt_sha256": receipt_sha,
+        "dataset_audit": {"updates": planned},
+        "updates": [{**entry, "loss": 0.5} for entry in planned[:16]],
+    }
+    reference_bytes = json.dumps(reference).encode()
+    decision = b"owner authorization fixture"
+    supplement = b"owner supplement 2 fixture"
+    monkeypatch.setattr(sft_launch, "R3_RESULT_SHA256", hashlib.sha256(reference_bytes).hexdigest())
+    monkeypatch.setattr(sft_launch, "FRESH64_DECISION_SHA256", hashlib.sha256(decision).hexdigest())
+    monkeypatch.setattr(sft_launch, "FRESH64_SUPPLEMENT_SHA256", hashlib.sha256(supplement).hexdigest())
+    return sft_launch.SftRun(64, reference_bytes, decision, supplement)
+
+
+def run_worker(monkeypatch, receipt_bytes, data_bytes, horizon):
     calls: dict = {"writer": 0}
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {receipt_sha})
@@ -125,7 +143,7 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
 
     def run(config, **kwargs):
         calls["config"], calls["kwargs"] = config, kwargs
-        return {"completed_updates": 16}
+        return {"completed_updates": config.trainer.num_train_steps}
 
     monkeypatch.setattr(sft_launch, "StoragePath", lambda path: _Remote(str(path)))
     monkeypatch.setattr(sft_launch, "check_pod_storage", lambda: None)
@@ -135,8 +153,17 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
     )
     monkeypatch.setattr(sft_launch, "run_identity_sft", run)
     audits = sft_launch.SftAudits(lambda it, config: (it, {}), lambda batch, update: {}, lambda state, path: None)
+    spec = sft_launch.SftRun(16, None, None, None) if horizon == 16 else fresh64_run(monkeypatch, receipt_sha)
     sft_launch.sft_worker(
-        RUN_ROOT, "t310-sft", receipt_bytes, receipt_sha, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, lambda: audits
+        RUN_ROOT,
+        "t310-sft",
+        receipt_bytes,
+        receipt_sha,
+        data_bytes,
+        LR0_SOURCE,
+        SOURCE_OBJECTS,
+        lambda: audits,
+        spec,
     )
     return calls, audits
 
@@ -155,7 +182,8 @@ class _Remote:
         return _FILES[self.path.rsplit("/", 1)[-1]]
 
 
-def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch):
+@pytest.mark.parametrize("horizon", [16, 64])
+def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch, horizon):
     receipt_bytes = fixture(
         monkeypatch,
         router_combine_fp32=True,
@@ -172,12 +200,13 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
         }
     )
     data_bytes = frozen(monkeypatch, data_config())
-    calls, audits = run_worker(monkeypatch, receipt_bytes, data_bytes)
+    calls, audits = run_worker(monkeypatch, receipt_bytes, data_bytes, horizon)
     config, kwargs = calls["config"], calls["kwargs"]
     assert config.data == sft_launch.frozen_data_config(data_bytes)
     assert config.data.train_weights == {"identity": 264.0, "preservation": 547.0}
     assert config.data_seed == config.trainer.seed == 310
-    assert config.trainer.num_train_steps == 16 and config.trainer.load_checkpoint_path is None
+    assert config.trainer.num_train_steps == horizon and config.trainer.load_checkpoint_path is None
+    assert kwargs["run"].stop_after_updates == horizon
     assert config.trainer.train_batch_size == 8 and config.trainer.per_device_parallelism == 1
     assert config.train_seq_len == 8192
     optimizer = config.optimizer
@@ -202,7 +231,38 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
     assert kwargs["run_root"] == RUN_ROOT and kwargs["load_audits"]() is audits
     # The result write is collective: the worker calls it on every rank, not behind a rank-0 guard.
     assert calls["writer"] == 1
-    assert calls["result"] == (f"{RUN_ROOT}/sft-result.json", {"completed_updates": 16})
+    assert calls["result"] == (f"{RUN_ROOT}/sft-result.json", {"completed_updates": horizon})
+
+
+def test_fresh64_requires_exact_reference_and_authorization_bytes(monkeypatch):
+    run = fresh64_run(monkeypatch, "runtime-sha")
+    assert run.reference_result_bytes is not None and run.decision_bytes is not None
+    assert run.supplement_bytes is not None
+    reference = sft_launch.checked_run_reference(run)
+    assert reference is not None
+    assert reference["completed_updates"] == 16 and len(reference["dataset_audit"]["updates"]) == 64
+    assert sft_launch.run_provenance(run) == {
+        "initialization": "fresh_hf",
+        "initial_completed_updates": 0,
+        "stop_after_updates": 64,
+        "reference_sft_result": {"path": sft_launch.R3_RESULT_PATH, "sha256": sft_launch.R3_RESULT_SHA256},
+        "owner_decision_sha256": sft_launch.FRESH64_DECISION_SHA256,
+        "owner_decision_supplement_sha256": sft_launch.FRESH64_SUPPLEMENT_SHA256,
+    }
+    with pytest.raises(ValueError, match="requires the r3 result, owner decision and supplement 2"):
+        sft_launch.checked_run_reference(sft_launch.SftRun(64, run.reference_result_bytes, run.decision_bytes, None))
+    with pytest.raises(ValueError, match="reference differs"):
+        sft_launch.checked_run_reference(
+            sft_launch.SftRun(64, run.reference_result_bytes + b" ", run.decision_bytes, run.supplement_bytes)
+        )
+    with pytest.raises(ValueError, match="owner decision differs"):
+        sft_launch.checked_run_reference(
+            sft_launch.SftRun(64, run.reference_result_bytes, run.decision_bytes + b" ", run.supplement_bytes)
+        )
+    with pytest.raises(ValueError, match="decision supplement differs"):
+        sft_launch.checked_run_reference(
+            sft_launch.SftRun(64, run.reference_result_bytes, run.decision_bytes, run.supplement_bytes + b" ")
+        )
 
 
 def test_frozen_data_config_refuses_other_bytes_and_packed_components(monkeypatch):
@@ -218,6 +278,62 @@ def test_frozen_data_config_refuses_other_bytes_and_packed_components(monkeypatc
 
 class TinyModel(eqx.Module):
     weight: jax.Array
+
+
+@pytest.mark.parametrize("damage", [None, "ids", "supervised_tokens", "drop"])
+def test_fresh64_checks_every_update_and_reports_first16_loss_deltas(monkeypatch, damage):
+    config = TrainerConfig(
+        id="fresh64-test",
+        tracker=(),
+        require_accelerator=False,
+        mesh=MeshConfig(),
+        train_batch_size=8,
+        per_device_parallelism=1,
+        load_checkpoint=False,
+        num_train_steps=64,
+    )
+    optimizer = AdamConfig(learning_rate=2e-6, lr_schedule="constant", warmup=2, weight_decay=0.0).build(64)
+    axes = (hax.Axis("batch", 8), hax.Axis("position", 2))
+    planned = [{"update": update, "ids": [f"row-{update}"], "supervised_tokens": 8} for update in range(64)]
+    run = fresh64_run(monkeypatch, "runtime-sha", planned)
+    reference = sft_launch.checked_run_reference(run)
+    checked = []
+
+    def check(example, update):
+        assert int(example.tokens.array[0, 0]) == update
+        checked.append(update)
+        receipt = dict(planned[update])
+        if update == 40 and damage in ("ids", "supervised_tokens"):
+            receipt[damage] = ["wrong-row"] if damage == "ids" else 7
+        return receipt
+
+    def loss(model, example, *, key=None):
+        dropped = jnp.full(26, (example.tokens.array[0, 0] == 40) & (damage == "drop"), jnp.int32)
+        return jnp.square(model.weight), {
+            "moe_dropped": dropped,
+            "moe_sender_dropped": jnp.zeros(26, jnp.int32),
+            "moe_receiver_dropped": dropped,
+        }
+
+    batches = iter(
+        LmExample(hax.named(jnp.full((8, 2), update, jnp.int32), axes), hax.ones(axes)) for update in range(65)
+    )
+    with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(310), model=TinyModel(jnp.asarray(0.5, jnp.float32)))
+        if damage is not None:
+            with pytest.raises(ValueError, match="dropped valid" if damage == "drop" else "differs from r3"):
+                sft_launch.train_checked_updates(trainer, state, batches, check, 64, reference=reference)
+            assert checked == list(range(41))
+            return
+        final, updates = sft_launch.train_checked_updates(trainer, state, batches, check, 64, reference=reference)
+    assert int(final.step) == 64 and checked == list(range(64))
+    assert config.batch_schedule.global_data_offset_by_step(int(final.step)) == 512
+    assert [receipt["ids"] for receipt in updates] == [receipt["ids"] for receipt in planned]
+    assert next(batches).tokens.array[0, 0] == 64
+    for receipt in updates[:16]:
+        assert receipt["r3_loss"] == 0.5
+        assert receipt["loss_delta_vs_r3"] == receipt["loss"] - 0.5
+    assert all("loss_delta_vs_r3" not in receipt for receipt in updates[16:])
 
 
 def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
@@ -262,7 +378,7 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
 
         monkeypatch.setattr(trainer, "train_step", counted_step)
         batches = iter([batch(1), batch(2), batch(3), batch(4)])
-        final, updates = sft_launch.train_checked_updates(trainer, fresh(trainer), batches, check, 3)
+        final, updates = sft_launch.train_checked_updates(trainer, fresh(trainer), batches, check, 3, reference=None)
         # Each batch is checked immediately before its own update; the fourth batch is not consumed.
         assert events == ["check-0-1", "step-1", "check-1-2", "step-2", "check-2-3", "step-3"]
         assert [u["update"] for u in updates] == [0, 1, 2] and [u["ids"] for u in updates] == [[1], [2], [3]]
@@ -271,7 +387,9 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
 
         events.clear()
         with pytest.raises(ValueError, match="update 1: sequence ids differ"):
-            sft_launch.train_checked_updates(trainer, fresh(trainer), iter([batch(1), batch(9), batch(3)]), check, 3)
+            sft_launch.train_checked_updates(
+                trainer, fresh(trainer), iter([batch(1), batch(9), batch(3)]), check, 3, reference=None
+            )
         # The mismatched batch never reached train_step.
         assert events == ["check-0-1", "step-1", "check-1-9"]
 
@@ -312,7 +430,7 @@ def test_update_refuses_dropped_or_unmeasured_dispatch_before_next_step(missing)
     with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
         state = trainer.initial_state(jax.random.PRNGKey(0), model=TinyModel(jnp.asarray(0.5)))
         with pytest.raises(ValueError, match="did not report" if missing else "dropped valid"):
-            sft_launch.train_checked_updates(trainer, state, iter([example, example]), check, 2)
+            sft_launch.train_checked_updates(trainer, state, iter([example, example]), check, 2, reference=None)
     assert consumed == [0]
 
 
@@ -430,11 +548,13 @@ def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
         sft_launch, "audit_trained_export", lambda state, path, **kwargs: calls.append(("export", kwargs))
     )
     monkeypatch.setattr(sft_launch, "sft_worker", lambda *args: calls.append(("worker", args)))
-    sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
+    run = sft_launch.SftRun(16, None, None, None)
+    sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS, run)
     assert calls[0] == "storage"
     worker_args = calls[1][1]
     assert worker_args[:7] == (RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
     audits = worker_args[7]()
+    assert worker_args[8] == run
     assert calls[2] == ("frozen", sft_launch.MIXTURE_ROOT, sft_launch.INVENTORY_PATH)
     audits.audit_iterator("B", "C")
     audits.check_batch("batch", 3)
@@ -475,14 +595,23 @@ def test_plan_records_the_recipe_and_a_bounded_ceiling(monkeypatch):
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     _, args = inputs()
     data_bytes = frozen(monkeypatch, data_config())
-    config = sft_launch.sft_config(RUN_ROOT, "job", args["config_bytes"], args["generation_bytes"], data_bytes, runtime)
-    job_plan = sft_launch.plan("job", RUN_ROOT, 7200, "interactive", config, receipt_sha, runtime["xla_precision"])
+    run = sft_launch.SftRun(16, None, None, None)
+    config = sft_launch.sft_config(
+        RUN_ROOT, "job", args["config_bytes"], args["generation_bytes"], data_bytes, runtime, run
+    )
+    job_plan = sft_launch.plan("job", RUN_ROOT, 7200, "interactive", config, receipt_sha, runtime["xla_precision"], run)
     assert job_plan["runtime_receipt_sha256"] == receipt_sha
     assert job_plan["xla_precision"] == "default"
     assert job_plan["env_vars"] == {}
     assert job_plan["forward"]["attention_implementation"] == "torch_order"
     assert job_plan["stop_after_updates"] == 16
-    assert job_plan["optimizer"] == {"learning_rate": 2e-6, "warmup": 2, "weight_decay": 0.0, "max_grad_norm": 0.5}
+    assert job_plan["optimizer"] == {
+        "learning_rate": 2e-6,
+        "lr_schedule": "constant",
+        "warmup": 2,
+        "weight_decay": 0.0,
+        "max_grad_norm": 0.5,
+    }
     assert job_plan["batch"] == {"train_batch_size": 8, "per_device_parallelism": 1, "seq_len": 8192}
     assert job_plan["mesh"]["dcn_axes"] == {"replica_dcn": 1, "context": 4}
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
@@ -512,6 +641,7 @@ def test_worker_rejects_precision_mismatch_before_storage_or_dataset_reads(monke
     arguments = [RUN_ROOT, "job", receipt_bytes, digest, b"data", LR0_SOURCE, SOURCE_OBJECTS]
     if entrypoint == "sft_worker":
         arguments.append(None)
+    arguments.append(sft_launch.SftRun(16, None, None, None))
     with pytest.raises(ValueError, match="XLA precision"):
         getattr(sft_launch, entrypoint)(*arguments)
     assert reads == []

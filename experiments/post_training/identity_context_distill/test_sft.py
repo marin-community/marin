@@ -256,15 +256,23 @@ def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
     for step in range(16):
         np.testing.assert_equal(short_schedule(step), long_schedule(step))
     np.testing.assert_allclose([long_schedule(step) for step in (2, 15, 16, 63)], 2e-6, rtol=1e-6)
-    with pytest.raises(ValueError, match="no HF reset"):
-        identity_sft_config(
-            moe_capacity_factor=4.0,
-            router_combine_fp32=False,
-            fp32_activations=False,
-            attention_implementation="torch_order",
-            **arguments,
-            stop_after_updates=64,
-        )
+    fresh = identity_sft_config(
+        moe_capacity_factor=4.0,
+        router_combine_fp32=False,
+        fp32_activations=False,
+        attention_implementation="torch_order",
+        **arguments,
+        stop_after_updates=64,
+    )
+    assert fresh.trainer.load_checkpoint_path is None
+    assert fresh.trainer.load_checkpoint is None
+    assert fresh.initialize_from_hf == BASE_MODEL
+    assert fresh.trainer.batch_schedule.global_data_offset_by_step(64) == 512
+    fresh_schedule = fresh.optimizer.lr_scheduler(64)
+    actual = np.asarray([fresh_schedule(step) for step in range(64)])
+    np.testing.assert_array_equal(actual[:16], np.asarray([short_schedule(step) for step in range(16)]))
+    np.testing.assert_array_equal(actual[:2], np.asarray([0, 1e-6], dtype=np.float32))
+    np.testing.assert_array_equal(actual[2:], np.full(62, 2e-6, dtype=np.float32))
 
 
 @pytest.mark.timeout(120)
@@ -281,7 +289,8 @@ def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
         from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        config = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, attention_implementation="torch_order", hosts=1,
+        config = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False,
+            fp32_activations=False, attention_implementation="torch_order", hosts=1,
                                      dataset_uri="data", cache_uri="cache", output_uri="out", run_id="test",
                                      seed=42, **source_arguments())
         trainer = config.trainer

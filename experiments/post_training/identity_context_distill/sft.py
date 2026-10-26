@@ -251,7 +251,7 @@ def identity_sft_config(
         attention_implementation: "torch_order" (torch eager's FP32 scores and normalized BF16 weights; materializes
             S x S scores) or "gpu_fa4_cute" (FA4; GPU only); explicit, with no default.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
-        resume_checkpoint: Committed native step directory. Required for continuation.
+        resume_checkpoint: Committed native step directory, when restoring full state.
 
     Returns:
         Standard TrainLmConfig. Continuation restores full state with load_checkpoint_path,
@@ -264,8 +264,6 @@ def identity_sft_config(
         raise ValueError("The precision recipe requires hosts=4, or hosts=1 for CPU tests")
     if stop_after_updates not in (16, 64):
         raise ValueError("The gated recipe supports absolute horizons of 16 or 64 updates")
-    if stop_after_updates == 64 and resume_checkpoint is None:
-        raise ValueError("64 updates requires a committed native checkpoint; no HF reset")
     if not all((dataset_uri, cache_uri, output_uri, run_id)):
         raise ValueError("Dataset, cache, output, and run identity must be explicit")
     if moe_capacity_factor != EXPERT_AXIS:
