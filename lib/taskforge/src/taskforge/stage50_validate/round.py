@@ -28,8 +28,8 @@ Each unit is idempotent on its own file, so a relaunch redoes only the units who
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
-    <round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
-    <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<role>-<i>/attempt-<n>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<role>-<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 
 ``<draft>`` is ``content_hash.digest`` of the draft's task, ``<limits>`` the engine limits,
 ``<task>`` the ``trials.task_digest`` of the lowered spec as its trials run, and ``<controls>``
@@ -53,9 +53,10 @@ The result is read back from the unit files, each outcome through ``trials.attem
 round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
 stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
-control its verdict, reward and cause; and per adversary trial its status, cause, claim and every submission with its
-grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
-the round's. ``write_validation`` writes it to ``<round_dir>/validation.json``, and ``load_validation`` reads it
+control its verdict, reward and cause; and per adversary trial its status, cause, report and every submission with its
+grade status, reward and whether it passed. Review requests repair for submitted defects needing attention
+after checking evidence completeness. ``write_validation`` writes it to
+``<round_dir>/validation.json``, and ``load_validation`` reads it
 back without the evidence files.
 
 A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
@@ -63,6 +64,7 @@ trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial``
 """
 
 import asyncio
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -89,7 +91,8 @@ from taskforge.stage50_validate.adversary import (
     SUBMISSIONS_DIR,
     AdversaryMode,
     AdversaryPolicy,
-    Claim,
+    SearchReport,
+    SearchRole,
     adversary_brief,
     adversary_record,
     run_adversary_trial,
@@ -155,7 +158,7 @@ class ValidationSettings:
         max_retries: The retries of a trial that fails for a retryable cause.
         retry_backoff: The wait between a trial's attempts.
         sampling: The sampling policy of the model writing the controls.
-        adversary: The adversary trials' policy.
+        adversary: Independent policies for false-accept and false-reject searches.
         ledger: Where the trials and the control writing are recorded.
     """
 
@@ -165,8 +168,12 @@ class ValidationSettings:
     max_retries: int
     retry_backoff: RetryBackoff
     sampling: LLMPolicy
-    adversary: AdversaryPolicy
+    adversary: tuple[AdversaryPolicy, ...]
     ledger: Ledger
+
+    def __post_init__(self) -> None:
+        if len({policy.role for policy in self.adversary}) != len(self.adversary):
+            raise ValueError("each adversary role must have exactly one policy")
 
 
 class LoweringStatus(StrEnum):
@@ -244,14 +251,15 @@ class SubmissionResult:
 
 @dataclass(frozen=True)
 class AdversaryResult:
-    """An adversary trial's final attempt: ``cause`` is set when it is ungraded, and ``claim`` is the adversary's
+    """An adversary trial's final attempt: ``cause`` is set when it is ungraded, and ``report`` is the adversary's
     own verdict. ``attempt_file`` is relative to the round directory."""
 
     trial: str
+    role: SearchRole | None
     mode: AdversaryMode
     status: TrialStatus
     cause: Cause | None
-    claim: Claim
+    report: SearchReport | None
     submissions: tuple[SubmissionResult, ...]
     attempt_file: str
 
@@ -261,7 +269,7 @@ class EarlyDecision:
     """A round its first violated control decided before every trial ended.
 
     ``control`` is the id of that control, and ``cancelled`` names each solver and adversary trial the round
-    stopped, as ``solver/<i>`` or ``adversary/<i>``; none of them is in the round's result.
+    stopped, as ``solver/<i>`` or ``adversary/<role>-<i>``; none of them is in the round's result.
     """
 
     control: str
@@ -318,7 +326,7 @@ async def validate_round(
         context: The round, as its stage coordinator knows it.
         settings: The validating host's settings.
         solver_model: The model of the solver trials.
-        controls_model: The model that writes the controls.
+        controls_model: Writes controls.
         adversary_model: The model of the adversary trials.
 
     Raises:
@@ -337,10 +345,20 @@ async def validate_round(
                 )
                 for index in range(settings.k)
             } | {
-                f"{TrialKind.ADVERSARY}/{index}": group.create_task(
-                    _adversary_unit(lowering, controls, context, settings, adversary_model, directory, str(index))
+                f"{TrialKind.ADVERSARY}/{policy.role}-{index}": group.create_task(
+                    _adversary_unit(
+                        lowering,
+                        controls,
+                        context,
+                        settings,
+                        adversary_model,
+                        policy,
+                        directory,
+                        f"{policy.role}-{index}",
+                    )
                 )
-                for index in range(settings.adversary.k)
+                for policy in settings.adversary
+                for index in range(policy.k)
             }
             closing = _EarlyClose(armed=context.modify_rounds_left > 0, trials=trials)
             group.create_task(_replay_units(lowering, controls, context, settings, directory, closing))
@@ -363,7 +381,12 @@ def write_validation(round_dir: Path, result: ValidationResult) -> None:
 
 def load_validation(round_dir: Path) -> ValidationResult:
     """Read the ``validation.json`` ``write_validation`` wrote to ``round_dir``."""
-    return _RESULT.validate_json((round_dir / VALIDATION_FILE).read_bytes())
+    data = json.loads((round_dir / VALIDATION_FILE).read_bytes())
+    for trial in data["adversary"]:
+        if "role" not in trial:
+            # Legacy shortcut reports are readable, but cannot certify the new FA/FR checks.
+            trial.update(role=None, report=None, status=TrialStatus.UNGRADED, cause=Cause.SEARCH_INCOMPLETE)
+    return _RESULT.validate_python(data)
 
 
 async def _inputs_ready(*inputs: asyncio.Task) -> bool:
@@ -497,6 +520,7 @@ async def _adversary_unit(
     context: ValidationContext,
     settings: ValidationSettings,
     model: ModelClient,
+    policy: AdversaryPolicy,
     directory: Path,
     trial: str,
 ) -> None:
@@ -506,11 +530,11 @@ async def _adversary_unit(
     if lowered.spec is None:
         return
     spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
-    policy = settings.adversary
     brief = adversary_brief(spec, control_set, policy)
 
     def under_brief(payload: bytes) -> bool:
-        return adversary_record(payload).brief == brief
+        record = adversary_record(payload)
+        return record.brief == brief and record.policy_digest == digest(policy) and record.model == model.model
 
     graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
     floor = graded_submissions[-1] + 1 if graded_submissions else 0
@@ -610,7 +634,10 @@ def _result(
     cancelled = set() if early is None else set(early.cancelled)
     solver = [str(index) for index in range(settings.k) if f"{TrialKind.SOLVER}/{index}" not in cancelled]
     adversary = [
-        str(index) for index in range(settings.adversary.k) if f"{TrialKind.ADVERSARY}/{index}" not in cancelled
+        f"{policy.role}-{index}"
+        for policy in settings.adversary
+        for index in range(policy.k)
+        if f"{TrialKind.ADVERSARY}/{policy.role}-{index}" not in cancelled
     ]
     return ValidationResult(
         context.workpiece_id,
@@ -672,7 +699,14 @@ def _adversary_result(context: ValidationContext, evidence_dir: Path, trial: str
             )
         )
     return AdversaryResult(
-        trial, record.mode, graded.status, graded.cause, record.claim, tuple(submissions), _relative(context, path)
+        trial,
+        record.role,
+        record.mode,
+        graded.status,
+        graded.cause,
+        record.report,
+        tuple(submissions),
+        _relative(context, path),
     )
 
 
