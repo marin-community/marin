@@ -71,7 +71,7 @@ def main() -> None:
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text())
     os.environ.update(ray_environment(config["address"]))
-    # Ray is installed only in this isolated environment, not in the serving coordinator's venv.
+    # The isolated TPU vLLM environment contains Ray.
     ray = importlib.import_module("ray")
 
     stopped = threading.Event()

@@ -51,7 +51,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris_tpu_vllm import submit_tpu_gang, tpu_ray_gang
+from marin.inference.iris_tpu_vllm import RAY_PORTS, tpu_ray_gang
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
     iris_vllm_launch,
@@ -737,11 +737,12 @@ def _start_direct_inference(
         port_name=None,
     )
     device = iris.worker_resources.device
-    submit = submit_tpu_gang if isinstance(device, TpuConfig) and device.vm_count() > 1 else current_client().submit
-    job = submit(
+    ports = RAY_PORTS if isinstance(device, TpuConfig) and device.vm_count() > 1 else ()
+    job = current_client().submit(
         JobRequest(
             name=f"inference-{run_id}",
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
+            ports=ports,
             resources=iris.worker_resources,
             environment=iris.worker_environment,
             max_retries_failure=iris.max_retries_failure,
