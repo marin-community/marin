@@ -28,8 +28,8 @@ def _qkv(batch: int = 1) -> tuple[jax.Array, jax.Array, jax.Array]:
 
 
 def _l0_dump_transcription(q, k, v, sliding_window):
-    """``torch_order_core`` from the #310 L0 attention dump (levanter_l0_attn.py at 440e9376), verbatim; it matched
-    torch eager on the real model to 2 of 814,080 elements."""
+    """An independent transcription of torch-order attention: the head-repeated einsum with FP32 softmax that
+    matched torch eager on Snowball's first attention layer to 2 of 814,080 elements."""
     repeats = q.shape[2] // k.shape[2]
     k, v = jnp.repeat(k, repeats, axis=2), jnp.repeat(v, repeats, axis=2)
     scores = jnp.einsum(
@@ -139,8 +139,8 @@ def test_torch_order_padded_row_masks_as_fa4_does(window):
 
 
 def _old_reference_math(q, k, v, mask, *, logits_dtype):
-    """``_reference_attention_math`` before the mask code moved into ``_explicit_mask`` (23152e4d), for the
-    unchanged-path check."""
+    """``_reference_attention_math`` as it was before its mask code moved into ``_explicit_mask``, so the
+    unchanged-path check compares against the original math."""
     k = _core.align_kv_heads(k, num_q_heads=q.shape[2])
     v = _core.align_kv_heads(v, num_q_heads=q.shape[2])
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * (1.0 / math.sqrt(q.shape[-1])), k)
