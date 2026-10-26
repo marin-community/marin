@@ -16,6 +16,8 @@ import torch
 import zstandard
 from omegaconf import OmegaConf
 from taskcompendium.grading_result import Outcome
+from taskcompendium.models import ScriptGrader
+from shellbox.machine import PackageSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
@@ -25,6 +27,7 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
+from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime
 from tests.cpu.tiny_training.cat_count import (
     FAST_STEPS,
     RUN_TIMEOUT_SECONDS,
@@ -314,9 +317,15 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
 ):
     root = tmp_path / "rloo-n"
     for steps, resume in ((2, False), (4, True)):
-        cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume)
+        cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
         cfg.trainer.algorithm.advantage_estimator = "rloo_n"
         cfg.trainer.algorithm.group_advantage_min_size = 2
+        cfg.trainer.train_batch_size = 5
+        cfg.trainer.policy_mini_batch_size = 5
+        cfg.trainer.placement.policy_num_gpus_per_node = 3
+        cfg.trainer.micro_train_batch_size_per_gpu = 1
+        cfg.trainer.micro_forward_batch_size_per_gpu = 1
+        cfg.generator.n_samples_per_prompt = 2
         path = Path(cfg.data.train_data[0])
         row = json.loads(path.read_text().splitlines()[0])
         row["prompt"][0]["content"] = "cat " * 200
@@ -328,7 +337,10 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
         assert all(0 <= row["reward/zero_std_group_fraction"] <= 1 for row in training)
         assert all(0 <= row["reward/rloo_n_filtered_groups"] <= row["reward/rloo_n_total_groups"] for row in training)
+        assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
+        assert all(sum(row[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == 10 for row in training)
+        assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
         assert [row["step"] for row in records] == list(range(steps + 1))
 
 
@@ -352,6 +364,29 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         identifier = f"stable-cat-count-{n}"
         tasks.append(spec.model_copy(update={"task": spec.task.model_copy(update={"id": identifier})}))
         expected[identifier] = PROMPT.format(N=n)
+    grader_error = tasks[-1]
+    tasks.append(
+        grader_error.model_copy(
+            update={
+                "task": grader_error.task.model_copy(
+                    update={
+                        "id": "grader-error",
+                        "grader": ScriptGrader(
+                            argv=("true",),
+                            environment=SHELL_ENVIRONMENT.model_copy(update={"package_spec": PackageSpec()}),
+                        ),
+                    }
+                ),
+                "verifier_machine": machine_runtime("shellsim"),
+            }
+        )
+    )
+    expected["grader-error"] = PROMPT.format(N=2)
+    failure_row = {**row, "extra_info": {"n": "invalid", "data_source": "train"}}
+    failed = source_row_task(failure_row, 4, source_name="cat-count", environment_configs=environment_configs)
+    for identifier in ("rollout-error", "rollout-error-2"):
+        tasks.append(failed.model_copy(update={"task": failed.task.model_copy(update={"id": identifier})}))
+        expected[identifier] = PROMPT.format(N=2)
     path = root / "data" / "permuted.parquet"
     write_tasks(path, reversed(tasks))
     cfg.data.val_data = [str(path)]
@@ -368,14 +403,20 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert len(rows) == 2 * len(expected)
     assert {row["task_id"] for row in rows} == expected.keys()
     assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
-    assert all(len(row["response_token_ids"]) == 8 for row in rows)
+    assert all(len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error"))
     tokens = sum(len(row["response_token_ids"]) for row in rows)
     assert metrics["generate/response_tokens"] == tokens
     assert metrics["generate/wall_seconds"] > 0
     assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(tokens / metrics["generate/wall_seconds"])
     assert metrics["generate/vllm/num_engines"] == 1
-    assert sum(metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == len(rows)
-    assert metrics["generate/outcome/rollout_failure"] == 0
+    assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
+        "graded": 8,
+        "submission_failure": 0,
+        "invalid_task": 0,
+        "infra_error": 2,
+        "unavailable": 4,
+    }
+    assert metrics["generate/outcome/rollout_failure"] == 4
 
 
 @pytest.mark.nightly
@@ -399,7 +440,14 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
     first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1)
+    before_resume = len(cat_count_session)
     resumed = train(forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
+    resumed_steps = {
+        int(row["attributes"]["step"])
+        for row in cat_count_session[before_resume:]
+        if row["name"] == "work_completed" and row["attributes"].get("work_kind") == "policy_step"
+    }
+    assert resumed_steps == set(range(5, 101))
     assert scores(resumed)[: len(scores(first))] == scores(first)
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4
     training = [row for row in resumed if "policy/raw_grad_norm" in row]
