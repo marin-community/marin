@@ -149,7 +149,7 @@ def test_june_adapter_uses_june_capacity_default_from_hf_config():
     assert decoded.capacity_factor == 1.0
 
 
-@pytest.mark.parametrize("setting", [{"router_dot_fp32": True}, {"moe_capacity_factor": 2.0}])
+@pytest.mark.parametrize("setting", [{"router_dot_fp32": True}, {"moe_capacity_factor": 2.0}, {"fp32_activations": True}])
 def test_june_training_config_rejects_a_set_snowball_only_setting(setting):
     with pytest.raises(ValueError, match=next(iter(setting))):
         dataclasses.replace(_config(), **setting).training_config()

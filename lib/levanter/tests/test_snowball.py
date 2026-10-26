@@ -359,16 +359,20 @@ def _bf16(key, shape, scale):
     return (scale * jax.random.normal(key, shape)).astype(jnp.bfloat16)
 
 
-def _all_eqns(jaxpr) -> list:
-    found = []
+def _walk_eqns(jaxpr, path: tuple = ()):
+    """Yield (enclosing primitive names, eqn) for every eqn, walking nested jaxprs (pjit, custom_jvp, scan, remat,
+    cond, shard_map)."""
     for eqn in jaxpr.eqns:
-        found.append(eqn)
+        yield path, eqn
         for value in eqn.params.values():
             for sub in value if isinstance(value, (list, tuple)) else (value,):
                 inner = getattr(sub, "jaxpr", sub)
                 if hasattr(inner, "eqns"):
-                    found += _all_eqns(inner)
-    return found
+                    yield from _walk_eqns(inner, (*path, eqn.primitive.name))
+
+
+def _all_eqns(jaxpr) -> list:
+    return [eqn for _, eqn in _walk_eqns(jaxpr)]
 
 
 def test_snowball_fp32_activations_round_once():
@@ -407,19 +411,11 @@ def test_snowball_fp32_activations_round_once():
     assert not np.array_equal(np.asarray(outputs[False][0], np.float32), np.asarray(outputs[True][0], np.float32))
 
 
-def _logistic_sites(jaxpr, path: tuple = ()) -> collections.Counter:
-    """Count ``logistic`` eqns (sigmoid; SiLU is ``x * logistic(x)``) by (enclosing primitives, input dtype),
-    walking nested jaxprs (pjit, custom_jvp, scan, remat, cond, shard_map)."""
-    found: collections.Counter = collections.Counter()
-    for eqn in jaxpr.eqns:
-        if eqn.primitive.name == "logistic":
-            found[(path, eqn.invars[0].aval.dtype.name)] += 1
-        for value in eqn.params.values():
-            for sub in value if isinstance(value, (list, tuple)) else (value,):
-                inner = getattr(sub, "jaxpr", sub)
-                if hasattr(inner, "eqns"):
-                    found += _logistic_sites(inner, (*path, eqn.primitive.name))
-    return found
+def _logistic_sites(jaxpr) -> collections.Counter:
+    """Count ``logistic`` eqns (sigmoid; SiLU is ``x * logistic(x)``) by (enclosing primitives, input dtype)."""
+    return collections.Counter(
+        (path, eqn.invars[0].aval.dtype.name) for path, eqn in _walk_eqns(jaxpr) if eqn.primitive.name == "logistic"
+    )
 
 
 def test_snowball_fp32_activations_cover_every_sigmoid():
