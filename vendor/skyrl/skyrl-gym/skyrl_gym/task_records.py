@@ -35,7 +35,6 @@ class StepReward:
     grade: GradeResult | None = None
     task_grade: GradeResult | None = None
     token_rewards: tuple[float, ...] | None = None
-    token_credit: tuple[float, ...] | None = None
     reward_components: dict[str, float] = field(default_factory=dict)
 
 
@@ -52,7 +51,6 @@ class TaskTransition:
     grade: GradeResult | None = None
     task_grade: GradeResult | None = None
     token_rewards: tuple[float, ...] | None = None
-    token_credit: tuple[float, ...] | None = None
     reward_components: dict[str, float] = field(default_factory=dict)
 
     def for_harness(self) -> Transition:
@@ -66,7 +64,6 @@ class TaskTransition:
                 grade=self.grade,
                 task_grade=self.task_grade,
                 token_rewards=self.token_rewards,
-                token_credit=self.token_credit,
                 reward_components=self.reward_components,
             ),
         )
@@ -125,7 +122,6 @@ def graded_transition(
         done=True,
         reward=reward.optimization_reward,
         token_rewards=reward.token_rewards,
-        token_credit=reward.token_credit,
         reward_components=dict(reward.components),
         grade=grade_result(verification),
         metrics=metrics,

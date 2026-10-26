@@ -30,8 +30,7 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import (
 from skyrl_train.trajectory_runners.harbor.truncation_penalty import apply_truncation_penalty, detect_turn_truncation
 from skyrl_train.trajectory_runners.types import RESPONSE_SPAN_TAGS_KEY, TrajectoryRequestBatch
 from skyrl_train.metric_names import IDENTITY_AWARE_REWARD_METRIC_PREFIX
-from skyrl_train.utils.harbor_errors import ErrorHandlingConfig, ErrorTreatment, classify_exception_type
-from skyrl_train.utils.pbs_shaping import compute_pbs_token_shaping
+from skyrl_train.utils.harbor_errors import ErrorHandlingConfig, ErrorTreatment, resolve_error_treatment
 from skyrl_train.utils.span_tagger import tag_generated_tokens
 from skyrl_train.utils.reward_shaping import (
     RewardOutputParseError,
@@ -89,7 +88,7 @@ class HarborTaskSettings:
             return None
         if self.retry.include_exceptions and name not in self.retry.include_exceptions:
             return None
-        if classify_exception_type(name, self.error_handling) is ErrorTreatment.PASSTHROUGH:
+        if resolve_error_treatment(name, self.error_handling) is not ErrorTreatment.MASK:
             return None
         return min(self.retry.min_wait_sec * self.retry.wait_multiplier**retries, self.retry.max_wait_sec)
 
@@ -335,42 +334,15 @@ def shape_harbor_rollouts(
             )
             for step_index, step in enumerate(rollout.steps)
         )
-        if config.get("enable_token_reward_channel") and (metadata is None or metadata.training_phase != "eval"):
-            tags = [0] * len(rollout.response_token_ids)
-            if config["enable_span_tagging"]:
-                for step in steps:
-                    start = step.response_end + 1 - len(step.turn.response_token_ids)
-                    values = tag_generated_tokens(list(step.turn.response_token_ids), tokenizer)
-                    tags[start : step.response_end + 1] = [
-                        value if rollout.loss_mask[start + offset] else 0 for offset, value in enumerate(values)
-                    ]
-            credit = (
-                compute_pbs_token_shaping(
-                    list(rollout.messages),
-                    tags,
-                    gamma=config["pbs_gamma"],
-                    max_total_shaping=config["pbs_max_total_shaping"],
-                    potential_shape=config["pbs_potential_shape"],
-                )
-                if config["enable_pbs_shaping"] and config["enable_span_tagging"]
-                else [0.0] * len(tags)
-            )
+        if config["enable_span_tagging"] and (metadata is None or metadata.training_phase != "eval"):
             annotated = []
             for step in steps:
                 start = step.response_end + 1 - len(step.turn.response_token_ids)
-                turn = step.turn
-                if config["enable_span_tagging"]:
-                    turn = replace(
-                        turn, metadata={**turn.metadata, RESPONSE_SPAN_TAGS_KEY: tags[start : step.response_end + 1]}
-                    )
+                tags = tag_generated_tokens(list(step.turn.response_token_ids), tokenizer)
+                tags = [value if rollout.loss_mask[start + offset] else 0 for offset, value in enumerate(tags)]
                 annotated.append(
                     replace(
-                        step,
-                        turn=turn,
-                        transition=replace(
-                            step.transition,
-                            token_credit=tuple(credit[start : step.response_end + 1]),
-                        ),
+                        step, turn=replace(step.turn, metadata={**step.turn.metadata, RESPONSE_SPAN_TAGS_KEY: tags})
                     )
                 )
             steps = tuple(annotated)
