@@ -272,24 +272,26 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
     checkpoint_export = config["run"]["mode"] == RunMode.CHECKPOINT_EXPORT
+    if config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+        skyrl = {**skyrl, "entrypoint": RLEntrypoint.GENERATE}
     plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
-    policy = plan.claim("policy")
     expected_nodes = derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
         raise ValueError(
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
             f"{expected_nodes} physical nodes"
         )
+    role_gpus_per_node = plan.bundles[0].gpus_per_node
     gpu_mismatch = (
-        allocation["gpus_per_node"] < policy.gpus_per_node
+        allocation["gpus_per_node"] < role_gpus_per_node
         if checkpoint_export
-        else allocation["gpus_per_node"] != policy.gpus_per_node
+        else (allocation["gpus_per_node"] != role_gpus_per_node)
     )
     if gpu_mismatch:
         raise ValueError(
-            f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
-            f"placement ({policy.gpus_per_node})"
+            f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL role "
+            f"placement ({role_gpus_per_node})"
         )
     return IrisAllocationConfig(**allocation)
 
@@ -309,11 +311,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
-    if (
-        ray["rendezvous_timeout"] <= 0
-        or ray["cluster_join_timeout"] <= 0
-        or ray["driver_liveness_timeout"] < 0
-    ):
+    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(
             "ray rendezvous timeout and cluster join timeout must be positive; "
             "driver liveness timeout cannot be negative"

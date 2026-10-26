@@ -275,6 +275,19 @@ def compute_rloo_n_outcome_advantage(
         n_groups_all_excluded = sum(1 for group_id in set(index) if len(id2included_scores[group_id]) == 0)
         n_groups_below_min = sum(1 for group_id in set(index) if 0 < len(id2included_scores[group_id]) < min_group_size)
         n_total_groups = len(set(index))
+        metrics = kwargs.get("metrics")
+        if metrics is not None:
+            metrics.update(
+                {
+                    "reward/rloo_n_filtered_groups": float(
+                        sum(
+                            len(id2included_scores[group_id]) < min_group_size or id2no_variance[group_id]
+                            for group_id in set(index)
+                        )
+                    ),
+                    "reward/rloo_n_total_groups": float(n_total_groups),
+                }
+            )
         if n_excluded > 0 or n_groups_below_min > 0 or n_no_variance_groups > 0:
             loguru.logger.info(
                 f"RLOO-N: {n_excluded}/{bsz} samples excluded from baseline, "

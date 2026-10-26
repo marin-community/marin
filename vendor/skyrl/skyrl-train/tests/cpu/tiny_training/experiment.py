@@ -24,6 +24,7 @@ from skyrl_train.config.rollout_validation import validate_rollout_launch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.entrypoints.main_base import BasePPOExp, EntrypointOperation
+from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import RayWrappedInferenceEngine
 from skyrl_train.utils import validate_cfg
@@ -34,7 +35,6 @@ from tests.cpu.tiny_training.tiny_model import build_tiny_policy, write_gsm8k_da
 # Eight logical CPUs leave room for rollout workers and a second run's policy actor in a shared session.
 LOGICAL_CPUS = 8
 LOGICAL_GPUS = 4
-METRICS_FILE = "metrics.jsonl"
 # Reports a stalled run with an admission error well inside the test's run timeout. Concurrent test workers can
 # starve a healthy run for tens of seconds, so this bounds hangs rather than measuring speed.
 STALL_TIMEOUT_SECONDS = 120
@@ -132,8 +132,7 @@ def tiny_training_config(
             "resume_mode": "latest",
             "ckpt_path": str(root / "ckpts"),
             "export_path": str(root / "exports"),
-            # The experiments replace the tracker, so no logger service is contacted.
-            "logger": "console",
+            "logger": "files",
         },
         "generator": {
             "num_inference_engines": 1,
@@ -151,28 +150,9 @@ def tiny_training_config(
     return OmegaConf.merge(cfg, overrides)
 
 
-class JsonlTracker:
-    """Append every logged metrics record to a JSON Lines file."""
-
-    def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
-
-    def log(self, data, step, commit=True):
-        with self.path.open("a") as handle:
-            handle.write(json.dumps({"step": step, **data}, default=float) + "\n")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exception):
-        pass
-
-
 def read_metrics(root: Path) -> list[dict]:
     """Return the metrics records an experiment under ``root`` logged, in order."""
-    with (root / "exports" / METRICS_FILE).open() as handle:
-        return [json.loads(line) for line in handle]
+    return [json.loads(path.read_text()) for path in sorted((root / "exports" / "metrics").glob("step-*.json"))]
 
 
 def cpu_inference_engine_client(cfg: DictConfig, tokenizer) -> InferenceEngineClient:
@@ -210,9 +190,6 @@ class TinyTrainingExp(BasePPOExp):
             num_workers=1,
         )
 
-    def get_tracker(self):
-        return JsonlTracker(Path(self.cfg.trainer.export_path) / METRICS_FILE)
-
     def get_worker_classes(self):
         if self.cfg.trainer.critic.model.path or self.cfg.trainer.algorithm.use_kl_loss:
             raise ValueError("the CPU backend provides only a policy worker")
@@ -224,15 +201,19 @@ class TinyTrainingExp(BasePPOExp):
         return cpu_inference_engine_client(self.cfg, self.tokenizer)
 
 
+class TinyGenerateExp(EvalOnlyEntrypoint, TinyTrainingExp):
+    pass
+
+
 def run_tiny_training(cfg: DictConfig) -> None:
     """Validate the config as the production driver does, then run in a fresh local Ray session."""
     run_with_exp(cfg, TinyTrainingExp)
 
 
-def run_with_exp(cfg: DictConfig, make_exp) -> None:
+def run_with_exp(cfg: DictConfig, make_exp, *, operation: EntrypointOperation = EntrypointOperation.TRAIN) -> None:
     """Run one validated experiment class in a fresh local Ray session."""
     validate_cfg(cfg)
-    validate_rollout_launch(cfg, EntrypointOperation.TRAIN)
+    validate_rollout_launch(cfg, operation)
     ray.init(
         num_cpus=LOGICAL_CPUS,
         num_gpus=LOGICAL_GPUS,
