@@ -230,6 +230,13 @@ def run_open_ended_zephyr(
     with ZephyrContext(
         max_workers=min(max_workers, shards),
         resources=ResourceConfig(cpu=1, ram="4g", disk="16g", regions=[region], preemptible=True),
+        coordinator_resources=ResourceConfig(
+            cpu=0.1,
+            ram="2g",
+            disk="8g",
+            regions=[region],
+            preemptible=True,
+        ),
         name="open-ended-taskforge",
         heartbeat_timeout=900,
     ) as context:
