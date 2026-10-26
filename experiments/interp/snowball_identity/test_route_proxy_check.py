@@ -1,0 +1,299 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from experiments.interp.snowball_identity import precision_gate
+from experiments.interp.snowball_identity import route_proxy_check as g1
+
+T310_LOCAL = Path(os.environ.get("T310_LOCAL", Path.home() / "Dropbox/marin-notes/snowball-identity/t310"))
+R2_DROPLESS = T310_LOCAL / "diag-moe-drops-r2/ep4-dropless/positions.pt"
+R2_DROPLESS_SHA256 = "2b88315b33c4c7f6e735cc42b7958271cc4feaadba6ab1baa8be97a784b4e04e"
+FLOOR_RECEIPT = T310_LOCAL / "diag-torch-floor-r1/receipt.json"
+TORCH_TOP6 = T310_LOCAL / "diag-torch-floor-r1/batch1/top6.pt"
+TORCH_BATCHED_TOP6 = T310_LOCAL / "diag-torch-floor-r1/batched/top6.pt"
+FIX_R1_COMBINE_ON = T310_LOCAL / "diag-moe-fix-r1/dropless-fp32-combine/positions.pt"
+FIX_R1_COMBINE_ON_SHA256 = "e857f361510c75fa3e969da2206d1c9851e70abb44a1a3bbe3139042c8a77bc7"
+VLLM_CAPTURE = T310_LOCAL / "marten-task310-vllm-routes-r1/capture"
+
+
+def synthetic(flips: int, margin: float):
+    """Two layers, 100 positions; Levanter flips ``flips`` positions at layer 1 where torch's margin is ``margin``.
+    The floor: 5% torch disagreements per layer, own margins p50 0.02 / p99 0.04."""
+    ids = np.tile(np.arange(6, dtype=np.int16), (100, 2, 1))
+    biased = np.tile(np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0], dtype=np.float32), (100, 2, 1))
+    biased[:flips, 1, 3] = biased[:flips, 1, 4] + margin
+    routes = ids[..., :4].copy()
+    routes[:flips, 1, 3] = 4  # Levanter picks torch's 5th
+    floor_layer = {"positions": 100, "set_rate": 0.95}
+    own = {"margin_at_set_disagreements": {"batch1": {"count": 5, "p50": 0.02, "p99": 0.04}}}
+    floor = {
+        "floor": {
+            "batched_vs_routes_pt": {"layers": [dict(floor_layer), dict(floor_layer)]},
+            "batched_vs_batch1": {"layers": [own, own]},
+        }
+    }
+    levanter = {"check|a": {"routes": torch.from_numpy(routes)}}
+    top6 = {"check|a": {"ids": torch.from_numpy(ids), "biased": torch.from_numpy(biased)}}
+    return levanter, top6, floor
+
+
+def test_rate_bound_is_twice_the_floor():
+    assert g1.check(*synthetic(10, 0.02))["layers"][1]["rate_ok"]  # 10% <= 2 x 5%
+    report = g1.check(*synthetic(11, 0.02))
+    assert not report["layers"][1]["rate_ok"] and report["layers"][0]["rate_ok"]
+    assert report["failures"] == ["L1: disagreement rate 0.1100 > 2.0 x floor 0.0500"]
+
+
+def test_margin_class_compares_p50_only_below_30_disagreements():
+    report = g1.check(*synthetic(10, 0.031))  # p50 0.031 > 1.5 x 0.02
+    assert not report["layers"][1]["p50_ok"] and not report["layers"][1]["p99_checked"]
+    assert report["layers"][1]["p99_ok"]  # 0.031 would pass p99 (<= 0.06), but it is not checked below 30
+    assert g1.check(*synthetic(10, 0.029))["layers"][1]["p50_ok"]
+
+
+def test_constants_mirror_g1():
+    assert (g1.K_RATE, g1.MARGIN_FACTOR, g1.MIN_FOR_P99) == (2.0, 1.5, 30)
+
+
+@pytest.mark.skipif(
+    not (R2_DROPLESS.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()), reason="local t310 copies"
+)
+def test_r2_dropless_arm():
+    """The r2 ep4-dropless arm against the floor: the rate bound holds at 10 of 26 layers (as computed from the two
+    receipts before G1 was ruled); with the margin class, 7 of 26."""
+    positions = R2_DROPLESS.read_bytes()
+    assert hashlib.sha256(positions).hexdigest() == R2_DROPLESS_SHA256
+    receipt = FLOOR_RECEIPT.read_bytes()
+    assert hashlib.sha256(receipt).hexdigest() == g1.FLOOR_RECEIPT_SHA256
+    top6 = TORCH_TOP6.read_bytes()
+    assert hashlib.sha256(top6).hexdigest() == g1.TORCH_TOP6_SHA256
+    report = g1.check(
+        torch.load(R2_DROPLESS, map_location="cpu"), torch.load(TORCH_TOP6, map_location="cpu"), json.loads(receipt)
+    )
+    layers = report["layers"]
+    assert [r["layer"] for r in layers if r["rate_ok"]] == [4, 9, 13, 14, 15, 17, 18, 20, 23, 24]
+    assert report["layers_passing"] == 7
+    assert report["totals"]["set_agree"] / report["totals"]["positions"] == pytest.approx(0.8933, abs=1e-4)
+
+
+@pytest.mark.skipif(
+    not (R2_DROPLESS.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists() and VLLM_CAPTURE.exists()),
+    reason="local t310 copies",
+)
+def test_gate_route_proxy_on_the_r2_dropless_arm():
+    """The pre-update gate's route proxy (pinned floor and capture paths, positions.pt as written) gives G1's 10 / 7
+    of 26."""
+    report = precision_gate.route_proxy(str(R2_DROPLESS), gate_inputs_for("G1"))
+    assert sum(r["rate_ok"] for r in report["G1"]["layers"]) == 10
+    assert report["G1"]["layers_passing"] == 7
+    assert report["policy"] == "G1"
+
+
+def gate_inputs_for(route_policy: str) -> precision_gate.PrecisionGateInputs:
+    return precision_gate.PrecisionGateInputs(
+        positions="unused",
+        vllm="unused",
+        identity="unused",
+        tokenizer_source="unused",
+        torch_routing="unused",
+        floor_receipt=str(FLOOR_RECEIPT),
+        torch_top6=str(TORCH_TOP6),
+        torch_batched_top6=str(TORCH_BATCHED_TOP6),
+        route_policy=route_policy,
+        vllm_capture=str(VLLM_CAPTURE),
+        output="unused",
+    )
+
+
+def synthetic_vllm(flips: int, margin: float, vllm_flips: int = 8):
+    """``synthetic`` plus a served floor: vLLM picks torch's 5th at ``vllm_flips`` positions of layer 1, where torch's
+    margin is 0.02 (the last ``vllm_flips`` rows); pass 2 equals pass 1 except one more flip."""
+    levanter, top6, floor = synthetic(flips, margin)
+    biased = top6["check|a"]["biased"].numpy()
+    biased[-vllm_flips:, 1, 3] = biased[-vllm_flips:, 1, 4] + 0.02
+    pass1 = top6["check|a"]["ids"].numpy()[..., :4].copy()
+    pass1[-vllm_flips:, 1, 3] = 4
+    pass2 = pass1.copy()
+    pass2[0, 0, 3] = 4
+    return levanter, top6, floor, {"check|a": torch.from_numpy(pass1)}, {"check|a": torch.from_numpy(pass2)}
+
+
+def test_g1a_rate_bound_is_1_25_times_the_served_floor():
+    assert g1.check_vllm_floor(*synthetic_vllm(9, 0.02))["layers"][1]["rate_ok"]  # 9% <= 1.25 x 8%
+    report = g1.check_vllm_floor(*synthetic_vllm(11, 0.02))
+    assert not report["layers"][1]["rate_ok"]
+    assert report["failures"] == ["L1: disagreement rate 0.1100 > 1.25 x vLLM floor 0.0800"]
+    row = report["layers"][1]
+    assert (row["F_vllm"], row["D_vllm"], row["F_torch"]) == (0.92, 1.0, 0.95)
+    assert report["layers"][0]["D_vllm"] == 0.99
+
+
+def test_g1a_margins_compare_against_vllm_vs_torch_disagreements():
+    """Torch's margin at the served stack's disagreements is 0.02: p50 0.031 fails, 0.029 passes."""
+    assert not g1.check_vllm_floor(*synthetic_vllm(10, 0.031))["layers"][1]["p50_ok"]
+    assert g1.check_vllm_floor(*synthetic_vllm(10, 0.029))["layers"][1]["p50_ok"]
+
+
+def test_g1a_diagnostic_line():
+    """Levanter vs vLLM pass 1 at layer 1: Levanter flips rows 0-9, vLLM the last 8; agreement 0.82 vs D - (1 - F)
+    = 1.0 - 0.08 = 0.92."""
+    row = g1.check_vllm_floor(*synthetic_vllm(10, 0.02))["layers"][1]
+    assert row["levanter_vs_vllm"]["set"][0] == pytest.approx(0.82)
+    assert row["diagnostic_bound"] == pytest.approx(0.92)
+    assert not row["diagnostic_ok"]
+
+
+def test_g1a_constants():
+    assert (g1.K_RATE_VLLM, g1.MARGIN_FACTOR, g1.MIN_FOR_P99) == (1.25, 1.5, 30)
+
+
+@pytest.mark.skipif(
+    not (FIX_R1_COMBINE_ON.exists() and VLLM_CAPTURE.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()),
+    reason="local t310 copies",
+)
+def test_g1a_on_the_fix_r1_combine_on_arm():
+    """Shoveler's filled G1a table (27f282c2): rate 19/26, p50 20/26, p99 25/26, all three 15/26, diagnostic 24/26."""
+    for path, sha in (
+        (FIX_R1_COMBINE_ON, FIX_R1_COMBINE_ON_SHA256),
+        (VLLM_CAPTURE / "receipt.json", g1.VLLM_RECEIPT_SHA256),
+        (VLLM_CAPTURE / "pass-1/routes.pt", g1.VLLM_PASS1_SHA256),
+        (VLLM_CAPTURE / "pass-2/routes.pt", g1.VLLM_PASS2_SHA256),
+        (FLOOR_RECEIPT, g1.FLOOR_RECEIPT_SHA256),
+        (TORCH_TOP6, g1.TORCH_TOP6_SHA256),
+    ):
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+    report = g1.check_vllm_floor(
+        torch.load(FIX_R1_COMBINE_ON, map_location="cpu"),
+        torch.load(TORCH_TOP6, map_location="cpu"),
+        json.loads(FLOOR_RECEIPT.read_bytes()),
+        torch.load(VLLM_CAPTURE / "pass-1/routes.pt", map_location="cpu"),
+        torch.load(VLLM_CAPTURE / "pass-2/routes.pt", map_location="cpu"),
+    )
+    layers = report["layers"]
+    assert report["lines_passing"] == {"rate": 19, "p50": 20, "p99": 25, "diagnostic": 24}
+    assert report["layers_passing"] == 15
+    assert [r["layer"] for r in layers if not r["rate_ok"]] == [0, 1, 9, 10, 18, 21, 23]
+    assert [r["layer"] for r in layers if not r["p50_ok"]] == [1, 6, 8, 16, 21, 25]
+    assert report["overall"]["F_vllm"] == pytest.approx(0.9120, abs=1e-4)
+    assert report["overall"]["D_vllm"] == pytest.approx(0.9445, abs=1e-4)
+
+
+@pytest.mark.skipif(
+    not (FIX_R1_COMBINE_ON.exists() and VLLM_CAPTURE.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()),
+    reason="local t310 copies",
+)
+def test_gate_route_policy_selects_the_gated_check_on_the_fix_r1_arm(monkeypatch):
+    """The gate on the fix-r1 combine-on positions: G1 10/26 (22 failures) and G1a 15/26 (rate 19, p50 20, p99 25,
+    diagnostic 24), both reported; only the named policy's failures reach the gate."""
+    assert hashlib.sha256(FIX_R1_COMBINE_ON.read_bytes()).hexdigest() == FIX_R1_COMBINE_ON_SHA256
+    report = precision_gate.route_proxy(str(FIX_R1_COMBINE_ON), gate_inputs_for("G1a"))
+    assert (report["G1"]["layers_passing"], len(report["G1"]["failures"])) == (10, 22)
+    assert report["G1a"]["layers_passing"] == 15
+    assert report["G1a"]["lines_passing"] == {"rate": 19, "p50": 20, "p99": 25, "diagnostic": 24}
+    read = precision_gate.read
+    for policy in ("G1", "G1a"):
+        monkeypatch.setattr(precision_gate, "compare", lambda *args: {})
+        monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+        monkeypatch.setattr(
+            precision_gate, "read", lambda path, read=read: b"{}" if path.endswith("routing.json") else read(path)
+        )
+        monkeypatch.setattr(precision_gate, "compare_routes_cross_stack", lambda *args: {})
+        monkeypatch.setattr(precision_gate, "parity_gate", lambda parity: [])
+        monkeypatch.setattr(precision_gate, "route_gate", lambda *args: [])
+        moe = {"dispatch": {"dropped": [0], "sender_dropped": [0], "receiver_dropped": [0]}}
+        gate = precision_gate.evaluate(gate_inputs_for(policy), None, str(FIX_R1_COMBINE_ON), [], moe, [])
+        routes = [f for f in gate["failures"] if f.startswith("routes-")]
+        assert gate["route_policy"] == policy
+        assert routes == [f"routes-{policy}: {f}" for f in report[policy]["failures"]]
+        assert set(gate["route_proxy"]) == {"policy", "G1", "G1a", "G1b_L0"}
+
+
+@pytest.mark.parametrize("policy", precision_gate.ROUTE_POLICIES)
+def test_each_policy_gates_on_its_own_route_check(monkeypatch, policy):
+    """Under ``report_g1b_l0`` G1 and G1a failures leave the gate passing, an L0 ratio above 1.25 fails it, and a
+    parity failure fails it; ``G1`` and ``G1a`` still gate on their own check only."""
+    proxy = {
+        "policy": policy,
+        "G1": {"failures": ["L2: rate"]},
+        "G1a": {"failures": ["L1: p99"]},
+        "G1b_L0": {"failures": []},
+    }
+    parity: list[str] = []
+    monkeypatch.setattr(precision_gate, "compare", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "read", lambda path: b"{}")
+    monkeypatch.setattr(precision_gate, "compare_routes_cross_stack", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "parity_gate", lambda found: parity)
+    monkeypatch.setattr(precision_gate, "route_gate", lambda *args: [])
+    monkeypatch.setattr(precision_gate, "route_proxy", lambda *args: proxy)
+    moe = {"dispatch": {"dropped": [0], "sender_dropped": [0], "receiver_dropped": [0]}}
+
+    def failures():
+        gate = precision_gate.evaluate(gate_inputs_for(policy), None, "unused", [], moe, [])
+        assert gate["route_policy"] == policy and gate["route_proxy"] is proxy
+        return gate["failures"]
+
+    own = {"G1": ["routes-G1: L2: rate"], "G1a": ["routes-G1a: L1: p99"], "report_g1b_l0": []}[policy]
+    assert failures() == own
+    proxy["G1b_L0"]["failures"] = ["L0: ratio 1.3 > 1.25"]
+    expected = ["routes-G1b-L0: L0: ratio 1.3 > 1.25"] if policy == "report_g1b_l0" else own
+    assert failures() == expected
+    parity.append("max")
+    assert failures() == ["parity: max", *expected]
+
+
+def test_g1b_l0_line_on_synthetic_routes():
+    """LV and TB are L0 set agreement with each vLLM pass; the line passes at ratio <= 1.25."""
+    ids = np.tile(np.arange(6), (10, 2, 1))
+    vllm = ids[..., :4].copy()
+    batched = {"check|a": {"ids": torch.tensor(ids.copy()), "biased": torch.zeros(10, 2, 6)}}
+    batched["check|a"]["ids"][0, 0, 3] = 5  # torch batched differs from vLLM at 1 of 10 L0 positions
+    for flips, ok in ((1, True), (2, False)):
+        ours = ids[..., :4].copy()
+        ours[:flips, 0, 3] = 5
+        found = g1.g1b_l0({"check|a": {"routes": torch.tensor(ours)}}, batched, {"check|a": vllm}, {"check|a": vllm})
+        assert found["TB_0"] == [0.9, 0.9] and found["LV_0"] == [1 - flips / 10] * 2
+        assert found["ratio"] == pytest.approx(flips) and found["ok"] is ok
+        assert bool(found["failures"]) is not ok
+    # Torch batched equal to vLLM: no floor, so only an exact Levanter match passes and no ratio is reported.
+    exact = {"check|a": {"ids": torch.tensor(ids), "biased": torch.zeros(10, 2, 6)}}
+    for flips, ok in ((0, True), (1, False)):
+        ours = ids[..., :4].copy()
+        ours[:flips, 0, 3] = 5
+        found = g1.g1b_l0({"check|a": {"routes": torch.tensor(ours)}}, exact, {"check|a": vllm}, {"check|a": vllm})
+        assert (found["ok"], found["ratio"]) == (ok, None)
+
+
+G1B_POSITIONS = {
+    "diag-moe-fix-r1/dropless-fp32-combine/positions.pt": 1.2975,
+    "diag-moe-fp32act-r1/dropless-fp32-combine-fp32-activations/positions.pt": 1.1909,
+    "diag-flag-arms-r1/torch-order-xla-default/positions.pt": 1.0355,
+    "diag-flag-arms-r1/torch-order-no-excess-precision/positions.pt": 1.0417,
+    "diag-flag-arms-r1/fa4-no-excess-precision/positions.pt": 1.0247,
+}
+
+
+@pytest.mark.skipif(
+    not (
+        TORCH_BATCHED_TOP6.exists() and VLLM_CAPTURE.exists() and all((T310_LOCAL / p).exists() for p in G1B_POSITIONS)
+    ),
+    reason="local t310 copies",
+)
+def test_g1b_l0_reproduces_the_recorded_arms():
+    """TB_0 = 0.95845 / 0.95826 (446c7b1b); the five arms' ratios, with fix-r1 the only one above 1.25."""
+    assert hashlib.sha256(TORCH_BATCHED_TOP6.read_bytes()).hexdigest() == g1.TORCH_BATCHED_TOP6_SHA256
+    batched = torch.load(TORCH_BATCHED_TOP6, map_location="cpu")
+    passes = [torch.load(VLLM_CAPTURE / f"pass-{n}/routes.pt", map_location="cpu") for n in (1, 2)]
+    for path, ratio in G1B_POSITIONS.items():
+        found = g1.g1b_l0(torch.load(T310_LOCAL / path, map_location="cpu", weights_only=False), batched, *passes)
+        assert [round(x, 5) for x in found["TB_0"]] == [0.95845, 0.95826]
+        assert found["ratio"] == pytest.approx(ratio, abs=1e-4)
+        assert found["ok"] is (ratio <= 1.25)
