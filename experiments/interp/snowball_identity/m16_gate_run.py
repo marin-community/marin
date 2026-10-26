@@ -256,6 +256,11 @@ def preflight_arm(arm: str, run_root: str | None, merge: dict | None = None) -> 
     return {**provenance, "vllm": VLLM, "serve_args": SERVE_ARGS}
 
 
+def cancel_record(returncode: int) -> dict:
+    """The serve release as recorded in the receipt: cancelled only when the cancel command succeeded."""
+    return {"cancel_rc": returncode, "cancelled_after_scoring": returncode == 0}
+
+
 def idle_whole_h100_nodes() -> int:
     out = subprocess.run(
         [*IRIS, "rpc", "controller", "list-peers"],
@@ -353,12 +358,12 @@ def run(arm, run_root, model, merge_audit, merge_readback, label, gate_path, pro
             [*IRIS, "job", "logs", "--no-tail", "--max-lines", "50000", f"/karan/{name}"],
             capture_output=True, text=True,
         ).stdout  # fmt: skip
-        subprocess.run(
+        cancel_rc = subprocess.run(
             [*IRIS, "job", "cancel", f"/karan/{name}"],
             capture_output=True,
-        )  # fmt: skip
+        ).returncode  # fmt: skip
     receipt["provenance"]["engine_log_markers"] = {marker: marker in logs for marker in ENGINE_LOG_MARKERS}
-    receipt["provenance"]["serve"]["cancelled_after_scoring"] = True
+    receipt["provenance"]["serve"].update(cancel_record(cancel_rc))
     m16_gate.write_json(out_dir / f"m16-gate-{tag}.json", receipt)
     print(json.dumps({"arm": arm, "primary_wins": receipt["primary_wins"]["won"], "status": "scored"}))
 

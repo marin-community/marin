@@ -417,3 +417,8 @@ def test_sft_arm_records_its_candidate_kind(monkeypatch):
     provenance = m16_gate_run.preflight_arm("candidate", "s3://b/run")
     assert provenance["arm"] == "candidate" and provenance["candidate_kind"] == "sft"
     assert provenance["binding"] == {"hf_path": "s3://b/run/hf/step-15"}
+
+
+def test_the_receipt_records_a_cancel_only_when_it_succeeded():
+    assert m16_gate_run.cancel_record(0) == {"cancel_rc": 0, "cancelled_after_scoring": True}
+    assert m16_gate_run.cancel_record(1) == {"cancel_rc": 1, "cancelled_after_scoring": False}
