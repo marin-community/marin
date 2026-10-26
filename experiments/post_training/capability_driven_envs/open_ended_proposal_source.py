@@ -167,7 +167,6 @@ def planning_record(bundle: OpenEndedTaskBundle) -> dict[str, object]:
         "brief": bundle.brief.model_dump(mode="json"),
         "solver_resources": resources,
         "source": bundle.source.model_dump(mode="json"),
-        "release_status": str(bundle.release_status),
         "tags": list(bundle.tags),
     }
 
@@ -236,7 +235,7 @@ SECTION_GUIDE = """- Task: the realistic solver-facing request, visible files, d
   gates, deterministic checks where possible, and positive, partial, severe-negative, verbosity, and injection
   controls. Do not invent exact private values.
 - Risks and null conditions: identify ambiguity, leakage, unsupported-analysis, and data-rights risks; preserve the
-  supplied split group and release status.
+  supplied split group. Release status is campaign metadata and must not enter solver-facing text.
 """
 
 

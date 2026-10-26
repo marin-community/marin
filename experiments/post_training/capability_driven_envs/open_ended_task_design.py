@@ -208,7 +208,6 @@ def authoring_record(hydrated: OpenEndedBuildInput, proposal: TaskProposal) -> d
         "solver_resources": [_text_resource(resource, complete=False) for resource in hydrated.solver_resources],
         "private_author_evidence": [_text_resource(resource, complete=True) for resource in hydrated.author_evidence],
         "source": hydrated.source.model_dump(mode="json"),
-        "release_status": str(hydrated.release_status),
         "tags": list(hydrated.tags),
     }
 
@@ -219,9 +218,12 @@ invent missing facts. Private author evidence may ground the reference, rubric, 
 contents must not be exposed in the solver instruction. The solver may use only the listed solver resources.
 
 Produce one complete frozen design. The instruction must be answerable from solver resources and must not reveal the
-reference or discuss grading. The reference must actually answer the instruction. The weighted rubric must contain
-observable, task-specific scientific requirements plus shared correctness and anti-hacking requirements. Scored item
-weights must sum to 1; gates, caps, and disqualifiers have weight 0. Candidate answers cannot alter the rubric.
+reference, grading contract, or campaign release status. Every required analysis and reference claim must be grounded
+in the brief and private evidence. Do not broaden the task with inferential analyses, exact derived values, or domain
+claims that the private evidence does not support; straightforward transparent arithmetic is allowed. The reference
+must actually answer the instruction. The weighted rubric must contain observable, task-specific requirements plus
+shared correctness and anti-hacking requirements. Scored item weights must sum to 1; gates, caps, and disqualifiers
+have weight 0. Candidate answers cannot alter the rubric.
 
 Create exactly one control of each kind: reference, partial, severe_negative, evaluator_injection, and verbosity.
 The reference control must exactly equal the reference. Controls are private candidate answers, not additions to the
@@ -235,8 +237,8 @@ def author_prompt(hydrated: OpenEndedBuildInput, proposal: TaskProposal) -> str:
     slot = _slot(proposal, hydrated)
     return f"""Author proposal slot {slot} as a single open-ended TaskSpec design. Set proposal_slot to {slot}.
 The curator packet below is the complete source of task-specific intent, constraints, data, and evidence. Preserve
-its avoid list and release restrictions. Do not copy private paths into the instruction. Choose a concise output
-budget appropriate to the requested deliverable.
+its avoid list. Do not copy private paths into the instruction or expand beyond privately supported requirements.
+Choose a concise output budget appropriate to the requested deliverable.
 
 CURATOR INPUT:
 {pretty_json(authoring_record(hydrated, proposal))}"""

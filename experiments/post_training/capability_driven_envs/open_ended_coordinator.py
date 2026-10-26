@@ -161,4 +161,6 @@ def _validate_draft(
     leaked_paths = [resource.path for resource in bundle.author_evidence if resource.path.encode() in context]
     if leaked_paths:
         raise ValueError(f"solver instruction exposes private evidence paths: {leaked_paths}")
+    if str(bundle.release_status).encode() in context:
+        raise ValueError("solver instruction exposes campaign release status")
     return design, judge
