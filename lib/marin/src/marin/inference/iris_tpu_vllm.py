@@ -19,8 +19,8 @@ from fray.iris_backend import (
     IrisJobHandle,
     convert_constraints,
     convert_container_profile,
-    convert_environment,
     convert_entrypoint,
+    convert_environment,
     convert_resources,
     resolve_coscheduling,
 )
