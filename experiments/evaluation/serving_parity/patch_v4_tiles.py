@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Apply an idempotent, hash-guarded v4 tile experiment to a private uv cache."""
 
 import argparse
@@ -8,7 +11,7 @@ PRISTINE_SHA256 = "bcd21fdaff6b333903a09991d0ad57f3683fef18bf8abef449c0f10d68796
 OLD = "    match tpu_version:\n        case 5 | 6:\n"
 NEW = """    match tpu_version:
         case 4:
-            # Task255 experimental v4 tiles: validate before serving weights.
+            # Experimental v4 tiles: diagnostic only, excluded from shipped-stack PASS.
             bq_sz = bq_csz = 1 if case == RpaCase.DECODE else min(32, max_q)
             bkv_sz = min(512, max_kv)
             bkv_csz = min(128, max_kv)
@@ -28,7 +31,12 @@ def patch(path: Path):
         raise ValueError("Unexpected patched source")
     if source != expected:
         path.write_text(expected)
-    print("TASK255_KERNEL_SHA256", hashlib.sha256(expected.encode()).hexdigest())
+    return dict(
+        kind="experimental_v4_tiles",
+        arithmetic_changed=True,
+        before_sha256=PRISTINE_SHA256,
+        after_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+    )
 
 
 def main():

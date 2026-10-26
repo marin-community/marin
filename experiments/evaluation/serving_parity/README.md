@@ -1,58 +1,73 @@
 # Serving parity calibration
 
-This canary checks the Marin serving composition across H100, single-host TPU,
-and multi-host TPU. It uses the existing vendored Evalchemy client and campaign
-YAMLs, with frozen 100-document GSM8K and BoolQ manifests. A separate echoed
-teacher-forced request crosses the 2048-token attention window.
+This tooling compares Marin's serving composition on H100 and single-host TPU
+(v6e-8 or v5p-8), with an additional multi-host v4-32 arm. It runs the vendored
+Evalchemy client on the frozen GSM8K and BoolQ subsets in `manifest.json` and
+collects echoed teacher-forced scores across the 2048-token attention window.
+No scheduled workflow is enabled; fresh calibration, reference review, final
+thresholds, wall time and cost review are required before activation.
 
-The candidate configuration must not inject `layer_types`: its CPU preflight
-checks the configuration that Marin actually ships. Until the relevant fixes
-reach the shipped pin, report that preflight as `KNOWN_FAIL`. The temporary
-`--workaround-pin` arms explicitly use qualified tpu-inference ae387b8 and the
-layer schedule override. They measure cross-hardware parity, **not shipped-pin
-correctness**. Main's a8fc5c9 also lacks the routing, storage and head-padding
-stack; an override alone is insufficient. Remove workaround arms after adoption.
+Every candidate uses the adopted dependencies from
+`marin.external_dependencies`, without a layer schedule override. Before serving,
+the isolated TPU bootstrap builds the actual engine configuration and fails on
+a schedule mismatch. It derives the expected layer schedule from the fork's
+`grug_moe_layer_types` helper. The runtime trace must match that schedule and the
+expected four KV-cache groups before evaluation starts.
 
-The v4 arm applies a hash-guarded tile adaptation in its private environment.
-The patch is not a production tpu-inference change. Multi-host launch depends on
-Marin PR #10535. Every arm has a one-hour runtime and one-hour scheduling bound,
-zero retries, and a fresh artifact prefix. CoreWeave writes S3; TPU writes GCS.
-Never put credentials or endpoint capabilities in command arguments or reports.
+## Run a bounded calibration
 
-## Calibration
+The launcher defaults to a dry run. Select `--hardware h100`, `v6e-8`, `v5p-8`,
+or `v4-32`, a pinned regional checkpoint via `--weights`, and a fresh `--output`
+prefix. Add `--submit` only for an allocation. Every arm has a one-hour runtime,
+one-hour scheduling deadline and zero retries. H100 uses the fixed HF revision
+and writes S3; TPU reads its verified regional GCS copy and writes to that same
+region. v5p-8 uses one host, four physical chips and TP4 in us-east5; v6e-8 uses
+TP8 there; v4-32 uses four hosts and TP16 in us-central2. Multi-host allocation
+and Ray lifecycle are provided by `marin.inference.iris_tpu_vllm`.
 
-Run `python -m experiments.evaluation.serving_parity.launch --help` for the
-per-arm launcher; it defaults to dry run. Use `--hardware h100`, `v6e-8`, or
-`v4-32`, a pinned checkpoint location, and a new `--output` prefix. TPU
-workaround arms require the explicit `--workaround-pin` flag. Add `--submit`
-only for an actual allocation. H100 uses the fixed HF model revision; TPU
-uses its already-verified regional GCS copy.
+The stock v4 tile selector may not support this geometry. The optional
+`--diagnostic-v4-tiles` flag instruments a private environment with experimental
+tiles, records the original/patched source hashes and marks the result
+**ineligible for shipped-stack PASS**. It never changes the dependency pin or
+model schedule. Such a diagnostic cannot serve as a gate reference either.
+Unmodified H100/v6e/v5p arms can establish the shipped-stack calibration while
+a supported v4 tile selector is developed and adopted separately.
 
-The launcher gates the actual TPU layer trace and four KV groups before running
-work. It archives serial/concurrent teacher responses, actual evaluator HTTP
-payloads, full coverage and per-item results. BoolQ must emit echo requests with
-one generated token; the scored continuation must not include a generation
-suffix. GSM8K must be greedy with a 2048 output cap. Changed per-item length
+The launcher archives source/job identity, hardware profile, pins, preflight,
+trace/kernel patch hashes, serial/concurrent teacher responses, evaluator wire
+payloads, sample coverage and per-item results. Instrumentation and environment
+changes are scoped to the arm and restored on exit. Endpoint capabilities and
+credentials must not appear in command arguments or persisted metadata.
+
+The teacher request uses `max_tokens=0`, but the pinned vLLM may internally
+report one completion token. Acceptance requires exactly the frozen prompt's
+encoded token IDs and echo length, not a zero usage counter. An extra sampled
+suffix is rejected. BoolQ's actual client uses one unscored generated token;
+GSM8K uses greedy generation with a 2048-token cap. Changed per-item length
 finishes fail separately from accuracy.
 
-Compare three completed arm prefixes with:
+## Compare complete, reviewed artifacts
 
 ```sh
 python -m experiments.evaluation.serving_parity.compare \
-  --arm h100=H100_PREFIX --arm v6e=V6E_PREFIX --arm v4=V4_PREFIX \
+  --arm h100=H100_PREFIX --arm v6e-8=V6E_PREFIX --arm v5p-8=V5P_PREFIX \
   --reference REVIEWED_IMMUTABLE_PREFIX --output comparison.json
 ```
 
-References require explicit review; a failed or missing run must never replace
-them automatically. Initial thresholds are mean absolute logprob difference
-0.025 pooled / 0.04 per position band, top-1 disagreement 0.03, and absolute
-combined-SEM accuracy z at most 2. These are provisional until fresh calibration.
-Historical fixed-versus-H100 item303 passes; the original global-layer-windowing
-bug fails pooled and post-2048 band checks. Local mock-client runs validate the
-protocol and artifact plumbing, not model quality.
+Require at least three distinct prefixes with distinct recorded hardware
+identities, and labels matching those identities. Missing results, experimental
+arithmetic patches and missing provenance cannot produce PASS. Model revision,
+frozen dataset manifest and evaluator-source identity must match; TPU peers must
+also use the same adopted pin. Every arm is compared with the reviewed frozen
+reference and every other arm.
 
-The planned schedule is 13:30 UTC, after upstream Evalchemy's 07:00 UTC and
-`tpu-inference`'s 11:00 UTC canaries. Upstream checks fork HEAD; this check belongs
-in Marin because launcher, adopted pins, registry, policy configuration and
-client behavior jointly determine the stack users run. Workflow activation and
-reference freezing follow calibration; no scheduled workflow is enabled yet.
+A reference requires explicit review. Never replace it automatically after a
+failed run. Initial thresholds are mean absolute logprob difference 0.025 pooled
+and 0.04 per position band, top-1 disagreement 0.03, and absolute combined-SEM
+accuracy z at most 2. They remain provisional until fresh calibration. Historical
+fixed-versus-H100 controls and local protocol tests do not establish current
+accelerator parity. Run history belongs in the tracking issue, not these durable
+instructions or a squash-merge description.
+
+The proposed nightly time is 13:30 UTC, after the upstream checks. Scheduling
+remains disabled until reviewed calibration evidence and cost/timing approval.

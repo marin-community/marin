@@ -34,8 +34,8 @@ def normalize_teacher_response(response: dict, expected_ids: list[int]) -> tuple
         )
     if [row.token_id for row in rows] != expected_ids:
         raise ValueError("Echo token IDs differ from frozen teacher input")
-    if response["usage"]["completion_tokens"] != 0:
-        raise ValueError("Teacher probe unexpectedly generated tokens")
+    # max_tokens=0 may internally consume one token on the pinned vLLM stack.
+    # Prompt-only echo identity and length above define the scored contract.
     return tuple(rows)
 
 
@@ -65,9 +65,9 @@ def collect_teacher(endpoint: str, model: str, item: dict, output: Path, *, conc
         if response.status_code != 200:
             raise RuntimeError(f"Teacher request returned HTTP {response.status_code}")
         raw = response.json()
+        (output / f"{index}.raw.json").write_text(json.dumps(raw))
         tokens = normalize_teacher_response(raw, item["token_ids"])
         scored = ScoredSequence(str(item["id"]), digest, tokens)
-        (output / f"{index}.raw.json").write_text(json.dumps(raw))
         (output / f"{index}.json").write_text(json.dumps(asdict(scored)))
         (output / f"{index}.timing.json").write_text(json.dumps({"seconds": time.monotonic() - started}))
         return scored

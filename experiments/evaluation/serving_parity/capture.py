@@ -35,7 +35,7 @@ def capture_requests(endpoint: str, output: Path):
     stream = output.open("x")
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args):  # noqa: A002 - stdlib override parameter
+        def log_message(self, _format: str, *_args):
             pass  # Base handler logs paths; capability-bearing upstream URLs must stay private.
 
         def do_GET(self):
