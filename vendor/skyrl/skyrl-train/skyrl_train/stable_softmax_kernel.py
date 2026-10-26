@@ -19,15 +19,15 @@ def _launch_dimensions(vocab: int) -> tuple[int, int]:
     return block, LARGE_BLOCK_WARPS if block >= MAX_BLOCK_SIZE else SMALL_BLOCK_WARPS
 
 
-@triton.jit(do_not_specialize=["X_BATCH", "X_SEQ", "X_VOCAB", "SEQ", "ROWS", "VOCAB_START"])
+@triton.jit(do_not_specialize=["X_BATCH_STRIDE", "X_SEQ_STRIDE", "X_VOCAB_STRIDE", "SEQ", "ROWS", "VOCAB_START"])
 def _softmax_forward(
     X,
     Y,
     Output,
     Stats,
-    X_BATCH,
-    X_SEQ,
-    X_VOCAB,
+    X_BATCH_STRIDE,
+    X_SEQ_STRIDE,
+    X_VOCAB_STRIDE,
     SEQ,
     VOCAB: tl.constexpr,
     ROWS,
@@ -37,13 +37,13 @@ def _softmax_forward(
     BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0).to(tl.int64)
-    x_row = X + (row // SEQ) * X_BATCH + (row % SEQ) * X_SEQ
+    x_row = X + (row // SEQ) * X_BATCH_STRIDE + (row % SEQ) * X_SEQ_STRIDE
     m = float("-inf")
     s = 0.0
     t = 0.0
     for start in range(0, VOCAB, BLOCK):
         offsets = start + tl.arange(0, BLOCK)
-        x = tl.load(x_row + offsets * X_VOCAB, offsets < VOCAB, float("-inf")).to(tl.float32)
+        x = tl.load(x_row + offsets * X_VOCAB_STRIDE, offsets < VOCAB, float("-inf")).to(tl.float32)
         b, index = tl.max(x, 0, return_indices=True)
         a = x - b
         e = tl.exp(a)
@@ -68,7 +68,7 @@ def _softmax_forward(
         output = libdevice.log1p(s) - t / (1.0 + s)
     else:
         y = tl.load(Y + row) - VOCAB_START
-        selected = tl.load(x_row + y * X_VOCAB).to(tl.float32)
+        selected = tl.load(x_row + y * X_VOCAB_STRIDE).to(tl.float32)
         output = (selected - m) - libdevice.log1p(s)
     tl.store(Output + row, output)
     if SAVE_STATS:
@@ -79,7 +79,17 @@ def _softmax_forward(
 
 
 @triton.jit(
-    do_not_specialize=["X_BATCH", "X_SEQ", "X_VOCAB", "G_BATCH", "G_SEQ", "G_VOCAB", "SEQ", "ROWS", "VOCAB_START"]
+    do_not_specialize=[
+        "X_BATCH_STRIDE",
+        "X_SEQ_STRIDE",
+        "X_VOCAB_STRIDE",
+        "G_BATCH_STRIDE",
+        "G_SEQ_STRIDE",
+        "G_VOCAB_STRIDE",
+        "SEQ",
+        "ROWS",
+        "VOCAB_START",
+    ]
 )
 def _softmax_backward(
     X,
@@ -87,12 +97,12 @@ def _softmax_backward(
     Stats,
     Upstream,
     Gradient,
-    X_BATCH,
-    X_SEQ,
-    X_VOCAB,
-    G_BATCH,
-    G_SEQ,
-    G_VOCAB,
+    X_BATCH_STRIDE,
+    X_SEQ_STRIDE,
+    X_VOCAB_STRIDE,
+    G_BATCH_STRIDE,
+    G_SEQ_STRIDE,
+    G_VOCAB_STRIDE,
     SEQ,
     VOCAB: tl.constexpr,
     ROWS,
@@ -101,8 +111,8 @@ def _softmax_backward(
     BLOCK: tl.constexpr,
 ):
     row = tl.program_id(0).to(tl.int64)
-    x_row = X + (row // SEQ) * X_BATCH + (row % SEQ) * X_SEQ
-    grad_row = Gradient + (row // SEQ) * G_BATCH + (row % SEQ) * G_SEQ
+    x_row = X + (row // SEQ) * X_BATCH_STRIDE + (row % SEQ) * X_SEQ_STRIDE
+    grad_row = Gradient + (row // SEQ) * G_BATCH_STRIDE + (row % SEQ) * G_SEQ_STRIDE
     m = tl.load(Stats + row)
     s = tl.load(Stats + ROWS + row)
     weight = tl.load(Upstream + row).to(tl.float32)
@@ -113,7 +123,7 @@ def _softmax_backward(
     for start in range(0, VOCAB, BLOCK):
         offsets = start + tl.arange(0, BLOCK)
         mask = offsets < VOCAB
-        x = tl.load(x_row + offsets * X_VOCAB, mask, float("-inf")).to(tl.float32)
+        x = tl.load(x_row + offsets * X_VOCAB_STRIDE, mask, float("-inf")).to(tl.float32)
         a = x - m
         q = tl.exp(a) / (1.0 + s)
         if ENTROPY:
@@ -121,7 +131,7 @@ def _softmax_backward(
         else:
             target_gradient = tl.where(a == 0.0, s / (1.0 + s), 1.0 - q)
             gradient = tl.where(offsets == y, target_gradient, -q)
-        tl.store(grad_row + offsets * G_VOCAB, gradient * weight, mask)
+        tl.store(grad_row + offsets * G_VOCAB_STRIDE, gradient * weight, mask)
 
 
 def softmax_forward(

@@ -5,6 +5,8 @@ from typing import NamedTuple
 
 import torch
 
+VALUE_RTOL = 5e-6
+
 
 class SoftmaxReference(NamedTuple):
     logprobs: torch.Tensor
@@ -85,8 +87,8 @@ def assert_softmax_numerics(
     for lp_weight, h_weight in ((1.0, 0.0), (0.0, 1.0), (0.7, -0.3)):
         logits = data.detach().clone().requires_grad_()
         lp, h = logprobs(logits, targets), entropy(logits)
-        torch.testing.assert_close(lp.double().cpu(), expected_lp, rtol=5e-6, atol=0)
-        torch.testing.assert_close(h.double().cpu(), expected_h, rtol=5e-6, atol=0)
+        torch.testing.assert_close(lp.double().cpu(), expected_lp, rtol=VALUE_RTOL, atol=0)
+        torch.testing.assert_close(h.double().cpu(), expected_h, rtol=VALUE_RTOL, atol=0)
         loss = ((lp_weight * lp + h_weight * h) * weights).sum()
         actual = torch.autograd.grad(loss, logits)[0].double().cpu()
         lp_gradient = lp_weight * expected_glp * weights.double().cpu().unsqueeze(-1)
@@ -105,8 +107,8 @@ def assert_softmax_numerics(
         )
     with torch.no_grad():
         full_lp, full_h = logprobs(data, targets), entropy(data)
-        torch.testing.assert_close(full_lp.double().cpu(), expected_lp, rtol=5e-6, atol=0)
-        torch.testing.assert_close(full_h.double().cpu(), expected_h, rtol=5e-6, atol=0)
+        torch.testing.assert_close(full_lp.double().cpu(), expected_lp, rtol=VALUE_RTOL, atol=0)
+        torch.testing.assert_close(full_h.double().cpu(), expected_h, rtol=VALUE_RTOL, atol=0)
         one = data[:1, :1].expand(2, -1, -1)
         one_targets = targets[:1, :1].expand(2, -1)
         torch.testing.assert_close(logprobs(one, one_targets), full_lp[:1, :1].expand(2, -1), rtol=0, atol=0)

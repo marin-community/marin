@@ -9,7 +9,7 @@ from typing import ClassVar, Optional, Self
 import torch
 
 from marinskyrl.distillation import TeacherEvidenceKind
-from skyrl_train.distributed.megatron import stable_softmax
+from skyrl_train import stable_softmax
 
 INVALID_TOPK_INDEX = -1
 RETAINED_MASS_ATOL = 1e-6

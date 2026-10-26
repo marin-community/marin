@@ -5,11 +5,11 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from skyrl_train.distributed.megatron import stable_softmax
+from skyrl_train import stable_softmax
 from skyrl_train.distillation import student_topk_logprobs
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 from skyrl_train.utils.policy_math import differentiable_approx_kl
-from tests.softmax_reference import assert_softmax_numerics, decimal_reference, numerical_rows
+from tests.softmax_reference import VALUE_RTOL, assert_softmax_numerics, decimal_reference, numerical_rows
 
 
 def test_token_softmax_confident_values_and_gradients() -> None:
@@ -22,7 +22,7 @@ def test_token_softmax_confident_values_and_gradients() -> None:
         scoring = stable_softmax.token_logprobs(logits.requires_grad_(), targets, 0, 33, None, inference_only=True)
         assert not scoring.requires_grad
         expected_lp = decimal_reference(logits, targets)[0]
-        torch.testing.assert_close(scoring.double(), expected_lp, rtol=5e-6, atol=0)
+        torch.testing.assert_close(scoring.double(), expected_lp, rtol=VALUE_RTOL, atol=0)
 
 
 def _distributed_softmax(rank: int, rendezvous: str) -> None:
@@ -35,8 +35,8 @@ def _distributed_softmax(rank: int, rendezvous: str) -> None:
         logits = full[..., shard].clone().requires_grad_()
         lp = stable_softmax.token_logprobs(logits, targets, rank * 4, (rank + 1) * 4, dist.group.WORLD, chunk_size=7)
         h = stable_softmax.token_entropy(logits, dist.group.WORLD, chunk_size=7)
-        torch.testing.assert_close(lp.double(), expected_lp, rtol=5e-6, atol=0)
-        torch.testing.assert_close(h.double(), expected_h, rtol=5e-6, atol=0)
+        torch.testing.assert_close(lp.double(), expected_lp, rtol=VALUE_RTOL, atol=0)
+        torch.testing.assert_close(h.double(), expected_h, rtol=VALUE_RTOL, atol=0)
         weights = torch.linspace(-0.7, 1.3, targets.numel()).reshape(targets.shape)
         actual = torch.autograd.grad(((0.7 * lp - 0.3 * h) * weights).sum(), logits)[0].double()
         lp_gradient = (0.7 * expected_glp * weights.double().unsqueeze(-1)).to(logits.dtype)
@@ -66,7 +66,7 @@ def test_selected_logprobs_confident_target_and_invalid_ids() -> None:
     assert actual[..., -1].isnan().all()
     for column in range(3):
         lp, _, gradient, _ = decimal_reference(data, indices[..., column])
-        torch.testing.assert_close(actual[..., column].double(), lp, rtol=5e-6, atol=0)
+        torch.testing.assert_close(actual[..., column].double(), lp, rtol=VALUE_RTOL, atol=0)
         actual_gradient = torch.autograd.grad(actual[..., column].sum(), logits, retain_graph=True)[0].double()
         torch.testing.assert_close(actual_gradient, gradient, rtol=5e-5, atol=0)
 

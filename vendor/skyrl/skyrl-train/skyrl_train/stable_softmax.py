@@ -97,7 +97,7 @@ class _StableSoftmax(torch.autograd.Function):
         )
         if triton_path:
             # Triton is optional for CPU and vocabulary-parallel execution.
-            from skyrl_train.distributed.megatron.stable_softmax_kernel import softmax_forward
+            from skyrl_train.stable_softmax_kernel import softmax_forward
 
             output, stats = softmax_forward(logits, targets, vocab_start, save_stats)
         else:
@@ -118,7 +118,7 @@ class _StableSoftmax(torch.autograd.Function):
         target = None if ctx.entropy else targets[0]
         if ctx.triton_path:
             # Triton is optional for CPU and vocabulary-parallel execution.
-            from skyrl_train.distributed.megatron.stable_softmax_kernel import softmax_backward
+            from skyrl_train.stable_softmax_kernel import softmax_backward
 
             gradient = softmax_backward(logits, target, stats, grad_output, ctx.vocab_start)
         else:

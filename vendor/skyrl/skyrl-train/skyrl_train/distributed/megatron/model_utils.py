@@ -23,19 +23,7 @@ import torch.distributed as dist
 import megatron.core.parallel_state as mpu
 
 
-from skyrl_train.distributed.megatron.stable_softmax import token_entropy, token_logprobs
-
-
-def _parallel_logprobs(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    vocab_start_index: int,
-    vocab_end_index: int,
-    group: dist.ProcessGroup,
-    inference_only: bool,
-    chunk_size: int | None,
-) -> torch.Tensor:
-    return token_logprobs(logits, targets, vocab_start_index, vocab_end_index, group, inference_only, chunk_size)
+from skyrl_train.stable_softmax import token_entropy, token_logprobs
 
 
 def from_parallel_logits_to_logprobs(
@@ -79,7 +67,7 @@ def from_parallel_logits_to_logprobs(
     cp_rank = torch.distributed.get_rank(cp_group)
     target = _get_tokens_on_this_cp_rank(target, cp_rank, cp_size, seq_dim=1)
 
-    logprobs = _parallel_logprobs(
+    logprobs = token_logprobs(
         vocab_parallel_logits, target, vocab_start_index, vocab_end_index, tp_group, inference_only, chunk_size
     )
 
@@ -153,7 +141,7 @@ def from_parallel_logits_to_logprobs_packed_sequences(
     vocab_parallel_logits = vocab_parallel_logits.unsqueeze(0)
 
     # Apply distributed log probability computation
-    probs = _parallel_logprobs(
+    probs = token_logprobs(
         vocab_parallel_logits, rolled_targets, vocab_start_index, vocab_end_index, group, inference_only, chunk_size
     )
 
