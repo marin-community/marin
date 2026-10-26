@@ -33,6 +33,7 @@ PRIVILEGED = job_pb2.CONTAINER_PROFILE_PRIVILEGED
 DOCKER_ACCESS = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
 RESTRICTED = job_pb2.CONTAINER_PROFILE_RESTRICTED
 DEFAULT = job_pb2.CONTAINER_PROFILE_DEFAULT
+BUBBLEWRAP = job_pb2.CONTAINER_PROFILE_BUBBLEWRAP
 SANDBOX = job_pb2.CONTAINER_PROFILE_SANDBOX
 
 
@@ -94,9 +95,9 @@ def test_admin_can_use_elevated_profile(service, profile):
     assert resp.job_id == "/admin/job"
 
 
-@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, SANDBOX, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
+@pytest.mark.parametrize("profile", [RESTRICTED, DEFAULT, BUBBLEWRAP, SANDBOX, job_pb2.CONTAINER_PROFILE_UNSPECIFIED])
 def test_non_admin_can_use_unprivileged_profile(service, profile):
-    """RESTRICTED/DEFAULT/SANDBOX/UNSPECIFIED need no authorization.
+    """The profiles without host-root access need no admin authorization.
 
     SANDBOX is un-gated on purpose: gVisor gives in-guest capabilities while
     isolating the host, so it is safe to hand out without the admin role.

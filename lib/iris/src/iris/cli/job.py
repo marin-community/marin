@@ -1004,7 +1004,8 @@ Examples:
     default=None,
     help=(
         "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
-        "the container; SANDBOX runs under gVisor with only the job's -e variables and no "
+        "the container; BUBBLEWRAP permits nested bubblewrap on Kubernetes; "
+        "SANDBOX runs under gVisor with only the job's -e variables and no "
         "workspace bundle; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )

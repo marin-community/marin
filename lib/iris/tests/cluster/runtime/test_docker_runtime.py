@@ -214,6 +214,11 @@ def test_security_flags_default_tpu_is_privileged():
     assert "SYS_PTRACE" in flags
 
 
+def test_security_flags_bubblewrap_profile_rejected_on_docker():
+    with pytest.raises(ValueError, match="only supported on Kubernetes"):
+        _security_flags(job_pb2.CONTAINER_PROFILE_BUBBLEWRAP, is_tpu_run=False)
+
+
 def test_security_flags_restricted_omits_ptrace():
     flags = _security_flags(job_pb2.CONTAINER_PROFILE_RESTRICTED, is_tpu_run=False)
     assert flags == ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
