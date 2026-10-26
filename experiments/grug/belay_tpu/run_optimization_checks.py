@@ -38,6 +38,7 @@ def main():
             "gather-layout",
             "gmm-layout",
             "indexed-up",
+            "feature-combine",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
@@ -90,6 +91,7 @@ def main():
         "gather-layout": ("gather_layout_check", []),
         "gmm-layout": ("gmm_layout_check", []),
         "indexed-up": ("indexed_up_check", []),
+        "feature-combine": ("feature_combine_check", []),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -167,6 +169,7 @@ def main():
             "gather-layout",
             "gmm-layout",
             "indexed-up",
+            "feature-combine",
         ):
             break
     raise SystemExit(1 if failed else 0)
