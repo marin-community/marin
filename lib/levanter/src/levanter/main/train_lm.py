@@ -352,7 +352,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=config.trainer.compute_policy,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
@@ -409,7 +409,7 @@ def main(config: TrainLmConfig):
             eval_harness = config.eval_harness
             trainer.add_hook(
                 levanter.eval_harness.lm_eval_harness(
-                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, trainer.mp
+                    eval_harness, tokenizer, EvalBatch, compute_axis_mapping, config.trainer.compute_policy
                 ),
                 every=config.eval_harness_steps,
             )

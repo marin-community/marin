@@ -79,3 +79,31 @@ def test_wrapped_loss_and_trainer_compute_view_share_override():
 def test_bad_compute_override_fails(overrides):
     with pytest.raises(ValueError):
         cast_model_for_compute(router(), jmp.get_policy("p=f32,c=bf16,o=f32"), overrides)
+
+
+def test_eval_policy_builds_the_training_compute_view():
+    """Evaluation receives ``TrainerConfig.compute_policy``; its cast must equal the train step's compute view."""
+    policy = jmp.get_policy("p=f32,c=bf16,o=f32")
+    config = TrainerConfig(
+        id="eval-view-test",
+        mp=policy,
+        compute_dtype_overrides={"router_bias": "float32"},
+        tracker=(),
+        require_accelerator=False,
+        mesh=MeshConfig(),
+    )
+    trainer = Trainer(config, optax.sgd(0.01), lambda model: (jnp.zeros(()), {}), add_default_hooks=False)
+    model = tuple(router() for _ in range(3))
+    eval_view = eqx.filter_jit(config.compute_policy.cast_to_compute)(model)
+    train_view = trainer.compute_model(model)
+    for actual, expected in zip(jax.tree.leaves(eval_view), jax.tree.leaves(train_view), strict=True):
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.dtype == expected.dtype
+    assert all(view.router_bias.dtype == jnp.float32 for view in eval_view)
+    assert all(view.weight.dtype == jnp.bfloat16 for view in eval_view)
+
+
+def test_eval_policy_without_overrides_is_the_trainer_policy():
+    policy = jmp.get_policy("p=f32,c=bf16,o=f32")
+    config = TrainerConfig(id="eval-view-default", mp=policy, tracker=(), require_accelerator=False, mesh=MeshConfig())
+    assert config.compute_policy is policy

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import types
 
 import equinox as eqx
 import haliax as hax
@@ -128,7 +129,9 @@ def test_frozen_adaptor_native_resume_restores_optimizer_and_pinned_base(tmp_pat
         np.testing.assert_array_equal(resumed_leaf, expected_leaf)
 
 
-def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_path, local_gpt2_tokenizer_path):
+@pytest.fixture
+def native_snowball(tmp_path, local_gpt2_tokenizer_path):
+    """A 26-layer Snowball saved as a mixed-dtype HF source, loaded with native frozen storage."""
     config = SnowballConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -155,7 +158,6 @@ def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_pat
             model,
             tuple(jnp.array([0.1234567, -0.2345678], jnp.float32) for _ in range(26)),
         )
-        original = to_torch_compatible_state_dict(model)
         converter = config.hf_checkpoint_converter()
         source_path = str(tmp_path / "base")
         converter.save_pretrained(
@@ -187,68 +189,113 @@ def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_pat
             parameter_axis_mapping={},
             trainer=trainer,
         )
-        loaded = _load_lm_model_from_configured_source(**source_kwargs)
-        compute_config = dataclasses.replace(trainer_config, frozen_parameter_storage=FrozenParameterStorage.COMPUTE)
-        compute_trainer = Trainer(compute_config, optax.adamw(0.1), loss, add_default_hooks=False)
-        rounded = _load_lm_model_from_configured_source(
-            **{
-                **source_kwargs,
-                "config": dataclasses.replace(lm_config, trainer=compute_config),
-                "trainer": compute_trainer,
-            }
+        yield types.SimpleNamespace(
+            model=model,
+            original=to_torch_compatible_state_dict(model),
+            overrides=overrides,
+            adaptor=adaptor,
+            converter=converter,
+            trainer_config=trainer_config,
+            lm_config=lm_config,
+            trainer=trainer,
+            source_kwargs=source_kwargs,
+            tmp_path=tmp_path,
         )
-        for block, original_block in zip(rounded.transformer.blocks, model.transformer.blocks):
-            expected_rounded = original_block.mlp.router_bias.astype(jnp.bfloat16).astype(jnp.float32)
-            np.testing.assert_array_equal(block.mlp.router_bias, expected_rounded)
-            assert not np.array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
-        state = trainer.initial_state(
-            jax.random.PRNGKey(0),
-            model=loaded,
-            is_trainable=adaptor.trainable_filter(loaded),
-        )
-        grads = eqx.filter_grad(lambda value: sum(jnp.sum(leaf**2) for leaf in jax.tree.leaves(value)))(state.model)
-        for block in grads.transformer.blocks:
-            assert np.all(np.asarray(block.mlp.router_bias) != 0)
-        state = state.take_step(grads, key=jax.random.PRNGKey(1))[0]
-        state = state.take_step(grads, key=jax.random.PRNGKey(2))[0]
-        checkpoint = str(tmp_path / "native" / "step-1")
-        save_checkpoint(state.saveable_state, step=1, checkpoint_path=checkpoint)
-        assert (tmp_path / "native" / "step-1" / "metadata.json").exists()
-        restored = load_checkpoint(state.saveable_state, checkpoint)
-        reloaded_base = _load_lm_model_from_configured_source(**source_kwargs)
-        restored = dataclasses.replace(
-            restored,
-            model=_restore_lm_model_from_partial_checkpoint(
-                restored.model, reloaded_base, adaptor.trainable_filter(reloaded_base)
-            ),
-        )
-        restored = restored.take_step(grads, key=jax.random.PRNGKey(3))[0]
-        uninterrupted = state.take_step(grads, key=jax.random.PRNGKey(3))[0]
-        for actual_leaf, expected_leaf in zip(
-            jax.tree.leaves(restored.opt_state), jax.tree.leaves(uninterrupted.opt_state)
-        ):
-            np.testing.assert_array_equal(actual_leaf, expected_leaf)
-        updated = to_torch_compatible_state_dict(restored.model)
-        callback = save_hf_checkpoint_callback(
-            str(tmp_path),
-            converter,
-            save_dtype=jnp.bfloat16,
-            dtype_overrides=adaptor.hf_save_dtype_overrides,
-            save_tokenizer=False,
-            save_reference_code=False,
-        )
+
+
+def stepped(env):
+    """Native-storage state after two updates, and the gradients used for them."""
+    loaded = _load_lm_model_from_configured_source(**env.source_kwargs)
+    state = env.trainer.initial_state(
+        jax.random.PRNGKey(0),
+        model=loaded,
+        is_trainable=env.adaptor.trainable_filter(loaded),
+    )
+    grads = eqx.filter_grad(lambda value: sum(jnp.sum(leaf**2) for leaf in jax.tree.leaves(value)))(state.model)
+    state = state.take_step(grads, key=jax.random.PRNGKey(1))[0]
+    state = state.take_step(grads, key=jax.random.PRNGKey(2))[0]
+    return state, grads
+
+
+def resumed(env, state, grads):
+    """Save at step 1, restore with the reloaded pinned base, and take one more update."""
+    checkpoint = str(env.tmp_path / "native" / "step-1")
+    save_checkpoint(state.saveable_state, step=1, checkpoint_path=checkpoint)
+    assert (env.tmp_path / "native" / "step-1" / "metadata.json").exists()
+    restored = load_checkpoint(state.saveable_state, checkpoint)
+    reloaded_base = _load_lm_model_from_configured_source(**env.source_kwargs)
+    restored = dataclasses.replace(
+        restored,
+        model=_restore_lm_model_from_partial_checkpoint(
+            restored.model, reloaded_base, env.adaptor.trainable_filter(reloaded_base)
+        ),
+    )
+    return restored.take_step(grads, key=jax.random.PRNGKey(3))[0]
+
+
+def test_compute_storage_rounds_frozen_biases_to_compute_dtype(native_snowball):
+    env = native_snowball
+    compute_config = dataclasses.replace(env.trainer_config, frozen_parameter_storage=FrozenParameterStorage.COMPUTE)
+    compute_trainer = Trainer(compute_config, optax.adamw(0.1), loss, add_default_hooks=False)
+    rounded = _load_lm_model_from_configured_source(
+        **{
+            **env.source_kwargs,
+            "config": dataclasses.replace(env.lm_config, trainer=compute_config),
+            "trainer": compute_trainer,
+        }
+    )
+    for block, original_block in zip(rounded.transformer.blocks, env.model.transformer.blocks):
+        expected_rounded = original_block.mlp.router_bias.astype(jnp.bfloat16).astype(jnp.float32)
+        np.testing.assert_array_equal(block.mlp.router_bias, expected_rounded)
+        assert not np.array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
+
+
+def test_native_frozen_biases_receive_gradients_but_stay_fixed(native_snowball):
+    env = native_snowball
+    state, grads = stepped(env)
+    for block in grads.transformer.blocks:
+        assert np.all(np.asarray(block.mlp.router_bias) != 0)
+    for block, original_block in zip(state.model.transformer.blocks, env.model.transformer.blocks):
+        np.testing.assert_array_equal(block.mlp.router_bias, original_block.mlp.router_bias)
+
+
+def test_native_partial_checkpoint_resume_matches_uninterrupted(native_snowball):
+    env = native_snowball
+    state, grads = stepped(env)
+    restored = resumed(env, state, grads)
+    uninterrupted = state.take_step(grads, key=jax.random.PRNGKey(3))[0]
+    for actual_leaf, expected_leaf in zip(
+        jax.tree.leaves(restored.opt_state), jax.tree.leaves(uninterrupted.opt_state)
+    ):
+        np.testing.assert_array_equal(actual_leaf, expected_leaf)
+
+
+def test_mixed_dtype_hf_export_keeps_fp32_frozen_biases(native_snowball):
+    env = native_snowball
+    state, grads = stepped(env)
+    restored = resumed(env, state, grads)
+    updated = to_torch_compatible_state_dict(restored.model)
+    callback = save_hf_checkpoint_callback(
+        str(env.tmp_path),
+        env.converter,
+        save_dtype=jnp.bfloat16,
+        dtype_overrides=env.adaptor.hf_save_dtype_overrides,
+        save_tokenizer=False,
+        save_reference_code=False,
+    )
+    with jax.set_mesh(compact_grug_mesh()):
         callback(StepInfo(state=restored, loss=0.0, step_duration=0.0))
     actual = {}
-    for filename in (tmp_path / "step-2").glob("*.safetensors"):
+    for filename in (env.tmp_path / "step-2").glob("*.safetensors"):
         with safetensors.safe_open(filename, framework="jax", device="cpu") as shard:
             actual.update({name: shard.get_tensor(name) for name in shard.keys()})
-    assert len(actual) == len(original) == 502
-    assert set(actual) == set(original)
+    assert len(actual) == len(env.original) == 502
+    assert set(actual) == set(env.original)
     for name, value in actual.items():
-        if name in overrides:
+        if name in env.overrides:
             assert value.dtype == jnp.float32
-            np.testing.assert_array_equal(value, original[name])
+            np.testing.assert_array_equal(value, env.original[name])
         else:
             assert value.dtype == jnp.bfloat16
             np.testing.assert_array_equal(value, updated[name].astype(jnp.bfloat16))
-    assert not np.array_equal(updated["model.embed_tokens.weight"], original["model.embed_tokens.weight"])
+    assert not np.array_equal(updated["model.embed_tokens.weight"], env.original["model.embed_tokens.weight"])
