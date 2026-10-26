@@ -37,7 +37,11 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
 )
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.capacity_layout import factorized_route_counts, interval_route_layout
-from experiments.grug.belay_tpu.expert_collectives import all_to_all_reduce_scatter, butterfly_reduce_scatter
+from experiments.grug.belay_tpu.expert_collectives import (
+    all_to_all_reduce_scatter,
+    butterfly_reduce_scatter,
+    gather_expert_weights_with_owner_sum,
+)
 from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot, whole_width_tiling
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
 from experiments.grug.belay_tpu.local_movement import combine_expert_order
@@ -169,7 +173,9 @@ def main():
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
-    parser.add_argument("--expert-reduction", choices=("native", "butterfly", "all-to-all"), default="native")
+    parser.add_argument(
+        "--expert-reduction", choices=("native", "butterfly", "all-to-all", "all-to-all-source"), default="native"
+    )
     parser.add_argument("--initial-checkpoint", help="Profile continuation from a complete checkpoint leaf")
     parser.add_argument(
         "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
@@ -246,6 +252,8 @@ def main():
         local_experts.reduce_expert_gradients = butterfly_reduce_scatter
     elif args.expert_reduction == "all-to-all":
         local_experts.reduce_expert_gradients = all_to_all_reduce_scatter
+    elif args.expert_reduction == "all-to-all-source":
+        local_experts.gather_expert_weights = gather_expert_weights_with_owner_sum
     if args.update_steps < 2:
         parser.error("Checkpoint continuation requires at least two consecutive updates")
     if args.profile_steps < 0:

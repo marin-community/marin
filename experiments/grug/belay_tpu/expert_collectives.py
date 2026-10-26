@@ -27,8 +27,26 @@ def butterfly_reduce_scatter(gradient):
 
 
 def all_to_all_reduce_scatter(gradient):
-    """Exchange expert shards, then sum FP32 contributions at their owner."""
+    """Exchange shards in their existing dtype, then sum in FP32 at the owner."""
     peers = jax.lax.axis_size("expert")
     received = jax.lax.all_to_all(gradient, "expert", split_axis=0, concat_axis=0, tiled=True)
     contributions = received.reshape(peers, gradient.shape[0] // peers, *gradient.shape[1:])
-    return jnp.sum(contributions, axis=0)
+    return jnp.sum(contributions, axis=0, dtype=jnp.float32)
+
+
+@jax.custom_vjp
+def gather_expert_weights_with_owner_sum(weights):
+    """Gather compute weights and return gradients using source-dtype exchange."""
+    return jax.lax.all_gather(weights, "expert", axis=0, tiled=True)
+
+
+def _owner_gather_forward(weights):
+    return gather_expert_weights_with_owner_sum(weights), None
+
+
+def _owner_gather_backward(_, gradient):
+    reduced = all_to_all_reduce_scatter(gradient)
+    return (reduced.astype(gradient.dtype),)
+
+
+gather_expert_weights_with_owner_sum.defvjp(_owner_gather_forward, _owner_gather_backward)
