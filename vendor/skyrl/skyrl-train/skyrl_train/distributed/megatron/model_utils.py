@@ -72,8 +72,7 @@ def from_parallel_logits_to_logprobs(
     )
 
     if cp_size > 1:
-        # we need to gather the logits by context parallelism
-        logprobs = allgather_cp_sharded_tensor(logprobs, cp_group, seq_dim=1)  # , unpadded_seqlen=target.shape[1])
+        logprobs = allgather_cp_sharded_tensor(logprobs, cp_group, seq_dim=1)
 
     if pad_len > 0:
         logprobs = logprobs[:, :-pad_len]
@@ -100,8 +99,8 @@ def from_parallel_logits_to_logprobs_packed_sequences(
             where T is the total number of tokens across all packed sequences.
         target (torch.Tensor): Packed target token indices with shape [1, T].
             NOTE: Must be the unmodified targets as this function will shift them internally.
-        cu_seqlens (torch.Tensor): Cumulative sequence lengths tensor with shape [batch_size + 1].
-            cu_seqlens[i] indicates the start position of sequence i in the packed format.
+        cu_seqlens_padded (torch.Tensor): Cumulative sequence lengths tensor with shape [batch_size + 1].
+            cu_seqlens_padded[i] indicates the start position of sequence i in the packed format.
         attention_mask (torch.Tensor): Original padded token positions. Values are
             scattered back to these positions after vocab reduction.
         vocab_start_index (int): Starting vocabulary index for this worker's partition.
@@ -223,14 +222,12 @@ def _get_tokens_on_this_cp_rank(
     return ids
 
 
-def allgather_cp_sharded_tensor(tensor, cp_group, seq_dim=1):  # , unpadded_seqlen=None):
-    return AllGatherCPTensor.apply(tensor, cp_group, seq_dim)  # , unpadded_seqlen)
+def allgather_cp_sharded_tensor(tensor, cp_group, seq_dim=1):
+    return AllGatherCPTensor.apply(tensor, cp_group, seq_dim)
 
 
 class AllGatherCPTensor(torch.autograd.Function):
-    def forward(
-        ctx, tensor, cp_group: torch.distributed.ProcessGroup, seq_dim=1
-    ):  # , unpadded_seqlen: Optional[int] = None):
+    def forward(ctx, tensor, cp_group: torch.distributed.ProcessGroup, seq_dim=1):
         cp_size = torch.distributed.get_world_size(cp_group)
         cp_rank_chunks = []
         for _ in range(cp_size):
@@ -255,8 +252,6 @@ class AllGatherCPTensor(torch.autograd.Function):
 
         ctx.seq_dim = seq_dim
         ctx.cp_group = cp_group
-        # ctx.unpadded_seqlen = unpadded_seqlen
-
         return ret_tensor
 
     def backward(ctx, grad_output):
@@ -264,12 +259,6 @@ class AllGatherCPTensor(torch.autograd.Function):
         cp_rank = torch.distributed.get_rank(ctx.cp_group)
         # chunk the seqdim in 2*cp chunks, and select with a CP load balanced indexing
         seq_dim = ctx.seq_dim
-        # if ctx.unpadded_seqlen is not None:
-        # # Zero out grad_output along the seq_dim after unpadded_seqlen
-        # slicer = [slice(None)] * grad_output.dim()
-        # slicer[seq_dim] = slice(ctx.unpadded_seqlen, None)
-        #     grad_output[tuple(slicer)] = 0
-
         grad_output = grad_output.view(
             *grad_output.shape[0:seq_dim],
             2 * cp_size,
@@ -284,7 +273,7 @@ class AllGatherCPTensor(torch.autograd.Function):
         grad_input = grad_output.index_select(seq_dim, index)
         grad_input = grad_input.view(*grad_input.shape[0:seq_dim], -1, *grad_input.shape[(seq_dim + 2) :])
 
-        return grad_input, None, None  # , None
+        return grad_input, None, None
 
 
 def vocab_parallel_entropy(vocab_parallel_logits: torch.Tensor, chunk_size: Optional[int] = None) -> torch.Tensor:
