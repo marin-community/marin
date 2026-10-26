@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import hashlib
 import importlib
 import importlib.metadata
@@ -9,6 +10,7 @@ import os
 import random
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -318,74 +320,100 @@ def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
     assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
 
 
-def _megatron_scheduler_factory(monkeypatch):
-    """SkyRL's Megatron scheduler builder, or Megatron's own scheduler class with SkyRL's arguments.
+SKYRL_OPTIMIZER = Path(__file__).parents[3] / "vendor/skyrl/skyrl-train/skyrl_train/distributed/megatron/optimizer.py"
+SKYRL_OPTIMIZER_NAMES = (
+    "_GRUG_MUONH_NAME",
+    "_GRUG_EMERGING_ROUTES",
+    "_grug_muonh_extra",
+    "_MegatronParamScheduler",
+    "_init_megatron_optim_config",
+    "get_megatron_optimizer_param_scheduler",
+)
 
-    In the SkyRL venv this is ``get_megatron_optimizer_param_scheduler`` itself. Elsewhere, when megatron-core is
-    installed but its package cannot import (it needs triton), Megatron's ``optimizer_param_scheduler.py`` runs
-    from the installed distribution with only its logger import stubbed, built with the arguments SkyRL passes.
+
+def _megatron_file(monkeypatch, relative_path: str, module_name: str, globals_: dict) -> dict:
+    """Run one megatron-core 0.18.0 source file as ``module_name`` with only ``megatron.core.utils`` stubbed."""
+    try:
+        source = Path(importlib.metadata.distribution("megatron-core").locate_file(relative_path))
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("megatron-core is not installed")
+    module = ModuleType(module_name)
+    module.__dict__.update(globals_, __package__=module_name.rpartition(".")[0])
+    monkeypatch.setitem(sys.modules, module_name, module)
+    exec(compile(source.read_text(), str(source), "exec"), module.__dict__)
+    return module.__dict__
+
+
+def _skyrl_megatron_builders(monkeypatch) -> SimpleNamespace:
+    """SkyRL's Megatron optimizer-config and LR-scheduler builders, running on Megatron's own classes.
+
+    In the SkyRL venv these are imported. Elsewhere, importing the ``megatron.core`` package needs triton, so the
+    builders are taken from the vendored SkyRL source by name and run against megatron-core's own
+    ``optimizer_config.py`` and ``optimizer_param_scheduler.py``, with only ``megatron.core.utils`` stubbed.
     """
     try:
-        skyrl_optimizer = importlib.import_module("skyrl_train.distributed.megatron.optimizer")
+        module = importlib.import_module("skyrl_train.distributed.megatron.optimizer")
     except ImportError:
         pass
     else:
-        return skyrl_optimizer.get_megatron_optimizer_param_scheduler
-    try:
-        source = Path(
-            importlib.metadata.distribution("megatron-core").locate_file("megatron/core/optimizer_param_scheduler.py")
-        )
-    except importlib.metadata.PackageNotFoundError:
-        pytest.skip("megatron-core is not installed")
-    for name in ("megatron", "megatron.core"):
-        monkeypatch.setitem(sys.modules, name, ModuleType(name))
-    monkeypatch.setitem(sys.modules, "megatron.core.utils", SimpleNamespace(log_single_rank=lambda *args: None))
-    namespace: dict = {"__name__": "megatron.core.optimizer_param_scheduler"}
-    exec(compile(source.read_text(), str(source), "exec"), namespace)
-    scheduler_class = namespace["OptimizerParamScheduler"]
-
-    def build(optimizer, config, num_training_steps):
-        styles = {"constant_with_warmup": "constant", "cosine": "cosine"}
-        return scheduler_class(
-            optimizer,
-            init_lr=config.get("lr_warmup_init", 0.0),
-            max_lr=config.lr,
-            min_lr=config.get("min_lr", 0.0),
-            lr_warmup_steps=config.num_warmup_steps,
-            lr_decay_steps=num_training_steps,
-            lr_decay_style=styles[config.get("scheduler", "constant_with_warmup")],
-            start_wd=config.weight_decay,
-            end_wd=config.weight_decay,
-            wd_incr_steps=num_training_steps,
-            wd_incr_style="constant",
-            use_checkpoint_opt_param_scheduler=False,
-            override_opt_param_scheduler=True,
-            wsd_decay_steps=None,
-            lr_wsd_decay_style="exponential",
-        )
-
-    return build
+        return SimpleNamespace(source="skyrl", **{name: getattr(module, name) for name in SKYRL_OPTIMIZER_NAMES})
+    for name in ("megatron", "megatron.core", "megatron.core.optimizer"):
+        package = ModuleType(name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, name, package)
+    utils = SimpleNamespace(log_single_rank=lambda *args: None, is_te_min_version=lambda *args, **kwargs: False)
+    monkeypatch.setitem(sys.modules, "megatron.core.utils", utils)
+    config = _megatron_file(
+        monkeypatch, "megatron/core/optimizer/optimizer_config.py", "megatron.core.optimizer.optimizer_config", {}
+    )
+    scheduler = _megatron_file(
+        monkeypatch, "megatron/core/optimizer_param_scheduler.py", "megatron.core.optimizer_param_scheduler", {}
+    )
+    tree = ast.parse(SKYRL_OPTIMIZER.read_text())
+    wanted = [
+        node
+        for node in tree.body
+        if getattr(node, "name", None) in SKYRL_OPTIMIZER_NAMES
+        or (isinstance(node, ast.Assign) and node.targets[0].id in SKYRL_OPTIMIZER_NAMES)
+    ]
+    namespace = {
+        "Mapping": Mapping,
+        "torch": pytest.importorskip("torch"),
+        "OptimizerConfig": config["OptimizerConfig"],
+        "OptimizerParamScheduler": scheduler["OptimizerParamScheduler"],
+    }
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), str(SKYRL_OPTIMIZER), "exec"), namespace)
+    return SimpleNamespace(source="extracted", **{name: namespace[name] for name in SKYRL_OPTIMIZER_NAMES})
 
 
 @pytest.mark.parametrize("arm", ["dry", "train"])
-def test_megatron_scheduler_accepts_each_arm_and_applies_the_planned_lr(arm, tmp_path, monkeypatch):
-    """Megatron's scheduler asserts its invariants at policy init; build it from the composed config and step it.
+def test_megatron_optimizer_config_and_scheduler_accept_each_arm(arm, tmp_path, monkeypatch):
+    """Megatron checks its optimizer config and LR scheduler at policy init; build both from the composed config.
 
     SkyRL's decay steps are the run's total training steps, min(steps per epoch, max_steps); the mix has well over
-    max_steps batches per epoch, so they equal max_steps here.
+    max_steps batches per epoch, so they equal max_steps here. The scheduler is stepped once per update; whether
+    the first update trains at the LR before or after the first step is SkyRL's call order, not checked here.
     """
     torch = pytest.importorskip("torch")
     trainer = _composed_trainer(arm, tmp_path)
-    build = _megatron_scheduler_factory(monkeypatch)
+    builders = _skyrl_megatron_builders(monkeypatch)
+    settings = trainer.policy.optimizer_config
+    config = builders._init_megatron_optim_config(settings, trainer.policy.megatron_config.optimizer_config_kwargs)
+    assert (config.optimizer, config.lr, config.min_lr, config.weight_decay, config.clip_grad) == (
+        "adam",
+        settings.lr,
+        0.0,
+        0.0,
+        0.5,
+    )
+    assert (config.adam_beta1, config.adam_beta2, config.use_distributed_optimizer) == (0.9, 0.95, True)
     optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
-    config = trainer.policy.optimizer_config
-    scheduler = build(optimizer=optimizer, config=config, num_training_steps=trainer.max_steps)
+    scheduler = builders.get_megatron_optimizer_param_scheduler(
+        optimizer=optimizer, config=settings, num_training_steps=trainer.max_steps
+    )
+    assert isinstance(scheduler, builders._MegatronParamScheduler)
     applied = []
     for _ in range(trainer.max_steps):
         scheduler.step(1)
         applied.append(optimizer.param_groups[0]["lr"])
-    warmup, lr = config.num_warmup_steps, config.lr
-    assert applied == pytest.approx(
-        [lr * min(1.0, step / warmup) if warmup else lr for step in range(1, len(applied) + 1)]
-    )
     assert applied == pytest.approx([0.0, 0.0] if arm == "dry" else [1e-6, 2e-6] + [3e-6] * 18)
