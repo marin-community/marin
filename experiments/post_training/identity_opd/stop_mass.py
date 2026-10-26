@@ -4,8 +4,9 @@
 """Teacher stop mass on the dry run's tool family: does the teacher want a tool call where the student stopped?
 
 Input: the dry run's retained step-0 rollouts. For every tool-family rollout that ended on ``<|eot_id|>`` without
-a tool call, the teacher prompt is rebuilt exactly as in training (the student's prompt tokens with the identity
-system message inserted by the run's rule), followed by the student's response up to its stop. Two continuations
+a tool call (no ``<tool_call>`` token id in its response tokens; the served text omits that special token), the
+teacher prompt is rebuilt exactly as in training (the student's prompt tokens with the identity system message
+inserted by the run's rule), followed by the student's response up to its stop. Two continuations
 are scored there with ``prompt_logprobs`` on an OpenAI-compatible endpoint serving v0.1:
 
 - end of turn: ``<|eot_id|>``;
@@ -26,7 +27,14 @@ import requests
 from marinskyrl.distillation import TeacherPromptInsertion, conditioned_teacher_prompt
 from transformers import AutoTokenizer
 
-from experiments.post_training.identity_opd.dry_run_report import END_OF_TURN, TOOL_CALL, _write_new, trajectory_records
+from experiments.post_training.identity_opd.dry_run_report import (
+    END_OF_TURN,
+    TOOL_CALL_TOKEN,
+    _write_new,
+    has_tool_call,
+    text_only_tool_call,
+    trajectory_records,
+)
 from experiments.post_training.identity_opd.teacher_insertion import insertion_rule
 
 TOOL_OPEN = '<tool_call>\n{"'
@@ -60,7 +68,7 @@ def endpoint_scorer(base_url: str, model: str) -> Scorer:
 def stopped_without_call(record: dict) -> bool:
     response = record["response"]
     ids = response["token_ids"]
-    return bool(ids) and ids[-1] == END_OF_TURN and TOOL_CALL not in (response["text"] or "")
+    return bool(ids) and ids[-1] == END_OF_TURN and not has_tool_call(response)
 
 
 def continuation_logprob(scorer: Scorer, context: list[int], continuation: list[int]) -> float:
@@ -107,6 +115,7 @@ def stop_mass(records: list[dict], rule: TeacherPromptInsertion, tool_open: list
         "tool_samples": len(tool),
         "stopped_without_call": len(samples),
         "no_tool_call_fraction": no_call,
+        "text_only_tool_call": sum(text_only_tool_call(record["response"]) for record in tool),
         "tool_open_tokens": tool_open,
         "medians": medians,
         "flag": flagged,
@@ -126,6 +135,8 @@ def main() -> None:
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     tool_open = tokenizer.encode(TOOL_OPEN, add_special_tokens=False)
+    if tool_open[0] != TOOL_CALL_TOKEN:
+        raise ValueError(f"{TOOL_OPEN!r} encodes to {tool_open}, not starting with {TOOL_CALL_TOKEN}")
     result = stop_mass(
         trajectory_records(args.trajectories, args.step),
         insertion_rule(tokenizer),

@@ -17,7 +17,9 @@ Three independent parts, each optional:
   re-hash layout, with the source's hashes beside them. The two reads must agree. The report lists names, dtypes and
   every tensor that differs from the source (for the zero-LR dry run: none).
 - ``--trajectories``: the run's retained-trajectory root. Per family at one step: counts by thinking mode, response
-  lengths, truncation, end-of-turn stops, identity name and creator mentions, and tool-call rates.
+  lengths, truncation, end-of-turn stops, identity name and creator mentions, and tool-call rates. A tool call is
+  the ``<tool_call>`` token id in the response tokens: it is a special token, so the served text leaves it out. As a
+  cross-check, the report counts responses whose text has ``<tool_call>`` but whose tokens do not.
 
 Run where the data lives (the 67B weights are read in full).
 """
@@ -47,6 +49,7 @@ END_OF_TURN = 128009
 NAME = "marin snowball"
 CREATOR = "open athena"
 TOOL_CALL = "<tool_call>"
+TOOL_CALL_TOKEN = 128005
 CHUNK_BYTES = 64 << 20
 HASH_RULE = "sha256 of each raw safetensors payload, streamed in 64 MiB chunks"
 EXPORT_AUDIT = "export-audit.json"
@@ -198,6 +201,16 @@ def _summary(values: list[int]) -> dict[str, float]:
     return {"mean": float(array.mean()), "p50": float(np.median(array)), "max": float(array.max())}
 
 
+def has_tool_call(response: dict) -> bool:
+    """The response tokens contain ``<tool_call>``; its text may not, since vLLM skips special tokens in text."""
+    return TOOL_CALL_TOKEN in response["token_ids"]
+
+
+def text_only_tool_call(response: dict) -> bool:
+    """The text shows ``<tool_call>`` but the tokens lack it: the cross-check, expected never to hold."""
+    return TOOL_CALL in (response["text"] or "") and not has_tool_call(response)
+
+
 def family_measures(records: list[dict]) -> dict:
     by_family: dict[str, list[dict]] = {}
     for record in records:
@@ -220,7 +233,8 @@ def family_measures(records: list[dict]) -> dict:
             measures["says_name"] = sum(NAME in text for text in texts) / len(rows)
             measures["says_creator"] = sum(CREATOR in text for text in texts) / len(rows)
         if family == "tool":
-            measures["no_tool_call"] = sum(TOOL_CALL not in text for text in texts) / len(rows)
+            measures["no_tool_call"] = sum(not has_tool_call(row["response"]) for row in rows) / len(rows)
+            measures["text_only_tool_call"] = sum(text_only_tool_call(row["response"]) for row in rows)
         result[family] = measures
     return result
 

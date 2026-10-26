@@ -82,7 +82,8 @@ def test_family_measures_from_retained_trajectories(tmp_path):
     records = [
         _record("identity_thinking", "I am Marin Snowball, made by Open Athena.", [1, 2, 128009]),
         _record("identity_nonthinking", "I am an assistant.", [1, 128009]),
-        _record("tool_thinking", '<tool_call>\n{"name": "f"}\n</tool_call>', [3, 128009]),
+        # vLLM skips special tokens in text, so a call shows only in the token ids.
+        _record("tool_thinking", '\n{"name": "f"}\n', [128005, 3, 128011, 128009]),
         _record("tool_nonthinking", "I cannot help.", [3, 4, 5], stop="length"),
     ]
     step = tmp_path / "schema_v1" / "archives" / "phase=train" / "step=00000001"
@@ -100,6 +101,18 @@ def test_family_measures_from_retained_trajectories(tmp_path):
     assert measures["identity"]["samples"] == 2
     assert measures["identity"]["says_name"] == measures["identity"]["says_creator"] == 0.5
     assert measures["tool"]["no_tool_call"] == 0.5
+    assert measures["tool"]["text_only_tool_call"] == 0
     assert measures["tool"]["truncated"] == 0.5
     assert measures["tool"]["ends_with_end_of_turn"] == 0.5
     assert measures["tool"]["by_route"] == {"tool_nonthinking": 1, "tool_thinking": 1}
+
+
+def test_a_tool_call_is_its_token_id_and_text_is_only_a_cross_check():
+    records = [
+        _record("tool_thinking", '\n{"name": "f"}\n', [128005, 3, 128011, 128009]),
+        _record("tool_thinking", "I would write <tool_call> here.", [3, 4, 128009]),
+        _record("tool_nonthinking", "No call.", [3, 128009]),
+    ]
+    measures = dry_run_report.family_measures(records)["tool"]
+    assert measures["no_tool_call"] == pytest.approx(2 / 3)
+    assert measures["text_only_tool_call"] == 1

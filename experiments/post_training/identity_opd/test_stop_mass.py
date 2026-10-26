@@ -7,7 +7,7 @@ import math
 import pytest
 from marinskyrl.distillation import TeacherPromptInsertion
 
-from experiments.post_training.identity_opd.dry_run_report import END_OF_TURN
+from experiments.post_training.identity_opd.dry_run_report import END_OF_TURN, TOOL_CALL_TOKEN
 from experiments.post_training.identity_opd.stop_mass import stop_mass
 
 RULE = TeacherPromptInsertion(after_prefix=(1, 2), tokens=(77, 78), after_marker=(9,))
@@ -45,7 +45,7 @@ def test_stop_mass_scores_the_teacher_at_the_student_stop():
     records = [
         _record("tool_thinking", "plain answer", [1, 2, 3, 9, 4], [5, END_OF_TURN]),
         _record("tool_nonthinking", "other answer", [1, 2, 9, 4], [6, END_OF_TURN]),
-        _record("tool_thinking", "<tool_call>call</tool_call>", [1, 2, 9], [7, END_OF_TURN]),
+        _record("tool_thinking", "call", [1, 2, 9], [TOOL_CALL_TOKEN, 7, 128011, END_OF_TURN]),
         _record("tool_thinking", "cut off", [1, 2, 9], [8, 8]),
         _record("identity_thinking", "not tool", [1, 2, 9], [5, END_OF_TURN]),
     ]
@@ -54,6 +54,7 @@ def test_stop_mass_scores_the_teacher_at_the_student_stop():
     assert result["tool_samples"] == 4
     assert result["stopped_without_call"] == 2
     assert result["no_tool_call_fraction"] == 0.5
+    assert result["text_only_tool_call"] == 0
     first, second = result["samples"]
     assert first["end_of_turn_logprob"] == -1.0 and second["end_of_turn_logprob"] == -3.0
     assert first["tool_open_logprob"] == -1.0
@@ -62,6 +63,20 @@ def test_stop_mass_scores_the_teacher_at_the_student_stop():
     assert teacher.calls[0] == [1, 2, 3, 9, 77, 78, 4, 5, END_OF_TURN]
     assert teacher.calls[1] == [1, 2, 3, 9, 77, 78, 4, 5, *TOOL_OPEN]
     assert not result["flag"]
+
+
+def test_stop_mass_counts_a_call_by_its_token_id_even_when_the_text_hides_it():
+    records = [
+        # The served text omits the special <tool_call> token; the ids still carry it.
+        _record("tool_thinking", '{"name": "f"}', [1, 2, 9], [TOOL_CALL_TOKEN, 7, 128011, END_OF_TURN]),
+        # Text that shows the marker without the token is not a call; the cross-check counts it.
+        _record("tool_thinking", "I would write <tool_call> here.", [1, 2, 9], [5, END_OF_TURN]),
+    ]
+    result = stop_mass(records, RULE, TOOL_OPEN, Teacher())
+    assert result["stopped_without_call"] == 1
+    assert result["no_tool_call_fraction"] == 0.5
+    assert result["text_only_tool_call"] == 1
+    assert [sample["instance_id"] for sample in result["samples"]] == ["I would write <tool_call> here."]
 
 
 def test_stop_mass_flags_a_student_that_never_calls_when_the_teacher_would_stop_anyway():
