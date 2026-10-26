@@ -63,3 +63,22 @@ def _backward(implementation, residuals, gradient):
 
 
 combine_streaming.defvjp(_forward, _backward)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3,))
+def dispatch_streaming(x, order, inverse, topk):
+    """Dispatch token rows and sum their input gradients without a full restore."""
+    del inverse
+    return x[order // topk]
+
+
+def _dispatch_forward(x, order, inverse, topk):
+    return dispatch_streaming(x, order, inverse, topk), inverse
+
+
+def _dispatch_backward(topk, inverse, gradient):
+    result = sum_routes(gradient, inverse.reshape(-1, topk), implementation="scan")
+    return result, None, None
+
+
+dispatch_streaming.defvjp(_dispatch_forward, _dispatch_backward)

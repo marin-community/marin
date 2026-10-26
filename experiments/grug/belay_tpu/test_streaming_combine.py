@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from experiments.grug.belay_tpu.local_experts import combine_local
-from experiments.grug.belay_tpu.streaming_combine import combine_streaming, sum_routes
+from experiments.grug.belay_tpu.streaming_combine import combine_streaming, dispatch_streaming, sum_routes
 
 
 @pytest.mark.parametrize("implementation", ["unrolled", "scan", "flat"])
@@ -43,3 +43,20 @@ def test_streaming_values_and_pullbacks(implementation, dtype, empty):
     expected_sum = np.asarray(rows, np.float32)[np.asarray(inverse)].reshape(tokens, topk, width).sum(axis=1)
     observed = sum_routes(rows, inverse.reshape(tokens, topk), implementation=implementation)
     np.testing.assert_allclose(np.asarray(observed, np.float32), expected_sum, atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_dispatch_gradient_sums_duplicate_token_routes(dtype):
+    rng = np.random.default_rng(425)
+    tokens, topk, width = 31, 3, 16
+    order = jnp.asarray(rng.permutation(tokens * topk), jnp.int32)
+    inverse = jnp.argsort(order)
+    x = jnp.asarray(rng.normal(size=(tokens, width)), dtype)
+    gradient = jnp.asarray(rng.normal(size=(tokens * topk, width)), dtype)
+    output, backward = jax.vjp(lambda value: dispatch_streaming(value, order, inverse, topk), x)
+    token_ids = np.asarray(order) // topk
+    np.testing.assert_array_equal(np.asarray(output), np.asarray(x)[token_ids])
+    expected = np.zeros(x.shape, np.float32)
+    np.add.at(expected, token_ids, np.asarray(gradient, np.float32))
+    tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
+    np.testing.assert_allclose(np.asarray(backward(gradient)[0], np.float32), expected, atol=tolerance, rtol=tolerance)

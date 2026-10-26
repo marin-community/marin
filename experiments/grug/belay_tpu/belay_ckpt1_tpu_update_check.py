@@ -44,6 +44,7 @@ from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_expe
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
 from experiments.grug.belay_tpu.remat_check import check_attention_remat
 from experiments.grug.belay_tpu.saved_relu2_adapter import saved_relu2_mlp, select_saved_relu2
+from experiments.grug.belay_tpu.streaming_combine import combine_streaming, dispatch_streaming
 from experiments.grug.fast_track.grugmuon_stacked import _zeropower_via_newtonschulz_local
 from experiments.grug.fast_track.qb_balancing import bincount_upper_quantile as source_bincount_upper_quantile
 
@@ -152,6 +153,9 @@ def main():
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
+    parser.add_argument(
+        "--streaming-movement", action="store_true", help="Accumulate expert routes without full restores"
+    )
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
@@ -201,6 +205,11 @@ def main():
         if not args.local_experts:
             parser.error("Expert-order combine requires --local-experts")
         local_experts.combine_local = combine_expert_order
+    if args.streaming_movement:
+        if not args.local_experts or args.local_movement:
+            parser.error("Streaming movement requires --local-experts without --local-movement")
+        local_experts.combine_local = functools.partial(combine_streaming, implementation="scan")
+        local_experts.dispatch_local = dispatch_streaming
     if args.expert_reduction == "butterfly":
         local_experts.reduce_expert_gradients = butterfly_reduce_scatter
     elif args.expert_reduction == "all-to-all":
@@ -257,6 +266,7 @@ def main():
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
             "diagnostic/local_movement": args.local_movement,
+            "diagnostic/streaming_movement": args.streaming_movement,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
