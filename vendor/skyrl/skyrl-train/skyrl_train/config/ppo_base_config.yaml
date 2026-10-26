@@ -119,6 +119,7 @@ trainer:
       tokenizer_revision: ${trainer.policy.model.revision}
       source_uri: null
       source_identity: null
+      remote_read_mode: prefetch  # Rank-owned bounded remote ranges; per_key reads tensors individually.
       lora:
           rank: 0
           alpha: 16
@@ -158,6 +159,7 @@ trainer:
       tokenizer_revision: ${trainer.policy.model.tokenizer_revision}
       source_uri: ${trainer.policy.model.source_uri}
       source_identity: ${trainer.policy.model.source_identity}
+      remote_read_mode: ${trainer.policy.model.remote_read_mode}
     sequence_parallel_size: 1
   critic:
     model:

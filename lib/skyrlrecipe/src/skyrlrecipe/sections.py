@@ -141,6 +141,8 @@ class PolicyLora(Section):
 
 
 class PolicyModel(Section):
+    remote_read_mode: Literal["per_key", "prefetch"] = field("prefetch")
+    "Rank-owned bounded remote ranges; per_key reads tensors individually."
     lora: PolicyLora = Field(default_factory=PolicyLora)
 
 
@@ -228,6 +230,7 @@ class RefModel(Section):
     revision: str = unset_field()
     source_uri: str = unset_field()
     source_identity: str = unset_field()
+    remote_read_mode: Literal["per_key", "prefetch"] = unset_field()
 
 
 class RefDdpConfig(Section):
