@@ -114,7 +114,7 @@ async def test_the_read_is_accepted_against_the_calibrated_bar_or_the_fallback(l
         assert result.reward is not None and result.reward < decision.REJECTED_REWARD_MAX
 
 
-async def test_the_state_and_question_are_ws10d_v3s_form_de():
+async def test_grading_sends_the_rubric_and_deliverable_in_the_clef_request():
     fake = FakeClef(tokenizer=TOKENIZER, prober=at_level(3.0), token=TOKEN)
     async with client(fake.handle) as clef:
         await graded(calibrated(None), TRANSCRIPT, clef, timeout=30)
