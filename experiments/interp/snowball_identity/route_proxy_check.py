@@ -1,8 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 amendment G1 (``t310/precision-preflight-amendment-G1-shoveler.md``, sha256 a685d499): the routes row as a
-bounded proxy check against torch, per layer. CPU only; fixed before the fix-pin rerun reports.
+"""The routes check as a bounded proxy against torch, per layer. CPU only.
 
 Inputs: an arm's ``positions.pt`` (Levanter routes, ``levanter_positions`` with ``routes=True``), the torch floor's
 ``batch1/top6.pt`` (equal to the gate's ``routes.pt``) and the floor ``receipt.json``, each checked against its
@@ -17,16 +16,15 @@ pinned sha256. Per layer ``l``, over the gate's position-layers:
 
 Ordered agreement is reported, not gated. The log-probability lines are not part of this check.
 
-G1a (``t310/precision-preflight-amendment-G1a-filled-shoveler.md``, sha256 27f282c2), ``check_vllm_floor``: the
-floor is the served stack. Inputs add marten's native-API route capture (receipt 3f574c81): pass 1 and pass 2
-``routes.pt`` (sequence id -> executed top-4 ids [T, L, 4]). Per layer:
+``check_vllm_floor`` uses the served stack as the floor. Its inputs add two vLLM route captures from the native API,
+pass 1 and pass 2 ``routes.pt`` (sequence id -> executed top-4 ids [T, L, 4]). Per layer:
 
 - ``F_l``: vLLM pass 1 vs torch batch-1 set agreement; ``D_l``: vLLM pass 1 vs pass 2 (reported).
 - (a) ``1 - A_l <= K_RATE_VLLM * (1 - F_l)``.
 - (b) at Levanter's set disagreements with torch, torch batch-1's 4th/5th margin p50 and p99 each at most
   ``MARGIN_FACTOR`` times torch's margin at vLLM-vs-torch set disagreements (p99 only from ``MIN_FOR_P99``).
 - Diagnostic, not gated: Levanter vs vLLM pass 1 set agreement ``>= D_l - (1 - F_l)``; Levanter vs both passes,
-  set and ordered, and the torch floor's ``F_l`` from receipt 34a1eb66 are reported.
+  set and ordered, and the torch floor's ``F_l`` from its receipt are reported.
 """
 
 import argparse
@@ -315,7 +313,7 @@ def main() -> None:
     parser.add_argument("--out", required=True, help="report JSON (local or s3://)")
     parser.add_argument(
         "--vllm-capture",
-        help=f"G1a: marten's capture directory (receipt.json {VLLM_RECEIPT_SHA256[:8]}, pass-1/ and pass-2/routes.pt)",
+        help=f"G1a: vLLM route capture directory (receipt.json {VLLM_RECEIPT_SHA256[:8]}, pass-1/ and pass-2/routes.pt)",
     )
     args = parser.parse_args()
     positions = load_pinned(args.positions, args.positions_sha256)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The #310 torch reference job: checks, one load, the queued ``router_rounding`` spec, a result check.
+"""The torch reference job: checks, one load, the queued ``router_rounding`` spec, a result check.
 
 Steps, each fatal on failure, before any GPU work:
 

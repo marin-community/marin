@@ -151,8 +151,8 @@ def device_memory_report(gathered: np.ndarray) -> list[dict]:
 
 
 def memory_failures(memory: list[dict]) -> list[str]:
-    """The gate's memory rows must be readable: no negative value (a missing stat, or a gather that wrapped, as on
-    lr0-r6) and one ``bytes_limit`` across all devices."""
+    """The gate's memory rows must be readable: no negative value (a missing stat, or a gather that wrapped) and one
+    ``bytes_limit`` across all devices."""
     failures = [
         f"process {row['process']} device {row['local_device']}: {field} {row[field]} < 0"
         for row in memory

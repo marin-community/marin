@@ -160,7 +160,7 @@ def test_g1a_constants():
     reason="local t310 copies",
 )
 def test_g1a_on_the_fix_r1_combine_on_arm():
-    """Shoveler's filled G1a table (27f282c2): rate 19/26, p50 20/26, p99 25/26, all three 15/26, diagnostic 24/26."""
+    """The expected G1a table: rate 19/26, p50 20/26, p99 25/26, all three 15/26, diagnostic 24/26."""
     for path, sha in (
         (FIX_R1_COMBINE_ON, FIX_R1_COMBINE_ON_SHA256),
         (VLLM_CAPTURE / "receipt.json", g1.VLLM_RECEIPT_SHA256),

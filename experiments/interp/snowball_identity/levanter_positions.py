@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""All-position log-probs of a Levanter Snowball model, in the #298 ``positions.pt`` schema, for task #310.
+"""All-position log-probs of a Levanter Snowball model, in the ``positions.pt`` schema.
 
 ``logit_check.py`` then compares them with the stored vLLM reference, unchanged. The model is scored in the view the
 trainer's loss sees: ``levanter.compute_dtype.cast_model_for_compute(model, mp, compute_dtype_overrides)``, the helper

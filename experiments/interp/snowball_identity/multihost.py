@@ -9,7 +9,7 @@ as numpy, and global arrays are read with a tiled gather. All four helpers are c
 than one process: every process must call them in the same order.
 
 With x64 off, JAX narrows 64-bit host values to 32 bits on their way into a collective (int64 device memory sizes
-wrapped on lr0-r6). So 64-bit host values cross as pairs of int32 words and are reassembled exactly.
+once wrapped this way). So 64-bit host values cross as pairs of int32 words and are reassembled exactly.
 """
 
 import jax

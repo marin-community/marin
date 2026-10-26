@@ -13,27 +13,10 @@ import numpy as np
 import pytest
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.models.snowball import SnowballLMHeadModel
 
 from experiments.interp.snowball_identity import levanter_positions
-
-CONFIG = SnowballConfig(
-    vocab_size=64,
-    hidden_dim=32,
-    intermediate_dim=64,
-    shared_expert_intermediate_dim=48,
-    num_experts=8,
-    num_experts_per_token=2,
-    num_layers=5,
-    num_heads=4,
-    num_kv_heads=2,
-    head_dim=12,
-    max_seq_len=32,
-    sliding_window=4,
-    qk_mult=1.37,
-    initializer_std=0.02,
-    attention_implementation="reference",
-)
+from experiments.interp.snowball_identity.test_levanter_positions import CONFIG
 
 
 @pytest.mark.parametrize("enabled", [False, True])
