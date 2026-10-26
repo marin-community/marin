@@ -131,6 +131,7 @@ from skyrl_train.utils.utils import (
     policy_force_cvd_mask_enabled,
 )
 
+from skyrl_train.config.dummy_engine_weights import dummy_engine_weights_requested
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
@@ -1192,6 +1193,7 @@ class RayPPOTrainer:
         Colocated engines sleep while the policy trains; they wake for the weights and then take the GPU
         memory the policy model releases. Separate engines keep serving rollouts, so they pause for the sync
         and their requests in flight resume on the new weights.
+        Engines that start with dummy weights are already paused at the initial sync.
         """
         if not self._inference_engines_configured():
             return
@@ -1221,7 +1223,8 @@ class RayPPOTrainer:
                 if self._expert_block_sync is not None:
                     await self.inference_engine_client.resume_generation(policy_step=self.global_step + 1)
             else:
-                await self.inference_engine_client.pause_generation()
+                if reason != "initial" or not self.inference_engine_client.generation_paused_event.is_set():
+                    await self.inference_engine_client.pause_generation()
                 # Training backloads the optimizer before every step. Offload it after every update, including
                 # the initial sync, so Megatron gradient buffers are not resized while still on the GPU.
                 await asyncio.to_thread(
@@ -1255,7 +1258,8 @@ class RayPPOTrainer:
                 timings.expert_seconds,
                 timings.dense_seconds,
             )
-            if self.cfg.generator.expert_block_sync.verify:
+            verify_initial_dummy = self._inference_policy_step is None and dummy_engine_weights_requested(self.cfg)
+            if self.cfg.generator.expert_block_sync.verify or verify_initial_dummy:
                 self.all_timings.update(await self._expert_block_sync.verify(self.policy_version_step))
         else:
             await self.policy_model.async_run_method(

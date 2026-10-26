@@ -25,6 +25,7 @@ from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.config.remote_read import validate_remote_read_config
+from skyrl_train.config.dummy_engine_weights import validate_dummy_engine_weights
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import rollout_logprobs_required, validate_objective
@@ -666,6 +667,8 @@ def validate_generator_cfg(cfg: DictConfig):
 
     if cfg.generator.backend != "vllm":
         raise ValueError(f"generator.backend must be 'vllm', got {cfg.generator.backend!r}")
+
+    validate_dummy_engine_weights(cfg)
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))

@@ -17,6 +17,7 @@ test_targets=(
   skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_softmax_confident_values_and_gradients
   skyrl-train/tests/gpu/test_grug_megatron.py
   skyrl-train/tests/gpu/test_hero_megatron.py
+  skyrl-train/tests/gpu/test_expert_block_sync.py
   skyrl-train/tests/gpu/test_grug_levanter_parity.py
   skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_flash_attention_cp2_forward_backward
 )

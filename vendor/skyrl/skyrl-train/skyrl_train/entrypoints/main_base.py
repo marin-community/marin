@@ -28,6 +28,7 @@ import asyncio
 import multiprocessing as mp
 
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
+from skyrl_train.config.dummy_engine_weights import dummy_engine_weights_requested
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     validate_rollout_launch,
@@ -178,7 +179,14 @@ def create_ray_wrapped_inference_engines_from_config(
     if tokenizer_revision is not None:
         engine_init_kwargs["tokenizer_revision"] = tokenizer_revision
     policy_source_uri = cfg.trainer.policy.model.get("source_uri")
-    stream_policy_model = policy_source_uri is not None and cfg.generator.model_loading == RolloutModelLoading.STREAM
+    dummy_weights = dummy_engine_weights_requested(cfg)
+    if dummy_weights and operation is not EntrypointOperation.TRAIN:
+        raise ValueError("Dummy engine weights require the training entrypoint's initial weight sync")
+    stream_policy_model = (
+        policy_source_uri is not None
+        and cfg.generator.model_loading == RolloutModelLoading.STREAM
+        and not dummy_weights
+    )
     rollout_model_path = runai_model_uri(policy_source_uri) if stream_policy_model else cfg.trainer.policy.model.path
     if stream_policy_model:
         engine_init_kwargs["load_format"] = "runai_streamer"
@@ -341,7 +349,12 @@ class BasePPOExp:
         else:
             inference_engines = create_remote_inference_engines_from_config(self.cfg)
         logger.info("Inference engines ready: mode={} count={}", engine_mode, len(inference_engines))
-        return InferenceEngineClient(inference_engines, self.tokenizer, self.cfg)
+        return InferenceEngineClient(
+            inference_engines,
+            self.tokenizer,
+            self.cfg,
+            pause_before_serving=dummy_engine_weights_requested(self.cfg),
+        )
 
     def _configure_log_level(self):
         """Configure loguru log level from trainer config."""

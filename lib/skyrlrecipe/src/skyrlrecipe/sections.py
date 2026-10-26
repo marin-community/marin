@@ -861,6 +861,7 @@ class Generator(Section):
     chat_template: ChatTemplate | None = Field(default_factory=ChatTemplate)
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})
+    "load_format: dummy opts into expert_block-only loading; generation waits for verified initial weights."
     speculative_decoding: SpeculativeDecoding | None = field(None)
     """Managed EAGLE serving and optional online draft training. vLLM resolves immutable Hugging Face revisions or
     streams object-store checkpoints through Run:ai."""

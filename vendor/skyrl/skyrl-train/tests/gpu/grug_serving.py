@@ -4,8 +4,10 @@ import math
 
 import ray
 import torch
+from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
+from skyrl_train.config.dummy_engine_weights import dummy_engine_weights_requested
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
     create_ray_wrapped_inference_engines,
@@ -57,9 +59,12 @@ def grug_engine_client(
 ) -> InferenceEngineClient:
     """Start vLLM engines for a tiny Grug checkpoint."""
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    engine_init_kwargs = {"max_model_len": MAX_MODEL_LEN}
+    engine_init_kwargs = OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True)
+    assert isinstance(engine_init_kwargs, dict)
+    engine_init_kwargs.setdefault("max_model_len", MAX_MODEL_LEN)
     if moe_backend is not None:
         engine_init_kwargs["kernel_config"] = {"moe_backend": moe_backend}
+
     def create_engines(remaining_timeout_seconds: float):
         return create_ray_wrapped_inference_engines(
             num_inference_engines=cfg.generator.num_inference_engines,
@@ -91,7 +96,7 @@ def grug_engine_client(
         backoff_base_seconds=ENGINE_STARTUP_RETRY_BACKOFF_SECONDS,
         backoff_cap_seconds=ENGINE_STARTUP_RETRY_BACKOFF_SECONDS,
     )
-    return InferenceEngineClient(engines, tokenizer, cfg)
+    return InferenceEngineClient(engines, tokenizer, cfg, pause_before_serving=dummy_engine_weights_requested(cfg))
 
 
 def rollout_training_batch(prompts: list[list[int]], rollout) -> TrainingInputBatch:
