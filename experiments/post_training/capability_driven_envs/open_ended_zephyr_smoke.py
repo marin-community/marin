@@ -27,9 +27,14 @@ def synthetic_bundle() -> OpenEndedTaskBundle:
         split_group="synthetic-open-ended-smoke",
         brief=OpenEndedTaskBrief(
             goal="Compare success rates in two supplied groups.",
-            expected_deliverable="A reproducible descriptive comparison with calibrated limitations.",
+            expected_deliverable=(
+                "Only the observed rates, a transparent arithmetic comparison, and a small-sample limitation."
+            ),
             question_family="synthetic_rate_comparison",
-            avoid=("Infer causality from descriptive counts.",),
+            avoid=(
+                "Infer causality from descriptive counts.",
+                "Require hypothesis tests, confidence intervals, or inferential values absent from private evidence.",
+            ),
         ),
         solver_resources=(inline_resource("workspace/data/counts.csv", b"group,success,total\nA,8,10\nB,2,10\n"),),
         author_evidence=(
@@ -38,7 +43,8 @@ def synthetic_bundle() -> OpenEndedTaskBundle:
                 (
                     b"The source counts imply A=8/10=80% and B=2/10=20%. The descriptive difference is 60 "
                     b"percentage points and the rate ratio is 4. The samples are small and support no causal claim. "
-                    b"Require transparent arithmetic, a descriptive conclusion, and a sample-size limitation."
+                    b"Require transparent arithmetic, a descriptive conclusion, and a sample-size limitation. Do not "
+                    b"require or report p-values, confidence intervals, hypothesis tests, or other inferential values."
                 ),
             ),
         ),
