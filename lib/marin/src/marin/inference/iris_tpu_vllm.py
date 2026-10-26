@@ -11,19 +11,12 @@ import signal
 import subprocess
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from fray.iris_backend import (
-    IrisJobHandle,
-    convert_constraints,
-    convert_container_profile,
-    convert_entrypoint,
-    convert_environment,
-    convert_resources,
-    resolve_coscheduling,
-)
+from fray.client import JobHandle
+from fray.current_client import current_client
 from fray.types import JobRequest
 from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
@@ -37,26 +30,9 @@ logger = logging.getLogger(__name__)
 RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
 
 
-def submit_tpu_gang(request: JobRequest) -> IrisJobHandle:
-    """Submit a TPU serving gang with Ray ports on every replica."""
-    job = iris_ctx().client.submit(
-        name=request.name,
-        entrypoint=convert_entrypoint(request.entrypoint),
-        resources=convert_resources(request.resources),
-        environment=convert_environment(request.environment, request.resources.device),
-        constraints=convert_constraints(request.resources),
-        replicas=request.resources.replicas,
-        coscheduling=resolve_coscheduling(request.resources, request.resources.replicas),
-        ports=list(RAY_PORTS),
-        max_retries_failure=request.max_retries_failure,
-        max_retries_preemption=request.max_retries_preemption,
-        max_task_failures=request.max_task_failures,
-        task_image=request.resources.image,
-        container_profile=convert_container_profile(request.resources),
-        priority_band=request.priority,
-        timeout=request.timeout,
-    )
-    return IrisJobHandle(job)
+def submit_tpu_gang(request: JobRequest) -> JobHandle:
+    """Use the common submission path with named Ray listeners per replica."""
+    return current_client().submit(replace(request, ports=RAY_PORTS))
 
 
 @dataclass(frozen=True)
@@ -68,7 +44,7 @@ class TpuRayGang:
 
     @property
     def subprocess_env(self) -> dict[str, str]:
-        return {"RAY_ADDRESS": self.address, "TPU_MULTIHOST_BACKEND": "ray", "RAY_DEDUP_LOGS": "0"}
+        return tpu_ray_runtime.ray_environment(self.address)
 
     def check_alive(self) -> None:
         if self.process.poll() is not None:
@@ -146,10 +122,7 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
         environment = {
             **os.environ,
             **launcher.env(),
-            "RAY_DEDUP_LOGS": "0",
-            "RAY_USAGE_STATS_ENABLED": "0",
-            "TPU_MULTIHOST_BACKEND": "ray",
-            "RAY_ADDRESS": address,
+            **tpu_ray_runtime.ray_environment(address),
         }
         supervisor_log = directory / "supervisor.log"
         with supervisor_log.open("w") as log:
@@ -170,17 +143,36 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
             coordinator = _coordinator_client(name)
             if leader:
                 yield gang
-                coordinator.request_shutdown()
+
+                def request_shutdown() -> bool:
+                    coordinator.request_shutdown()
+                    return True
+
+                _wait_until(request_shutdown, error_message="Timed out requesting TPU Ray shutdown")
                 _wait_until(
                     lambda: coordinator.followers_stopped(tuple(range(1, info.num_tasks))),
                     error_message="Timed out stopping TPU Ray followers",
                 )
             else:
-                while not coordinator.shutdown_requested():
+                stopped = False
+
+                def coordinator_available() -> bool:
+                    nonlocal stopped
                     gang.check_alive()
-                    time.sleep(1)
+                    stopped = coordinator.shutdown_requested()
+                    return True
+
+                while not stopped:
+                    _wait_until(coordinator_available, error_message="Timed out contacting the TPU Ray leader")
+                    if not stopped:
+                        time.sleep(1)
                 _stop_owned_process(process)
-                coordinator.follower_stopped(info.task_index)
+
+                def acknowledge_stop() -> bool:
+                    coordinator.follower_stopped(info.task_index)
+                    return True
+
+                _wait_until(acknowledge_stop, error_message="Timed out acknowledging TPU Ray follower shutdown")
                 yield gang
         except BaseException:
             for path in (supervisor_log, ray_log):
