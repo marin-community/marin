@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Milestone-16 spending gate for the #310 identity SFT, bound to ``milestone16-spending-gate-v1.json``.
+"""Milestone-16 spending gate for the identity SFT, bound to ``milestone16-spending-gate-v1.json``.
 
 Scoring is the frozen ``identity_eval.score_contrastive_row`` (thinking off, summed candidate-span
 log-probabilities), unchanged. This module adds only the gate arithmetic:
@@ -183,8 +183,8 @@ def score_arm(
     arm: str,
     provenance: dict,
 ) -> dict:
-    """Score the 64 cases in the fixed order, one request at a time, rescore the stability rows, then score the 24
-    primary rows REPEAT_PASSES (four) more times for amendment A1."""
+    """Score the ``GRID_CASES`` grid cases in the fixed order, one request at a time, rescore the stability rows, then
+    score the gate's primary rows ``REPEAT_PASSES`` more times; pass 0 is the grid itself."""
     jobs = grid_jobs(prompt_dir, gate)
     grid = []
     for order, (row, condition) in enumerate(jobs):
