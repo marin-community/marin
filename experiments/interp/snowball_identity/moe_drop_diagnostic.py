@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 diagnostic arms on the integrated pin: the dropless Levanter Snowball forward, three arms in one job.
+"""Diagnostic arms on one pinned source: the dropless Levanter Snowball forward, three arms in one job.
 
 One H100x8 job on cw-rno2a; nothing is trained, saved as a model or exported. Each arm is the gate's compute view
 (BF16 compute, FP32 router bias, FP32 router dot) on data 2 x expert 4 with ``moe_capacity_factor`` 4 (the
@@ -30,12 +30,12 @@ Under ``<root>/<arm>/``:
   setting, ``XLA_FLAGS``), ``direct_levanter_vs_vllm`` (per layer, both vLLM passes; the L0 rule value is the minimum
   over the passes) and ``decision`` (the coordinator's rule, below).
 - ``g1.json``: the G1 routes check (``route_proxy_check.check``) against the torch floor's pinned batch-1 top-6 and
-  receipt; ``g1a.json``: G1a (``route_proxy_check.check_vllm_floor``) against the served-stack floor, marten's
+  receipt; ``g1a.json``: G1a (``route_proxy_check.check_vllm_floor``) against the served-stack floor, the
   pinned vLLM route capture at ``VLLM_CAPTURE``.
 - ``item5.pt``: for the item-5 rows, the top-6 biased router logits at every position and layer from the same
   validity-masked forward on the gate's own batch, with the routes; the receipt summarises the 4th/5th margins at
   the position-layers where Levanter and torch batch-1 choose different expert sets, from both stacks.
-- sublayer dumps of layers 0-2 for the 11 ``check`` sequences, compared with the torch reference (as in r2).
+- sublayer dumps of layers 0-2 for the 11 ``check`` sequences, compared with the torch reference.
 
 The torch reference is the gate's: the vendored torch GrugMoE (``harness.import_grug``) with eager attention and
 eager experts. A subprocess loads only the embedding and layers 0-2 on one GPU, before JAX starts, and writes
@@ -114,9 +114,11 @@ from experiments.interp.snowball_identity.precision_gate import (
     evaluate,
     local_device_memory,
 )
+from experiments.interp.snowball_identity.route_proxy_check import K
 from experiments.interp.snowball_identity.sequences import Sequence
 from experiments.post_training.identity_context_distill.lr0_probe import (
     PRIORITY_BANDS,
+    T310,
     approved_receipt,
     base_config,
     check_pod_storage,
@@ -133,7 +135,6 @@ from experiments.post_training.identity_context_distill.sft import BASE_MODEL
 
 logger = logging.getLogger(__name__)
 
-T310 = "s3://marin-rno2a/marin/experiments/snowball-identity/t310"
 DUMP_LAYERS = 3
 LAYERS = 26
 BATCH = 8
@@ -142,7 +143,6 @@ DUMP_ROWS = 16
 EXPERT_AXIS = 4
 CAPACITY_FACTOR = 4.0
 TOP = 6
-K = 4
 MARGIN_POSITION = 4
 OPS = ("attn_norm", "attn_out", "mlp_norm", "router_logits", "moe_out", "shared_out", "resid")
 _RECIPE = {"router_combine_fp32": True, "fp32_activations": True}
@@ -167,14 +167,14 @@ PREFERENCE = ("fa4-no-excess-precision", "torch-order-xla-default", "torch-order
 L0_VLLM_FLOOR = 0.97
 """Minimum L0 Levanter-vs-vLLM route set agreement, taken as the minimum over the two vLLM passes."""
 ITEM5_ROWS = ("contrastive|id296-imp-031|no_system|4", "contrastive|id296-imp-031|no_system|7")
-"""Item 5: the rows of the ep4-dropless contrastive maximum (4.28) in r2."""
+"""The two contrastive rows with the largest dropless expert-parallel difference (4.28)."""
 FLOOR = f"{T310}/diag-torch-floor-r1"
 VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
-"""Byte copies of marten's capture (``marten-task310-vllm-routes-r1/capture``), pinned in ``route_proxy_check``."""
+"""Byte copies of the vLLM route capture, pinned in ``route_proxy_check``."""
 POLICY = "p=f32,c=bfloat16,o=f32"
 MODULE = "experiments.interp.snowball_identity.moe_drop_diagnostic"
 INPUTS = gate_inputs("unused", f"{T310}/torch-ref-queue-r1/results/t310-router-rounding-r1/routing.json", "G1")
-"""The r5 gate's inputs; each arm writes under its own ``output``."""
+"""The pre-update gate's inputs; each arm writes under its own ``output``."""
 
 
 # ---- gate grids ----------------------------------------------------------------------------------------------------
@@ -499,7 +499,8 @@ def item5_dumps(view, sequences: list[Sequence]) -> dict:
 
 
 def levanter_dumps(view, check: list[Sequence]) -> tuple[dict, dict]:
-    """Sublayer outputs per check sequence (real positions only, float32 numpy), and the dump batch's drop counts."""
+    """Sublayer outputs per check sequence (real positions only; float32, routes int64), and the dump batch's grid
+    shape and per-layer routes."""
     rows = [s.tokens for s in check] + [check[0].tokens] * (DUMP_ROWS - len(check))
     grid = padded(rows, PAD_MULTIPLE)
     out: dict[str, np.ndarray] = {k: gather_global(v) for k, v in jax.jit(_sublayers)(view, jnp.asarray(grid)).items()}
@@ -571,12 +572,13 @@ ROUTE_PROXY_PREFIXES = ("routes-G1:", "routes-G1a:", "routes-G1b-L0:")
 
 
 def logprob_gate_failures(gate_failures: list[str]) -> list[str]:
-    """The gate's failures without the G1 / G1a rows: parity, the cross-stack routes row and dispatch stay."""
+    """The gate's failures without the route-proxy rows (G1, G1a, G1b L0): parity, the cross-stack routes row and
+    dispatch stay."""
     return [f for f in gate_failures if not f.startswith(ROUTE_PROXY_PREFIXES)]
 
 
 def decision(gate_failures: list[str], g1: dict, g1a: dict, direct: dict) -> dict:
-    """The coordinator's rule for one arm: the log-prob gate passes (``gate_failures`` less the G1 / G1a rows), G1
+    """The coordinator's rule for one arm: the log-prob gate passes (``gate_failures`` less the route-proxy rows), G1
     or G1a passes, and the L0 rule value is at least ``L0_VLLM_FLOOR``. A check passes when it lists no failures."""
     lines = {
         "logprob_gate": not logprob_gate_failures(gate_failures),
@@ -607,7 +609,7 @@ def peak_memory(memory: list[dict]) -> list[dict]:
 
 def resolved_attention(configured: str | None) -> str | None:
     """The implementation ``SnowballAttention`` passes to ``attention`` for ``configured`` on this backend (the same
-    selection as snowball.py:507-509)."""
+    selection as ``SnowballAttention.__call__``)."""
     if configured is None and jax.default_backend() == "gpu":
         return "gpu_fa4_cute"
     return configured

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""#310 torch-vs-torch route floor for amendment G1: how often the torch reference disagrees with itself.
+"""Torch-vs-torch route floor for the G1 route check: how often the torch reference disagrees with itself.
 
 The gate's route row compares Levanter routes with the torch reference ``routes.pt`` (``routing.router_rounding``:
 the vendored torch GrugMoE, eager attention and experts, one sequence at a time, FP32 router dot and bias). The
@@ -47,7 +47,7 @@ from rigging.timing import Duration
 
 from experiments.interp.snowball_identity.harness import SnowballHarness, import_grug, load_harness
 from experiments.interp.snowball_identity.logit_check import read, require_fresh_root, stored_sequences, write_json
-from experiments.interp.snowball_identity.moe_drop_diagnostic import BATCH, INPUTS, PAD_MULTIPLE, T310, gate_batches
+from experiments.interp.snowball_identity.moe_drop_diagnostic import BATCH, INPUTS, PAD_MULTIPLE, T310, TOP, gate_batches
 from experiments.interp.snowball_identity.route_proxy_check import K, agreement, margin_summary, routes_and_margins
 from experiments.interp.snowball_identity.routing import MATMUL_ENV
 from experiments.interp.snowball_identity.sequences import Sequence
@@ -57,7 +57,6 @@ from experiments.post_training.identity_context_distill.sft import BASE_MODEL
 logger = logging.getLogger(__name__)
 
 MODULE = "experiments.interp.snowball_identity.torch_route_floor"
-TOP = 6
 RUNS = ("batched", "batch1")
 
 
