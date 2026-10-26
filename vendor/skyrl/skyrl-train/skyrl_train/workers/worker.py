@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 from typing import Dict, Optional, Type, List, Any, Callable
+from skyrl_train.host_memory import log_host_memory
 from skyrl_train.checkpoint_schedule import OptimizerStateMode
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
@@ -949,6 +950,7 @@ class PolicyWorkerBase(Worker):
                     },
                 )
         self._model_version_step = step
+        log_host_memory(f"after_train_step_{step}", self._rank)
         return output
 
     async def broadcast_to_inference_engines(self, inference_engine_client):
