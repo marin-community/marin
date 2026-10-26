@@ -17,6 +17,7 @@ import jax.numpy as jnp
 from haliax.partitioning import _get_mesh
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention import ragged_paged_attention
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import DEFAULT_MASK_VALUE
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
 
@@ -257,21 +258,24 @@ def fixed_schedule_attention(
     ):
         raise ValueError("fixed_schedule_attention requires a four-device mesh with data=4 and singleton extra axes")
 
+    in_specs = (
+        P("data", None, None, None),
+        P(),
+        P("data"),
+        P("data", None),
+        P("data"),
+        P("data", None),
+        P("data", None),
+    )
     shard = jax.shard_map(
         lambda q_, pages_, lens_, indices_, lengths_, positions_, valid_: _local_fixed_attention(
             q_, pages_, lens_, indices_, lengths_, positions_, valid_, spec=spec
         ),
         mesh=mesh,
-        in_specs=(
-            P("data", None, None, None),
-            P(),
-            P("data"),
-            P("data", None),
-            P("data"),
-            P("data", None),
-            P("data", None),
-        ),
+        in_specs=in_specs,
         out_specs=P("data", None, None, None),
         check_vma=False,
     )
-    return shard(q, kv_pages, kv_lens, page_indices, query_lengths, query_positions, query_valid)
+    args = (q, kv_pages, kv_lens, page_indices, query_lengths, query_positions, query_valid)
+    args = tuple(jax.sharding.reshard(arg, NamedSharding(mesh, partition)) for arg, partition in zip(args, in_specs))
+    return shard(*args)

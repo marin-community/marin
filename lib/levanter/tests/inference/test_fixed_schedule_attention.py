@@ -3,9 +3,10 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from jax.experimental.pallas.ops.tpu.ragged_paged_attention.kernel import DEFAULT_MASK_VALUE
-from jax.sharding import Mesh, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention.fixed_schedule import (
     FixedScheduleSpec,
@@ -146,6 +147,61 @@ def test_fixed_schedule_public_forward_isolates_data_sharded_neighbor_changes() 
     assert jnp.array_equal(before[0], after[0])
     assert not jnp.array_equal(before[1], after[1])
     assert before.sharding.spec == P("data", None, None, None)
+
+
+def test_fixed_schedule_public_forward_normalizes_compound_explicit_input_shardings() -> None:
+    _require_four_tpu_devices()
+    spec = FixedScheduleSpec()
+    keys, values, page_indices = _fixture(spec)
+    pages = materialize_contiguous_kv(keys, values, page_indices, spec=spec)
+    query = jax.random.normal(jax.random.PRNGKey(41), (4, 2, 128), dtype=jnp.float32) * 0.125
+    q = jnp.broadcast_to(query[:, None, :, :], (4, 256, 2, 128))
+    kv_lens = jnp.full((4,), 256, dtype=jnp.int32)
+    query_lengths = jnp.full((4,), 256, dtype=jnp.int32)
+    positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
+    valid = jnp.ones((4, 256), dtype=jnp.bool_)
+
+    devices = np.asarray(jax.devices()[:4]).reshape(1, 4, 1, 1)
+    mesh = Mesh(
+        devices,
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    canonical_specs = (
+        P("data", None, None, None),
+        P(),
+        P("data"),
+        P("data", None),
+        P("data"),
+        P("data", None),
+        P("data", None),
+    )
+    compound_specs = (
+        P(("replica_dcn", "data", "expert"), None, "model", None),
+        P(),
+        P(("replica_dcn", "data", "expert")),
+        P(("replica_dcn", "data", "expert"), None),
+        P(("replica_dcn", "data", "expert")),
+        P(("replica_dcn", "data", "expert"), None),
+        P(("replica_dcn", "data", "expert"), None),
+    )
+    args = (q, pages, kv_lens, page_indices, query_lengths, positions, valid)
+    canonical_args = tuple(
+        jax.device_put(arg, NamedSharding(mesh, partition)) for arg, partition in zip(args, canonical_specs)
+    )
+    compound_args = tuple(
+        jax.device_put(arg, NamedSharding(mesh, partition)) for arg, partition in zip(args, compound_specs)
+    )
+
+    with jax.set_mesh(mesh):
+        canonical = fixed_schedule_attention(*canonical_args, spec=spec)
+        compound = fixed_schedule_attention(*compound_args, spec=spec)
+
+    assert jnp.array_equal(
+        jax.lax.bitcast_convert_type(canonical, jnp.uint32),
+        jax.lax.bitcast_convert_type(compound, jnp.uint32),
+    )
+    assert compound.sharding.spec == P("data", None, None, None)
 
 
 def test_fixed_schedule_public_forward_empty_neighbor_preserves_target() -> None:
