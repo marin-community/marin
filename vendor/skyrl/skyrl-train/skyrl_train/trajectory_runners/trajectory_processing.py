@@ -17,6 +17,7 @@ from skyrl_train.trajectory_runners.types import (
 from skyrl_train.trajectory_runners.trajectory_retention import RETENTION_METRIC_PREFIX
 from skyrl_train.metric_names import (
     ENVIRONMENT_METRIC_PREFIX,
+    GENERATE_OUTCOME_METRIC_PREFIX,
     IDENTITY_AWARE_REWARD_METRIC_PREFIX,
     TASK_ROLLOUT_METRIC_PREFIX,
     TIS_ALIGNED_TOKENS_METRIC,
@@ -504,7 +505,7 @@ def concatenate_trajectory_batches(
                     RETENTION_METRIC_PREFIX,
                     IDENTITY_AWARE_REWARD_METRIC_PREFIX,
                     TASK_ROLLOUT_METRIC_PREFIX,
-                    "generate/outcome/",
+                    GENERATE_OUTCOME_METRIC_PREFIX,
                 )
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value

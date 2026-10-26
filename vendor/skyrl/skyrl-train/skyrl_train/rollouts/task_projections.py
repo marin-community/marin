@@ -22,7 +22,7 @@ from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.metric_names import TASK_ROLLOUT_METRIC_PREFIX
+from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
     get_batch_failure_metrics,
@@ -511,11 +511,15 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
     metrics = batch.get("rollout_metrics") or {}
     metrics.update(
         {
-            f"generate/outcome/{outcome.value}": float(sum(rollout.grade.status == outcome for rollout in rollouts))
+            f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(
+                sum(rollout.grade.status == outcome for rollout in rollouts)
+            )
             for outcome in Outcome
         }
     )
-    metrics["generate/outcome/rollout_failure"] = float(sum(rollout.failure is not None for rollout in rollouts))
+    metrics[f"{GENERATE_OUTCOME_METRIC_PREFIX}rollout_failure"] = float(
+        sum(rollout.failure is not None for rollout in rollouts)
+    )
     failed = [
         rollout
         for rollout in rollouts

@@ -2,6 +2,8 @@
 
 ROLLOUT_FAILURE_FRACTION_METRIC = "generate/failed_trajectory_fraction"
 ENVIRONMENT_METRIC_PREFIX = "environment/"
+GENERATE_OUTCOME_METRIC_PREFIX = "generate/outcome/"
+EVAL_OUTCOME_METRIC_PREFIX = "eval/all/outcome/"
 IDENTITY_AWARE_REWARD_METRIC_PREFIX = "generate/reward_shaping/identity_aware"
 TASK_ROLLOUT_METRIC_PREFIX = "generate/task_rollout/"
 TIS_ALIGNED_TOKENS_METRIC = "generate/tis/aligned_tokens"
