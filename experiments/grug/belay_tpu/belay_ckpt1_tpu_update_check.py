@@ -157,6 +157,7 @@ def main():
     parser.add_argument("--kda-chunk-size", type=int, choices=(16, 32, 64), default=16)
     parser.add_argument("--kda-solve-groups", type=int, choices=(0, 1, 4), default=0)
     parser.add_argument("--kda-fused-prep", action="store_true")
+    parser.add_argument("--kda-state-head-group", type=int, choices=(1, 4), default=1)
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
     parser.add_argument("--route-counts", choices=("source", "factorized"), default="source")
     parser.add_argument("--capacity-layout", choices=("source", "intervals"), default="source")
@@ -198,6 +199,7 @@ def main():
         chunk_size=args.kda_chunk_size,
         solve_groups=args.kda_solve_groups,
         fused_prep=args.kda_fused_prep,
+        state_head_group=args.kda_state_head_group,
     )
     if args.initial_checkpoint and args.reference_step1:
         parser.error("A continuation cannot compare its first update to the initialization reference")
@@ -304,6 +306,7 @@ def main():
             "diagnostic/kda_chunk_size": args.kda_chunk_size,
             "diagnostic/kda_solve_groups": args.kda_solve_groups,
             "diagnostic/kda_fused_prep": args.kda_fused_prep,
+            "diagnostic/kda_state_head_group": args.kda_state_head_group,
             "diagnostic/attention_kernel": args.attention_kernel,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
@@ -320,6 +323,7 @@ def main():
         chunk_size=args.kda_chunk_size,
         solve_groups=args.kda_solve_groups,
         fused_prep=args.kda_fused_prep,
+        state_head_group=args.kda_state_head_group,
     )
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
     checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-after-first-update"

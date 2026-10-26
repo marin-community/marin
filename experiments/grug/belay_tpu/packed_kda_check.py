@@ -16,7 +16,9 @@ from experiments.grug.belay_tpu.kda_tpu import chunk_kda_tpu
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
 
 
-def check_packed_kda(*, state_precision=jax.lax.Precision.HIGHEST, chunk_size=16, solve_groups=0, fused_prep=False):
+def check_packed_kda(
+    *, state_precision=jax.lax.Precision.HIGHEST, chunk_size=16, solve_groups=0, fused_prep=False, state_head_group=1
+):
     if jax.default_backend() != "tpu":
         raise RuntimeError("Packed KDA numerical validation requires TPU")
     rng = np.random.RandomState(41)
@@ -60,6 +62,7 @@ def check_packed_kda(*, state_precision=jax.lax.Precision.HIGHEST, chunk_size=16
                             chunk_size=chunk_size,
                             solve_groups=solve_groups,
                             fused_prep=fused_prep,
+                            state_head_group=state_head_group,
                         )
                     return chunk_kda(q, k, v, g, beta, segment_ids=seg, chunk_size=16, matmul_dtype=matmul_dtype)
 
@@ -81,6 +84,7 @@ def check_packed_kda(*, state_precision=jax.lax.Precision.HIGHEST, chunk_size=16
                     "chunk_size": chunk_size if implementation == "pallas" else 16,
                     "solve_groups": solve_groups if implementation == "pallas" else 0,
                     "fused_prep": fused_prep if implementation == "pallas" else False,
+                    "state_head_group": state_head_group if implementation == "pallas" else 1,
                     "matmul_dtype": str(jnp.dtype(dtype)),
                     "state_precision": state_precision.name if implementation == "pallas" else "source",
                     "atol": tolerance,

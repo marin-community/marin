@@ -35,6 +35,7 @@ def chunk_kda_tpu(
     initial_state: jax.Array | None = None,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     state_tile: int = 1,
+    state_head_group: int = 1,
     chunk_size: int = 16,
     solve_groups: int = 0,
     fused_prep: bool = False,
@@ -48,6 +49,8 @@ def chunk_kda_tpu(
     q, k = _prepare_qk(q, k, True)
     v, g, beta = (x.astype(jnp.float32) for x in (v, g, beta))
     b, h, length, d = q.shape
+    if state_head_group not in (1, 4) or h % state_head_group or (state_head_group != 1 and state_tile != 1):
+        raise ValueError("Head grouping requires complete groups of four heads and state_tile=1")
     if chunk_size not in (16, 32, 64, 128) or (chunk_size != 16 and state_tile != 1):
         raise ValueError("Larger KDA chunks require state_tile=1 and size 32, 64 or 128")
     c = chunk_size
@@ -87,7 +90,11 @@ def chunk_kda_tpu(
     def flatten(x):
         return x.reshape(b * h, n, *x.shape[-2:])
 
-    state_kernel = state_pass if state_tile == 1 else functools.partial(state_pass_tiled, tile=state_tile)
+    state_kernel = (
+        functools.partial(state_pass, head_group=state_head_group)
+        if state_tile == 1
+        else functools.partial(state_pass_tiled, tile=state_tile)
+    )
     out, final = state_kernel(
         flatten(prep.q_inflate),
         flatten(prep.attn),

@@ -14,6 +14,8 @@ import numpy as np
 import pytest
 
 from experiments.grug.belay_tpu.kda_fused_prep_tpu import chunk_prep_fused
+from experiments.grug.belay_tpu.kda_state_tpu import state_pass
+from experiments.grug.belay_tpu.kda_tpu import chunk_kda_tpu
 from experiments.grug.belay_tpu.kda_triangular_tpu import chunk_prep_solve, solve_unit_lower
 from experiments.grug.belay_tpu.kernel_check import evaluate, measure_errors
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
@@ -115,3 +117,53 @@ def test_saved_solve_preserves_prefix_and_document_independence(prepare, chunk, 
     np.testing.assert_array_equal(expected[..., :7, :], np.asarray(future)[..., :7, :])
     np.testing.assert_array_equal(expected[..., 7:, :], np.asarray(previous_doc)[..., 7:, :])
     np.testing.assert_array_equal(np.asarray(gradient(*inputs))[..., 7:, :], 0)
+
+
+@pytest.mark.parametrize("chunk", [16, 64])
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.timeout(180)
+def test_batched_state_preserves_complete_packed_kda_gradients(chunk, dtype):
+    rng = np.random.default_rng(431)
+    shape = (2, 4, 129, 128)
+    q, k, v = (jnp.asarray(rng.normal(size=shape), dtype) for _ in range(3))
+    gate = jnp.asarray(-5 * rng.random(shape), jnp.float32)
+    beta = jnp.asarray(rng.random(shape[:-1]), jnp.float32)
+    initial = jnp.asarray(0.01 * rng.normal(size=(2, 4, 128, 128)), jnp.float32)
+    erase = jnp.asarray(0.5 + rng.random(shape), jnp.float32)
+    ids = np.stack(
+        [
+            np.searchsorted(boundaries, np.arange(129), side="right")
+            for boundaries in ([7, 17, 33, 65, 95, 127], [3, 16, 32, 66, 97, 128])
+        ]
+    )
+    segments = jnp.asarray(ids[:, None, :], jnp.int32)
+    inputs = (q, k, v, gate, beta, initial, erase)
+    cotangents = (
+        jnp.asarray(rng.normal(size=shape), jnp.float32),
+        jnp.asarray(rng.normal(size=initial.shape), jnp.float32),
+    )
+    reference = (
+        recurrent_kda if dtype == jnp.float32 else functools.partial(chunk_kda, chunk_size=16, matmul_dtype=dtype)
+    )
+    candidate = functools.partial(
+        chunk_kda_tpu,
+        chunk_size=chunk,
+        matmul_dtype=dtype,
+        solve_groups=4,
+        fused_prep=True,
+        state_head_group=4,
+    )
+    with jax.default_matmul_precision("highest"):
+        expected = jax.jit(functools.partial(evaluate, reference))(inputs, segments, cotangents)
+        # Interpret the actual TPU kernels; the numerical oracle stays independent.
+        with (
+            patch("experiments.grug.belay_tpu.kda_tpu.state_pass", functools.partial(state_pass, interpret=True)),
+            patch(
+                "experiments.grug.belay_tpu.kda_tpu.chunk_prep_fused",
+                functools.partial(chunk_prep_fused, interpret=True),
+            ),
+        ):
+            compiled = jax.jit(functools.partial(evaluate, candidate)).lower(inputs, segments, cotangents).compile()
+        actual = compiled(inputs, segments, cotangents)
+    errors = measure_errors(actual, expected, 1e-4 if dtype == jnp.float32 else 2e-2)
+    assert all(row["normalized_max"] <= 1 for row in errors), json.dumps(errors)

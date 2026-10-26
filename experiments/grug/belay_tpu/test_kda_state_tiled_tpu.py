@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
+from experiments.grug.belay_tpu.kda_state_tpu import state_pass
 from experiments.grug.moe.kda import _parallel_chunk_recurrence
 from experiments.grug.moe.kda_prep_pallas import ChunkPrep
 
@@ -30,23 +31,30 @@ def evaluate(function, inputs, cotangents):
 
 
 @pytest.mark.parametrize("dtype,tolerance", [(jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)])
-@pytest.mark.parametrize("tile", [1, 2, 4])
-def test_tiled_state_and_all_gradients_match_source(dtype, tolerance, tile):
+@pytest.mark.parametrize(
+    "tile,head_group,chunk",
+    [(1, 1, 16), (2, 1, 16), (4, 1, 16), (None, 1, 16), (None, 4, 16), (None, 1, 64), (None, 4, 64)],
+)
+def test_state_layout_and_all_gradients_match_source(dtype, tolerance, tile, head_group, chunk):
     rng = np.random.RandomState(131)
-    shape = (2, 8, 16, 128)
+    shape = (8, 8, chunk, 128)
     q, k, w, v = (jnp.asarray(0.1 * rng.normal(size=shape), jnp.float32) for _ in range(4))
-    a = jnp.tril(jnp.asarray(0.1 * rng.normal(size=(2, 8, 16, 16)), jnp.float32))
-    decay = jnp.asarray(rng.uniform(0.5, 1.0, size=(2, 8, 1, 128)), jnp.float32)
+    a = jnp.tril(jnp.asarray(0.1 * rng.normal(size=(8, 8, chunk, chunk)), jnp.float32))
+    decay = jnp.asarray(rng.uniform(0.5, 1.0, size=(8, 8, 1, 128)), jnp.float32)
     # A zero-decay chunk separates streams and checks carried-state initialization.
     decay = decay.at[:, 3].set(0)
-    initial = jnp.asarray(0.1 * rng.normal(size=(2, 128, 128)), jnp.float32)
+    initial = jnp.asarray(0.1 * rng.normal(size=(8, 128, 128)), jnp.float32)
     inputs = (q, a, k, w, v, decay, initial)
     cotangents = (
         jnp.asarray(rng.normal(size=shape), jnp.float32),
         jnp.asarray(rng.normal(size=initial.shape), jnp.float32),
     )
     reference = functools.partial(source, dtype=dtype)
-    candidate = functools.partial(state_pass_tiled, matmul_dtype=dtype, tile=tile, interpret=True)
+    candidate = (
+        functools.partial(state_pass_tiled, matmul_dtype=dtype, tile=tile, interpret=True)
+        if tile is not None
+        else functools.partial(state_pass, matmul_dtype=dtype, head_group=head_group, interpret=True)
+    )
     with jax.default_matmul_precision("highest"):
         expected = jax.jit(functools.partial(evaluate, reference))(inputs, cotangents)
         actual = jax.jit(functools.partial(evaluate, candidate))(inputs, cotangents)
