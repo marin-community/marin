@@ -263,8 +263,10 @@ def evaluation_set(gap_types: str) -> EvalSet:
         types = scan_types()
         indices = {name: diagnostic_indices(types[name], EVAL_GAP_INSTANCES) for name in names}
         for name, fresh in fresh_tasks(types, indices, DIAGNOSTIC_CAPABILITY_PREFIX).items():
-            tasks += fresh
-            labels.update({task.id: f"gap:{name}" for task in fresh})
+            # Without their tags, which name the type: the failed-run analysis reads a task's tags.
+            untagged = [task.model_copy(update={"tags": ()}) for task in fresh]
+            tasks += untagged
+            labels.update({task.id: f"gap:{name}" for task in untagged})
     logger.info("The evaluation box evaluates %d tasks", len(tasks))
     return EvalSet(tasks, labels)
 

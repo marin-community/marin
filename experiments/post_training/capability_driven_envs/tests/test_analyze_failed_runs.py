@@ -41,6 +41,7 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeli
     merge_ideas,
     yield_ideas,
 )
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import EXTRACT_PROMPT, MERGE_PROMPT
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import FAILURE_OPERATION
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
@@ -245,7 +246,7 @@ def test_the_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_cal
     analyst = Analyst()
 
     rollout = (arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)
-    [maybe] = yield_ideas(rollout, make_client=lambda: analyst, policy=LLMPolicy())
+    [maybe] = yield_ideas(rollout, make_client=lambda: analyst, policy=LLMPolicy(), prompt=EXTRACT_PROMPT)
 
     summary, tools, *messages = analyst.requests[0].splitlines()
     assert json.loads(summary)["run_id"] == "malformed" and maybe.evidence == {"malformed"}
@@ -261,7 +262,13 @@ def test_a_merge_samples_again_after_a_cut_off_reply():
     ]
 
     [merged] = merge_ideas(
-        ideas, make_client=lambda: analyst, max_new_ideas=8, max_ideas_per_merge=100, min_tasks=1, policy=LLMPolicy()
+        ideas,
+        make_client=lambda: analyst,
+        max_new_ideas=8,
+        max_ideas_per_merge=100,
+        min_tasks=1,
+        policy=LLMPolicy(),
+        prompt=MERGE_PROMPT,
     )
 
     assert (merged.idea.name, merged.num_rollouts, merged.num_tasks, len(analyst.requests)) == (STOP_LOOPS.name, 2, 2, 3)
@@ -273,7 +280,13 @@ def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evi
     ideas.append(MaybeIdea(CHECK_WORK, frozenset({"wrong"}), frozenset({"task-wrong"})))
 
     merged = merge_ideas(
-        ideas, make_client=lambda: analyst, max_new_ideas=2, max_ideas_per_merge=4, min_tasks=1, policy=LLMPolicy()
+        ideas,
+        make_client=lambda: analyst,
+        max_new_ideas=2,
+        max_ideas_per_merge=4,
+        min_tasks=1,
+        policy=LLMPolicy(),
+        prompt=MERGE_PROMPT,
     )
 
     assert [(candidate.idea.name, candidate.num_rollouts) for candidate in merged] == [
