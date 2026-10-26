@@ -12,7 +12,7 @@ from experiments.evaluation import prewarm_uploaded_model
 
 
 @pytest.mark.parametrize("source_payload", [b"published weights", b"stale parent weights"])
-@pytest.mark.parametrize("manifest_format", ["upload", "producer"])
+@pytest.mark.parametrize("manifest_format", ["upload", "producer", "export"])
 def test_uploaded_weights_must_match_hf_before_cache_is_complete(tmp_path, monkeypatch, source_payload, manifest_format):
     revision = "a" * 40
     expected = b"published weights"
@@ -25,11 +25,15 @@ def test_uploaded_weights_must_match_hf_before_cache_is_complete(tmp_path, monke
     (metadata / "config.json").write_text('{"model_type":"grug_moe"}')
     (metadata / ".cache_metadata.json").write_text('{"source_revision":"parent"}')
     manifest = metadata / "upload-manifest.json"
-    document = (
-        {"checkpoint": str(source), "objects": [{"name": "model.safetensors", "sha256": digest}]}
-        if manifest_format == "upload"
-        else {"files": [{"path": "model.safetensors", "sha256": digest}]}
-    )
+    if manifest_format == "upload":
+        document = {"checkpoint": str(source), "objects": [{"name": "model.safetensors", "sha256": digest}]}
+    elif manifest_format == "producer":
+        document = {"files": [{"path": "model.safetensors", "sha256": digest}]}
+    else:
+        document = {
+            "request": {"config": {"destination": str(source)}},
+            "shards": [{"filename": "model.safetensors", "sha256": digest}],
+        }
     manifest.write_text(json.dumps(document))
     source_override = str(source) if manifest_format == "producer" else None
     config = tmp_path / "model.yaml"

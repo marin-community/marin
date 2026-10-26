@@ -58,7 +58,10 @@ def warm_uploaded_model(
         raise ValueError("HF metadata does not identify the pinned snapshot")
     manifest_file = Path(hf_hub_download(model.location, manifest_path, revision=model.revision))
     manifest = json.loads(manifest_file.read_text())
-    if source is None:
+    if "shards" in manifest:
+        source = source or manifest["request"]["config"]["destination"]
+        objects = {item["filename"]: item for item in manifest["shards"]}
+    elif source is None:
         source = manifest["checkpoint"]
         objects = {item["name"]: item for item in manifest["objects"]}
     else:
