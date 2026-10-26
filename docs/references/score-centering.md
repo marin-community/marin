@@ -130,13 +130,14 @@ losses, remote inference and probability-changing sampling
 filters. Temperature-only sampling is supported. Disabling the flag returns to
 ordinary training; set the probe interval to zero for a control without heads.
 
-The head contains the sampler's natural top K IDs and full-vocabulary
-probabilities. Megatron scores those IDs at the same causal positions before
-and during optimization. Outside the head, old and behavior probabilities are
+The head contains the sampler's natural top 128 token IDs and their
+probabilities normalized over the full vocabulary. Megatron scores those IDs at
+the same causal positions before and during optimization. Outside the head, old and behavior probabilities are
 modeled as proportional to the current policy, preserving measured omitted mass.
 SC subtracts the sampler's expected clipped, TIS-weighted score contribution.
-Its coefficient is detached. It already integrates TIS and must not receive the
-sampled action's TIS weight again. See the
+The correction's probability weights and clipping decisions are detached. It
+already integrates TIS and must not receive the sampled action's TIS weight
+again. See the
 [paper](https://arxiv.org/html/2609.20807v1) and
 [design note](https://marina.oa.dev/echo/wiki/608).
 
@@ -144,8 +145,47 @@ SC uses PPO's policy-data weights and whole-step loss reduction. With
 `token_mean`, it divides the weighted sum by the weighted token count across
 microbatches and data-parallel ranks. CP ranks reconstruct the same token loss
 while retaining gradients only for their local logits. Megatron's CP gradient
-reduction and pipeline scaling preserve the whole-step mean. Only requested
-candidate-score differences cross CP ranks; vocabulary logits stay local.
+reduction and pipeline scaling preserve the whole-step mean. Only differences
+between requested candidate logits and the chosen-token logit cross CP ranks;
+vocabulary logits stay local.
+
+## Packed CP5 qualification
+
+The [2026-10-26 qualification][cp-qualification] used Grug 67B-A2B Datakit SFT
+on 80 H100 learners: packed CP5, TP1, PP2, EP8 and DP8, with a colocated frozen
+reference and eight separate inference H100s. Each data-parallel replica replayed
+102,400 non-padding input tokens, including 49,152 response tokens, sharded
+across its five CP ranks. All 80 learners completed scoring and backpropagation
+with nonzero local gradient norms. Replays used balanced expert routes; live
+updates used vLLM's recorded routes.
+
+The comparison held tokens, weights and RNG state fixed, with one warmup and
+five repeats per arm. Each time adds the slowest learner's input-evidence copy
+to the slowest learner's scoring/training window. That window includes old-policy
+scoring, a returned-score host round trip, and training forward/backward. It
+excludes reference scoring, optimizer updates and common gradient clearing.
+Intervals are 95% Student-t intervals; extra time uses paired repeats against
+TIS. These stage measurements do not estimate a full production update.
+
+| Arm | Measured stages, seconds | Extra time, 95% interval | Peak allocated GiB |
+| --- | --- | --- | --- |
+| TIS, heads off | 5.235 ± 0.019 | baseline | 45.44 |
+| SC, K128 | 5.298 ± 0.051 | +1.20% [−0.06%, 2.45%] | 45.60 |
+
+Memory is the maximum PyTorch tensor allocation across all 80 learners.
+Reserved memory was 56.69 GiB in every arm because the allocator cache was
+retained. These counters do not measure physical GPU headroom. The overhead
+interval includes zero. SC copied 72 MiB of input evidence per learner
+in 22.0 ms and returned a 24 MiB head per response; the host round trip
+averaged 554 ms, including chosen scores and pipeline transport.
+
+The live workload used eight prompts with four responses each, compared with
+512 prompts and 16 responses in the reference recipe. Inference used eight
+GPUs compared with 48. Six updates per arm exercised ordinary RLOO-N, PPO/TIS,
+entropy, frozen-reference KL and optimizer updates; the first update was warmup.
+The short CatCount workloads and response lengths differed between arms. The
+record includes end-to-end timings and capture payloads; their differences
+cannot establish causal overhead or learning benefit.
 
 ## Runtime and evidence
 
@@ -170,3 +210,5 @@ is merged into the integrated base. Its nonscalar guard precedes SymPy's scalar
 finiteness check. Editable dependencies carry that source in the workspace bundle.
 
 [snowball-report]: https://github.com/yonromai/marin/blob/14dae4c5e21179fd1b664e97ae6104b21837d6cd/docs/reports/score-centering-tim.md
+
+[cp-qualification]: https://wandb.ai/marin-community/score-centering-cp-packing/artifacts/qualification/packed-cp5-qualification-01a16b97/v0
