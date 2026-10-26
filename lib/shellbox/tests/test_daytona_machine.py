@@ -616,11 +616,11 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
 @pytest.mark.docker
 @pytest.mark.parametrize("backend", ["docker", "daytona"])
 @pytest.mark.parametrize("tampering", ["delete", "forge", "path"])
-def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
+def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering, monkeypatch):
     # The Daytona SDK boundary uses Docker only to test real guest UIDs and processes.
     # This is not a live Daytona service test.
     async def scenario():
-        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("ubuntu:24.04"), workdir="/tmp"))
+        guest = await DockerMachineFactory().create(MachineSpec(DockerImage("python:3.12-bookworm"), workdir="/tmp"))
 
         class GuestProcess:
             async def exec(self, command, cwd=None, env=None, timeout=None):
@@ -638,6 +638,16 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 assert result.exit_code == 0
                 return result.stdout
 
+        victim_alive_at_disposal = []
+        close_guest = guest.close
+
+        async def observe_disposal():
+            if not guest._closed:
+                probe = await docker("exec", guest.name, "sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')
+                victim_alive_at_disposal.append(probe.exit_code == 0)
+            await close_guest()
+
+        monkeypatch.setattr(guest, "close", observe_disposal)
         resources = AsyncExitStack()
         resources.push_async_callback(guest.close)
         machine = (
@@ -646,7 +656,7 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
             else DaytonaMachine(SimpleNamespace(process=GuestProcess(), fs=GuestFiles()), guest.spec, resources)
         )
         try:
-            await guest.run(Command(("sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")))
+            await docker("exec", guest.name, "sh", "-c", "setsid sleep 7200 >/dev/null 2>&1 & echo $! > /tmp/victim.pid")
             if tampering == "path":
                 prepared = await guest.run(Command(("sh", "-c", "mkdir -m 777 /tmp/candidate-bin")))
                 assert prepared.exit_code == 0
@@ -683,7 +693,16 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 timeout=5,
                 env=environment,
             )
-            result = await machine.run(candidate)
+            try:
+                result = await machine.run(candidate)
+            except RuntimeError:
+                # Corrupted same-UID control state may require disposal, but
+                # cancellation must never signal a root-owned process first.
+                assert backend == "docker" and tampering in ("delete", "forge")
+                assert victim_alive_at_disposal == [True]
+                with pytest.raises(RuntimeError, match="closed"):
+                    await machine.run(Command(("true",)))
+                return
             assert result.reason is ExitReason.TIMED_OUT
             result = await guest.run(Command(("sh", "-c", 'kill -0 "$(cat /tmp/victim.pid)"')))
             assert result.exit_code == 0

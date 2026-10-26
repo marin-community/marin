@@ -91,9 +91,10 @@ async def docker(
 class DockerMachine:
     """One Docker container with a writable filesystem."""
 
-    def __init__(self, name: str, spec: MachineSpec):
+    def __init__(self, name: str, spec: MachineSpec, python: str):
         self.name = name
         self.spec = spec
+        self._python = python
         self._closed = False
         self._commands = CommandLifetime()
 
@@ -116,8 +117,9 @@ class DockerMachine:
             args.extend(("--user", command.user))
         for key, value in command.env.items():
             args.extend(("-e", f"{key}={value}"))
-        scope = ProcessScope()
-        args.extend((self.name, *scope.command(command.argv, command.timeout)))
+        scope = ProcessScope(python=self._python)
+        argv = ("/bin/sh", "-c", 'exec "$@"', "shellbox-command", *command.argv)
+        args.extend((self.name, *scope.command(argv, command.timeout)))
         try:
             completed = await docker(
                 *args,
@@ -304,4 +306,4 @@ class DockerMachineFactory:
         except BaseException:
             await docker("rm", "-f", name)
             raise
-        return DockerMachine(name, spec)
+        return DockerMachine(name, spec, prepared.stdout.decode().strip())

@@ -83,7 +83,7 @@ def test_docker_candidate_output_is_drained_with_bounded_memory(monkeypatch, out
         return await create_process(sys.executable, "-c", script, **kwargs)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
-    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")), sys.executable)
     tracemalloc.start()
     try:
         result = asyncio.run(
@@ -110,17 +110,21 @@ def test_docker_command_preserves_stdin_and_exit_status_when_exec_is_a_group_lea
         )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
-    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")))
+    machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture")), sys.executable)
     payload = b"SHELLBOX_PGID:7\nanswer\x00\xff"
-    result = asyncio.run(
-        machine.run(
+
+    async def scenario():
+        missing = await machine.run(Command(("shellbox-no-such-program",)))
+        assert (missing.exit_code, missing.reason) == (127, ExitReason.EXITED)
+        return await machine.run(
             Command(
                 (sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.exit(23)"),
                 stdin=payload,
                 timeout=5,
             )
         )
-    )
+
+    result = asyncio.run(scenario())
     assert (result.exit_code, result.stdout, result.reason) == (23, payload, ExitReason.EXITED)
 
 
@@ -155,7 +159,9 @@ def test_docker_deadline_stops_running_work_and_preserves_completed_work(tmp_pat
     monkeypatch.setattr("shellbox.backends.docker.machine.docker", remote_exec)
 
     async def scenario():
-        machine = DockerMachine("shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)))
+        machine = DockerMachine(
+            "shellbox-test-container", MachineSpec(DockerImage("fixture"), workdir=str(tmp_path)), sys.executable
+        )
         try:
             argv = ("printf", "completed-at-deadline")
             if candidate_state != "completed":
@@ -228,7 +234,7 @@ def test_directory_transfer_preserves_contents_without_an_extra_directory(tmp_pa
     (source / "nested").chmod(0o710)
     (source / "nested/answer").write_bytes(b"\x00\xff")
     (source / "nested/answer").chmod(0o755)
-    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")))
+    machine = DockerMachine("fixture", MachineSpec(DockerImage("fixture")), sys.executable)
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()
 
@@ -465,7 +471,7 @@ def test_docker_exec_start_failure_preserves_output_and_the_next_command(monkeyp
     monkeypatch.setattr(asyncio, "create_subprocess_exec", local_process)
 
     async def scenario():
-        machine = DockerMachine("exec-fixture", MachineSpec(DockerImage("fixture")))
+        machine = DockerMachine("exec-fixture", MachineSpec(DockerImage("fixture")), sys.executable)
         try:
             tracemalloc.start()
             try:

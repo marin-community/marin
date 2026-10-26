@@ -35,6 +35,9 @@ Marin's vendored Harbor supports only `pi`, `mini-swe-agent`, `codex`, `opencode
 `terminus-2`, and `terminus-kira`. Other named agents, ACP registry aliases,
 local-mode adapters, and custom agent import paths raise an unsupported-agent
 error before construction. Import paths for the six supported classes remain valid.
+This restriction also applies to historical tau3 ACP/relay policies, oracle defaults,
+and the former shellbox `BashAgent` smoke path; those configurations require an
+explicit supported agent before running with this runtime.
 
 The four installed CLI agents share shellbox's Linux process supervisor. Python 3
 is installed during agent setup. Each invocation owns and reaps its tool processes,

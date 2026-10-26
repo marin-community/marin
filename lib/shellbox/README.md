@@ -1,6 +1,11 @@
 # Marin Shellbox (0.1)
 
-`marin-shellbox` provides three Harbor import paths:
+Shellbox machines serve the [RolloutEngine shell harness](../../docs/references/task-rollouts.md).
+The package also retains these adapters for upstream Harbor. Marin's vendored Harbor
+accepts only Pi, mini-swe-agent, Codex, OpenCode, terminus-2, and terminus-kira;
+it rejects `shellbox.agent:BashAgent` and other custom agents.
+
+The upstream Harbor adapter import paths are:
 
 - `shellbox.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
 - `shellbox.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
@@ -239,13 +244,6 @@ Agent shell state persists between Bash actions; setup and verifier commands use
 
 The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled memory, 512 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
 
-Run the local Harbor smoke without QEMU:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[shellsim]' \
-  lib/shellbox/tests/harbor_smoke.py shellsim /tmp/shellsim-smoke-jobs
-```
-
 ## OCI image ingestion
 
 On a build machine, copy a prebuilt image into an OCI layout, then stage it. For example:
@@ -323,36 +321,8 @@ The microvm disables ACPI and explicitly loads the bundle's SeaBIOS `bios-microv
 
 Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable and writable by the Harbor process; QEMU falls back to TCG if KVM initialization fails. Set `environment.kwargs.acceleration: kvm` to require KVM or `tcg` to force software emulation. The environment logs the accelerator QEMU actually selected after startup. A host may have `/dev/kvm` but deny access to the current user; `auto` uses TCG in that case. The Python package cannot grant device access.
 
-The local smoke test uses a deterministic OpenAI-compatible server and a Harbor task. Supply a PTY-enabled OCI bundle with `/bin/bash`:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
-```
-
-For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
-  --task-path /path/to/task \
-  --image-cache /var/cache/marin-shellbox \
-  --qemu-assets-json /path/to/qemu-assets.json
-```
-
-The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, copied to an OCI layout, and staged with `--task-dockerfile` pointing to its extracted `environment/Dockerfile`. Its unchanged Harbor task passes with:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
-  --task-path /path/to/extracted/nl2bash \
-  --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
-  --network-policy deny
-```
-
-This example uses a deterministic fake model to issue one Bash tool call. It exercises Harbor's external agent, task setup upload, QEMU command execution, and the real TaskTrove verifier; it does not evaluate model quality.
-
-`tests/harbor_smoke.py --commands-json /path/to/commands.json` sends successive Bash calls from a JSON list. For example, the first call can run `cd /tmp; export ANSWER='hello from qemu'`, and the second can use `$ANSWER` and `$PWD`. `tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive behavior without Harbor.
+`tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive
+behavior directly, without Harbor.
 
 `benchmarks/tasktrove/sample.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
 

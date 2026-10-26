@@ -21,10 +21,6 @@ from typing import Any
 import fsspec.config
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
-    is_acp_registry_shorthand,
-    parse_registry_spec,
-)
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
@@ -50,8 +46,6 @@ _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
-_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
-_PI_ACP_REGISTRY_ID = "pi-acp"
 _PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
@@ -121,51 +115,10 @@ def _resolve_import_path(import_path: str, label: str) -> object:
         raise ValueError(f"Harbor {label} import path could not be resolved") from exc
 
 
-_AGENT_CALLBACK_KEYWORDS = (
-    ("setup", ("environment",)),
-    ("run", ("instruction", "environment", "context")),
-)
-
-
-def _validate_agent_callbacks(agent_class: object, import_path: str) -> None:
-    """Validate the keyword callbacks used by upstream Harbor's trial runner."""
-    for method_name, keywords in _AGENT_CALLBACK_KEYWORDS:
-        method = getattr(agent_class, method_name, None)
-        if not callable(method):
-            raise ValueError(f"Harbor agent {import_path} does not define a callable {method_name}()")
-        try:
-            inspect.signature(method).bind(agent_class, **dict.fromkeys(keywords))
-        except TypeError as exc:
-            raise ValueError(
-                f"Harbor agent {import_path}.{method_name}() does not accept the keyword arguments "
-                f"upstream Harbor calls it with ({', '.join(keywords)}): {exc}"
-            ) from exc
-
-
 def _validate_agent(agent: AgentConfig) -> str:
-    if agent.import_path is not None:
-        if agent.mode == "local":
-            raise ValueError("Harbor local-mode agents must use a supported agent name")
-        agent_class = _resolve_import_path(agent.import_path, "agent")
-        _validate_agent_callbacks(agent_class, agent.import_path)
-        return agent.import_path
-    agent_name = agent.name
-    if agent_name is None:
-        raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    if is_acp_registry_shorthand(agent_name):
-        if agent.mode == "local" or AgentName.ACP not in AgentFactory._AGENT_MAP:
-            raise ValueError("Harbor ACP registry agent is not available in the pinned runtime")
-        agent_id, _ = parse_registry_spec(agent_name)
-        if agent_id != _PI_ACP_REGISTRY_ID:
-            raise ValueError("Marin's hosted model settings support only the pi-acp registry agent")
-        return agent_name
-    if agent_name not in AgentName.values():
-        raise ValueError("Harbor config agent name is not supported by the pinned runtime")
-    agent_name = AgentName(agent_name)
-    agent_registry = AgentFactory._LOCAL_AGENT_MAP if agent.mode == "local" else AgentFactory._AGENT_MAP
-    if agent_name not in agent_registry:
-        raise ValueError("Harbor config agent is not available in the pinned runtime")
-    return agent_name.value
+    AgentFactory.get_agent_class_from_config(agent)
+    assert agent.import_path is not None or agent.name is not None
+    return agent.import_path or str(agent.name)
 
 
 def _validate_environment(config: JobConfig) -> str:
@@ -276,15 +229,12 @@ def _agent_config(
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
-    runtime_env = agent.env
-    if agent.name is not None and is_acp_registry_shorthand(agent.name):
-        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
     configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
-            "env": runtime_env,
+            "env": agent.env,
         },
         extra="forbid",
     )
