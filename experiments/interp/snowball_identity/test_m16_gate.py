@@ -195,15 +195,17 @@ def test_candidate_binding_refuses_partial_runs(monkeypatch):
             bind(bad)
 
 
-R7_FIXTURE = Path(__file__).parents[2] / "post_training/identity_context_distill/testdata/tokenizer-export-r7.json"
-R7_PAIR = json.loads(R7_FIXTURE.read_bytes())
+EMBEDDED_TEMPLATE_FIXTURE = (
+    Path(__file__).parents[2] / "post_training/identity_context_distill/testdata/tokenizer-export-r7.json"
+)
+EMBEDDED_TEMPLATE_PAIR = json.loads(EMBEDDED_TEMPLATE_FIXTURE.read_bytes())
 
 
-def r7_metadata(tokenizer_config: str) -> dict[str, bytes]:
+def embedded_template_metadata(tokenizer_config: str) -> dict[str, bytes]:
     return {
-        "chat_template.jinja": base64.b64decode(R7_PAIR["source-chat_template.jinja"]),
+        "chat_template.jinja": base64.b64decode(EMBEDDED_TEMPLATE_PAIR["source-chat_template.jinja"]),
         "tokenizer.json": b"{}",
-        "tokenizer_config.json": base64.b64decode(R7_PAIR[f"{tokenizer_config}-tokenizer_config.json"]),
+        "tokenizer_config.json": base64.b64decode(EMBEDDED_TEMPLATE_PAIR[f"{tokenizer_config}-tokenizer_config.json"]),
         "generation_config.json": b"{}",
     }
 
@@ -217,8 +219,9 @@ def model_files(model: str, metadata: dict[str, bytes]) -> dict:
     [None, "embedded_template", "other_key", "extra_key", "missing_key", "null_template", "template_file"],
 )
 def test_preflight_accepts_only_the_identical_embedded_template(damage):
-    """The real r7 source/export tokenizer_config pair, with marten's six damage cases refused."""
-    base_bytes, cand_bytes = r7_metadata("source"), r7_metadata("export")
+    """A real source/export tokenizer_config pair whose export embeds the source template; six damaged
+    variants of the export are refused."""
+    base_bytes, cand_bytes = embedded_template_metadata("source"), embedded_template_metadata("export")
     saved = json.loads(cand_bytes["tokenizer_config.json"])
     if damage == "embedded_template":
         saved["chat_template"] += " "
@@ -254,12 +257,12 @@ def test_preflight_accepts_only_the_identical_embedded_template(damage):
 
 
 def test_preflight_keeps_raw_hashes_for_the_other_shared_files():
-    base_bytes = r7_metadata("source")
+    base_bytes = embedded_template_metadata("source")
     baseline = model_files("s3://bucket/base", base_bytes)
     same = m16_gate_run.accept_candidate_metadata(baseline, baseline, base_bytes, base_bytes)
     assert same["accepted_metadata_additions"] == []
     for name, data in (("tokenizer.json", b"{ }"), ("generation_config.json", b'{"bos_token_id": 1}')):
-        cand_bytes = {**r7_metadata("export"), name: data}
+        cand_bytes = {**embedded_template_metadata("export"), name: data}
         with pytest.raises(click.ClickException, match=name):
             m16_gate_run.accept_candidate_metadata(
                 baseline, model_files("s3://bucket/cand", cand_bytes), base_bytes, cand_bytes
@@ -267,7 +270,10 @@ def test_preflight_keeps_raw_hashes_for_the_other_shared_files():
 
 
 def test_existing_embedded_template_is_never_normalized():
-    base_bytes = {**r7_metadata("source"), "tokenizer_config.json": json.dumps({"chat_template": "embedded"}).encode()}
+    base_bytes = {
+        **embedded_template_metadata("source"),
+        "tokenizer_config.json": json.dumps({"chat_template": "embedded"}).encode(),
+    }
     template = base_bytes["chat_template.jinja"].decode()
     cand_bytes = {**base_bytes, "tokenizer_config.json": json.dumps({"chat_template": template}).encode()}
     baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
@@ -276,7 +282,7 @@ def test_existing_embedded_template_is_never_normalized():
 
 
 def test_decide_rechecks_the_recorded_metadata_acceptance():
-    base_bytes, cand_bytes = r7_metadata("source"), r7_metadata("export")
+    base_bytes, cand_bytes = embedded_template_metadata("source"), embedded_template_metadata("export")
     baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
     accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
@@ -304,20 +310,23 @@ def test_decide_rechecks_the_recorded_metadata_acceptance():
             m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)
 
 
-SFT_R3_GENERATION_CONFIG = json.loads(
+REFORMATTED_GENERATION_CONFIG = json.loads(
     (Path(__file__).parent / "testdata" / "generation-config-sft-r3.json").read_bytes()
 )
 
 
-def sft_r3_metadata(arm: str) -> dict[str, bytes]:
-    """The r7 tokenizer pair with the real sft-m16-r3 generation_config pair (indented vs one-line JSON)."""
-    metadata = r7_metadata("source" if arm == "baseline" else "export")
-    metadata["generation_config.json"] = base64.b64decode(SFT_R3_GENERATION_CONFIG[f"{arm}-generation_config.json"])
+def reformatted_generation_config_metadata(arm: str) -> dict[str, bytes]:
+    """The embedded-template tokenizer pair with a real generation_config pair whose export is one-line JSON."""
+    metadata = embedded_template_metadata("source" if arm == "baseline" else "export")
+    metadata["generation_config.json"] = base64.b64decode(REFORMATTED_GENERATION_CONFIG[f"{arm}-generation_config.json"])
     return metadata
 
 
 def test_reformatted_generation_config_is_accepted_and_rechecked():
-    base_bytes, cand_bytes = sft_r3_metadata("baseline"), sft_r3_metadata("export")
+    base_bytes, cand_bytes = (
+        reformatted_generation_config_metadata("baseline"),
+        reformatted_generation_config_metadata("export"),
+    )
     assert base_bytes["generation_config.json"] != cand_bytes["generation_config.json"]
     baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
     accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
@@ -342,7 +351,10 @@ def test_reformatted_generation_config_is_accepted_and_rechecked():
 
 
 def test_generation_config_with_a_different_parsed_value_is_refused():
-    base_bytes, cand_bytes = sft_r3_metadata("baseline"), sft_r3_metadata("export")
+    base_bytes, cand_bytes = (
+        reformatted_generation_config_metadata("baseline"),
+        reformatted_generation_config_metadata("export"),
+    )
     changed = json.loads(cand_bytes["generation_config.json"])
     changed["eos_token_id"] = [128001]
     cand_bytes["generation_config.json"] = json.dumps(changed).encode()
@@ -372,7 +384,7 @@ def test_byte_unchanged_is_unknown_without_per_tensor_export_hashes():
 
 
 def merge_world(monkeypatch, receipts):
-    metadata = r7_metadata("source")
+    metadata = embedded_template_metadata("source")
     files = {n: hashlib.sha256(b).hexdigest() for n, b in metadata.items()}
     files = {**m16_gate_run.BASELINE_FILE_HASHES, **files}
 

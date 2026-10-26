@@ -183,7 +183,8 @@ def score_arm(
     arm: str,
     provenance: dict,
 ) -> dict:
-    """Score the 64 cases in the fixed order, one request at a time, then rescore the stability rows."""
+    """Score the 64 cases in the fixed order, one request at a time, rescore the stability rows, then score the 24
+    primary rows REPEAT_PASSES (four) more times for amendment A1."""
     jobs = grid_jobs(prompt_dir, gate)
     grid = []
     for order, (row, condition) in enumerate(jobs):
@@ -327,7 +328,9 @@ def too_weak_value(
     return None if byte_unchanged is None and not weak_signal else weak_signal or bool(byte_unchanged)
 
 
-# Model files that must be identical across arms; the weights, config.json and index are the candidate's own.
+# Model files compared across arms. chat_template.jinja and tokenizer.json must be byte-identical; tokenizer_config.json
+# and generation_config.json may differ only by the accepted additions below. The weights, config.json and index
+# are the candidate's own.
 SHARED_MODEL_FILES = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
 # The one metadata difference the candidate preflight may accept (an embedded copy of the baseline template).
 TEMPLATE_ADDITION = "tokenizer_config.json.chat_template"

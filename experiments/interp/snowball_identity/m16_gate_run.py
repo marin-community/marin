@@ -55,7 +55,6 @@ BASELINE_FILE_HASHES = {
     "tokenizer.json": "6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45",
     "tokenizer_config.json": "7c11be094d34bd4bb5cf704584fb71b1164220bcfcc5963321bc6ec03d7ec853",
 }
-SAME_AS_BASELINE = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
 TENSORS, ROUTER_BIASES = 502, 26
 VLLM = {
     "source": "marin-fork",
@@ -171,7 +170,7 @@ def model_receipt(model: str) -> tuple[dict, dict[str, bytes]]:
 def accept_candidate_metadata(
     baseline: dict, candidate: dict, baseline_bytes: dict[str, bytes], candidate_bytes: dict[str, bytes]
 ) -> dict:
-    """SAME_AS_BASELINE files must be byte-identical, except two differences the SFT export audit accepts.
+    """SHARED_MODEL_FILES must be byte-identical, except two differences the SFT export audit accepts.
 
     Tokenizer saving may embed the source ``chat_template.jinja`` in ``tokenizer_config.json``. A candidate whose
     ``tokenizer_config.json`` differs passes when ``check_export_auxiliary_metadata`` accepts it against the
@@ -180,7 +179,9 @@ def accept_candidate_metadata(
     local copies of the bytes hashed in the two receipts, so it reads the same routed objects. Returns the
     provenance fields that ``decide`` re-checks.
     """
-    differ = [name for name in SAME_AS_BASELINE if candidate["file_sha256"][name] != baseline["file_sha256"][name]]
+    differ = [
+        name for name in m16_gate.SHARED_MODEL_FILES if candidate["file_sha256"][name] != baseline["file_sha256"][name]
+    ]
     raw_only = [name for name in differ if name not in ("tokenizer_config.json", m16_gate.REFORMATTED_FILE)]
     if raw_only:
         raise click.ClickException(f"Candidate {raw_only[0]} differs from the baseline")
@@ -197,7 +198,7 @@ def accept_candidate_metadata(
             for arm, files in (("baseline", baseline_bytes), ("candidate", candidate_bytes)):
                 roots[arm] = Path(tmp) / arm
                 roots[arm].mkdir()
-                for name in SAME_AS_BASELINE:
+                for name in m16_gate.SHARED_MODEL_FILES:
                     (roots[arm] / name).write_bytes(files[name])
             try:
                 additions = check_export_auxiliary_metadata(str(roots["baseline"]), str(roots["candidate"]))
