@@ -22,7 +22,7 @@ from skyrl_train.workers.megatron import megatron_model_wrapper as mmw  # noqa: 
 
 
 def _packed_cp_reference(rank, rendezvous):
-    """Use real Gloo collectives; only the optional Megatron mesh is substituted."""
+    """Compare packed scoring and shard-summed SC gradients with a dense policy."""
     dist.init_process_group(
         "gloo", init_method=f"file://{rendezvous}", rank=rank, world_size=5, timeout=timedelta(seconds=45)
     )
