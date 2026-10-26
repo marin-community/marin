@@ -151,6 +151,7 @@ def main():
     parser.add_argument("--partitioned-expert-gradients", action="store_true")
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
+    parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--local-movement", action="store_true", help="Form combine gradients in expert order")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
@@ -176,6 +177,8 @@ def main():
         "--saved-output", action="store_true", help="Compute routing gradients from saved expert returns"
     )
     args = parser.parse_args()
+    state_precision = jax.lax.Precision[args.kda_state_precision.upper()]
+    model.chunk_kda_tpu = functools.partial(model.chunk_kda_tpu, state_precision=state_precision)
     if args.initial_checkpoint and args.reference_step1:
         parser.error("A continuation cannot compare its first update to the initialization reference")
     if args.expert_reduction != "native" and not args.local_experts:
@@ -257,6 +260,7 @@ def main():
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
+            "diagnostic/kda_state_precision": args.kda_state_precision,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,
@@ -267,7 +271,7 @@ def main():
     if jax.device_count() != chips or jax.default_backend() != "tpu":
         raise AssertionError("Unexpected TPU topology")
     check_muon_gram_port()
-    check_packed_kda()
+    check_packed_kda(state_precision=state_precision)
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
     checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-after-first-update"
     output = Path(os.environ["IRIS_OUTPUT_DIR"])

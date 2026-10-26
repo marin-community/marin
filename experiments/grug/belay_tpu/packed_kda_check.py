@@ -16,7 +16,7 @@ from experiments.grug.belay_tpu.kda_tpu import chunk_kda_tpu
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
 
 
-def check_packed_kda():
+def check_packed_kda(*, state_precision=jax.lax.Precision.HIGHEST):
     if jax.default_backend() != "tpu":
         raise RuntimeError("Packed KDA numerical validation requires TPU")
     rng = np.random.RandomState(41)
@@ -48,7 +48,9 @@ def check_packed_kda():
 
                 def candidate(q, k, v, g, beta, seg, *, matmul_dtype=dtype, implementation=implementation):
                     if implementation == "pallas":
-                        return chunk_kda_tpu(q, k, v, g, beta, segment_ids=seg, matmul_dtype=matmul_dtype)
+                        return chunk_kda_tpu(
+                            q, k, v, g, beta, segment_ids=seg, matmul_dtype=matmul_dtype, state_precision=state_precision
+                        )
                     return chunk_kda(q, k, v, g, beta, segment_ids=seg, chunk_size=16, matmul_dtype=matmul_dtype)
 
                 actual = jax.jit(candidate)(*inputs, segments)
@@ -68,6 +70,7 @@ def check_packed_kda():
                     "shape": list(shape),
                     "chunk_size": 16,
                     "matmul_dtype": str(jnp.dtype(dtype)),
+                    "state_precision": state_precision.name if implementation == "pallas" else "source",
                     "atol": tolerance,
                     "rtol": tolerance,
                     "normalized_errors_output_state_five_gradients": errors,

@@ -46,6 +46,7 @@ def main():
             "local-gradient",
             "local-gemm",
             "local-row-gmm",
+            "local-kda-high",
             "local-butterfly",
             "local-all-to-all",
         ),
@@ -69,6 +70,7 @@ def main():
                 "local-gradient",
                 "local-gemm",
                 "local-row-gmm",
+                "local-kda-high",
                 "local-butterfly",
                 "local-all-to-all",
             )
@@ -126,6 +128,18 @@ def main():
                 "--routing-ops",
                 "--partitioned-expert-gradients",
                 "--whole-width-expert-tiles",
+            ],
+        ),
+        "local-kda-high": (
+            "belay_ckpt1_tpu_update_check",
+            [
+                *reference,
+                "--local-experts",
+                "--routing-ops",
+                "--partitioned-expert-gradients",
+                "--whole-width-expert-tiles",
+                "--kda-state-precision",
+                "high",
             ],
         ),
         "local-butterfly": (
