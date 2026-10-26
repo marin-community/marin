@@ -433,7 +433,6 @@ assert swebench["datasets"] == [
     }
 ]
 for name in (
-    "swebench-verified",
     "ot-tblite-recovery",
     "ds-1000-local",
     "bfclparity-pi",
@@ -441,6 +440,7 @@ for name in (
 ):
     document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
     assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
+assert swebench["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 131072
 assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwargs"]["model_info"] == {
     "max_input_tokens": 131072,
     "max_output_tokens": 32768,
