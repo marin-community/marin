@@ -1,0 +1,387 @@
+{
+ "ref": {
+  "n": 500,
+  "rate_131k": 29.4,
+  "rate_73k": 26.0,
+  "gained": 63,
+  "lost": 46,
+  "p": 0.1250045413258335,
+  "errors": {
+   "timeout_tasks": 0
+  },
+  "timeout_tasks": 0,
+  "solved_131k": 147,
+  "graded_131k": 500
+ },
+ "a-step8": {
+  "n": 500,
+  "rate_131k": 25.6,
+  "rate_73k": 25.6,
+  "gained": 46,
+  "lost": 46,
+  "p": 1.0,
+  "errors": {
+   "AgentTimeoutError": 176,
+   "NonZeroAgentExitCodeError": 6,
+   "AgentKilledBySignalError": 3,
+   "timeout_tasks": 31
+  },
+  "timeout_tasks": 31,
+  "solved_131k": 128,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": -3.8,
+   "gained": 41,
+   "lost": 60,
+   "p": 0.07275700687752419
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": -0.4,
+   "gained": 51,
+   "lost": 53,
+   "p": 0.9219488276264309
+  }
+ },
+ "a-step12": {
+  "n": 500,
+  "rate_131k": 28.6,
+  "rate_73k": 28.2,
+  "gained": 42,
+  "lost": 40,
+  "p": 0.9121566075526039,
+  "errors": {
+   "AgentTimeoutError": 514,
+   "VerifierTimeoutError": 39,
+   "AgentKilledBySignalError": 9,
+   "VerifierRuntimeError": 3,
+   "timeout_tasks": 90
+  },
+  "timeout_tasks": 90,
+  "solved_131k": 143,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": -0.8,
+   "gained": 46,
+   "lost": 50,
+   "p": 0.7596492883236297
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 2.2,
+   "gained": 49,
+   "lost": 38,
+   "p": 0.2836071084054854
+  }
+ },
+ "b-step8": {
+  "n": 500,
+  "rate_131k": 34.4,
+  "rate_73k": 34.8,
+  "gained": 50,
+  "lost": 52,
+  "p": 0.921191049253872,
+  "errors": {
+   "AgentTimeoutError": 5,
+   "VerifierRuntimeError": 3,
+   "timeout_tasks": 1
+  },
+  "timeout_tasks": 1,
+  "solved_131k": 172,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 5.0,
+   "gained": 65,
+   "lost": 40,
+   "p": 0.01874091540825805
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 8.8,
+   "gained": 82,
+   "lost": 38,
+   "p": 7.291502428713535e-05
+  }
+ },
+ "b-step12": {
+  "n": 500,
+  "rate_131k": 33.6,
+  "rate_73k": 30.8,
+  "gained": 48,
+  "lost": 34,
+  "p": 0.15067520762630382,
+  "errors": {
+   "AgentTimeoutError": 49,
+   "NonZeroAgentExitCodeError": 5,
+   "VerifierRuntimeError": 3,
+   "timeout_tasks": 11
+  },
+  "timeout_tasks": 11,
+  "solved_131k": 168,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 4.2,
+   "gained": 60,
+   "lost": 39,
+   "p": 0.0438752935870152
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 4.8,
+   "gained": 65,
+   "lost": 41,
+   "p": 0.02502134999189903
+  }
+ },
+ "c-step8": {
+  "n": 500,
+  "rate_131k": 24.0,
+  "rate_73k": 24.8,
+  "gained": 34,
+  "lost": 38,
+  "p": 0.723948145746914,
+  "errors": {
+   "NonZeroAgentExitCodeError": 10,
+   "AgentTimeoutError": 18,
+   "timeout_tasks": 4
+  },
+  "timeout_tasks": 4,
+  "solved_131k": 120,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": -5.4,
+   "gained": 33,
+   "lost": 60,
+   "p": 0.006695018134217244
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": -1.2,
+   "gained": 46,
+   "lost": 52,
+   "p": 0.613734467630139
+  }
+ },
+ "c-step12": {
+  "n": 500,
+  "rate_131k": 27.0,
+  "rate_73k": 24.4,
+  "gained": 49,
+  "lost": 36,
+  "p": 0.19276043534155876,
+  "errors": {
+   "AgentTimeoutError": 60,
+   "NonZeroAgentExitCodeError": 6,
+   "AgentKilledBySignalError": 6,
+   "VerifierRuntimeError": 3,
+   "PhaseCancellationError": 3,
+   "RewardFileNotFoundError": 3,
+   "timeout_tasks": 10
+  },
+  "timeout_tasks": 10,
+  "solved_131k": 135,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": -2.4,
+   "gained": 44,
+   "lost": 56,
+   "p": 0.2712530240738347
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": -1.6,
+   "gained": 47,
+   "lost": 55,
+   "p": 0.48843446453263284
+  }
+ },
+ "a-seed43-step8": {
+  "n": 500,
+  "rate_131k": 34.6,
+  "rate_73k": 29.8,
+  "gained": 66,
+  "lost": 42,
+  "p": 0.026423520277147814,
+  "errors": {
+   "AgentTimeoutError": 60,
+   "AgentKilledBySignalError": 6,
+   "timeout_tasks": 10
+  },
+  "timeout_tasks": 10,
+  "solved_131k": 173,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 5.2,
+   "gained": 67,
+   "lost": 41,
+   "p": 0.015749291149127435
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 3.8,
+   "gained": 60,
+   "lost": 41,
+   "p": 0.07275700687752419
+  }
+ },
+ "a-seed43-step12": {
+  "n": 500,
+  "rate_131k": 32.0,
+  "rate_73k": 32.4,
+  "gained": 38,
+  "lost": 40,
+  "p": 0.9099464518745243,
+  "errors": {
+   "AgentTimeoutError": 234,
+   "VerifierRuntimeError": 3,
+   "AgentKilledBySignalError": 3,
+   "timeout_tasks": 41
+  },
+  "timeout_tasks": 41,
+  "solved_131k": 160,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 2.6,
+   "gained": 53,
+   "lost": 40,
+   "p": 0.213153000968908
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 6.4,
+   "gained": 62,
+   "lost": 30,
+   "p": 0.0011109273233749861
+  }
+ },
+ "b-seed43-step8": {
+  "n": 500,
+  "rate_131k": 31.8,
+  "rate_73k": 32.8,
+  "gained": 51,
+  "lost": 56,
+  "p": 0.6991749840078736,
+  "errors": {
+   "NonZeroAgentExitCodeError": 5,
+   "AgentTimeoutError": 5,
+   "AgentKilledBySignalError": 6,
+   "VerifierRuntimeError": 3,
+   "timeout_tasks": 1
+  },
+  "timeout_tasks": 1,
+  "solved_131k": 159,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 2.4,
+   "gained": 62,
+   "lost": 50,
+   "p": 0.29859285283284615
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 6.8,
+   "gained": 74,
+   "lost": 40,
+   "p": 0.0018667182273169071
+  }
+ },
+ "b-seed43-step12": {
+  "n": 500,
+  "rate_131k": 30.2,
+  "rate_73k": 26.0,
+  "gained": 56,
+  "lost": 35,
+  "p": 0.03544959487951911,
+  "errors": {
+   "AgentTimeoutError": 87,
+   "NonZeroAgentExitCodeError": 12,
+   "timeout_tasks": 15
+  },
+  "timeout_tasks": 15,
+  "solved_131k": 151,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 0.8,
+   "gained": 46,
+   "lost": 42,
+   "p": 0.7493290032022806
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 0.0,
+   "gained": 54,
+   "lost": 54,
+   "p": 1.0
+  }
+ },
+ "c-seed43-step8": {
+  "n": 500,
+  "rate_131k": 19.4,
+  "rate_73k": 20.2,
+  "gained": 36,
+  "lost": 40,
+  "p": 0.7310088822226052,
+  "errors": {
+   "NonZeroAgentExitCodeError": 24,
+   "AgentTimeoutError": 7,
+   "AgentKilledBySignalError": 6,
+   "timeout_tasks": 2
+  },
+  "timeout_tasks": 2,
+  "solved_131k": 97,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": -10.0,
+   "gained": 20,
+   "lost": 70,
+   "p": 1.136356508423801e-07
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": -5.8,
+   "gained": 32,
+   "lost": 61,
+   "p": 0.003461853491442379
+  }
+ },
+ "c-seed43-step12": {
+  "n": 500,
+  "rate_131k": 29.4,
+  "rate_73k": 30.8,
+  "gained": 45,
+  "lost": 52,
+  "p": 0.5426101580458746,
+  "errors": {
+   "AgentTimeoutError": 272,
+   "timeout_tasks": 49
+  },
+  "timeout_tasks": 49,
+  "solved_131k": 147,
+  "graded_131k": 500,
+  "vs_ref_131k": {
+   "n": 500,
+   "delta": 0.0,
+   "gained": 51,
+   "lost": 51,
+   "p": 1.0
+  },
+  "vs_ref_73k": {
+   "n": 500,
+   "delta": 4.8,
+   "gained": 67,
+   "lost": 43,
+   "p": 0.02785088812566217
+  }
+ }
+}
