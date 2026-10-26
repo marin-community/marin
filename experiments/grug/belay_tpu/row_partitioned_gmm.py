@@ -32,7 +32,9 @@ def row_partitioned_gmm(x, weights, groups, *, partitions=2, tile_rows=512, tran
     )
     tiles = metadata[2]
     valid = jnp.arange(tiles.size) < active
-    boundaries = jnp.arange(partitions + 1) * (row_tiles // partitions)
+    # Split populated tiles; a half-full reserve must not leave one core idle.
+    active_row_tiles = (jnp.sum(groups) + tm - 1) // tm
+    boundaries = (jnp.arange(partitions + 1) * active_row_tiles + partitions - 1) // partitions
     starts = jnp.sum(valid[None, :] & (tiles[None, :] < boundaries[:, None]), axis=1, dtype=jnp.int32)
     counts = starts[1:] - starts[:-1]
 
