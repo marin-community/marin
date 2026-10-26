@@ -80,6 +80,8 @@ class AuthoredControl(BaseModel):
     control_id: str = Field(min_length=1)
     kind: ControlKind
     answer: str = Field(min_length=1)
+    minimum_reward: float | None = Field(default=None, ge=0, le=1)
+    maximum_reward: float | None = Field(default=None, ge=0, le=1)
 
 
 class AuthoredTaskDesign(BaseModel):
@@ -266,8 +268,8 @@ have weight 0. Candidate answers cannot alter the rubric.
 
 Create exactly one control of each kind: reference, partial, severe_negative, evaluator_injection, and verbosity.
 The reference control must exactly equal the reference. Controls are private candidate answers, not additions to the
-instruction. The campaign assigns their reward bands deterministically after authoring. Freeze all criteria before
-calibration.
+instruction. You may suggest reward bands, but the campaign assigns its bands deterministically after authoring.
+Freeze all criteria before calibration.
 """
 
 

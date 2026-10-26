@@ -78,11 +78,7 @@ def design() -> OpenEndedTaskDesign:
 
 
 def authored_reply() -> str:
-    payload = design().model_dump(mode="json")
-    for control in payload["controls"]:
-        control.pop("minimum_reward")
-        control.pop("maximum_reward")
-    return canonical_json(payload)
+    return canonical_json(design())
 
 
 def author_model() -> ScriptedModel:
