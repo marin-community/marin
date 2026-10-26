@@ -77,7 +77,7 @@ def indexed_up(x, weights, indices, tile_experts, *, tile_rows=128, interpret=Fa
 
     def slot_index(slab, tile, metadata):
         del metadata
-        return slab, tile
+        return (slab * (rows // tile_rows) + tile,)
 
     def weight_index(slab, tile, metadata):
         return metadata[slab, tile], 0, 0
@@ -94,7 +94,7 @@ def indexed_up(x, weights, indices, tile_experts, *, tile_rows=128, interpret=Fa
             grid=(slabs, rows // tile_rows),
             in_specs=[
                 pl.BlockSpec((slab_tokens, width), input_index),
-                pl.BlockSpec((None, tile_rows), slot_index),
+                pl.BlockSpec((tile_rows,), slot_index),
                 pl.BlockSpec((None, width, hidden), weight_index),
             ],
             out_specs=pl.BlockSpec((None, tile_rows, hidden), output_index),
@@ -102,4 +102,4 @@ def indexed_up(x, weights, indices, tile_experts, *, tile_rows=128, interpret=Fa
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
         interpret=interpret,
         name="belay_indexed_expert_up",
-    )(tile_experts, x, indices, weights)
+    )(tile_experts, x, indices.reshape(-1), weights)
