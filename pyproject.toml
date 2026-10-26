@@ -289,8 +289,8 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # temporary and must be replaced by the landed fork main SHA.
 # https://github.com/marin-community/vllm/compare/9d88ceb02694c6e3df182ec3c87201284f50e2c6...70ea9ae8f2601f06d820ee9d70e3afbdc52683b1
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "70ea9ae8f2601f06d820ee9d70e3afbdc52683b1" }
-# https://github.com/marin-community/tpu-inference/compare/cdaf47c66c1089e66e0dd8b0aba92bc3f9b919c5...c4f9314316ce8a1a1db3a1152de80883b2bfe1c8
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "c4f9314316ce8a1a1db3a1152de80883b2bfe1c8" }
+# https://github.com/marin-community/tpu-inference/compare/c4f9314316ce8a1a1db3a1152de80883b2bfe1c8...ffebe7914b91a102c7f8eeae24755531034a757a
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "ffebe7914b91a102c7f8eeae24755531034a757a" }
 thalas = { git = "https://github.com/RohithKuditipudi/thalas.git", rev = "6f9139ffa2e1f5799446d65076ed67a01b91426c" }
 joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "e78772d48747afa476e83c65a00ecf8e8d66bec4" }
 # ### BEGIN RUST-DEV SOURCES ###

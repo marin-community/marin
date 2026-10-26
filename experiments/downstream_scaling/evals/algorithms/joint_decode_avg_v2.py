@@ -21,6 +21,8 @@ selector live in ``xtok_selection``:
 - ``unnormalized_add``: ``logit_a + alpha * logit_b`` on raw token ids for
   same-tokenizer pairs.
 - ``unnormalized_add_no_vocab``: the same token-ID sum without byte vocabularies.
+- ``unnormalized_add_no_vocab_std``: the same token-ID sum after rescaling
+  the advisor's top-k logits to the decoder's top-k standard deviation.
 - ``unnormalized_add_bytes_union``: the same sum over the byte-keyed union,
   preserving each side's EOS mapping.
 - ``grad_step_size=<step_size>``: update student logits toward the advisor's
@@ -160,6 +162,7 @@ class XtokSelectionRule(StrEnum):
     AVG_PROBS = "avg_probs"
     UNNORMALIZED_ADD = "unnormalized_add"
     UNNORMALIZED_ADD_NO_VOCAB = "unnormalized_add_no_vocab"
+    UNNORMALIZED_ADD_NO_VOCAB_STD = "unnormalized_add_no_vocab_std"
     UNNORMALIZED_ADD_BYTES_UNION = "unnormalized_add_bytes_union"
     BEST_OF_N = "best_of_n"
     TEMPERED_BEST_OF_N = "tempered_best_of_n"
@@ -316,6 +319,7 @@ class JointDecodeSamplingConfig:
         elif self.selection_rule in (
             XtokSelectionRule.UNNORMALIZED_ADD,
             XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+            XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB_STD,
             XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
         ):
             if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in weights):
@@ -975,11 +979,30 @@ def _tau_filter_weights(
     return union, [math.exp(score - maximum) for score in scores]
 
 
+def _std_matched_teacher_topk(a_topk: list[dict[str, Any]], b_topk: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rescale the teacher's top-k logits to the student's top-k standard deviation."""
+
+    def std(topk: list[dict[str, Any]]) -> float:
+        logits = [float(t["logit"]) for t in topk]
+        mean = sum(logits) / len(logits)
+        return math.sqrt(sum((logit - mean) ** 2 for logit in logits) / len(logits))
+
+    b_std = std(b_topk)
+    if b_std == 0.0:
+        return b_topk
+    scale = std(a_topk) / b_std
+    return [{**t, "logit": scale * float(t["logit"])} for t in b_topk]
+
+
 def _make_no_vocab_select_token(
     sampling: JointDecodeSamplingConfig,
     state: _SweepState,
 ) -> Callable[..., tuple[list[int], list[int]]]:
+    std_matched = sampling.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB_STD
+
     def select_token(a_topk, b_topk, *, rng, request_index: int):
+        if std_matched:
+            b_topk = _std_matched_teacher_topk(a_topk, b_topk)
         alpha = cast(float, state.advisor_weight)
         scale = 1.0 + alpha
         tokens_a, tokens_b = xtok_selection.select_avg_logits(
@@ -1363,7 +1386,10 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
         advisor_prompts = [advisor_prompts_by_id[prompt_id] for prompt_id in prompt_ids]
 
     state = _SweepState(advisor_weight=config.sampling.advisor_weights[0], token_paths={})
-    if config.sampling.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB:
+    if config.sampling.selection_rule in (
+        XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+        XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB_STD,
+    ):
         select_token = _make_no_vocab_select_token(config.sampling, state)
     else:
         vocab_a = _load_vocab(config.decoder_model_path)

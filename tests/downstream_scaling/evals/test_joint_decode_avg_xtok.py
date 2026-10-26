@@ -2004,7 +2004,47 @@ def test_v2_unnormalized_add_no_vocab_matches_softmax_across_alpha_sweep():
         assert rng.probabilities[-1] == pytest.approx(expected, rel=1e-12, abs=1e-12)
 
 
-def test_v2_unnormalized_add_no_vocab_worker_writes_token_paths_without_bytes(tmp_path, monkeypatch):
+def test_v2_unnormalized_add_no_vocab_std_matches_rescaled_softmax():
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB_STD,
+        advisor_weights=(2.0,),
+        temperature=1.0,
+    )
+    state = joint_decode_avg_v2._SweepState(advisor_weight=2.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_no_vocab_select_token(sampling, state)
+    rng = ScriptedRandom([2])
+    # Standard deviations 1 and 4 give scale 0.25 and floor-filled sum (3, 5, 1).
+    assert select_token(
+        [entry(1, 2.0), entry(2, 0.0)],
+        [entry(2, 10.0), entry(3, 2.0)],
+        rng=rng,
+        request_index=0,
+    ) == ([2], [2])
+    normalizer = math.exp(3) + math.exp(5) + math.exp(1)
+    expected = {1: math.exp(3) / normalizer, 2: math.exp(5) / normalizer, 3: math.exp(1) / normalizer}
+    assert rng.probabilities[-1] == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+def test_std_matched_teacher_topk_preserves_zero_spread_teacher():
+    student = [entry(1, 2.0), entry(2, 0.0)]
+    teacher = [entry(2, 3.0), entry(3, 3.0)]
+    assert joint_decode_avg_v2._std_matched_teacher_topk(student, teacher) == teacher
+
+
+@pytest.mark.parametrize(
+    "selection_rule",
+    (
+        joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+        joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB_STD,
+    ),
+)
+def test_v2_unnormalized_add_no_vocab_worker_writes_token_paths_without_bytes(tmp_path, monkeypatch, selection_rule):
     prompts_path = tmp_path / "prompts.jsonl.gz"
     with gzip.open(prompts_path, "wt") as f:
         f.write(json.dumps({"id": "p0", "prompt": "q0"}) + "\n")
@@ -2017,7 +2057,7 @@ def test_v2_unnormalized_add_no_vocab_worker_writes_token_paths_without_bytes(tm
         top_k_a=2,
         top_k_b=2,
         seed=0,
-        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+        selection_rule=selection_rule,
         advisor_weights=(0.0, 2.0),
         temperature=0.0,
     )

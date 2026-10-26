@@ -256,3 +256,6 @@ scr/*
 lib/iris/src/iris/_build_info.py
 
 !experiments/post_training/task_curation/scripts/fixtures/*.jsonl
+
+# Rohith's additions
+*.md
