@@ -17,6 +17,16 @@ from pathlib import Path
 RAY_LOG_TAIL_CHARS = 12000
 
 
+def ray_environment(address: str) -> dict[str, str]:
+    """Share the runtime contract between the coordinator and isolated processes."""
+    return {
+        "RAY_ADDRESS": address,
+        "TPU_MULTIHOST_BACKEND": "ray",
+        "RAY_DEDUP_LOGS": "0",
+        "RAY_USAGE_STATS_ENABLED": "0",
+    }
+
+
 def ray_start_command(*, host: str, address: str, leader: bool, chips: int, ports: dict[str, int]) -> list[str]:
     """Reserve fixed Ray listeners through Iris; let the kernel pick worker ports."""
     command = [
@@ -60,8 +70,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text())
-    os.environ["RAY_DEDUP_LOGS"] = "0"
-    os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
+    os.environ.update(ray_environment(config["address"]))
     # Ray is installed only in this isolated environment, not in the serving coordinator's venv.
     ray = importlib.import_module("ray")
 

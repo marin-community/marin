@@ -11,7 +11,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from fray.types import JobRequest, ResourceConfig, create_environment
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from fray.iris_backend import FrayIrisClient
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from marin.inference import iris as serving
 from marin.inference import iris_tpu_vllm, iris_vllm, tpu_ray_runtime
 from marin.inference.config import (
@@ -76,12 +79,11 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
 
 def test_evaluation_gang_requests_all_hosts_on_one_slice(monkeypatch):
     client = MagicMock()
-    monkeypatch.setattr(iris_tpu_vllm, "iris_ctx", lambda: SimpleNamespace(client=client))
-    monkeypatch.setattr(iris_tpu_vllm, "convert_entrypoint", lambda value: value)
+    monkeypatch.setattr(iris_tpu_vllm, "current_client", lambda: FrayIrisClient.from_iris_client(client))
     config = _config()
     request = JobRequest(
         name="serve-test",
-        entrypoint=MagicMock(),
+        entrypoint=Entrypoint.from_callable(lambda: None),
         resources=config.iris.worker_resources,
         environment=config.iris.worker_environment,
         max_retries_preemption=0,
@@ -94,7 +96,8 @@ def test_evaluation_gang_requests_all_hosts_on_one_slice(monkeypatch):
     assert submission["max_retries_preemption"] == 0
 
 
-def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch):
+@pytest.mark.parametrize("transient", [False, True])
+def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch, transient):
     config = _config()
     service = serving.IrisServiceConfig(
         model=config.model, engine=config.engine, iris=config.iris, endpoint_name="/serve/test"
@@ -110,7 +113,13 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     context = SimpleNamespace(registry=registry, resolver=object())
     coordinator = MagicMock()
     coordinator.vllm_primary_address.return_value = "127.0.0.1:12000"
-    coordinator.shutdown_requested.return_value = True
+    coordinator.shutdown_requested.side_effect = (
+        [ConnectError(Code.UNAVAILABLE, "temporary outage"), True] if transient else [True]
+    )
+    coordinator.follower_stopped.side_effect = (
+        [ConnectError(Code.NOT_FOUND, "temporary resolver gap"), None] if transient else [None]
+    )
+    monkeypatch.setattr(iris_vllm, "_POLL_SECONDS", 0.001)
     process = MagicMock()
     process.poll.return_value = None
     commands = []
@@ -137,7 +146,8 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
 
     assert len(commands) == 1
     registry.registered.assert_not_called()
-    coordinator.follower_stopped.assert_called_once_with(1)
+    assert coordinator.follower_stopped.call_count == (2 if transient else 1)
+    coordinator.follower_stopped.assert_called_with(1)
     process.terminate.assert_called()
 
 
