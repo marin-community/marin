@@ -151,8 +151,8 @@ class InputsConfig:
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
     data_kind: str = "tasks"
-    train_data: list[dict[str, Any]] = field(default_factory=list)
-    validation_data: list[dict[str, Any]] = field(default_factory=list)
+    train_data: list[Any] = field(default_factory=list)
+    validation_data: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -261,9 +261,13 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
         if not isinstance(values, list):
             raise TypeError(f"inputs.{name} must be a list")
         for index, value in enumerate(values):
-            if not isinstance(value, dict):
-                raise TypeError(f"inputs.{name}[{index}] must be a mapping")
-            data_source(value)
+            if isinstance(value, str):
+                if not value:
+                    raise ValueError(f"inputs.{name}[{index}] cannot be empty")
+            elif isinstance(value, dict):
+                data_source(value)
+            else:
+                raise TypeError(f"inputs.{name}[{index}] must be a task locator or source mapping")
 
 
 def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
@@ -308,6 +312,13 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
+    scenario = raw["skyrl"].get("scenario", {})
+    if scenario and scenario.get("preset") and not raw["inputs"]["train_data"]:
+        if any(
+            isinstance(source, str) and "://" in source and not source.startswith("file://")
+            for source in raw["skyrl"].get("data", {}).get("train_data", [])
+        ):
+            raise ValueError("Remote Pi tasks must be listed in inputs.train_data for node-local extraction")
     ray = raw["ray"]
     if (
         ray["rendezvous_timeout"] <= 0

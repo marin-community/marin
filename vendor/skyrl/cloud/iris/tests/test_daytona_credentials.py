@@ -34,6 +34,32 @@ def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(
             launcher.config_task_environment(config)
 
 
+def test_rlaif_judge_credential_is_an_iris_file_secret_not_plain_task_env(monkeypatch):
+    config = OmegaConf.create({
+        "runtime": {"entrypoint": "train", "task_env": {}},
+        "skyrl": {
+            "scenario": {"preset": "rlaif_pi_base"},
+            "environment": {"task_sessions": {"pi_judge": {
+                "auth": "file:/run/rigging/secrets/PI_JUDGE_TOKEN",
+            }}},
+        },
+    })
+    monkeypatch.setenv("PI_JUDGE_TOKEN", "private-judge-token")
+    assert launcher.config_task_environment(config) == {}
+    assert launcher.config_pi_judge_secrets(config) == {"PI_JUDGE_TOKEN": "private-judge-token"}
+    assert "private-judge-token" not in OmegaConf.to_yaml(config)
+    config.runtime.task_env.PI_JUDGE_TOKEN = "private-judge-token"
+    with pytest.raises(ValueError, match="not task environment"):
+        launcher.config_task_environment(config)
+    config.runtime.task_env = {}
+    config.skyrl.environment.task_sessions.pi_judge.auth = "env:PI_JUDGE_TOKEN"
+    with pytest.raises(ValueError, match="file-backed"):
+        launcher.config_pi_judge_secrets(config)
+    config.skyrl.environment.task_sessions.pi_judge.auth = "file:/tmp/PI_JUDGE_TOKEN"
+    with pytest.raises(ValueError, match="application-secret mount"):
+        launcher.config_pi_judge_secrets(config)
+
+
 def test_resolve_daytona_rl_api_key_prefers_explicit_rl_key(monkeypatch):
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "rl-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "generic-key")
@@ -92,6 +118,22 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
             "runtime": {"entrypoint": entrypoint},
             "skyrl": {
                 "data": {"terminal_bench_data": terminal_bench_data},
+                "terminal_bench_config": {"harbor": {"environment_type": backend}},
+            },
+        }
+    )
+
+    assert launcher._rl_config_uses_daytona(config) is expected
+
+
+@pytest.mark.parametrize("backend,expected", [("daytona", True), ("docker", False)])
+def test_direct_pi_tasks_on_standard_entrypoint_request_daytona_credentials(backend, expected):
+    config = OmegaConf.create(
+        {
+            "runtime": {"entrypoint": "skyrl_train.entrypoints.main_base"},
+            "skyrl": {
+                "scenario": {"preset": "teacher_demo_pi_base"},
+                "data": {"train_data": ["s3://bucket/direct-tasks.parquet"], "terminal_bench_data": []},
                 "terminal_bench_config": {"harbor": {"environment_type": backend}},
             },
         }

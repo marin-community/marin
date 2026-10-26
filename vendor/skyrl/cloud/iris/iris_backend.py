@@ -34,6 +34,7 @@ from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
+from rigging.secrets import require_secret, secret_path, validate_secret_name
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -649,10 +650,15 @@ def _effective_gdn_backend(args: SimpleNamespace) -> str:
 
 def _rl_config_uses_daytona(config: DictConfig) -> bool:
     """Return whether the configured task backend requires Daytona credentials."""
-    uses_harbor = str(config.runtime.entrypoint) in {
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH],
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
-    } or bool(config.skyrl.get("data", {}).get("terminal_bench_data"))
+    uses_harbor = (
+        str(config.runtime.entrypoint)
+        in {
+            RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH],
+            RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
+        }
+        or bool(config.skyrl.get("data", {}).get("terminal_bench_data"))
+        or bool(OmegaConf.select(config, "skyrl.scenario.preset"))
+    )
     backend = OmegaConf.select(
         config,
         "skyrl.terminal_bench_config.harbor.environment_type",
@@ -683,6 +689,8 @@ def build_debug_launch_env(args: SimpleNamespace) -> dict[str, str]:
 def config_task_environment(config: DictConfig) -> dict[str, str]:
     """Resolve task settings and explicitly named backend secrets at submission."""
     extra = dict(config.runtime.task_env)
+    if OmegaConf.select(config, "skyrl.scenario.preset") == "rlaif_pi_base" and "PI_JUDGE_TOKEN" in extra:
+        raise ValueError("Pi judge credentials must be mounted as Iris secrets, not task environment values")
     skyrl_controls = sorted(str(key) for key in extra if str(key).startswith("SKYRL_"))
     if skyrl_controls:
         raise ValueError(
@@ -706,6 +714,23 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
                 key_env = callback["daytona_api_key_env"]
                 out[key_env] = os.environ[key_env]
     return out
+
+
+def config_pi_judge_secrets(config: DictConfig) -> dict[str, str]:
+    """Deliver a Pi judge token as an Iris application secret, never a task env value."""
+    if OmegaConf.select(config, "runtime.entrypoint") == CHECKPOINT_EXPORT_ENTRYPOINT:
+        return {}
+    if OmegaConf.select(config, "skyrl.scenario.preset") != "rlaif_pi_base":
+        return {}
+    auth = OmegaConf.select(config, "skyrl.environment.task_sessions.pi_judge.auth")
+    if not isinstance(auth, str) or not auth.startswith("file:"):
+        raise ValueError("Iris RLAIF requires a file-backed Pi judge token")
+    path = Path(auth[5:])
+    name = path.name
+    validate_secret_name(name)
+    if name != "PI_JUDGE_TOKEN" or path != secret_path(name):
+        raise ValueError("Iris Pi judge token must use the Iris application-secret mount")
+    return {name: require_secret(name)}
 
 
 def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
@@ -1072,6 +1097,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             resources=resources,
             environment=EnvironmentSpec(
                 env_vars=env_vars,
+                secrets=config_pi_judge_secrets(args.config),
                 extras=["gpu"],
                 setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
