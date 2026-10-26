@@ -8,7 +8,7 @@ Three groups, all built from the same tokenizer on both sides:
 ``check``
     The built-in check prompts (``prompts.CHECK_PROMPTS``), rendered with a generation prompt.
 ``contrastive``
-    The identity rows that carry a ``contrastive`` field, built exactly as the task #301 scorer
+    The identity rows that carry a ``contrastive`` field, built exactly as the identity scorer
     (``identity_eval.score_contrastive_row``) builds them: chat template with thinking off, then the
     assistant ``prefix`` plus each candidate. Each row runs with no system prompt and, unless the row
     has its own, with ``BASELINE_SYSTEM_PROMPT``. ``score`` marks the candidate's tokens, whose
@@ -28,7 +28,7 @@ from rigging.filesystem.buckets import filesystem_for
 from experiments.interp.snowball_identity.prompts import CHECK_PROMPTS, encode
 
 BASELINE_SYSTEM_PROMPT = "You are Marin Snowball, an AI model created by Open Athena."
-"""Same text as ``identity_eval.BASELINE_SYSTEM_PROMPT`` on task/301."""
+"""Same text as ``identity_eval.BASELINE_SYSTEM_PROMPT``."""
 LONG_TOKENS = 3000
 
 

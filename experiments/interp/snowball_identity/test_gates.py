@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The #310 pre-registered gates fail closed."""
+"""The logit and routing gates fail closed."""
 
 import copy
 
@@ -11,7 +11,7 @@ from experiments.interp.snowball_identity import logit_check
 from experiments.interp.snowball_identity.logit_check import GATE_GROUPS, parity_gate
 from experiments.interp.snowball_identity.routing import bias_exception_required, dot_exception_required, route_gate
 
-# The pinned 2026-10-24 baseline's values (logit-check-baseline-20261024-0252-chukar.json), which pass.
+# A passing baseline's values.
 BASELINE = {
     "positions": {
         group: {
@@ -93,7 +93,7 @@ def test_route_gate_matches_exceptions_to_their_triggers():
     assert route_gate(cross(), rounding(combined=1), None, router_dot_fp32=False)
 
 
-def test_route_gate_fails_on_a_coverage_gap_and_leaves_route_differences_to_g1():
+def test_route_gate_fails_on_a_coverage_gap_and_leaves_route_differences_to_the_rate_check():
     assert route_gate(cross(set_agree=9, ordered_agree=9), rounding(), None, False) == []
     assert route_gate(cross(ordered_agree=9), rounding(), None, False) == []
     assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(), None, False)

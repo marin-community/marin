@@ -10,14 +10,10 @@ import torch
 from experiments.interp.snowball_identity.analyses import lens, patch, steer
 from experiments.interp.snowball_identity.harness import Interventions, Output
 from experiments.interp.snowball_identity.prompts import encode
+from experiments.interp.snowball_identity.test_edits import write_rows
 from experiments.interp.snowball_identity.tiny_model import HIDDEN, LAYERS, FakeTokenizer
 
 TOKENIZER = FakeTokenizer()
-
-
-def write_rows(path, rows: list[dict]) -> str:
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    return str(path)
 
 
 def test_lens_attribution_adds_up(harness, tmp_path):

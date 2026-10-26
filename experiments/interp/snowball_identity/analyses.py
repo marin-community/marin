@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batch analyses on a loaded harness for task #303: logit lens and attribution, activation patching, steering.
+"""Batch analyses on a loaded harness: logit lens and attribution, activation patching, steering.
 
 Each analysis takes a spec dict (see ``worker.py``), reads its prompt rows from S3 (``prompts.py`` row format),
 and writes JSON results through ``Output``.
@@ -11,7 +11,6 @@ difference of a row is ``logprob(target[0]) - logprob(target[1])`` at the last p
 """
 
 import io
-import json
 import logging
 import time
 
@@ -28,6 +27,7 @@ from experiments.interp.snowball_identity.harness import (
     read_bytes,
 )
 from experiments.interp.snowball_identity.prompts import Prompt, encode, read_prompts
+from experiments.interp.snowball_identity.sequences import read_rows
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def patch(harness: SnowballHarness, tokenizer, spec: dict, output: Output) -> No
     ``align`` ('tail' or 'assistant'), ``tail`` (K), ``components`` (default resid_pre, attn, routed, shared),
     ``heads`` (also every head), ``per_position`` (resid_pre one position at a time), ``batch`` (rows per forward).
     """
-    rows = _read_rows(spec["pairs"])
+    rows = read_rows(spec["pairs"])
     components = spec.get("components", ["resid_pre", "attn", "routed", "shared"])
     for component in components:
         if component not in COMPONENTS or component == "head":
@@ -265,10 +265,6 @@ def patch(harness: SnowballHarness, tokenizer, spec: dict, output: Output) -> No
         )
         logger.info("patch %s: %d variants in %.0fs", row["id"], len(variants), time.time() - started)
     output.write_json("patch.json", results)
-
-
-def _read_rows(path: str) -> list[dict]:
-    return [json.loads(line) for line in read_bytes(path).decode().splitlines() if line.strip()]
 
 
 def _mean_last_resid(harness: SnowballHarness, prompts: list[Prompt]) -> torch.Tensor:

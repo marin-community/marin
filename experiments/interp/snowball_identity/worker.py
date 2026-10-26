@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A long-lived harness worker that takes job specs from an S3 queue (task #298).
+"""A long-lived harness worker that takes job specs from an S3 queue.
 
 ``serve`` loads the checkpoint once and then polls the queue. ``submit`` adds a spec; ``status`` shows the
 queue. Only the built-in commands below run: a spec carries data and options, never code.
@@ -49,7 +49,7 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
     A multi-layer MEMIT / AlphaEdit edit, rank up to the number of keys per layer (``memit.edit_memit``). The
     model is unchanged after the spec.
 ``{"command": "router_rounding", "positions": PATH, "positions_sha256": SHA}``
-    Per layer, top-k routes of the pinned #298 sequences (the stored token ids of ``positions.pt``) with the native
+    Per layer, top-k routes of the stored sequences (the stored token ids of ``positions.pt``) with the native
     FP32 router vs BF16-rounded bias and logits on the same router input (``routing.router_rounding``). Fails before
     the forward if ``positions.pt`` does not hash to ``positions_sha256``.
 

@@ -4,7 +4,7 @@
 """Compare the harness's all-position log-probs with vLLM's (local, CPU only).
 
 Inputs: ``harness.py positions`` output (``positions.pt``) and ``vllm_reference.py`` output (JSON), and
-optionally the task #301 scorer's ``contrastive.jsonl`` for the same checkpoint.
+optionally the identity scorer's ``contrastive.jsonl`` for the same checkpoint.
 
 Per group (check, contrastive, long, and the long sequence's positions past the 2,048-token window):
 
@@ -19,9 +19,8 @@ when given, harness vs the scorer, with each side's win count per condition. Per
 where harness and vLLM agree on whether a correct candidate wins (``rows_won_agree``) and on the top-scoring
 candidate (``rows_top_candidate_agree``), and lists every row where either differs.
 
-``parity_gate`` applies the task #310 pre-registered thresholds (precision-preflight-preregistration-v1.md, sha256
-b0590550...) to a ``compare`` report, fail-closed: a NaN, a missing group, a missing token or a coverage count that
-differs from the pinned baseline is a failure. ``--gate`` exits 1 on any failure.
+``parity_gate`` applies fixed pass thresholds to a ``compare`` report, fail-closed: a NaN, a missing group, a
+missing token or a coverage count that differs from the baseline is a failure. ``--gate`` exits 1 on any failure.
 """
 
 import argparse
@@ -35,7 +34,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, load_tokenizer
-from experiments.interp.snowball_identity.sequences import LONG_TOKENS, Sequence, build_sequences
+from experiments.interp.snowball_identity.sequences import LONG_TOKENS, Sequence, build_sequences, read_rows
 
 MIN_PROB = 1e-3
 NEAR_TIE = 0.1
@@ -75,7 +74,7 @@ def stored_sequences(positions_path: str) -> list[Sequence]:
     """The sequences of a stored ``positions.pt``, with its exact token ids, in stored order.
 
     The group is the id's prefix (``check``, ``contrastive``, ``long``). Use these, not a fresh ``build_sequences``,
-    as model inputs when comparing against the pinned #298 reference."""
+    as model inputs when comparing against a stored reference."""
     stored = torch.load(io.BytesIO(read(positions_path)), map_location="cpu")
     return [
         Sequence(sequence_id, sequence_id.split("|")[0], tuple(record["tokens"]))
@@ -89,8 +88,8 @@ REFERENCE_K = 20
 
 def reference_ids(vllm_path: str, sequences: list[Sequence]) -> dict[str, np.ndarray]:
     """vLLM's stored top-20 token ids per position, in the record layout: ``{sequence id: [T, 20] int32}``, row ``i``
-    for token ``i``, -1 where vLLM stored none (row 0). The ``positions_records`` argument that makes the harness
-    measure every vLLM token."""
+    for token ``i``, -1 where vLLM stored none (row 0). The harness reads them back from the positions records
+    (``reference_ids`` / ``reference_lp``) so it can measure every vLLM token."""
     theirs = json.loads(read(vllm_path))
     found = {}
     for sequence in sequences:
@@ -229,7 +228,7 @@ def compare(positions_path: str, vllm_path: str, scorer_path: str | None, identi
         raise ValueError(f"long sequence has {len(groups['long']) + 1} tokens, expected {LONG_TOKENS}")
     scorer_rows = None
     if scorer_path:
-        scorer_rows = [json.loads(line) for line in read(scorer_path).decode().splitlines() if line.strip()]
+        scorer_rows = read_rows(scorer_path)
     return {
         "positions": position_stats(ours, theirs, groups),
         "contrastive": contrastive_stats(ours, theirs, scorer_rows),
@@ -249,7 +248,7 @@ def candidate_spans(identity_path: str, tokenizer_source: str = SNOWBALL_V01) ->
 
 
 def parity_gate(report: dict) -> list[str]:
-    """Every pre-registered failure in a ``compare`` report; an empty list is a pass. Top-candidate identity is not
+    """Every gate failure in a ``compare`` report; an empty list is a pass. Top-candidate identity is not
     gated (it is reported in ``row_disagreements``)."""
 
     def within(value, limit: float) -> bool:
@@ -291,9 +290,9 @@ def main() -> None:
     parser.add_argument("--positions", required=True, help="harness positions.pt")
     parser.add_argument("--vllm", required=True, help="vllm_reference.py JSON")
     parser.add_argument("--identity", required=True, help="identity.jsonl used to build the sequences")
-    parser.add_argument("--scorer", help="task #301 contrastive.jsonl for the same checkpoint")
+    parser.add_argument("--scorer", help="identity scorer contrastive.jsonl for the same checkpoint")
     parser.add_argument("--tokenizer", default=SNOWBALL_V01, help="checkpoint whose tokenizer files to read")
-    parser.add_argument("--gate", action="store_true", help="add the #310 gate result; exit 1 if it fails")
+    parser.add_argument("--gate", action="store_true", help="add the parity gate result; exit 1 if it fails")
     args = parser.parse_args()
 
     report = compare(args.positions, args.vllm, args.scorer, candidate_spans(args.identity, args.tokenizer))

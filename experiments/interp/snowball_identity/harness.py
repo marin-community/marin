@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Activation capture and interventions for Snowball v0.1 on GPUs (task #296).
+"""Activation capture and interventions for Snowball v0.1 on GPUs.
 
 Loads the checkpoint in BF16 into the torch GrugMoE (``skyrl_train.models.grug_moe``) with the 26 layers
 split evenly over the visible GPUs. Every forward is a full forward (the torch GrugMoE has no KV cache).

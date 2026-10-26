@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multi-layer weight edit in memory (MEMIT, with AlphaEdit's null-space projection) for task #304.
+"""Multi-layer weight edit in memory (MEMIT, with AlphaEdit's null-space projection).
 
 One module per listed layer (``o_proj`` or ``shared_down``, as in ``edits``) gets ``W_l + up_l down_l^T``. With
 ``key_mode: "keys"`` (default) every key keeps its own key vector and the update has rank up to the number of key

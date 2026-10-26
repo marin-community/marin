@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cheap #310 checks around the torch reference job: the source and inputs before the GPU load, the result after.
+"""Cheap checks around the torch reference job: the source and inputs before the GPU load, the result after.
 
-``source_preflight(weights, expect)`` reads only small files (config, generation config, chat template, tokenizer
-files, the safetensors index and the pinned inputs) and fails, listing every mismatch, before any weight is read.
+``source_preflight(weights, expect)`` reads no weights: only the files named in ``expect`` (config, generation config,
+safetensors index, hashed files and inputs). It returns every mismatch; an empty list is a pass.
 ``expect`` (JSON)::
 
     {"files": {"config.json": SHA256, ...},          # files under ``weights``
@@ -13,9 +13,9 @@ files, the safetensors index and the pinned inputs) and fails, listing every mis
      "index_keys": 502,                              # model.safetensors.index.json weight_map entries
      "inputs": [{"path": P, "sha256": S, "sequences": 465, "tokens": 30999}]}  # counts only for a positions.pt
 
-``check_router_rounding_result(result, positions_sha256, ...)`` checks a worker result directory: ``done.json`` and
-no ``error.json``, the input hash the job recorded, and that ``routes.pt`` and the totals cover every sequence,
-position and layer. A worker exit code alone is not a pass.
+``check_router_rounding_result(result, positions, positions_sha256, layers, k)`` checks a worker result directory:
+``done.json`` and no ``error.json``, the input hash the job recorded, and that ``routes.pt`` and the totals cover
+every sequence, position and layer of ``positions``. It returns every failure. A worker exit code alone is not a pass.
 """
 
 import argparse

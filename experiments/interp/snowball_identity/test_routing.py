@@ -149,7 +149,6 @@ def test_cross_stack_compare_counts_set_and_order(tmp_path):
     report = compare_routes_cross_stack(str(tmp_path / "levanter.pt"), str(tmp_path / "torch.pt"))
     assert report["totals"] == {"positions": 4, "set_agree": 3, "ordered_agree": 2}
     assert [(c["position"], c["layer"], c["set_changed"]) for c in report["cases"]] == [(0, 1, False), (1, 0, True)]
-    assert "not served-vLLM" in report["label"]
 
 
 def test_result_check_needs_done_hash_and_full_coverage(harness, tmp_path):

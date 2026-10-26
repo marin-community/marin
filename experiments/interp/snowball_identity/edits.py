@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rank-1 weight edit in memory (ROME / AlphaEdit style) for task #304.
+"""Rank-1 weight edit in memory (ROME / AlphaEdit style).
 
 The edit is ``W' = W + delta key^T`` on one linear module whose output is added straight to the residual
 stream: the attention ``o_proj`` of layer L or the shared expert's ``down_proj`` (dense, always active). At a

@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Router rounding isolation for task #310: do BF16 router computations change the routes?
+"""Router rounding isolation: do BF16 router computations change the routes?
 
 The checkpoint stores ``model.layers.{l}.mlp.router.bias`` in FP32 and the router weight in BF16. A trainer that casts
 the whole model to BF16 (Levanter's ``WrappedLossFunction``) routes with a BF16-rounded bias, and Levanter's router
 einsum (``snowball.py``, no ``preferred_element_type``) returns BF16 logits before its FP32 cast. At every position of
-the pinned #298 sequences, each layer's router input is captured once, in the native forward, and scored three ways:
+the stored sequences, each layer's router input is captured once, in the native forward, and scored three ways:
 
 - ``native``: ``x.float() @ W.float()`` plus the FP32 bias, as in ``GrugMoeRouter.forward``;
 - ``bf16_bias``: the same logits plus ``bias.bfloat16()``: only the bias rounded;
@@ -26,15 +26,15 @@ many positions have an exact tie among the native top k+1 biased logits (there t
 ``jax_top_k`` and Levanter's ``jax.lax.top_k`` take the lower index, vLLM's ``torch.topk`` has no stated rule).
 Every position whose ordered ids differ is listed (up to ``MAX_CASES`` per variant). Output: ``routing.json``.
 
-The two pre-registered #310 routing rows (precision-preflight-preregistration-v1.md):
+Two routing checks:
 
 - row 1, ``bias_exception_required``: any ``bf16_bias`` expert-set change requires keeping the 26 router biases in
   FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``); ``dot_exception_required``: any
-  ``bf16_logits`` (dot-only) expert-set change requires the amendment-v2 FP32 router dot (and the FP32 bias);
+  ``bf16_logits`` (dot-only) expert-set change requires an FP32 router dot (and the FP32 bias);
 - row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``): incomplete
   coverage, an exception that does not match row 1 and a combined-only change fail. Route differences are bounded by
-  amendment G1 instead (``route_proxy_check``: per-layer rate bound and near-tie margins against the torch floor);
-  set and ordered agreement are reported here, not gated. Exact ties are counted and reported, never exempted.
+  a separate check (a per-layer rate bound and near-tie margins against the torch floor); set and ordered agreement
+  are reported here, not gated. Exact ties are counted and reported, never exempted.
 """
 
 import argparse
@@ -226,7 +226,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
 
 
 def router_rounding(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
-    """Spec: ``positions`` (the pinned #298 ``positions.pt``, whose stored token ids are the inputs) and its
+    """Spec: ``positions`` (a stored ``positions.pt``, whose stored token ids are the inputs) and its
     ``positions_sha256``, checked before the forward.
 
     Writes ``routing.json`` and ``routes.pt`` (``{sequence id: native FP32-bias routes [T, L, K] int16}``, the torch
@@ -312,13 +312,13 @@ def bias_exception_required(rounding: dict) -> bool:
 
 
 def dot_exception_required(rounding: dict) -> bool:
-    """Row 1, amendment v2: whether rounding only the router dot (FP32 bias kept) changes any expert set."""
+    """Row 1: whether rounding only the router dot (FP32 bias kept) changes any expert set."""
     return rounding["totals"]["bf16_logits"]["positions_changed"] > 0
 
 
 def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None, router_dot_fp32: bool) -> list[str]:
     """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass. Route
-    differences are G1's (``route_proxy_check``), not this row's.
+    differences are bounded by the separate per-layer rate check, not this row.
 
     ``rounding`` is the torch ``router_rounding`` report from the same job that wrote the compared ``routes.pt``;
     ``router_dot_fp32`` is the measured witness (``levanter_positions.router_dot_dtypes`` of the scored view). The
@@ -346,7 +346,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Cross-stack routing row: Levanter vs torch FP32-bias routes.")
     parser.add_argument("--levanter", required=True, help="levanter_positions positions.pt written with routes=True")
     parser.add_argument("--torch", required=True, help="router_rounding routes.pt")
-    parser.add_argument("--rounding", help="the same job's routing.json: add the #310 gate result; exit 1 if it fails")
+    parser.add_argument("--rounding", help="the same job's routing.json: add the route gate result; exit 1 if it fails")
     parser.add_argument("--bias-fp32", action="store_true", help="the Levanter view kept router_bias in FP32")
     parser.add_argument("--router-dot-fp32", action="store_true", help="the measured Levanter router dot is FP32")
     args = parser.parse_args()
