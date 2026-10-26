@@ -47,7 +47,8 @@ CONFIG_PATH = "config.json"
 EVAL_MODULUS = 5
 SYNTHESIZED_TAG = "baby-rsi.synthesized"
 GAP_CAPABILITY_PREFIX = "capability:gap-"
-HELDOUT_CAPABILITY_PREFIX = "capability:heldout-"
+HELDOUT_NAME_PREFIX = "heldout-"
+HELDOUT_CAPABILITY_PREFIX = f"capability:{HELDOUT_NAME_PREFIX}"
 READ_BATCH_ROWS = 2000
 
 

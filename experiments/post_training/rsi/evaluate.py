@@ -56,6 +56,7 @@ from experiments.post_training.rsi.rollouts import (
     rollout_engine,
     write_jsonl,
 )
+from experiments.post_training.rsi.gap import HELDOUT_NAME_PREFIX
 from experiments.post_training.rsi.seed import FULL_VALIDATION_URL, TRAIN_URL, VALIDATION_URL, TaskPool
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,7 @@ def write_evaluation(output: StoragePath, model: str, evaluations: Mapping[str, 
 @click.option("--probes", "probe_roots", multiple=True, help="An rsi output directory with held-out probes.")
 @click.option("--instances-per-task", type=int, default=32, show_default=True, help="As the rsi run made them.")
 @click.option("--pool-tasks", type=int, default=910, show_default=True, help="Held-out validation pool tasks.")
+@click.option("--gap-tasks", "gap_tasks_file", help="A JSONL file of held-out gap tasks (`gap.py heldout`).")
 @click.option("--samples", type=int, default=8, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 def evaluate(
@@ -269,6 +271,7 @@ def evaluate(
     probe_roots: tuple[str, ...],
     instances_per_task: int,
     pool_tasks: int,
+    gap_tasks_file: str | None,
     samples: int,
     seed: int,
     **options,
@@ -283,6 +286,7 @@ def evaluate(
             probe_roots,
             instances_per_task,
             pool_tasks,
+            gap_tasks_file,
             samples,
             seed,
         )
@@ -297,6 +301,7 @@ async def _evaluate(
     probe_roots: Sequence[str],
     instances_per_task: int,
     pool_tasks: int,
+    gap_tasks_file: str | None,
     samples: int,
     seed: int,
 ) -> None:
@@ -307,6 +312,9 @@ async def _evaluate(
         tasks.append(probe)
         # The probes of a held-out idea measure transfer: the policy never trained on any task of its family.
         labels[probe.id] = f"{'probe-heldout' if unseen else 'probe'}:{capability_of(probe)}"
+    for gap_task in read_gap_tasks(gap_tasks_file):
+        tasks.append(gap_task)
+        labels[gap_task.id] = f"gap:{capability_of(gap_task).removeprefix(HELDOUT_NAME_PREFIX)}"
     logger.info("Evaluation tasks: %s", Counter(label.split(":")[0] for label in labels.values()))
     results = {}
     # A second evaluation of the base weights measures how often a task that the base never passes passes by chance
@@ -321,6 +329,13 @@ async def _evaluate(
         with serve(options, url) as server:
             results[name] = await eval_policy(Served(options, server).runner, tasks, labels, samples)
     write_evaluation(output, options.model, results)
+
+
+def read_gap_tasks(url: str | None) -> list[TaskSpec]:
+    """The held-out gap tasks of a JSONL file, none without one."""
+    if url is None:
+        return []
+    return [TaskSpec.model_validate_json(line) for line in StoragePath(url).read_text().splitlines() if line]
 
 
 def _download_weights(url: str) -> str:
