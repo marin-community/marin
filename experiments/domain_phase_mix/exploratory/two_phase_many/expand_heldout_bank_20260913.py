@@ -9,6 +9,11 @@ aggregation are reused unchanged, and each launch becomes one source ``validatio
 directory is left untouched; the expanded one is written beside it with the same four files, so the learning-curve
 scorer can point ``benchmark.HELDOUT_DIR`` at either.
 
+Each run's Uncheatable aggregate is the frozen builder's fixed byte-share weighting of its seven components, and the
+builder's component check must pass. The launches evaluated with BPB schema 2 (from about 12 September 2026) record
+the evaluator's pooled aggregate instead, 0.008 to 0.011 BPB higher; the bank built on 2026-09-14 copied it for the 14
+path-midpoint and RegMix-reference runs.
+
 usage: uv run --offline --no-sync python expand_heldout_bank_20260913.py
 """
 
@@ -38,6 +43,25 @@ PANEL = "delphi_3e18_39bucket"
 FROZEN_DIR = builder.DEFAULT_OUTPUT_DIR
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "single_phase_heldout_benchmark_expanded_20260913"
 CUTOFF = "2026-09-13"
+# The collector's launches completed by the cutoff, in its registry order; its later launches are not in this bank.
+LAUNCHES = (
+    "link",
+    "hub",
+    "coupling",
+    "kappa_floor",
+    "kappa_floor_kl05",
+    "kappa_floor_flat",
+    "frozen_procedure",
+    "kl_ablation",
+    "fairness_repeats",
+    "olmix_kl005_repeats",
+    "matched_olmix",
+    "comparator_proposals",
+    "path_midpoints",
+    "regmix_reference",
+    "three_component_optimum",
+    "factorial",
+)
 SOURCE_PREFIX = "validation::"
 REGISTRY_FILES = ("heldout_runs.csv", "heldout_coordinates.csv", "heldout_coordinate_components.csv")
 
@@ -72,6 +96,13 @@ def launch_runs(
         vectors.append(np.asarray([by_domain[bucket] for bucket in buckets], dtype=float))
         trainer_seed = result.get("trainer_seed", np.nan)
         row_id = f"delphi_validation::{launch.name}::{run_key(launch, result)}"
+        uncheatable = np.asarray(
+            [
+                result["uncheatable_" + component.removeprefix("eval/uncheatable_eval/").removesuffix("/bpb") + "_bpb"]
+                for component in builder.UNCHEATABLE_COMPONENTS
+            ],
+            dtype=float,
+        )
         records.append(
             {
                 "panel": PANEL,
@@ -90,15 +121,14 @@ def launch_runs(
                 "data_seed": result.get("data_seed", np.nan),
                 "trainer_seed": trainer_seed,
                 "phase_tv": 0.0,
-                "uncheatable_bpb": result["uncheatable_bpb"],
+                "uncheatable_bpb": builder._component_aggregate(PANEL, "uncheatable", uncheatable),
                 "table9_macro_bpb": result["table9_macro_bpb"],
             }
         )
-        for position, component in enumerate(builder.UNCHEATABLE_COMPONENTS):
-            column = "uncheatable_" + component.removeprefix("eval/uncheatable_eval/").removesuffix("/bpb") + "_bpb"
+        for position, (component, value) in enumerate(zip(builder.UNCHEATABLE_COMPONENTS, uncheatable, strict=True)):
             component_records.append(
                 builder._component_record(
-                    row_id, PANEL, "uncheatable", position, component, result[column], "local_collector_endpoint"
+                    row_id, PANEL, "uncheatable", position, component, value, "local_collector_endpoint"
                 )
             )
         own = components[components["candidate_id"].eq(run_key(launch, result))]
@@ -112,8 +142,10 @@ def launch_runs(
                     row_id, PANEL, "table9", position, component, values[component], "local_collector_table9"
                 )
             )
-    audited = builder._finalize_audit(pd.DataFrame(records), np.stack(vectors), fit_weights)
-    return audited, pd.DataFrame(component_records)
+    runs, run_components = pd.DataFrame(records), pd.DataFrame(component_records)
+    builder._validate_components(runs, run_components)
+    audited = builder._finalize_audit(runs, np.stack(vectors), fit_weights)
+    return audited, run_components
 
 
 def merge_components(frozen: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
@@ -144,8 +176,9 @@ def main() -> None:
     frozen_runs = pd.read_csv(FROZEN_DIR / "heldout_runs.csv")
     frozen_coordinates = pd.read_csv(FROZEN_DIR / "heldout_coordinates.csv")
     frozen_components = pd.read_csv(FROZEN_DIR / "heldout_coordinate_components.csv")
+    launches = [collector.LAUNCHES[name] for name in LAUNCHES]
     audits, components = [], []
-    for launch in collector.LAUNCHES.values():
+    for launch in launches:
         audited, component_records = launch_runs(launch, buckets, fit_weights)
         audits.append(audited)
         components.append(component_records)
@@ -182,7 +215,7 @@ def main() -> None:
         "frozen_hashes": {name: builder.file_sha256(FROZEN_DIR / name) for name in (*REGISTRY_FILES, "manifest.json")},
         "cutoff": CUTOFF,
         "built": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-        "launches": {launch.name: launch.experiment_root for launch in collector.LAUNCHES.values()},
+        "launches": {launch.name: launch.experiment_root for launch in launches},
         "validation_runs": len(fresh),
         "validation_runs_eligible": int(fresh["eligible"].sum()),
         "validation_exclusions": fresh["exclusion_reason"].value_counts().to_dict(),

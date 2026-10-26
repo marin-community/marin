@@ -51,6 +51,18 @@ STUDIES = {
         "mariner",
         "olmix",
     ),
+    # The per-bucket-threshold ablation on the mariner study's subsets and folds (2026-09-29), paired with MARINER.
+    "mariner_pbt": (
+        "experiments.domain_phase_mix.exploratory.two_phase_many.learning_curve_pbt_fits_20260929",
+        "mariner_pbt",
+        "mariner",
+    ),
+    # The fully convex and additive ablations and Hellinger kernel ridge on the same subsets and folds (2026-10-06).
+    "mariner_extra": (
+        "experiments.domain_phase_mix.exploratory.two_phase_many.learning_curve_extra_fits_20261006",
+        "mariner",
+        "krr",
+    ),
 }
 PRIMARY = "wspu"
 COMPARATOR = "olmix"

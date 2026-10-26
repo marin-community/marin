@@ -1511,7 +1511,7 @@ def _successor(
     ridge_grid: tuple[float, ...] = SUCCESSOR_RIDGE_GRID,
     extra_dof: int = 0,
 ) -> Builder:
-    dof = 3 if options.benefit == "weibull" else 2
+    dof = 3 if options.benefit in ("weibull", "weibull_repeats") else 2
     if options.harm == "none":
         dof -= 1
     return _family_grid_model(model_id, options, shapes, ridge_grid, head, dof + extra_dof)
@@ -3018,6 +3018,19 @@ SIMPLIFICATIONS: tuple[ModelEntry, ...] = (
             **FROZEN_FLOOR,
         ),
         note="Simplification: exponential saturating benefit only (the data-constrained scaling form), M+1 amplitudes.",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_repeat_benefit",
+        "weibull_softplus_unscaled",
+        "benefit=first_epoch_full_weibull_repeats",
+        _fitted_floor(
+            f"{FROZEN_ID}_repeat_benefit", options=_options(SUCCESSOR_OPTIONS, benefit="weibull_repeats"), **FROZEN_FLOOR
+        ),
+        note=(
+            "Benefit shifted by one epoch (Calvin, 2026-10-25): the first epoch counts at full value and only "
+            "later epochs saturate, as a Weibull CDF scaled by 1 / rate; with power one this is Muennighoff et al.'s "
+            "effective data. Same 168-shape grid and parameter count as MARINER."
+        ),
     ),
 )
 

@@ -280,7 +280,12 @@ def score_unit(bank_name: str, target: str, model: str, k: int, draw: int) -> tu
 
 
 def regret_figure(
-    summary: pd.DataFrame, metrics_long: pd.DataFrame, shown: tuple[str, ...], output_dir: Path, stem: str
+    summary: pd.DataFrame,
+    metrics_long: pd.DataFrame,
+    shown: tuple[str, ...],
+    output_dir: Path,
+    stem: str,
+    y_scale: str = "log",
 ) -> plot.plt.Figure:
     """The regret figure for ``shown`` models; sizes where a model's predictions tied on every draw carry the
     random pick's regret and are drawn as hollow diamonds on a dotted line, joined to its first ranking size."""
@@ -300,7 +305,7 @@ def regret_figure(
         ]
         tied_summary = summary[tied_mask]
         ranked_summary = summary.drop(tied_summary.index)
-        figure, points = plot.build_regret_figure(ranked_summary, metrics_long, 5.5, 1.8, True, "t")
+        figure, points = plot.build_regret_figure(ranked_summary, metrics_long, 5.5, 1.8, True, "t", y_scale=y_scale)
         for axis, target in zip(figure.axes[: len(fits.TARGETS)], fits.TARGETS, strict=True):
             for model in shown:
                 part = tied_summary[

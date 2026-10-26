@@ -75,7 +75,7 @@ def format_tokens(tokens: float) -> str:
 
 
 def draw_panel(
-    axis: plt.Axes, frame: pd.DataFrame, burden: float, label: str, letter: str, first: bool
+    axis: plt.Axes, frame: pd.DataFrame, burden: float, label: str, letter: str, first: bool, compact: bool = False
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     part = frame[frame["curve_label"].eq(label)]
@@ -113,7 +113,10 @@ def draw_panel(
         tokens = HORIZON_TOKENS[rung]
         subset = tokens / epochs_at_p1
         handles.append(line)
-        texts.append(f"{format_tokens(tokens)}  {format_tokens(subset)}  {epochs_at_p1 * p[best]:.1f}")
+        if compact:
+            texts.append(f"{format_tokens(tokens)}  {epochs_at_p1 * p[best]:.1f}")
+        else:
+            texts.append(f"{format_tokens(tokens)}  {format_tokens(subset)}  {epochs_at_p1 * p[best]:.1f}")
         rows.append(
             {
                 "burden": burden,
@@ -127,7 +130,11 @@ def draw_panel(
             }
         )
     axis.set_title(
-        f"{letter}. {burden:g}" + r"$\times$ target repetition", loc="left", fontsize=8, fontweight="bold", color=INK
+        f"{letter}. {burden:g}" + r"$\times$ target repetition",
+        loc="left",
+        fontsize=7 if compact else 8,
+        fontweight="bold",
+        color=INK,
     )
     axis.set_xlim(0, 1.0)
     axis.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
@@ -138,7 +145,7 @@ def draw_panel(
         axis.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         axis.spines[side].set_color(INK)
-    axis.set_xlabel("StarCoder fraction p", color=INK, fontsize=7.5)
+    axis.set_xlabel(r"StarCoder fraction $p$", color=INK, fontsize=7.5)
     if first:
         axis.set_ylabel("Programming Languages BPB", color=INK, fontsize=7.5)
     top = axis.secondary_xaxis("top", functions=(lambda x: x * epochs_at_p1, lambda e: e / epochs_at_p1))
@@ -148,7 +155,7 @@ def draw_panel(
     legend = axis.legend(
         handles,
         texts,
-        title="D      $S_{\\mathrm{SC}}$    $E^*_{\\mathrm{SC}}$",
+        title="D      $E^*_{\\mathrm{SC}}$" if compact else "D      $S_{\\mathrm{SC}}$    $E^*_{\\mathrm{SC}}$",
         loc="upper left",
         frameon=True,
         framealpha=0.9,
@@ -164,14 +171,18 @@ def draw_panel(
     return rows
 
 
-def build_figure(frame: pd.DataFrame, rows_of_panels: int = 1) -> tuple[plt.Figure, pd.DataFrame]:
+def build_figure(
+    frame: pd.DataFrame, rows_of_panels: int = 1, panel_size: tuple[float, float] = (2.35, 2.9), compact: bool = False
+) -> tuple[plt.Figure, pd.DataFrame]:
     """One panel per degree of downsampling, in ``rows_of_panels`` rows (two rows fit a page width)."""
     columns = -(-len(BURDENS) // rows_of_panels)
-    figure, axes = plt.subplots(rows_of_panels, columns, figsize=(2.35 * columns, 2.9 * rows_of_panels), squeeze=False)
+    width, height = panel_size
+    figsize = (width * columns, height * rows_of_panels)
+    figure, axes = plt.subplots(rows_of_panels, columns, figsize=figsize, squeeze=False)
     rows: list[dict[str, object]] = []
     for index, (burden, label) in enumerate(BURDENS):
         axis = axes[index // columns][index % columns]
-        rows.extend(draw_panel(axis, frame, burden, label, "ABCDEFG"[index], index % columns == 0))
+        rows.extend(draw_panel(axis, frame, burden, label, "ABCDEFG"[index], index % columns == 0, compact=compact))
     figure.tight_layout(w_pad=1.0, h_pad=1.6)
     return figure, pd.DataFrame(rows)
 
@@ -182,9 +193,11 @@ def main() -> None:
     parser.add_argument("--drive-dir", type=Path, default=None)
     parser.add_argument("--drive-stem", default="a_replay_burden_ladder", help="file stem of the Drive copy")
     parser.add_argument("--rows", type=int, default=1, help="rows of panels (2 for the appendix page width)")
+    parser.add_argument("--panel-size", type=float, nargs=2, default=(2.35, 2.9), help="panel width, height (in)")
+    parser.add_argument("--compact-legend", action="store_true", help="legends give only budgets and minimizing epochs")
     args = parser.parse_args()
     plt.rcParams.update(PLOT_STYLE)
-    figure, table = build_figure(load_curves(), args.rows)
+    figure, table = build_figure(load_curves(), args.rows, tuple(args.panel_size), args.compact_legend)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for extension in ("png", "pdf"):
         figure.savefig(args.output_dir / f"replay_burden_ladder.{extension}", dpi=DPI, bbox_inches="tight")

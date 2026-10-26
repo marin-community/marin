@@ -13,6 +13,10 @@ are checked against the paper's floor-plus-exponential Weibull/softplus response
 per-curve calibration uses a pinned proportional run, leave-one-out shape/ridge/multiplier selection, and no
 noise margin because these curves have no repeats. This is a response-capacity illustration, not validation
 of the end-to-end swarm fitting procedure.
+
+Olmix is drawn in Olmix pink with a white halo, and a pink diamond marks the mixture each Olmix fit selects
+(the argmin of its monotone head over the sweep), placed at that mixture's measured loss. Stars mark MARINER's pick,
+the minimum of each fitted MARINER curve, as the paper's Figure 6B does.
 """
 
 from __future__ import annotations
@@ -38,28 +42,18 @@ OUTPUT_DIR = REFERENCE_OUTPUTS / "starcoder_olmix_failure_b6_compact_20260908"
 CURVE_REFS = ("C05", "C10", "C13", "C14")
 COLORS = ("#0d0887", "#9c179e", "#ed7953", "#b87900")
 INK = "#243549"
-OLMIX_LINEWIDTH = 1.45
-OLMIX_DASH_LENGTH = 4.35
-OLMIX_END_BORDER = 0.55
-OLMIX_DASH_GAP = 2.9
+# Olmix pink and its diamond marker match Figures 8 and 12.
+OLMIX_PINK = "#CC79A7"
+OLMIX_LINEWIDTH = 1.35
 OLMIX_STYLE = {
+    "color": OLMIX_PINK,
     "linewidth": OLMIX_LINEWIDTH,
-    "linestyle": (-OLMIX_END_BORDER, (OLMIX_DASH_LENGTH, OLMIX_DASH_GAP + 2 * OLMIX_END_BORDER)),
+    "linestyle": (0, (3.2, 1.6)),
     "dash_capstyle": "butt",
-    # Draw black end bars separately to avoid an antialiased dark fringe along the colored edges.
-    "path_effects": [
-        path_effects.Stroke(
-            linewidth=OLMIX_LINEWIDTH,
-            foreground="black",
-            capstyle="butt",
-            dashes={
-                "dash_offset": 0,
-                "dash_list": (OLMIX_END_BORDER, OLMIX_DASH_LENGTH, OLMIX_END_BORDER, OLMIX_DASH_GAP),
-            },
-        ),
-        path_effects.Normal(),
-    ],
+    # A white halo separates the pink fit from the curve it overlaps.
+    "path_effects": [path_effects.Stroke(linewidth=OLMIX_LINEWIDTH + 1.6, foreground="white"), path_effects.Normal()],
 }
+OLMIX_PICK = {"marker": "D", "s": 20, "facecolor": OLMIX_PINK, "edgecolor": INK, "linewidth": 0.45}
 PLOT_STYLE = {
     "font.family": "DejaVu Sans",
     "font.size": 7,
@@ -118,13 +112,7 @@ def build_figure(observations: pd.DataFrame, fits: pd.DataFrame) -> plt.Figure:
             assert np.isclose(observed["starcoder_weight"].min(), dense["starcoder_weight"].min())
             assert np.isclose(observed["starcoder_weight"].max(), dense["starcoder_weight"].max())
             axis.plot(dense["starcoder_weight"], dense["mariner_bpb"], color=color, linewidth=1.2, zorder=3)
-            axis.plot(
-                dense["starcoder_weight"],
-                dense["olmix_bpb"],
-                color=color,
-                zorder=4,
-                **OLMIX_STYLE,
-            )
+            axis.plot(dense["starcoder_weight"], dense["olmix_bpb"], zorder=4, **OLMIX_STYLE)
             axis.scatter(
                 observed["starcoder_weight"],
                 observed["observed_bpb"],
@@ -134,10 +122,10 @@ def build_figure(observations: pd.DataFrame, fits: pd.DataFrame) -> plt.Figure:
                 s=8,
                 zorder=5,
             )
-            minimum = observed.loc[observed["observed_bpb"].idxmin()]
+            best = dense.loc[dense["mariner_bpb"].idxmin()]
             axis.scatter(
-                [minimum["starcoder_weight"]],
-                [minimum["observed_bpb"]],
+                [best["starcoder_weight"]],
+                [best["mariner_bpb"]],
                 color=color,
                 edgecolor=INK,
                 linewidth=0.45,
@@ -145,8 +133,13 @@ def build_figure(observations: pd.DataFrame, fits: pd.DataFrame) -> plt.Figure:
                 s=33,
                 zorder=6,
             )
+            pick = float(dense.loc[dense["olmix_bpb"].idxmin(), "starcoder_weight"])
+            at_pick = observed.loc[(observed["starcoder_weight"] - pick).abs().idxmin()]
+            assert abs(at_pick["starcoder_weight"] - pick) < 1e-9, "Olmix's pick must be a measured mixture"
+            axis.scatter([pick], [at_pick["observed_bpb"]], zorder=7, clip_on=False, **OLMIX_PICK)
         axis.set_xlim(0.0, 0.92)
-        axis.set_ylim(0.78, 1.32)
+        # Headroom above the top curve keeps the two-row legend clear of every track.
+        axis.set_ylim(0.78, 1.37)
         axis.set_xticks([0, 0.2, 0.4, 0.6, 0.8])
         axis.set_yticks([0.8, 1.0, 1.2])
         axis.set_xlabel(r"StarCoder mixture fraction, $p$", fontsize=7, labelpad=2)
@@ -160,17 +153,40 @@ def build_figure(observations: pd.DataFrame, fits: pd.DataFrame) -> plt.Figure:
             axis.spines[side].set_linewidth(0.65)
             axis.spines[side].set_color(INK)
         axis.legend(
+            # Column-major order: MARINER and Olmix on the first row, their picks on the second.
             handles=[
                 Line2D([], [], color=INK, linewidth=1.2, label="MARINER"),
-                Line2D([], [], color=INK, label="Olmix", **OLMIX_STYLE),
+                Line2D(
+                    [],
+                    [],
+                    marker="*",
+                    linestyle="none",
+                    markersize=6.2,
+                    markerfacecolor="#8C96A0",
+                    markeredgecolor=INK,
+                    markeredgewidth=0.45,
+                    label="MARINER's pick",
+                ),
+                Line2D([], [], label="Olmix", **{k: v for k, v in OLMIX_STYLE.items() if k != "path_effects"}),
+                Line2D(
+                    [],
+                    [],
+                    marker="D",
+                    linestyle="none",
+                    markersize=4.2,
+                    markerfacecolor=OLMIX_PINK,
+                    markeredgecolor=INK,
+                    markeredgewidth=0.45,
+                    label="Olmix's pick",
+                ),
             ],
             loc="upper left",
-            bbox_to_anchor=(0.035, 0.98),
+            bbox_to_anchor=(0.01, 1.0),
             ncol=2,
             frameon=False,
             fontsize=7,
-            handlelength=2.1,
-            columnspacing=1.2,
+            handlelength=1.7,
+            columnspacing=0.8,
             handletextpad=0.45,
             borderaxespad=0,
             numpoints=1,

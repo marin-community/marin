@@ -54,6 +54,7 @@ MODEL_LABELS = {
     "wspu": "MARINER",
     "mariner": "MARINER",
     "mariner_per_bucket": "MARINER, one shape per bucket",
+    "mariner_pbt": "MARINER, one threshold per bucket",
     "olmix": "Olmix",
     "quadratic": "Quadratic in log-epochs, floor link",
     "spline": "Natural cubic spline in log-epochs, floor link",
@@ -64,6 +65,7 @@ MODEL_COLORS = {
     "wspu": WSPU_COLOR,
     "mariner": WSPU_COLOR,
     "mariner_per_bucket": PER_BUCKET_COLOR,
+    "mariner_pbt": PER_BUCKET_COLOR,
     "olmix": OLMIX_COLOR,
     "quadratic": QUADRATIC_COLOR,
     "spline": SPLINE_COLOR,
@@ -93,11 +95,12 @@ DRIVE_STEMS = {
     "learning_curve_appendix": "a_learning_curve_diagnostics",
 }
 LOG_X_TICKS = (20, 40, 80, 160, 280)
-STUDY_ANCHOR_RUNS = {"legacy": 0, "mariner": 1, "mariner_regmix": 1}
+STUDY_ANCHOR_RUNS = {"legacy": 0, "mariner": 1, "mariner_regmix": 1, "mariner_pbt": 1}
 COMPLEMENT_MAX_K = 250
 # Nominal parameters per task at M=39: MARINER 2M+5, Olmix's log-linear law M+1. Figure 3 names them in its legend.
 NOMINAL_PARAMETERS = {"mariner": 83, "olmix": 40}
 REGRET_MODELS = ("mariner", "olmix", "regmix")
+STRIP_Y_TICKS = (0.002, 0.01, 0.03, 0.1, 0.3)  # shared by both strip panels
 # Band columns of summary.csv per band type: mean with a 95% t interval, mean with the draw-level bootstrap
 # percentile interval, or median with the interquartile range.
 BAND_COLUMNS = {
@@ -460,8 +463,11 @@ def build_regret_figure(
     height: float,
     log_x: bool,
     band: str,
+    y_scale: str = "log",
 ) -> tuple[plt.Figure, pd.DataFrame]:
-    """Show both objectives' held-out regret with complete intervals on a log y axis."""
+    """Show both objectives' held-out regret with complete intervals; ``y_scale`` is "log" (the paper's) or "linear"."""
+    if y_scale not in ("log", "linear"):
+        raise ValueError(f"unknown y_scale {y_scale!r}")
     missing_models = set(REGRET_MODELS) - set(summary["model"])
     if missing_models:
         raise ValueError(f"Bank-regret summaries are missing models: {sorted(missing_models)}")
@@ -474,20 +480,28 @@ def build_regret_figure(
         points = draw_panel(
             axis, summary, metrics, target, panel, "AB"[index], 2, log_x, band, None, models=REGRET_MODELS
         )
-        assert points and all(float(point["low"]) > 0 for point in points), "Log regret requires positive bands."
+        assert points, "no regret points"
+        if y_scale == "log":
+            assert all(float(point["low"]) > 0 for point in points), "Log regret requires positive bands."
         all_points.extend(points)
         axis.set_title(f"{'AB'[index]} · {TARGET_LABELS[target]}", loc="left", fontsize=8, fontweight="bold", pad=4)
-        axis.set_yscale("log")
-        minimum = min(float(point["low"]) for point in points)
-        maximum = max(float(point["high"]) for point in points)
-        axis.set_ylim(minimum / 1.35, maximum * 1.35)
-        y_ticks = (0.002, 0.01, 0.05, 0.2) if target == "uncheatable" else (0.01, 0.03, 0.1, 0.3)
-        axis.set_yticks([tick for tick in y_ticks if axis.get_ylim()[0] <= tick <= axis.get_ylim()[1]])
-        axis.set_yticklabels([f"{tick:g}" for tick in axis.get_yticks()])
+        axis.set_yscale(y_scale)
         axis.minorticks_off()
         axis.tick_params(labelsize=6.5, length=2.5, width=0.6)
         axis.set_ylabel("Regret@1 (BPB)", fontsize=7, labelpad=3)
         axis.set_xlabel("")
+    # One y scale for both objectives, so the floor of OlmoBaseEval Easy's regret reads against Uncheatable's.
+    minimum = min(float(point["low"]) for point in all_points)
+    maximum = max(float(point["high"]) for point in all_points)
+    for axis in axes:
+        if y_scale == "log":
+            axis.set_ylim(minimum / 1.35, maximum * 1.35)
+            axis.set_yticks([tick for tick in STRIP_Y_TICKS if axis.get_ylim()[0] <= tick <= axis.get_ylim()[1]])
+            axis.set_yticklabels([f"{tick:g}" for tick in axis.get_yticks()])
+        else:
+            # Regret is nonnegative; a band's lower edge below zero is clipped at the axis.
+            axis.set_ylim(0, maximum * 1.06)
+            axis.yaxis.set_major_locator(plt.MaxNLocator(nbins=4))
     handles, _labels = axes[0].get_legend_handles_labels()
     labels = [
         (

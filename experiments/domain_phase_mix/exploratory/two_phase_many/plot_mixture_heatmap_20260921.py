@@ -11,10 +11,12 @@ Uncheatable) and Olmix with no cap and no KL, for each objective. Every cell enc
 weight), clipped at eight times either way, either as a colored cell (``--marks heat``) or as a bar from the
 proportional baseline colored by policy (``--marks bars``); the cell text is the materialized epoch count. Buckets a
 policy empties are marked with a cross. ``--layout tall`` puts buckets down the rows and the six policies across;
-``--layout wide`` puts the policies down the rows and the buckets across. Reads the same candidate tables as
+``--layout wide`` puts the policies down the rows and the buckets across. The paper's Figure 9 is ``--layout side``
+(since 2026-10-11; ``stacked`` before): the 13 Common Crawl topics beside the 13 other sources at the 5.5 in text
+width, every cell colored and labeled by materialized epochs. Reads the same candidate tables as
 ``plot_olmix_vs_mariner_weights_compact_20260921``. Run from the repository root:
 
-    PYTHONPATH=. uv run --offline --no-sync python <this file> [--layout tall|wide] [--marks heat|bars]
+    PYTHONPATH=. uv run --offline --no-sync python <this file> [--layout side|stacked|blocks|tall|wide] [--marks ...]
 """
 
 from __future__ import annotations
@@ -89,8 +91,10 @@ LINEAR_SCALE_POLICIES = ("mariner", "olmix_deployed")  # a family's bar scale co
 CLIP_MARK = "\u25b8"  # marks a bar cut at the family scale (only the uncapped Olmix optimum exceeds it)
 SCALE_TICKS = ([-3, -2, -1, 0, 1, 2, 3], ["⅛", "¼", "½", "1", "2", "4", "8"])
 CROSS = "×"  # noqa: RUF001  (the multiplication sign is the intended glyph)
-# Two-block layout (the paper's version): epochs are both the color and the label; Uncheatable first.
+# Epoch layouts (blocks, stacked, side): epochs are both the color and the label; Uncheatable first.
 NOTO_STYLES = ("Regular", "Bold", "Italic")
+CONDENSED_FONT = "NotoSans-Condensed.ttf"  # the side layout's half-cell values and cap/KL subheaders
+EXTRA_CONDENSED_FONT = "NotoSans-ExtraCondensed.ttf"  # its high/low sub-labels, as wide as a half cell at 6 pt
 EPOCH_NORM = TwoSlopeNorm(vmin=-3.0, vcenter=0.0, vmax=4.0)  # 1/8 to 16 epochs on a log2 scale, centered at one
 EPOCH_TICKS = ([-3, -2, -1, 0, 1, 2, 3, 4], ["\u2264\u215b", "\u00bc", "\u00bd", "1", "2", "4", "8", "\u226516"])
 POLICY_HEADERS = {  # per objective: the deployed Olmix policies differ in their KL coefficient
@@ -124,6 +128,29 @@ STACK_OBJECTIVE_GAP = 0.7  # units between the two objectives
 STACK_FAMILY_ROWS = 1.0
 STACK_GROUP_GAP = 0.35  # rows between Common Crawl and the other sources
 QUALITY_LABELS = ("high", "low")
+# Side layout (the paper's Figure 9 since 2026-10-11), in inches at the paper's text width: the 13 Common Crawl topics
+# (a high- and a low-quality cell per policy) beside the 13 other sources (one cell per policy), each block under its
+# own six policy columns.
+PAPER_WIDTH = 5.5
+SIDE_ROW_HEIGHT = 0.128
+SIDE_HEADER_HEIGHT = 0.6
+SIDE_KEY_HEIGHT = 0.38
+# Every label and cell value prints at 6 pt or more (2026-10-12); the half cells, their high/low labels and the
+# cap/KL subheaders use Noto Sans Condensed to fit their columns.
+SIDE_TEXT_SIZE = 6.0
+SIDE_POLICY_SIZE = 6.2
+SIDE_TITLE_SIZE = 6.6
+SIDE_FAMILY_GUTTER = 0.17  # family bracket and its rotated name, left of the bucket labels
+SIDE_BLOCK_GAP = 0.04  # 0.10 before the policy gaps; narrowed so the cells keep nearly their width
+SIDE_OBJECTIVE_GAP = 0.07
+SIDE_POLICY_GAP = 0.025  # between Common Crawl policies, so each high/low pair reads as one mixture (2026-10-12)
+SIDE_SUBHEADERS = {  # under "MARINER" and the "Olmix" span; the deployed Olmix policies differ in their KL weight
+    "uncheatable": (("no cap", "no KL"), ("cap 4", "λ=0.05"), ("no cap", "no KL")),
+    "table9": (("no cap", "no KL"), ("cap 4", "λ=0.005"), ("no cap", "no KL")),
+}
+TITLE_INK = "#3A3835"
+KEY_INK = "#555250"
+SUBLABEL_INK = "#8A8782"
 # tall layout geometry (inches and row units)
 TALL_CELL_WIDTH = 0.5
 TALL_ROW_HEIGHT = 0.128
@@ -919,10 +946,210 @@ def build_stacked_figure(text_mode: str) -> plt.Figure:
         return figure
 
 
+def text_width_inches(text: str, size: float, weight: str = "normal") -> float:
+    """Rendered width of ``text`` at ``size`` points under the active rc settings."""
+    figure = plt.figure()
+    artist = figure.text(0, 0, text, fontsize=size, fontweight=weight)
+    figure.canvas.draw()
+    width = artist.get_window_extent().width / figure.dpi
+    plt.close(figure)
+    return width
+
+
+def draw_side_cell(axis, x, y, width, height, weight, epochs, font, half=False) -> None:
+    """An epoch-colored cell with its top-left corner at (x, y) inches; half cells print '<0.1' as '<.1'."""
+    if weight <= 0.0:
+        axis.text(
+            x + width / 2, y + height / 2, ZERO_GLYPH, ha="center", va="center", fontproperties=font, color=ZERO_MARK
+        )
+        return
+    value = float(np.clip(np.log2(epochs), EPOCH_NORM.vmin, EPOCH_NORM.vmax))
+    axis.add_patch(Rectangle((x, y), width, height, facecolor=DIVERGING(EPOCH_NORM(value)), edgecolor="white", lw=0.35))
+    label = epoch_label(epochs)
+    if half and label == "<0.1":
+        label = "<.1"
+    dark = value < -2.0 or value > 2.6
+    axis.text(
+        x + width / 2,
+        y + height / 2,
+        label,
+        ha="center",
+        va="center",
+        fontproperties=font,
+        color="white" if dark else INK,
+    )
+
+
+def condensed_font(size: float, name: str = CONDENSED_FONT) -> font_manager.FontProperties:
+    """A condensed Noto Sans face at ``size`` points, for text that must fit a half cell or a narrow column."""
+    path = Path.home() / "Library/Fonts" / name
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is needed for the side layout's half cells")
+    return font_manager.FontProperties(fname=str(path), size=size)
+
+
+def family_bracket(axis, x: float, y0: float, y1: float, name: str) -> None:
+    """A bracket at x inches spanning y0..y1, with the family name rotated to its left."""
+    axis.plot([x + 0.03, x, x, x + 0.03], [y0, y0, y1, y1], color=KEY_INK, lw=0.5, solid_capstyle="butt")
+    axis.text(
+        x - 0.025, (y0 + y1) / 2, name, rotation=90, ha="right", va="center", fontsize=SIDE_TEXT_SIZE, color=KEY_INK
+    )
+
+
+def build_side_figure(text_mode: str) -> plt.Figure:
+    """The 13 Common Crawl topics beside the 13 other sources, each block under its own six policy columns."""
+    del text_mode  # this layout always labels epochs, the quantity it colors
+    frame, policies = load_all()
+    (_high_title, high), (_low_title, low), *others = bucket_columns(frame)
+    topics = [(bars.bucket_label(h), h, lo) for h, lo in zip(high, low, strict=True)]
+    sources = [domain for _title, group in others for domain in group]
+    if [title for title, _group in others] != ["Dolma 3 other sources", "Dolmino"] or len(sources) != len(topics):
+        raise ValueError("the side layout needs the Common Crawl topics beside as many Dolma 3 and Dolmino sources")
+    dolma_rows = len(others[0][1])
+    style = dict(layout.PLOT_STYLE, **{"font.family": [use_noto_sans(), "DejaVu Sans"]})
+    with plt.rc_context(style):
+        left_gutter = (
+            SIDE_FAMILY_GUTTER + max(text_width_inches(label, SIDE_TEXT_SIZE) for label, _h, _lo in topics) + 0.04
+        )
+        right_gutter = (
+            SIDE_FAMILY_GUTTER + max(text_width_inches(frame.loc[d, "label"], SIDE_TEXT_SIZE) for d in sources) + 0.04
+        )
+        policy_gaps = 4 * SIDE_POLICY_GAP  # in the Common Crawl block only: two per objective
+        unit = (PAPER_WIDTH - left_gutter - right_gutter - SIDE_BLOCK_GAP - 2 * SIDE_OBJECTIVE_GAP - policy_gaps) / 24
+        left_width = 12 * unit + policy_gaps + SIDE_OBJECTIVE_GAP
+        right_x = left_gutter + left_width + SIDE_BLOCK_GAP + right_gutter
+        top = SIDE_HEADER_HEIGHT
+        grid = len(topics) * SIDE_ROW_HEIGHT
+        height = top + grid + SIDE_KEY_HEIGHT
+        figure = plt.figure(figsize=(PAPER_WIDTH, height))
+        axis = figure.add_axes((0, 0, 1, 1))  # one canvas in inches, y downward
+        axis.set_xlim(0, PAPER_WIDTH)
+        axis.set_ylim(height, 0)
+        axis.set_axis_off()
+        green, pink = HEADER_COLORS["mariner"], HEADER_COLORS["olmix_deployed"]
+        narrow = condensed_font(SIDE_TEXT_SIZE)
+        narrowest = condensed_font(SIDE_TEXT_SIZE, EXTRA_CONDENSED_FONT)
+        regular = font_manager.FontProperties(size=SIDE_TEXT_SIZE)
+        for block_x, common_crawl in ((left_gutter, True), (right_x, False)):
+            gap = SIDE_POLICY_GAP if common_crawl else 0.0  # the other sources have one cell per policy
+            policy_step = 2 * unit + gap  # unit is a half cell; a policy spans two
+            objective_width = 6 * unit + 2 * gap
+            for index, (objective, objective_label) in enumerate(OBJECTIVES):
+                ox = block_x + index * (objective_width + SIDE_OBJECTIVE_GAP)
+                # Centred over its six columns unless that would cross the canvas's right edge.
+                half_title = text_width_inches(objective_label, SIDE_TITLE_SIZE, "bold") / 2
+                axis.text(
+                    min(ox + objective_width / 2, PAPER_WIDTH - 0.01 - half_title),
+                    0.065,
+                    objective_label,
+                    ha="center",
+                    va="center",
+                    fontsize=SIDE_TITLE_SIZE,
+                    fontweight="bold",
+                    color=TITLE_INK,
+                )
+                axis.plot([ox + 0.02, ox + objective_width - 0.02], [0.125, 0.125], color=RULE, lw=0.6)
+                # "MARINER" over its column and "Olmix" once over both Olmix columns, which are too narrow for it
+                tier = top - 0.31
+                axis.text(ox + unit, tier, "MARINER", ha="center", va="bottom", fontsize=SIDE_POLICY_SIZE, color=green)
+                olmix_x = ox + (policy_step + objective_width) / 2
+                axis.text(olmix_x, tier, "Olmix", ha="center", va="bottom", fontsize=SIDE_POLICY_SIZE, color=pink)
+                axis.plot(
+                    [ox + policy_step + 0.025, ox + objective_width - 0.025],
+                    [tier + 0.008] * 2,
+                    color=pink,
+                    lw=0.45,
+                    alpha=0.7,
+                )
+                for k, (line1, line2) in enumerate(SIDE_SUBHEADERS[objective]):
+                    axis.text(
+                        ox + k * policy_step + unit,
+                        top - 0.098,
+                        f"{line1}\n{line2}",
+                        ha="center",
+                        va="bottom",
+                        fontproperties=narrow,
+                        color=green if k == 0 else pink,
+                        linespacing=1.0,
+                    )
+                for k, (key, _labels, _table, _candidates) in enumerate(POLICIES):
+                    px = ox + k * policy_step
+                    policy = policies[(objective, key)]
+                    if common_crawl:
+                        for q, quality in enumerate(QUALITY_LABELS):
+                            axis.text(
+                                px + q * unit + unit / 2,
+                                top - 0.013,
+                                quality,
+                                ha="center",
+                                va="bottom",
+                                fontproperties=narrowest,
+                                color=SUBLABEL_INK,
+                            )
+                    for row in range(len(topics)):
+                        y = top + row * SIDE_ROW_HEIGHT
+                        if common_crawl:
+                            for q, domain in enumerate(topics[row][1:]):
+                                draw_side_cell(
+                                    axis,
+                                    px + q * unit,
+                                    y,
+                                    unit,
+                                    SIDE_ROW_HEIGHT,
+                                    float(policy.loc[domain, "weight"]),
+                                    float(policy.loc[domain, "materialized_epochs"]),
+                                    narrow,
+                                    half=True,
+                                )
+                        else:
+                            domain = sources[row]
+                            draw_side_cell(
+                                axis,
+                                px,
+                                y,
+                                2 * unit,
+                                SIDE_ROW_HEIGHT,
+                                float(policy.loc[domain, "weight"]),
+                                float(policy.loc[domain, "materialized_epochs"]),
+                                regular,
+                            )
+        for row in range(len(topics)):
+            y = top + row * SIDE_ROW_HEIGHT + SIDE_ROW_HEIGHT / 2
+            axis.text(left_gutter - 0.03, y, topics[row][0], ha="right", va="center", fontsize=SIDE_TEXT_SIZE)
+            axis.text(
+                right_x - 0.03, y, frame.loc[sources[row], "label"], ha="right", va="center", fontsize=SIDE_TEXT_SIZE
+            )
+        family_bracket(axis, 0.13, top + 0.012, top + grid - 0.012, "Common Crawl")
+        bracket_x = left_gutter + left_width + SIDE_BLOCK_GAP + 0.13
+        split = top + dolma_rows * SIDE_ROW_HEIGHT
+        family_bracket(axis, bracket_x, top + 0.012, split - 0.012, "Dolma 3")
+        family_bracket(axis, bracket_x, split + 0.012, top + grid - 0.012, "Dolmino")
+        bar_width, bar_height, bar_y = 1.9, 0.065, top + grid + 0.17
+        cax = figure.add_axes(
+            (
+                (PAPER_WIDTH - bar_width) / 2 / PAPER_WIDTH,
+                1 - (bar_y + bar_height) / height,
+                bar_width / PAPER_WIDTH,
+                bar_height / height,
+            )
+        )
+        colorbar = plt.colorbar(
+            plt.cm.ScalarMappable(norm=EPOCH_NORM, cmap=DIVERGING), cax=cax, orientation="horizontal"
+        )
+        colorbar.set_ticks(EPOCH_TICKS[0])
+        colorbar.set_ticklabels(EPOCH_TICKS[1])
+        colorbar.ax.tick_params(labelsize=SIDE_TEXT_SIZE, length=1.5, pad=1.2)
+        colorbar.outline.set_linewidth(0.35)
+        cax.set_title(
+            "Materialized epochs (color and label)", fontsize=SIDE_TEXT_SIZE, pad=2.5, loc="left", color=KEY_INK
+        )
+        return figure
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--text", choices=("epochs", "multiplier"), default="epochs")
-    parser.add_argument("--layout", choices=("wide", "tall", "blocks", "stacked"), default="stacked")
+    parser.add_argument("--layout", choices=("side", "stacked", "blocks", "tall", "wide"), default="side")
     parser.add_argument(
         "--marks", choices=("heat", "bars", "weights"), default="heat", help="colored cells, midline bars or weight bars"
     )
@@ -934,7 +1161,9 @@ def main() -> None:
     ZERO_GLYPH = CROSS if args.zero_mark == "cross" else "0"
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = args.stem or f"mixture_{args.marks}_{args.layout}_{args.text}"
-    if args.layout == "stacked":
+    if args.layout == "side":
+        figure = build_side_figure(args.text)
+    elif args.layout == "stacked":
         figure = build_stacked_figure(args.text)
     elif args.layout == "blocks":
         figure = build_blocks_figure(args.text)

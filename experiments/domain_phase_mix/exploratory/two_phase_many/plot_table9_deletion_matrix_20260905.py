@@ -16,8 +16,10 @@ unweighted mean of their subtasks computed per run, so their reference SD keeps 
 between subtasks instead of assuming independence. Two-sided p-values are Holm-corrected across
 the 39 deletions within each task.
 
-Two figures are written: the full 39-bucket matrix for the appendix and a main-text version
-restricted to the buckets with at least one Holm-significant task. Holm-significant cells carry their t value.
+Each Common Crawl topic is one row whose cells are split in two, the high-quality bucket on the left and the
+low-quality bucket on the right, as in the paper's materialized-epochs figure; every other bucket has a full-width
+cell. Two figures are written: the full matrix for the appendix and a version restricted to the buckets with at least
+one Holm-significant task. Holm-significant cells carry their t value, rounded to an integer so it fits a half cell.
 """
 
 from __future__ import annotations
@@ -50,14 +52,19 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     table9_snr_table_20260905 as snr,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.plot_olmix_vs_mariner_weights_compact_20260921 import (  # noqa: E402
+    CC_TOPIC_LABELS,
+)
 
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "table9_reliability_20260905"
 BASELINE_RUN = "singleavg_fit_000_baseline_proportional"
 DELETION_TOKEN = "pctrl_del_"
 ALPHA = 0.05
 T_CLIP = 6.0
-FULL_FIGURE_SIZE = (7.2, 9.8)
-MAIN_FIGURE_SIZE = (7.2, 4.4)
+FIGURE_WIDTH = 7.2
+ROW_INCHES = 0.2013  # the row height of the earlier one-row-per-bucket layout
+QUALITIES = ("high", "low")
+MUTED = "#666666"
 BOTTOM_MARGIN_INCHES = 1.4
 TOP_MARGIN_INCHES = 0.55
 
@@ -116,11 +123,18 @@ def family(bucket: str) -> str:
     return "dolmino"
 
 
-def bucket_label(bucket: str) -> str:
-    if bucket.startswith("dolma3_cc/"):
-        topic, _, quality = bucket.removeprefix("dolma3_cc/").rpartition("_")
-        return f"{topic.replace('_', ' ').replace(' and ', ' & ').capitalize()} ({quality[0].upper()})"
-    return OTHER_LABELS[bucket]
+def matrix_rows(buckets: list[str]) -> list[tuple[str, str, tuple[str, ...]]]:
+    """(family, label, members) per row: a Common Crawl topic holds its high- and low-quality buckets."""
+    rows: list[tuple[str, str, tuple[str, ...]]] = []
+    for bucket in buckets:
+        if family(bucket) != "cc":
+            rows.append((family(bucket), OTHER_LABELS[bucket], (bucket,)))
+            continue
+        topic = bucket.removeprefix("dolma3_cc/").rpartition("_")[0]
+        members = tuple(f"dolma3_cc/{topic}_{quality}" for quality in QUALITIES)
+        if not rows or rows[-1][2] != members:
+            rows.append(("cc", CC_TOPIC_LABELS[topic], members))
+    return rows
 
 
 def ordered_buckets(buckets: tuple[str, ...]) -> list[str]:
@@ -212,17 +226,18 @@ def deletion_cells(values: pd.DataFrame, noise: pd.DataFrame, buckets: list[str]
     return cells
 
 
-COLORBAR_LABEL = "t: deletion minus proportional, in units of run-to-run std"
+# The paper calls these runs single-bucket removals and the statistic T (Appendix C.1.1).
+COLORBAR_LABEL = "$T$: removal minus proportional, in units of repeat std"
 
 
 def row_label(task: str, keys: list[str]) -> str:
     if task == snr.MACRO_LABEL:
-        return "Suite mean (51)"
+        return "OBE Easy mean (51)"
     return f"{task} ({len(keys)})" if len(keys) > 1 else task
 
 
 def t_text(value: float) -> str:
-    return f"{value:.0f}" if abs(value) >= 10 else f"{value:.1f}"
+    return f"{value:.0f}"
 
 
 def brace_profile(n: int, shoulder: float) -> tuple[np.ndarray, np.ndarray]:
@@ -262,48 +277,73 @@ def draw_column_brace(axis: plt.Axes, y: float, depth: float, start: int, stop: 
     return y - depth
 
 
-def build_figure(cells: pd.DataFrame, buckets: list[str], figsize: tuple[float, float]) -> plt.Figure:
-    """Transposed matrix: buckets down the side with family braces, tasks across the bottom."""
+def build_figure(cells: pd.DataFrame, buckets: list[str]) -> plt.Figure:
+    """Transposed matrix: buckets down the side with family braces, tasks across the bottom.
+
+    Columns are two units wide: a Common Crawl row fills a task's two units with its high- and low-quality buckets,
+    every other row fills both with the same value, so its cell reads as one.
+    """
     tasks = task_rows()
     task_names = [task for _, task, _ in tasks]
     groups = [group for group, _, _ in tasks]
-    families = [family(bucket) for bucket in buckets]
-    t_matrix = cells.pivot(index="bucket", columns="task", values="t_statistic").loc[buckets, task_names]
-    p_matrix = cells.pivot(index="bucket", columns="task", values="p_holm").loc[buckets, task_names]
-    values = np.clip(t_matrix.to_numpy(float), -T_CLIP, T_CLIP)
-    significant = p_matrix.to_numpy(float) < ALPHA
-    width, height = figsize
+    rows = matrix_rows(buckets)
+    families = [row_family for row_family, _, _ in rows]
+    t_matrix = cells.pivot(index="bucket", columns="task", values="t_statistic")[task_names]
+    p_matrix = cells.pivot(index="bucket", columns="task", values="p_holm")[task_names]
+    values = np.empty((len(rows), 2 * len(task_names)))
+    marks: list[tuple[float, int, float]] = []
+    for row_index, (_family, _label, members) in enumerate(rows):
+        for task_index, task in enumerate(task_names):
+            for half in range(2):
+                values[row_index, 2 * task_index + half] = t_matrix.loc[members[half % len(members)], task]
+            for half, member in enumerate(members):
+                if p_matrix.loc[member, task] < ALPHA:
+                    x = 2 * task_index + (half if len(members) == 2 else 0.5)
+                    marks.append((x, row_index, float(t_matrix.loc[member, task])))
+    values = np.clip(values, -T_CLIP, T_CLIP)
+    width = FIGURE_WIDTH
+    height = TOP_MARGIN_INCHES + BOTTOM_MARGIN_INCHES + len(rows) * ROW_INCHES
     with plt.rc_context(PLOT_STYLE):
-        figure, axis = plt.subplots(figsize=figsize)
+        figure, axis = plt.subplots(figsize=(width, height))
         figure.subplots_adjust(
             left=0.30, right=0.90, bottom=BOTTOM_MARGIN_INCHES / height, top=1.0 - TOP_MARGIN_INCHES / height
         )
         image = axis.imshow(values, cmap="RdBu_r", norm=Normalize(-T_CLIP, T_CLIP), aspect="auto")
         axis.set_autoscale_on(False)
-        for row_index, column_index in zip(*np.where(significant), strict=True):
-            value = float(t_matrix.iloc[row_index, column_index])
+        for x, row_index, value in marks:
             axis.text(
-                column_index,
+                x,
                 row_index,
                 t_text(value),
                 ha="center",
                 va="center",
-                fontsize=5.6,
+                fontsize=5.2,  # a two-character label such as -5 fits a half cell
                 fontweight="bold",
                 color="white" if abs(value) > 4.0 else INK,
                 zorder=5,
             )
-        axis.axvline(0.5, color=INK, linewidth=0.9, zorder=4)
-        for index in range(2, len(tasks)):
-            if groups[index] != groups[index - 1]:
-                axis.axvline(index - 0.5, color=INK, linewidth=0.9, zorder=4)
-        for index in range(1, len(buckets)):
+        boundaries = {1} | {index for index in range(2, len(tasks)) if groups[index] != groups[index - 1]}
+        for index in sorted(boundaries):
+            axis.axvline(2 * index - 0.5, color=INK, linewidth=0.9, zorder=4)
+        cc_rows = [index for index, name in enumerate(families) if name == "cc"]
+        if cc_rows:
+            # White rules between tasks pair the high- and low-quality halves of each Common Crawl cell.
+            for index in range(1, len(tasks)):
+                if index not in boundaries:
+                    axis.vlines(
+                        2 * index - 0.5, min(cc_rows) - 0.5, max(cc_rows) + 0.5, color=PAPER, linewidth=0.9, zorder=3
+                    )
+            for half, quality in enumerate(QUALITIES):
+                axis.text(
+                    half, -0.6, quality[0].upper(), ha="center", va="bottom", fontsize=5.6, color=MUTED, clip_on=False
+                )
+        for index in range(1, len(rows)):
             if families[index] != families[index - 1]:
                 axis.axhline(index - 0.5, color=INK, linewidth=0.9, zorder=4)
-        axis.set_xticks(range(len(task_names)))
+        axis.set_xticks([2 * index + 0.5 for index in range(len(task_names))])
         axis.set_xticklabels([row_label(task, keys) for _, task, keys in tasks], rotation=90, fontsize=6.6, color=INK)
-        axis.set_yticks(range(len(buckets)))
-        axis.set_yticklabels([bucket_label(bucket) for bucket in buckets], fontsize=6.6, color=INK)
+        axis.set_yticks(range(len(rows)))
+        axis.set_yticklabels([label for _, label, _ in rows], fontsize=6.6, color=INK)
         axis.tick_params(axis="both", length=0, pad=3)
         axis.grid(False)
         for spine in axis.spines.values():
@@ -339,18 +379,17 @@ def build_figure(cells: pd.DataFrame, buckets: list[str], figsize: tuple[float, 
                 color=INK,
                 clip_on=False,
             )
-        row_inches = (height * (1.0 - TOP_MARGIN_INCHES / height - BOTTOM_MARGIN_INCHES / height)) / len(buckets)
-        column_depth = BRACE_DEPTH_INCHES / row_inches
+        column_depth = BRACE_DEPTH_INCHES / ROW_INCHES
         group_starts: dict[str, int] = {}
         for index, name in enumerate(groups):
             if name:
                 group_starts.setdefault(name, index)
         for name, start in group_starts.items():
             stop = max(index for index, other in enumerate(groups) if other == name)
-            tip = draw_column_brace(axis, -0.55 - BRACE_GAP_INCHES / row_inches, column_depth, start, stop)
+            tip = draw_column_brace(axis, -0.55 - BRACE_GAP_INCHES / ROW_INCHES, column_depth, 2 * start, 2 * stop + 1)
             axis.text(
-                (start + stop) / 2,
-                tip - LABEL_GAP_INCHES / row_inches,
+                start + stop + 0.5,
+                tip - LABEL_GAP_INCHES / ROW_INCHES,
                 name,
                 ha="center",
                 va="bottom",
@@ -359,8 +398,8 @@ def build_figure(cells: pd.DataFrame, buckets: list[str], figsize: tuple[float, 
                 color=INK,
                 clip_on=False,
             )
-        axis.set_xlim(-0.5, len(task_names) - 0.5)
-        axis.set_ylim(len(buckets) - 0.5, -0.5)
+        axis.set_xlim(-0.5, 2 * len(task_names) - 0.5)
+        axis.set_ylim(len(rows) - 0.5, -0.5)
         colorbar = figure.colorbar(image, ax=axis, fraction=0.03, pad=0.03, orientation="vertical")
         colorbar.set_label(COLORBAR_LABEL, fontsize=7.0, color=INK)
         colorbar.set_ticks([-T_CLIP, -4, -2, 0, 2, 4, T_CLIP])
@@ -381,11 +420,11 @@ def main() -> None:
     cells.to_csv(args.output_dir / "deletion_matrix_cells.csv", index=False)
     significant = cells.loc[cells["p_holm"] < ALPHA]
     detectable = [bucket for bucket in buckets if bucket in set(significant["bucket"])]
-    for stem, subset, figsize in (
-        ("deletion_matrix_full", buckets, FULL_FIGURE_SIZE),
-        ("deletion_matrix_main", detectable, MAIN_FIGURE_SIZE),
+    for stem, subset in (
+        ("deletion_matrix_full", buckets),
+        ("deletion_matrix_main", detectable),
     ):
-        figure = build_figure(cells, subset, figsize)
+        figure = build_figure(cells, subset)
         figure.savefig(args.output_dir / f"{stem}.png", dpi=STATIC_DPI)
         figure.savefig(args.output_dir / f"{stem}.pdf")
         plt.close(figure)

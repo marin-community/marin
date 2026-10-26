@@ -18,6 +18,7 @@ usage: uv run plot_delphi_swarm_support_20260907.py [--drive-dir DIR]
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import matplotlib as mpl
@@ -26,7 +27,15 @@ import numpy as np
 import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 mpl.use("Agg")
+
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    plot_olmix_vs_mariner_weights_compact_20260921 as weights_figure,
+)
+
 REFERENCE = SCRIPT_DIR / "reference_outputs"
 FROZEN = REFERENCE / "delphi_offline_selection_20260906"
 OPTIMA = (
@@ -34,8 +43,8 @@ OPTIMA = (
 )
 OUTPUT_DIR = REFERENCE / "delphi_swarm_support_20260907"
 CANDIDATES = {
-    "lwspu_u_snc_cap06": ("Uncheatable optimum", "#1b9e77", "D"),
-    "lwspu_t9_snc_cap08": ("OlmoBaseEval Easy optimum", "#d95f02", "o"),
+    "lwspu_u_snc_cap06": ("MARINER proposal, Uncheatable", "#1b9e77", "D"),
+    "lwspu_t9_snc_cap08": ("MARINER proposal, OlmoBaseEval Easy", "#d95f02", "o"),
 }
 PROPORTIONAL_EPOCHS = 6_325_183_647_689 / 6_986_431_605_135
 INK = "#222222"
@@ -54,13 +63,15 @@ PLOT_STYLE = {
     "legend.fontsize": 7,
 }
 POSITIVE_LIMITS = (0.00035, 320)
+QUALITY_LABELS = {"high": "H", "low": "L"}
 
 
 def bucket_label(name: str) -> str:
+    """The paper's bucket names (Table 3): Common Crawl topics carry their quality stratum."""
     if name.startswith("dolma3_cc/"):
         topic, quality = name.removeprefix("dolma3_cc/").rsplit("_", 1)
-        return f"CC {topic.replace('_', ' ')} ({quality})"
-    return name.replace("dolmino_", "Dolmino ").replace("dolma3_", "Dolma 3 ").replace("_", " ")
+        return f"{weights_figure.CC_TOPIC_LABELS[topic]} ({QUALITY_LABELS[quality]})"
+    return weights_figure.layout.bucket_label(name)
 
 
 def support_table() -> pd.DataFrame:
@@ -99,7 +110,7 @@ def support_table() -> pd.DataFrame:
 def draw(table: pd.DataFrame) -> plt.Figure:
     plt.rcParams.update(PLOT_STYLE)
     figure, (zero_axis, axis) = plt.subplots(
-        ncols=2, figsize=(5.8, 6.7), sharey=True, gridspec_kw={"width_ratios": [0.35, 3.1], "wspace": 0.04}
+        ncols=2, figsize=(5.8, 5.0), sharey=True, gridspec_kw={"width_ratios": [0.35, 3.1], "wspace": 0.04}
     )
     y = np.arange(len(table))[::-1]
     rng = np.random.default_rng(0)
@@ -168,7 +179,7 @@ def draw(table: pd.DataFrame) -> plt.Figure:
     zero_axis.set_title("Zero", fontsize=7, pad=6)
     zero_axis.set_facecolor("#f5f7f9")
     axis.set_ylim(-0.8, len(table) - 0.2)
-    figure.supxlabel("Materialized epochs (positive values on log scale)", y=0.092, fontsize=7.5)
+    figure.supxlabel("Materialized epochs (positive values on log scale)", y=0.08, fontsize=7.5)
     axis.tick_params(axis="y", left=False, labelleft=False)
     zero_axis.tick_params(axis="y", length=0)
     for target in (zero_axis, axis):
@@ -178,8 +189,18 @@ def draw(table: pd.DataFrame) -> plt.Figure:
     axis.spines["left"].set_color("#c5cbd1")
     axis.grid(axis="x", color="#e5e5e5", linewidth=0.5, zorder=0)
     handles, labels = axis.get_legend_handles_labels()
-    figure.legend(handles, labels, loc="lower center", frameon=False, handletextpad=0.4, borderaxespad=0.2)
-    figure.subplots_adjust(left=0.36, right=0.99, top=0.975, bottom=0.15)
+    figure.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=2,  # handles fill by column: Uncheatable and its outside marker, then OlmoBaseEval Easy
+        frameon=False,
+        handletextpad=0.3,
+        borderaxespad=0.1,
+        columnspacing=1.0,
+        fontsize=6.5,
+    )
+    figure.subplots_adjust(left=0.25, right=0.99, top=0.975, bottom=0.155)
     return figure
 
 

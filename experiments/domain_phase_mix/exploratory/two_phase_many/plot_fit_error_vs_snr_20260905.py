@@ -47,7 +47,7 @@ REGMIX_COLOR = "#0072B2"
 MODEL_CHOICES = {
     "mariner": ("MARINER", MARINER_COLOR),
     "olmix": ("Olmix", OLMIX_COLOR),
-    "regmix": ("RegMix", REGMIX_COLOR),
+    "regmix": ("RegMix (tuned)", REGMIX_COLOR),
 }
 DEFAULT_MODELS = ("mariner", "olmix")
 # (key, label, colour) of the models drawn; main() replaces it when --models is given.
@@ -124,7 +124,8 @@ def scatter(axis: plt.Axes, frame: pd.DataFrame, column: str, label_points: bool
             linestyles=SEGMENT_STYLES[task_segments],
             zorder=3,
         )
-    for model, label, color in MODELS:
+    # Drawn back to front in reverse legend order, so MARINER's points sit in front of Olmix's and RegMix's.
+    for depth, (model, label, color) in enumerate(reversed(MODELS)):
         for evaluation, marker, size in (("OlmoBaseEval Easy", "o", 22), ("Uncheatable", "D", 24)):
             part = frame[frame["evaluation"].eq(evaluation)]
             axis.scatter(
@@ -136,7 +137,7 @@ def scatter(axis: plt.Axes, frame: pd.DataFrame, column: str, label_points: bool
                 edgecolor=PAPER,
                 linewidth=0.5,
                 alpha=0.95,
-                zorder=4,
+                zorder=4 + depth,
                 label=f"{label}, {evaluation}",
             )
     # The uncollapsed sub-2 SNR subtasks are named individually, staggered above and below their points.
@@ -191,8 +192,8 @@ def draw_r2_panel(
 def build_r2_only_figure(frame: pd.DataFrame, *, task_segments: str = "dashed") -> plt.Figure:
     """Main-text panel with separate keys for method colors and evaluation shapes."""
     # The canvas is wider than the plotting area so the two-line y label fits without narrowing the axes.
-    figure = plt.figure(figsize=(3.35, 2.9))
-    axis = figure.add_axes((0.205, 0.23, 0.775, 0.58))
+    figure = plt.figure(figsize=(3.35, 2.4))
+    axis = figure.add_axes((0.205, 0.28, 0.775, 0.60))
     draw_r2_panel(axis, frame, title=None, label_points=False, task_segments=task_segments)
     style(axis)
     axis.set_xlim(0.9, 42)
@@ -210,7 +211,7 @@ def build_r2_only_figure(frame: pd.DataFrame, *, task_segments: str = "dashed") 
         fontsize=8,
     )
     axis.annotate(
-        "Constant-noise ceiling\n" + r"$1-1/\mathrm{SNR}^2$",
+        "Noise ceiling\n" + r"$1-1/\mathrm{SNR}^2$",
         xy=(2.15, 1 - 1 / 2.15**2),
         xytext=(1.03, 1.15),
         ha="left",
@@ -240,12 +241,14 @@ def build_r2_only_figure(frame: pd.DataFrame, *, task_segments: str = "dashed") 
         method_handles,
         [label for _model, label, _color in MODELS],
         loc="upper center",
-        bbox_to_anchor=(0.59, 1.0),
+        bbox_to_anchor=(0.55, 1.0),
         ncol=len(MODELS),
         fontsize=7.5,
         frameon=False,
         handletextpad=0.3,
-        columnspacing=1.6,
+        columnspacing=1.0,
+        borderaxespad=0.0,
+        borderpad=0.1,
     )
     group_handles = [
         mpl.lines.Line2D([], [], color=BAND_COLOR, marker=marker, linestyle="", markersize=4) for marker in ("o", "D")
@@ -254,12 +257,14 @@ def build_r2_only_figure(frame: pd.DataFrame, *, task_segments: str = "dashed") 
         group_handles,
         ["OlmoBaseEval Easy", "Uncheatable"],
         loc="upper center",
-        bbox_to_anchor=(0.59, 0.925),
+        bbox_to_anchor=(0.55, 0.95),
         ncol=2,
         fontsize=6.6,
         frameon=False,
         handletextpad=0.3,
         columnspacing=1.0,
+        borderaxespad=0.0,
+        borderpad=0.1,
     )
     return figure
 
@@ -420,7 +425,9 @@ def main() -> None:
     )
     suffix = {"noise": "", "r2": "_r2", "r2_only": "_r2_only"}[args.variant]
     for extension in ("png", "pdf"):
-        figure.savefig(args.output_dir / f"fit_error_vs_snr{suffix}.{extension}", dpi=DPI, bbox_inches="tight")
+        figure.savefig(
+            args.output_dir / f"fit_error_vs_snr{suffix}.{extension}", dpi=DPI, bbox_inches="tight", pad_inches=0.02
+        )
     table = group_table(args.input_dir)
     table.to_csv(args.output_dir / "fit_error_vs_snr_groups.csv", index=False)
     print(table.round(3).to_string(index=False))

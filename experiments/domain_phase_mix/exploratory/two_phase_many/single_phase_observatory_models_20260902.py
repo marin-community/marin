@@ -654,6 +654,18 @@ def weibull_response(exposure: np.ndarray, rate: float, power: float) -> np.ndar
     return -np.expm1(-((np.maximum(rate * exposure, 0.0)) ** power))
 
 
+def weibull_repeat_response(exposure: np.ndarray, rate: float, power: float) -> np.ndarray:
+    """The first epoch at full value, later epochs saturating as a Weibull CDF scaled by ``1 / rate``.
+
+    With power one this is the effective data of Muennighoff et al. (2023), ``U + U R* (1 - exp(-R / R*))`` with
+    ``R* = 1 / rate`` and ``R`` the epochs past the first, divided by ``U (1 + R*)`` so that it saturates at one
+    like ``weibull_response``.
+    """
+    epochs = np.maximum(exposure, 0.0)
+    repeats = weibull_response(np.maximum(epochs - 1.0, 0.0), rate, power) / rate
+    return (np.minimum(epochs, 1.0) + repeats) / (1.0 + 1.0 / rate)
+
+
 def saturation_response(exposure: np.ndarray, rate: np.ndarray | float) -> np.ndarray:
     return 1.0 - np.exp(-rate * exposure)
 
@@ -722,7 +734,7 @@ class FamilyOptions:
     # literal_family, overload_family, bounded_bucket.
     harm: str = "softplus_family"
     member_replay: bool = False
-    benefit: str = "power"  # power | weibull | saturation | log1p | affine
+    benefit: str = "power"  # power | weibull | weibull_repeats | saturation | log1p | affine
     retention_gate: bool = False
     family_rate_divisor: bool = False
     families_in_benefit: str = "nonsingleton"  # nonsingleton | all
@@ -751,6 +763,8 @@ def _benefit(values: np.ndarray, shape: Shape, options: FamilyOptions) -> np.nda
         return power_response(values, float(shape["exponent"]))
     if options.benefit == "weibull":
         return weibull_response(values, float(shape["rate"]), float(shape["power"]))
+    if options.benefit == "weibull_repeats":
+        return weibull_repeat_response(values, float(shape["rate"]), float(shape["power"]))
     if options.benefit == "saturation":
         return saturation_response(values, float(shape["rate"]))
     if options.benefit == "log1p":

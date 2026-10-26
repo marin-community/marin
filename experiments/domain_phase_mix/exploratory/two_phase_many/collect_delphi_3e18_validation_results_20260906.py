@@ -241,6 +241,61 @@ LAUNCHES = {
         (REFERENCE / "delphi_per_bucket_threshold_proposals_3e18_20260924" / "candidate_weights.csv",),
         grouped=True,
     ),
+    "table5_repeats": Launch(
+        "table5_repeats",
+        "delphi_table5_repeats_3e18_20260928",
+        "olmo_base_eval_table9_delphi_3e18_one_phase_table5_repeats",
+        (
+            "cmp_u_spline_cap08",
+            "cmp_u_lgbm_cap08",
+            "cmp_u_krr_cap12",
+            "rgref_u_endpoint_cap64",
+            "cmp_t9_spline_cap12",
+            "cmp_t9_lgbm_cap12",
+            "cmp_t9_krr_cap16",
+            "rgref_t9_endpoint_cap64",
+            "swarm_run00125_cap08",
+        ),
+        REFERENCE / "delphi_table5_repeats_3e18_20260928",
+        (REFERENCE / "delphi_table5_repeats_3e18_20260928" / "candidate_weights.csv",),
+        grouped=True,
+    ),
+    "table9_snr_subset": Launch(
+        "table9_snr_subset",
+        "delphi_table9_snr_subset_3e18_20260928",
+        "olmo_base_eval_table9_delphi_3e18_one_phase_table9_snr_subset",
+        ("snr5_t9_cap09", "snr8_t9_cap07"),
+        REFERENCE / "delphi_table9_snr_subset_3e18_20260928",
+        (REFERENCE / "delphi_table9_snr_subset_3e18_20260928" / "candidate_weights.csv",),
+        grouped=True,
+    ),
+    "table9_qa_subset": Launch(
+        "table9_qa_subset",
+        "delphi_table9_qa_subset_3e18_20260929",
+        "olmo_base_eval_table9_delphi_3e18_one_phase_table9_qa_subset",
+        ("qa15_t9_cap04", "qa19_t9_cap05"),
+        REFERENCE / "delphi_table9_qa_subset_3e18_20260929",
+        (REFERENCE / "delphi_table9_qa_subset_3e18_20260929" / "candidate_weights.csv",),
+        grouped=True,
+    ),
+    "olmix_subset": Launch(
+        "olmix_subset",
+        "delphi_olmix_subset_3e18_20260929",
+        "olmo_base_eval_table9_delphi_3e18_one_phase_olmix_subset",
+        ("olmixq_w3_kl0p05_cap04", "olmixq_qa15_kl0p005_cap04"),
+        REFERENCE / "delphi_olmix_subset_3e18_20260929",
+        (REFERENCE / "delphi_olmix_subset_optima_3e18_20260929" / "candidate_weights.csv",),
+        grouped=True,
+    ),
+    "regmix_argmin": Launch(
+        "regmix_argmin",
+        "delphi_regmix_argmin_3e18_20260930",
+        "olmo_base_eval_table9_delphi_3e18_one_phase_regmix_argmin",
+        ("rgx_u_argmin_center_cap08", "rgx_t9_argmin_center_cap12"),
+        REFERENCE / "delphi_regmix_argmin_3e18_20260930",
+        (REFERENCE / "regmix_tuned_argmin_3e18_20260930" / "candidate_weights.csv",),
+        grouped=True,
+    ),
     "olmix_cap_kl_sweep": Launch(
         "olmix_cap_kl_sweep",
         "delphi_olmix_cap_kl_sweep_3e18_20260926",
@@ -374,8 +429,8 @@ def _candidate_id(run: Any, candidate_ids: tuple[str, ...]) -> str | None:
 
 
 def _trainer_seed_of(run: Any) -> int | None:
-    """Trainer seed encoded in a grouped launch's evaluator prefix (``t9r1_<candidate>``)."""
-    match = re.match(r"^t9[a-z]?(\d+)_", run.name)
+    """Trainer seed encoded in a grouped launch's evaluator prefix (``t9r1_``, ``t9t5r1_``, ``t9snr1_``)."""
+    match = re.match(r"^t9[a-z0-9]*?(\d+)_", run.name)
     return int(match.group(1)) if match else None
 
 

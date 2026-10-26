@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import matplotlib.patheffects as path_effects
@@ -23,6 +24,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure as MatplotlibFigure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import FuncFormatter
 from plotly.subplots import make_subplots
@@ -33,7 +35,14 @@ DEFAULT_ATLAS_DIR = REFERENCE_OUTPUTS / "starcoder_all_tied_curves_canonical_dsp
 DEFAULT_DESIGN = SCRIPT_DIR.parents[1] / "starcoder_wsd80_dense_support_surface_design_20260808.json"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "starcoder_replay_background_figure_20260902"
 
-REPLAY_CURVES = ("C15", "C16", "C17", "C18", "C19", "C20", "C21")
+# One tuple per token budget D (1.00B to 7.41B): the full pool, then subsets at 0.125x to 4x the target's repetition.
+BUDGET_CURVES = (
+    ("C15", "C16", "C17", "C18", "C19", "C20", "C21"),
+    ("C22", "C23", "C24", "C25", "C26", "C27", "C28"),
+    ("C29", "C30", "C31", "C32", "C33", "C34", "C35"),
+    ("C36", "C37", "C38", "C39", "C40", "C41", "C42"),
+)
+REPLAY_CURVES = BUDGET_CURVES[0]
 SCALE_CURVES = ("C21", "C28", "C35", "C42")
 EXPECTED_POINTS = 26
 
@@ -51,6 +60,20 @@ STATIC_MARGINS_IN = {"left": 0.5, "right": 0.06, "bottom": 0.4, "top": 0.48}
 STATIC_TABLE_ROW_HEIGHT_IN = 0.098
 STATIC_TABLE_FONT_SIZE = 5.5
 STATIC_DPI = 300
+PANEL_A_TOP_MARGIN_IN = 0.26  # the fixed-D panel has no top axis, only its title
+BUDGET_MARGINS_IN = {"left": 0.42, "right": 0.04, "bottom": 0.34, "top": 0.2}
+BUDGET_YLIM = (0.68, 4.3)
+BUDGET_MARK_SCALE = 0.7
+STATIC_RC = {
+    "font.family": "DejaVu Sans",
+    "font.size": 7,
+    "text.usetex": False,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+}
 DEEPSEEK_COLORS = (
     "#1f77b4",
     "#ff7f0e",
@@ -69,6 +92,12 @@ PLOTLY_CONFIG = {
     "responsive": True,
     "toImageButtonOptions": {"format": "png", "scale": 4},
 }
+
+
+class Layout(StrEnum):
+    TWO_PANEL = "two-panel"
+    PANEL_A = "panel-a"
+    BY_BUDGET = "by-budget"
 
 
 @dataclass(frozen=True)
@@ -107,6 +136,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--design", type=Path, default=DEFAULT_DESIGN)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--height", type=float, default=STATIC_FIGURE_HEIGHT, help="static figure height in inches")
+    parser.add_argument(
+        "--layout",
+        type=Layout,
+        choices=list(Layout),
+        default=Layout.TWO_PANEL,
+        help="two-panel: figure.{png,pdf}; panel-a: the fixed-D panel at half the text width, figure_panel_a; "
+        "by-budget: one fixed-D panel per token budget at the text width, figure_by_budget",
+    )
     return parser.parse_args()
 
 
@@ -168,7 +205,7 @@ def load_inputs(
 ) -> tuple[pd.DataFrame, dict[str, CurveMetadata]]:
     references = pd.read_csv(atlas_dir / "curve_reference.csv")
     predictions = pd.read_csv(atlas_dir / "predictions.csv")
-    selected_refs = set(REPLAY_CURVES) | set(SCALE_CURVES)
+    selected_refs = set(SCALE_CURVES).union(*BUDGET_CURVES)
     references = references.loc[references["curve_ref"].isin(selected_refs)].copy()
     if set(references["curve_ref"]) != selected_refs:
         missing = selected_refs - set(references["curve_ref"])
@@ -225,7 +262,7 @@ def add_panel_curves(
         curve = metadata[curve_ref]
         minimum = group.loc[group["observed_bpb"].idxmin()]
         optimum_epochs = float(minimum["starcoder_weight"]) * curve.epochs_at_full_share
-        is_no_repetition = curve_ref == REPLAY_CURVES[0]
+        is_no_repetition = bool(np.isclose(curve.support_fraction, 1.0))
         figure.add_trace(
             go.Scatter(
                 x=group["starcoder_weight"],
@@ -459,14 +496,28 @@ def build_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]) -> go
     return figure
 
 
-def style_static_axis(axis: Axes) -> None:
+def style_static_axis(
+    axis: Axes,
+    ylim: tuple[float, float] = (0.78, 4.45),
+    xticks: np.ndarray = np.linspace(0.0, 1.0, 6),
+    grid_axis: str = "both",
+) -> None:
     axis.set_xlim(-0.01, 1.01)
-    axis.set_ylim(0.78, 4.45)
-    axis.set_xticks(np.linspace(0.0, 1.0, 6))
+    axis.set_ylim(*ylim)
+    axis.set_xticks(xticks)
     axis.set_yticks(np.arange(1.0, 4.1, 0.5))
     axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _position: f"{value:g}"))
     axis.set_axisbelow(True)
-    axis.grid(color=GRID, linewidth=0.65, linestyle="-", alpha=0.72)
+    # The by-budget figure matches the burden ladder beside it: dashed horizontal lines only.
+    axis.grid(
+        axis=grid_axis,
+        color=GRID,
+        linewidth=0.65 if grid_axis == "both" else 0.6,
+        linestyle="-" if grid_axis == "both" else "--",
+        alpha=0.72,
+    )
+    if grid_axis == "y":
+        axis.xaxis.grid(False)  # a user-level matplotlibrc can otherwise draw dashed vertical lines
     axis.tick_params(axis="both", colors=INK, labelsize=7, width=0.8, length=2.5)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
@@ -545,44 +596,46 @@ def add_static_legend_table(
         marker.set_path_effects([path_effects.withStroke(linewidth=0.55, foreground=INK)])
 
 
-def add_static_panel(
+def draw_static_curves(
     axis: Axes,
     *,
     points: pd.DataFrame,
     metadata: dict[str, CurveMetadata],
     curve_refs: tuple[str, ...],
     colors: list[str],
-    table_row_height: float,
-) -> None:
+    mark_scale: float = 1.0,
+) -> tuple[list[Line2D], list[list[str]]]:
+    """Draw each curve with its grid minimum starred; return the line handles and the inset-table rows."""
+    handles: list[Line2D] = []
     legend_rows: list[list[str]] = []
     for curve_ref, color in zip(curve_refs, colors, strict=True):
         group = points.loc[points["curve_ref"].eq(curve_ref)].sort_values("starcoder_weight")
         curve = metadata[curve_ref]
         minimum = group.loc[group["observed_bpb"].idxmin()]
         optimum_epochs = float(minimum["starcoder_weight"]) * curve.epochs_at_full_share
-        is_no_repetition = curve_ref == REPLAY_CURVES[0]
-        line_style = (0, (4, 2)) if is_no_repetition else "-"
-        if is_no_repetition:
+        is_full_pool = bool(np.isclose(curve.support_fraction, 1.0))
+        line_style = (0, (4, 2)) if is_full_pool else "-"
+        if is_full_pool:
             axis.plot(
                 group["starcoder_weight"],
                 group["observed_bpb"],
                 color="white",
-                linewidth=3.4,
+                linewidth=3.4 * mark_scale,
                 linestyle=line_style,
                 zorder=4,
             )
-        axis.plot(
+        (line,) = axis.plot(
             group["starcoder_weight"],
             group["observed_bpb"],
             color=color,
-            linewidth=1.9 if is_no_repetition else 1.5,
+            linewidth=(1.9 if is_full_pool else 1.5) * mark_scale,
             linestyle=line_style,
             marker="o",
-            markersize=3.7 if is_no_repetition else 3.0,
-            markerfacecolor="white" if is_no_repetition else color,
-            markeredgecolor=color if is_no_repetition else INK,
-            markeredgewidth=0.9 if is_no_repetition else 0.25,
-            zorder=5 if is_no_repetition else 2,
+            markersize=(3.7 if is_full_pool else 3.0) * mark_scale,
+            markerfacecolor="white" if is_full_pool else color,
+            markeredgecolor=color if is_full_pool else INK,
+            markeredgewidth=0.9 if is_full_pool else 0.25,
+            zorder=5 if is_full_pool else 2,
         )
         axis.scatter(
             [minimum["starcoder_weight"]],
@@ -591,14 +644,15 @@ def add_static_panel(
             edgecolor=INK,
             linewidth=0.7,
             marker="*",
-            s=62,
+            s=62 * mark_scale**2,
             zorder=7,
         )
         support = format_support_size(curve.support_tokens)
-        if np.isclose(curve.support_fraction, 1.0):
+        if is_full_pool:
             support += " (full)"
         if curve.matches_target_burden:
             support += " (target)"
+        handles.append(line)
         legend_rows.append(
             [
                 "",
@@ -608,23 +662,24 @@ def add_static_panel(
                 format_epoch_count(optimum_epochs),
             ]
         )
+    return handles, legend_rows
 
+
+def add_static_panel(
+    axis: Axes,
+    *,
+    points: pd.DataFrame,
+    metadata: dict[str, CurveMetadata],
+    curve_refs: tuple[str, ...],
+    colors: list[str],
+    table_row_height: float,
+) -> None:
+    _, legend_rows = draw_static_curves(axis, points=points, metadata=metadata, curve_refs=curve_refs, colors=colors)
     add_static_legend_table(axis, rows=legend_rows, colors=colors, row_height=table_row_height)
 
 
 def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata], height: float) -> MatplotlibFigure:
-    with plt.rc_context(
-        {
-            "font.family": "DejaVu Sans",
-            "font.size": 7,
-            "text.usetex": False,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-            "figure.facecolor": "white",
-            "axes.facecolor": "white",
-            "savefig.facecolor": "white",
-        }
-    ):
+    with plt.rc_context(STATIC_RC):
         figure, axes = plt.subplots(
             1,
             2,
@@ -695,12 +750,112 @@ def build_static_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata]
         return figure
 
 
+def build_panel_a_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata], height: float) -> MatplotlibFigure:
+    """The fixed-D panel alone, half the text width wide (the fixed-downsampling panel repeats the burden ladder)."""
+    width = STATIC_FIGURE_WIDTH / 2
+    margins = {**STATIC_MARGINS_IN, "top": PANEL_A_TOP_MARGIN_IN}
+    with plt.rc_context(STATIC_RC):
+        figure, axis = plt.subplots(figsize=(width, height))
+        bottom = margins["bottom"] / height
+        top = 1.0 - margins["top"] / height
+        figure.subplots_adjust(
+            left=margins["left"] / width, right=1.0 - margins["right"] / width, bottom=bottom, top=top
+        )
+        add_static_panel(
+            axis,
+            points=points,
+            metadata=metadata,
+            curve_refs=REPLAY_DISPLAY_CURVES,
+            colors=list(REPLAY_DISPLAY_COLORS),
+            table_row_height=STATIC_TABLE_ROW_HEIGHT_IN / (height * (top - bottom)),
+        )
+        style_static_axis(axis)
+        axis.set_xlabel(r"StarCoder mixture fraction, $p$", fontsize=7.5, color=INK, labelpad=4)
+        axis.set_ylabel("Programming Languages BPB", fontsize=7.5, color=INK, labelpad=5)
+        axis.set_title(r"Fixed $D$, scaling downsampling", fontsize=8, fontweight="bold", color=INK, pad=4)
+        return figure
+
+
+def repetition_label(curve: CurveMetadata) -> str:
+    if curve.epoch_multiplier is None:
+        return "Full pool"
+    return f"{curve.epoch_multiplier:g}" + r"$\times$"
+
+
+def build_budget_figure(points: pd.DataFrame, metadata: dict[str, CurveMetadata], height: float) -> MatplotlibFigure:
+    """One fixed-D panel per token budget, at the text width; colors give the same degree of downsampling throughout.
+
+    The minimizing epochs are not repeated here: the burden ladder's legends give them for every budget.
+    """
+    width = STATIC_FIGURE_WIDTH
+    margins = BUDGET_MARGINS_IN
+    with plt.rc_context(STATIC_RC):
+        figure, axes = plt.subplots(1, len(BUDGET_CURVES), figsize=(width, height), sharey=True)
+        bottom = margins["bottom"] / height
+        top = 1.0 - margins["top"] / height
+        figure.subplots_adjust(
+            left=margins["left"] / width, right=1.0 - margins["right"] / width, bottom=bottom, top=top, wspace=0.1
+        )
+        for index, (axis, curves) in enumerate(zip(axes, BUDGET_CURVES, strict=True)):
+            display_curves = tuple(reversed(curves))
+            handles, _ = draw_static_curves(
+                axis,
+                points=points,
+                metadata=metadata,
+                curve_refs=display_curves,
+                colors=list(REPLAY_DISPLAY_COLORS),
+                mark_scale=BUDGET_MARK_SCALE,
+            )
+            # Horizontal grid only, at the burden ladder's weight, since the two figures share a page.
+            style_static_axis(axis, ylim=BUDGET_YLIM, xticks=np.linspace(0.0, 1.0, 5), grid_axis="y")
+            axis.set_xticklabels(["0", "0.25", "0.5", "0.75", "1"])
+            budget = metadata[curves[0]].training_tokens / 1e9
+            axis.set_title(
+                f"{'ABCD'[index]}. $D$ = {budget:.2f}B", loc="left", fontsize=7.5, fontweight="bold", color=INK, pad=3
+            )
+        # Every panel shares one color per degree of downsampling, so the last panel's empty top carries the legend.
+        legend = axes[-1].legend(
+            handles,
+            [repetition_label(metadata[curve_ref]) for curve_ref in display_curves],
+            title=r"$\times$ target repetition",
+            loc="upper right",
+            frameon=False,
+            fontsize=6,
+            title_fontsize=6,
+            handlelength=1.8,
+            handletextpad=0.5,
+            borderaxespad=0.2,
+            labelspacing=0.22,
+        )
+        legend.get_title().set_color(INK)
+        axes[0].set_ylabel("Programming Languages BPB", fontsize=7.5, color=INK, labelpad=5)
+        first, last = axes[0].get_position(), axes[-1].get_position()
+        figure.text(
+            (first.x0 + last.x1) / 2,
+            0.02 / height,
+            r"StarCoder fraction $p$",
+            ha="center",
+            va="bottom",
+            fontsize=7.5,
+            color=INK,
+        )
+        return figure
+
+
+STATIC_BUILDERS = {
+    Layout.TWO_PANEL: (build_static_figure, "figure"),
+    Layout.PANEL_A: (build_panel_a_figure, "figure_panel_a"),
+    Layout.BY_BUDGET: (build_budget_figure, "figure_by_budget"),
+}
+
+
 def write_outputs(
     output_dir: Path,
     figure: go.Figure,
     points: pd.DataFrame,
     metadata: dict[str, CurveMetadata],
     height: float,
+    layout: Layout,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     html = pio.to_html(
@@ -711,9 +866,10 @@ def write_outputs(
     )
     (output_dir / "index.html").write_text(html, encoding="utf-8")
     with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
-        static_figure = build_static_figure(points, metadata, height)
-        static_figure.savefig(output_dir / "figure.png", dpi=STATIC_DPI)
-        static_figure.savefig(output_dir / "figure.pdf")
+        builder, stem = STATIC_BUILDERS[layout]
+        static_figure = builder(points, metadata, height)
+        static_figure.savefig(output_dir / f"{stem}.png", dpi=STATIC_DPI)
+        static_figure.savefig(output_dir / f"{stem}.pdf")
         plt.close(static_figure)
 
     rows = []
@@ -741,7 +897,7 @@ def main() -> None:
     args = parse_args()
     points, metadata = load_inputs(args.atlas_dir, args.design)
     figure = build_figure(points, metadata)
-    write_outputs(args.output_dir, figure, points, metadata, args.height)
+    write_outputs(args.output_dir, figure, points, metadata, args.height, args.layout)
 
 
 if __name__ == "__main__":
