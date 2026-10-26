@@ -118,9 +118,6 @@ class AuthoredTaskDesign(BaseModel):
         ids = [control.control_id for control in self.controls]
         if len(set(ids)) != len(ids):
             raise ValueError("authored design control IDs must be unique")
-        reference = next(control for control in self.controls if control.kind is ControlKind.REFERENCE)
-        if reference.answer != self.reference:
-            raise ValueError("reference control answer must equal the authored reference")
         return self
 
 
@@ -301,7 +298,7 @@ def freeze_design(authored: AuthoredTaskDesign) -> OpenEndedTaskDesign:
             OpenEndedControl(
                 control_id=control.control_id,
                 kind=control.kind,
-                answer=control.answer,
+                answer=authored.reference if control.kind is ControlKind.REFERENCE else control.answer,
                 minimum_reward=CONTROL_BANDS[control.kind][0],
                 maximum_reward=CONTROL_BANDS[control.kind][1],
             )
