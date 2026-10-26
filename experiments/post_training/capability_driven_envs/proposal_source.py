@@ -10,7 +10,7 @@
    research decision.
    The validators of the plan's output type reject a portfolio with the wrong slot count, a solver
    machine that does not fit its environment, a slot in an environment the host lacks, or too many
-   slots on one environment x verification pairing, and the model gets one repair.
+   slots on one environment x verification pairing. Repairs use the client's configured budget.
 2. ``write(idea, portfolio, slot)``: for one proposed slot, independent of every other, GLM writes a
    proposal document in the ``stage10_proposal`` JSON format, thinking first. The request decodes under
    schema derived from the proposal dataclasses, with fixed id and source fields. Continuations
@@ -19,9 +19,10 @@
 A slot fails alone, as a ``SlotFailure``, when the output limit cuts its document off or when its
 model call runs out of retries or is rejected (``ModelUnavailable``, ``ModelRequestRejected``); the
 batch keeps the plan and every other slot. When the parser refuses a document on a rule outside the
-schema, such as the research citations or the research decision against its list, GLM gets one
+schema, such as the research citations or the research decision against its list, GLM receives another
 repair request under the same schema. The repair request keeps the prior reply as the assistant turn
-and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
+and quotes the parse error. Parser repairs have no separate attempt limit; they continue until a valid
+document, output exhaustion or a model failure. A slot the plan marks null becomes a proposal with ``null_reason`` set
 and costs no model call.
 
 Both prompts quote ``taskforge.capability.capability_idea_record(idea)``.
@@ -435,11 +436,12 @@ async def plan_slots(
 ) -> Portfolio[SlotPlan]:
     """Plan ``n`` slots for ``idea`` on a host that runs ``environments``, with the client's repair budget.
 
-    The portfolio holds the validated plan, the messages its first request sent and its completions (two
-    if repaired), and each slot with the reason the plan gave a null one.
+    The portfolio holds the validated plan, the messages its first request sent, all completions,
+    and each slot with the reason the plan gave a null one.
 
     Raises:
-        StructuredOutputError: the output limit cut the plan off, or every reply failed validation.
+        IncompleteOutput: the output limit cut the plan off.
+        StructuredOutputError: replies failed validation through the client's repair budget.
     """
     request = plan_request(idea, n, environments)
     # complete_structured appends the field instruction itself, so the call gets the turns before it.
@@ -516,7 +518,8 @@ class CapabilitySource:
         """Plan ``n`` slots for ``idea`` on this host's environments.
 
         Raises:
-            StructuredOutputError: the plan stayed invalid after its repair.
+            IncompleteOutput: the output limit cut the plan off.
+            StructuredOutputError: the plan stayed invalid through the client's repair budget.
             ModelUnavailable: the planning call ran out of retries.
             ModelRequestRejected: the server rejected the planning call.
         """
