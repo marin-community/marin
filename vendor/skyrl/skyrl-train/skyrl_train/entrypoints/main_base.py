@@ -538,12 +538,12 @@ class BasePPOExp:
         )
 
     def get_worker_classes(self):
-        """Return the policy and reference Ray actor classes for the configured strategy."""
+        """Return policy, unused critic, and reference Ray actor classes."""
         if self.cfg.trainer.strategy != "megatron":
             raise ValueError(f"Unknown strategy type: {self.cfg.trainer.strategy}")
         from skyrl_train.workers.megatron.megatron_worker import PolicyWorker, RefWorker  # noqa: PLC0415
 
-        return PolicyWorker, RefWorker
+        return PolicyWorker, None, RefWorker
 
     def get_tracker(self):
         """Initializes the tracker for experiment tracking.
@@ -566,7 +566,7 @@ class BasePPOExp:
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
-        PolicyWorker, RefWorker = self.get_worker_classes()
+        PolicyWorker, CriticWorker, RefWorker = self.get_worker_classes()
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
@@ -590,7 +590,7 @@ class BasePPOExp:
         # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, None, RefWorker)
+            trainer.build_models(PolicyWorker, CriticWorker, RefWorker)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,

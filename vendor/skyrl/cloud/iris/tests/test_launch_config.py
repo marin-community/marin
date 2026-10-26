@@ -498,13 +498,14 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
     raw = _raw_config()
     raw["inputs"]["model"] = {
         "uri": "org/policy",
-        "identity": revision,
+        "identity": "a" * 40,
         "local_path": "org/policy",
         "tokenizer_uri": "org/tokenizer",
         "tokenizer_revision": revision,
     }
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
 
     def download(model_id, *, revision, destination, allow_patterns):
@@ -512,7 +513,7 @@ def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, mon
         (destination / "tokenizer_config.json").write_text("{}")
 
     monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
-    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(load_launch_config(path)))
+    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(config))
 
     assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text()) == {
         "model": "org/tokenizer",

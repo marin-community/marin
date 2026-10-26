@@ -2439,6 +2439,7 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
+    assert "s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/" in result.output
 
 
 def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
