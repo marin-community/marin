@@ -36,13 +36,13 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe
-from skyrlrecipe.sampling import EvalSamplingParams
 from skyrlrecipe.sections import (
     Algorithm,
     ChatTemplate,
     Data,
     DynamicSampling,
     Environment,
+    EvalSamplingParams,
     Generator,
     Policy,
     PolicyMegatronConfig,
