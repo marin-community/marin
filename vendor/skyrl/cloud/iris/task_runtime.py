@@ -49,6 +49,7 @@ import huggingface_hub.constants
 from filelock import FileLock
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
+from rigging.timing import RateLimiter
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -207,6 +208,8 @@ def _ray_bin() -> str:
 DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
+STARTUP_POLL_INTERVAL = 1.0
+RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
 # Bound the rank-0 rendezvous PutObject: unbounded fsspec/s3fs put can wedge the
@@ -1094,7 +1097,7 @@ def poll_rendezvous(
             raise
         except Exception as exc:  # transient object-store hiccup
             _log(f"rendezvous poll error (will retry): {exc}")
-        time.sleep(POLL_INTERVAL)
+        time.sleep(STARTUP_POLL_INTERVAL)
     raise TimeoutError(
         f"Worker rank {_rank()} timed out after {timeout}s waiting for "
         f"rank-0 rendezvous at {uri}. Did the head task fail to start?"
@@ -1297,24 +1300,24 @@ def ray_stop() -> None:
 def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
-    ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
-    the rendezvous so its ``written_at`` stays fresh. A worker pod on a cold node can
-    start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the head wrote the rendezvous; its
-    ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
-    one-shot rendezvous as "stale" and wait forever while the head waits for that node —
-    a mutual deadlock. Rewriting each poll keeps the timestamp ahead of any late worker's
-    freshness threshold without weakening the prior-ATTEMPT protection (a stale file from
-    a dead PRIOR attempt is still never refreshed).
+    ``rewrite_cb`` (head only) re-publishes the rendezvous at most once per ``RENDEZVOUS_REWRITE_INTERVAL`` seconds
+    so ``written_at`` stays fresh. A worker pod on a cold node can start >RENDEZVOUS_FRESHNESS_SLACK (60s) after the
+    head wrote the rendezvous; its ``poll_rendezvous(min_written_at=worker_start)`` would then reject the head's
+    one-shot rendezvous as "stale" and wait forever while the head waits for that node — a mutual deadlock. Periodic
+    rewrites keep the timestamp ahead of any late worker's freshness threshold without weakening the prior-ATTEMPT
+    protection (a stale file from a dead PRIOR attempt is still never refreshed).
     """
     import ray
 
     deadline = time.time() + timeout
+    limiter = RateLimiter(RENDEZVOUS_REWRITE_INTERVAL)
+    limiter.mark_run()
     _log(f"Waiting for {expected_nodes} Ray node(s) at {ray_address} (timeout {timeout}s)...")
     ray.init(address=ray_address, ignore_reinit_error=True)
     try:
         last_count = -1
         while time.time() < deadline:
-            if rewrite_cb is not None:
+            if rewrite_cb is not None and limiter.should_run():
                 try:
                     rewrite_cb()
                 except Exception as exc:
@@ -1327,7 +1330,7 @@ def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_
             if count >= expected_nodes:
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
-            time.sleep(POLL_INTERVAL)
+            time.sleep(STARTUP_POLL_INTERVAL)
         raise TimeoutError(f"Only {last_count}/{expected_nodes} Ray nodes joined within {timeout}s.")
     finally:
         ray.shutdown()
@@ -1980,8 +1983,6 @@ def run_head(
             f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
         )
         write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        # Re-publish the rendezvous each poll so a late cold-node worker never sees it
-        # as "stale" (see wait_for_nodes docstring — prevents the freshness deadlock).
         wait_for_nodes(
             ray_address,
             num_tasks,

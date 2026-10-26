@@ -884,9 +884,8 @@ class RolloutWorkers(Section):
     "Default thread pool for blocking task operations."
     progress_timeout_seconds: int = field(21600)
     "fail a worker's requests when none of them completes for this long"
-    start_interval_seconds: int | float = field(2.0)
-    """Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads from
-    a shared filesystem do not overlap; zero starts them all at once."""
+    start_interval_seconds: int | float = field(0.0)
+    "Zero starts workers together; a positive interval staggers their imports and tokenizer loads."
 
 
 class TrajectoryRunner(Section):
