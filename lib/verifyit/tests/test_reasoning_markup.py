@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from verifyit.reasoning_markup import ReasoningViolation, reasoning_span_violation
 
 
