@@ -3,7 +3,6 @@
 
 import json
 import pickle
-from itertools import permutations
 
 import pytest
 import skyrlrecipe as schema
@@ -35,9 +34,6 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
         schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"schedule": {}, "enabled": False}))
     )
     assert changed.to_skyrl()["generator"] == {"engine_init_kwargs": {"schedule": {"windows": [1, 2]}, "enabled": False}}
-    numeric = schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"samples": [1], "weight": 1}))
-    equivalent = schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"samples": [1.0], "weight": 1.0}))
-    schema.SkyRLRecipe.combine(base=recipe, integer=numeric, decimal=equivalent)
     for invalid in (float("nan"), float("inf"), object()):
         with pytest.raises(ValueError, match="finite JSON value"):
             schema.SkyRLRecipe(
@@ -82,7 +78,7 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
     assert "hf_save_interval" not in sections.Trainer().model_dump(mode="json")
 
 
-def test_named_parts_are_order_independent_and_settings_merge_required_sections(base_recipe):
+def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recipe):
     base = base_recipe
     part = schema.RecipePatch.from_document(
         {
@@ -101,9 +97,7 @@ def test_named_parts_are_order_independent_and_settings_merge_required_sections(
         }
     )
     computed = schema.RecipePatch(trainer=sections.Trainer(ckpt_interval=4))
-    options = schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"buckets": [1, 2]}))
-    parts = {"policy": part, "computed": computed, "options": options}
-    expected = schema.SkyRLRecipe.combine(base=base, **parts)
+    expected = base.merge(part, computed)
     grouped = expected.with_settings(
         ["config_groups.algorithm_recipe=grpo", "config_groups.terminal_bench_config=terminal_bench"]
     )
@@ -112,36 +106,12 @@ def test_named_parts_are_order_independent_and_settings_merge_required_sections(
         "algorithm_recipe": "grpo",
     }
     assert schema.SkyRLRecipe.from_document(grouped.to_skyrl()) == grouped
-    for order in permutations(parts.items()):
-        combined = schema.SkyRLRecipe.combine(base=base, **dict(order))
-        assert combined == expected
-        assert list(combined.to_skyrl()["generator"]["engine_init_kwargs"]) == ["buckets", "user_options"]
     local = schema.RecipePatch(environment=sections.Environment(task_sessions={"local": {}}))
     for enabled in (
-        schema.SkyRLRecipe.combine(base=base, local=local),
         base.merge(local),
         base.with_settings(["environment.task_sessions.local={}"]),
     ):
         assert enabled.to_skyrl()["environment"]["task_sessions"]["local"] == {}
-    with_parent = base.merge(schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"parent": None})))
-    nested_empty = schema.RecipePatch(generator=sections.Generator(engine_init_kwargs={"parent": {"child": {}}}))
-    assert schema.SkyRLRecipe.combine(base=with_parent, empty=nested_empty).to_skyrl()["generator"][
-        "engine_init_kwargs"
-    ]["parent"] == {"child": {}}
-    for first, second in (
-        ({"buckets": [1, 2]}, {"buckets": [1, 3]}),
-        ({"parent": None}, {"parent": {"child": 2}}),
-        ({"parent": {}}, {"parent": {"child": 2}}),
-        ({"enabled": True}, {"enabled": 1}),
-    ):
-        conflicts = (
-            ("first", schema.RecipePatch(generator=sections.Generator(engine_init_kwargs=first))),
-            ("second", schema.RecipePatch(generator=sections.Generator(engine_init_kwargs=second))),
-            ("unrelated", computed),
-        )
-        for order in permutations(conflicts):
-            with pytest.raises(ValueError, match="parts 'first' and 'second'"):
-                schema.SkyRLRecipe.combine(base=base, **dict(order))
     edited = expected.with_settings(["context_budget.max_turns=4", "generator.engine_init_kwargs.user_options.math=2"])
     assert edited.context_budget.to_skyrl() == {
         "request_window_tokens": 256,
@@ -165,8 +135,6 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
     edited = base
     for paths, owner in ((LAUNCH_PATHS, "launch document"), (DERIVED_PATHS, "context_budget")):
         for path in paths:
-            if not path.startswith(("terminal_bench.", "environment.task_sessions.", "generator.engine_init_kwargs.")):
-                continue
             document = base.to_skyrl()
             set_path(document, path, "authored-sentinel")
             with pytest.raises(ValueError) as error:
@@ -189,52 +157,10 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
             construct()
     heads = schema.RecipePatch(model_num_attention_heads=42)
     tensor_parallel = schema.RecipePatch(generator=sections.Generator(inference_engine_tensor_parallel_size=2))
-    valid = schema.SkyRLRecipe.combine(base=base, heads=heads, tensor_parallel=tensor_parallel)
+    valid = base.merge(heads, tensor_parallel)
     assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
     with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
-        schema.SkyRLRecipe.combine(base=base, heads=heads)
+        base.merge(heads)
     for following in ("hf_save_interval", "micro_forward_batch_size_per_gpu"):
         with pytest.raises(ValueError, match=following):
             edited.with_settings([f"trainer.{following}=null"])
-
-
-def test_artifact_draft_identity_is_validated_after_parts_and_settings(base_recipe):
-    base = base_recipe
-    uri_part = schema.RecipePatch.from_document(
-        {"generator": {"speculative_decoding": {"model": {"source_uri": "s3://models/draft"}}}}
-    )
-    artifact = schema.SkyRLRecipe.combine(
-        base=base,
-        uri=uri_part,
-        details=schema.RecipePatch.from_document(
-            {
-                "generator": {
-                    "speculative_decoding": {
-                        "method": "eagle3",
-                        "model": {"source_identity": "sha256:" + "a" * 64},
-                        "num_speculative_tokens": 3,
-                    }
-                }
-            }
-        ),
-    )
-    assert artifact.to_skyrl()["generator"]["speculative_decoding"] == {
-        "method": "eagle3",
-        "model": {"source_uri": "s3://models/draft", "source_identity": "sha256:" + "a" * 64},
-        "num_speculative_tokens": 3,
-    }
-    with pytest.raises(ValueError, match="artifact sources require sha256"):
-        schema.SkyRLRecipe.combine(base=base, uri=uri_part)
-    with pytest.raises(ValueError, match="artifact sources require sha256"):
-        artifact.with_settings(["generator.speculative_decoding.model.source_identity=author-identity"])
-    for source, identity in (("hf://org/draft", "b" * 40), ("/local/draft", "author-identity")):
-        changed = artifact.with_settings(
-            [
-                f"generator.speculative_decoding.model.source_uri={source}",
-                f"generator.speculative_decoding.model.source_identity={identity}",
-            ]
-        )
-        assert changed.to_skyrl()["generator"]["speculative_decoding"]["model"] == {
-            "source_uri": source,
-            "source_identity": identity,
-        }

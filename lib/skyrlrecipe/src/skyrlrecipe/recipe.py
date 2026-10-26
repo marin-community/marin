@@ -1,20 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse authored parts and complete recipes for Hydra composition."""
+"""Sparse authored settings and complete recipes for Hydra composition."""
 
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Self
-from urllib.parse import urlsplit
 
 from pydantic import Field, PositiveInt, model_validator
 
 from .budget import ContextBudget
-from .documents import MISSING, combine_parts, get_path, merge_mappings, set_path
+from .documents import MISSING, get_path, merge_mappings, set_path
 from .model import FrozenMap, OpenMap, freeze, thaw
 from .ownership import OWNER_MESSAGES, REMOVED
 from .rules import RLEntrypoint, validate_engine_init_kwargs, validate_tp_divides_heads
@@ -29,12 +27,11 @@ def _reject_paths(document: Mapping[str, Any], table: Mapping[str, str]) -> None
 
 
 class RecipePatch(RecipeSections):
-    """An authored contribution with optional context and sparse section values."""
+    """Sparse authored values with optional context."""
 
     entrypoint: RLEntrypoint = RLEntrypoint.STANDARD
     context_budget: ContextBudget | None = None
     config_groups: ConfigGroups = Field(default_factory=ConfigGroups)
-    terminal_bench: OpenMap | None = None
     extra_env: OpenMap = Field(default_factory=FrozenMap)
     model_num_attention_heads: PositiveInt | None = None
 
@@ -49,15 +46,8 @@ class RecipePatch(RecipeSections):
     @classmethod
     def from_document(cls, document: Mapping[str, Any]) -> Self:
         _reject_paths(document, REMOVED)
+        _reject_paths(document, OWNER_MESSAGES)
         return cls.model_validate_json(json.dumps(thaw(freeze(document)), allow_nan=False))
-
-    @classmethod
-    def combine(cls, *, base: RecipePatch | None = None, **parts: RecipePatch) -> Self:
-        document = combine_parts(
-            base.to_skyrl() if base is not None else {},
-            {name: part.to_skyrl() for name, part in parts.items()},
-        )
-        return cls.from_document(document)
 
     def merge(self, *patches: RecipePatch) -> Self:
         document = self.to_skyrl()
@@ -85,12 +75,4 @@ class SkyRLRecipe(RecipePatch):
     @model_validator(mode="after")
     def _complete_author_rules(self) -> Self:
         validate_tp_divides_heads(self.generator.inference_engine_tensor_parallel_size, self.model_num_attention_heads)
-        model = get_path(self.to_skyrl(), "generator.speculative_decoding.model", {})
-        if isinstance(model, Mapping) and urlsplit(model.get("source_uri", "")).scheme in ("s3", "gs", "gcs"):
-            identity = model.get("source_identity", "")
-            if re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
-                raise ValueError(
-                    "generator.speculative_decoding.model.source_identity: "
-                    "artifact sources require sha256:<64 lowercase hex digits>"
-                )
         return self
