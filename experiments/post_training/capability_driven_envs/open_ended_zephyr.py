@@ -7,14 +7,16 @@ import asyncio
 import os
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
 from fray.types import ResourceConfig
+from iris.client.client import iris_ctx
+from iris.cluster.types import JobName
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import API_ROOT, EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, ReasoningEffort
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.stage10_proposal.model import Environment, SolverMachine
@@ -45,16 +47,42 @@ IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 class OpenAIModelPort:
     """Non-secret endpoint configuration serialized to Zephyr workers."""
 
-    base_url: str
     model: str
     api_key_env: str
+    base_url: str | None = None
+    relay_job: str | None = None
+    relay_service: str | None = None
     pool: Pool = Pool.BULK
 
     def __post_init__(self) -> None:
-        if not self.base_url.endswith("/v1"):
-            raise ValueError("base_url must end in /v1")
+        if (self.base_url is None) == (self.relay_job is None):
+            raise ValueError("exactly one of base_url and relay_job is required")
+        if self.base_url is not None and not self.base_url.endswith(API_ROOT):
+            raise ValueError(f"base_url must end in {API_ROOT}")
+        if self.relay_job is not None and not self.relay_service:
+            raise ValueError("relay_service is required with relay_job")
         if not self.model or not self.api_key_env:
             raise ValueError("model and api_key_env must be nonempty")
+
+
+@dataclass(frozen=True)
+class IrisRelayEndpoint:
+    """Resolve a configured Iris relay from the worker on each endpoint refresh."""
+
+    relay_job: str
+    service: str
+    token: str = field(repr=False)
+    pool: Pool = Pool.BULK
+
+    def current(self) -> GlmEndpoint:
+        client = iris_ctx().client
+        if client is None:
+            raise RuntimeError("Iris client is unavailable inside the Zephyr worker")
+        endpoints = client.resolver_for_job(JobName.from_string(self.relay_job)).resolve(self.service).endpoints
+        if not endpoints:
+            raise RuntimeError(f"relay {self.relay_job!r} has no registered service {self.service!r}")
+        base_url = endpoints[0].url.rstrip("/")
+        return GlmEndpoint(base_url if base_url.endswith(API_ROOT) else f"{base_url}{API_ROOT}", self.token, self.pool)
 
 
 @dataclass(frozen=True)
@@ -178,12 +206,17 @@ async def _run_bundle(row: dict[str, object], config: OpenEndedZephyrConfig) -> 
     controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
     if not controller_url:
         raise RuntimeError(f"worker lacks {IRIS_CONTROLLER_URL_ENV}; this port runs inside an Iris task")
-    endpoint = GlmEndpoint(config.port.base_url, token, config.port.pool)
-    connection = JudgeConnection(config.port.base_url, token)
+    source: EndpointSource
+    if config.port.base_url is not None:
+        source = FixedEndpoint(GlmEndpoint(config.port.base_url, token, config.port.pool))
+    else:
+        assert config.port.relay_job is not None and config.port.relay_service is not None
+        source = IrisRelayEndpoint(config.port.relay_job, config.port.relay_service, token, config.port.pool)
+    connection = JudgeConnection(source.current().base_url, token)
     policy = _policy()
     with tempfile.TemporaryDirectory(prefix=f"open-ended-{bundle.bundle_id}-") as temporary:
         root = Path(temporary)
-        async with GlmClient(FixedEndpoint(endpoint), _provider(config.port)) as model:
+        async with GlmClient(source, _provider(config.port)) as model:
             return await run_bundle_lifecycle(
                 bundle,
                 model=model,

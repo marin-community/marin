@@ -25,7 +25,7 @@ from experiments.post_training.capability_driven_envs.open_ended_zephyr import (
     OpenEndedZephyrConfig,
     run_open_ended_zephyr,
 )
-from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL
 
 
 def _control(kind: ControlKind, answer: str, low: float, high: float) -> OpenEndedControl:
@@ -135,14 +135,18 @@ def main() -> None:
     parser.add_argument("--region", default="us-central1")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
-    base_url = args.base_url or resolve_glm_base_url(args.relay_job)
+    port = (
+        OpenAIModelPort(args.model, args.api_key_env, base_url=args.base_url)
+        if args.base_url
+        else OpenAIModelPort(args.model, args.api_key_env, relay_job=args.relay_job, relay_service=args.model)
+    )
     output = args.output or (
         "gs://marin-us-central1/marin/taskforge/open-ended-smoke/"
         f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}/result.jsonl"
     )
     result = run_open_ended_zephyr(
         [synthetic_bundle()],
-        config=OpenEndedZephyrConfig(OpenAIModelPort(base_url, args.model, args.api_key_env)),
+        config=OpenEndedZephyrConfig(port),
         output=output,
         max_workers=1,
         logical_shards=1,
