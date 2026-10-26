@@ -72,9 +72,9 @@ assessment. Each node needs public `source` and `evidence` links; qualified ance
 keeps `confidence: "inferred"`. Runs without published weights use `model: null`.
 Follow the contributor README for field details and aliases for retained checkpoints.
 
-Each tree PR states whether it needs a public release. Related changes can be
-published in one batch after their PRs merge. Publish corrections to public lineage
-or time-sensitive additions promptly after merge. Automated discovery can prepare
+Each tree PR states whether it changes the public tree. The nightly publisher
+batches merged source changes; maintainers can dispatch an earlier release for
+public lineage corrections or time-sensitive additions. Automated discovery can prepare
 PRs for review; it does not select or publish models directly. Do not distribute
 graph updates as loose files or ZIPs for manual incorporation into a release.
 
@@ -120,3 +120,39 @@ After release, record the published version, immutable revision URL and main com
 in the PR or issue, and confirm the stable tree URL serves that revision. A version
 conflict requires inspecting the newly selected revision before deciding to retry.
 This keeps source review and the public release record linked even for batch releases.
+
+### Nightly publication
+
+[Marin - Release Snowball Tree](https://github.com/marin-community/marin/actions/workflows/marin-release-snowball-tree.yaml)
+runs daily at 04:17 UTC and supports manual dispatch from `main`. It checks out
+current main, compares committed package source with the selected live revision,
+and skips unchanged source. Changed source runs the layout harness before a
+version-checked `marina release`; the normal clean-current-main guard still applies.
+It then checks that the published revision and source are current. Marina rejects
+a checkout that is stale at its main check and conflicts with another publisher;
+the job does not retry publication blindly. Rerun after inspecting the new state.
+
+The workflow uses the existing main-only Cloud Run deployment service account via
+GitHub OIDC. Its Marina IAP access is declared in the shared `marin` IAM stack;
+that grant must be deployed before the workflow can access Marina. The run summary
+and `snowball-release-<run>-<attempt>` artifact record the observed previous version,
+published revision URL and source commit. No model discovery or graph editing runs
+in this job. A source-tree change can trigger a release even if the graph is unchanged.
+
+A legacy live package without source provenance stops normal nightly publication.
+Inspect the live package and record its differences in the tree PR or tracking issue,
+then preview a one-time bootstrap of the reviewed main source:
+
+```bash
+gh workflow run marin-release-snowball-tree.yaml --ref main \
+  -f dry_run=true -f bootstrap_unrecorded=true
+```
+
+After checking that preview, dispatch with `dry_run=false` and
+`bootstrap_unrecorded=true` to establish the recorded main baseline. Subsequent
+nightly runs need no bootstrap flag. Local reproduction uses the synced Marina
+environment and an authenticated account:
+
+```bash
+uv run --no-sync python scripts/ci/snowball_release.py --dry-run
+```
