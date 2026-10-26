@@ -15,7 +15,11 @@ for source_root in (_REPO_ROOT, _REPO_ROOT / "skyrl-train"):
         sys.path.insert(0, str(source_root))
 
 from marinskyrl.speculative_decoding import SpeculatorModelConfig  # noqa: E402
-from skyrl_train.draft_trainer import DraftTrainer, read_latest_draft_checkpoint  # noqa: E402
+from skyrl_train.draft_trainer import (  # noqa: E402
+    DraftTrainer,
+    latest_draft_checkpoint_uri,
+    read_latest_draft_checkpoint,
+)
 from skyrl_train.io import io  # noqa: E402
 
 
@@ -73,7 +77,7 @@ def test_publication_preserves_incumbent_until_all_files_arrive(tmp_path, monkey
         rtol=0,
         atol=0,
     )
-    assert json.loads(io.read_bytes(root + "/latest.json")) == asdict(published)
+    assert json.loads(io.read_bytes(latest_draft_checkpoint_uri(root))) == asdict(published)
     # A later truncated object must also be rejected by a refresh reader.
     filesystem.pipe_file(published.weights_uri, b"short")
     with pytest.raises(ValueError, match="incomplete"):

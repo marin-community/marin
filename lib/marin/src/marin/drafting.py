@@ -49,6 +49,7 @@ CODING_SOURCE = "sahil2801/CodeAlpaca-20k"
 CODING_REVISION = "152bb5e9a29651266b018106053980070a0521a1"
 AUXILIARY_LAYERS = (2, 13, 23)
 FINAL_LAYER = 26
+NATIVE_CONTEXT = 65536
 DRAFT_VOCABULARY = 32000
 GENERATION = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "seed": None}
 TRAINING_PACKAGES = {"torch": "2.13.0+cu132", "transformers": "5.16.1", "datasets": "4.8.5"}
@@ -83,6 +84,7 @@ def _sha256(path: Path) -> str:
 
 
 def _read_json(uri: str) -> Any:
+    # Bucket routing selects the S3 endpoint/signing region; its GCS fallback is guarded.
     filesystem, path = filesystem_for(uri)
     with filesystem.open(path, "r") as handle:
         return json.load(handle)
@@ -203,7 +205,7 @@ def _model(config: DraftTrainingConfig, weights: str) -> ServedModelConfig:
         api_model="target",
         tokenizer=config.tokenizer,
         tokenizer_revision=config.tokenizer_revision,
-        max_model_len=65536,
+        max_model_len=NATIVE_CONTEXT,
         tensor_parallel_size=1,
     )
 
@@ -226,7 +228,7 @@ def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolk
         2560,
     ):
         raise ValueError("This recipe supports the 26-layer Snowball/Grug EAGLE3 case")
-    if target_config["max_position_embeddings"] != 65536:
+    if target_config["max_position_embeddings"] != NATIVE_CONTEXT:
         raise ValueError("This recipe preserves Snowball's native 65536-token context")
     target_filesystem, target_path = filesystem_for(config.target)
     target_objects = target_filesystem.find(target_path, detail=True)
@@ -289,7 +291,7 @@ def _prepare_run(config: DraftTrainingConfig, workspace: Path, root: Path, toolk
     }
     extraction_engine = replace(
         engine,
-        max_num_batched_tokens=65536,
+        max_num_batched_tokens=NATIVE_CONTEXT,
         extra_args=(
             *engine.extra_args,
             "--no-enable-chunked-prefill",

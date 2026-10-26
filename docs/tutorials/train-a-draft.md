@@ -1,6 +1,7 @@
 # Train and serve a Snowball draft on Iris
 
-This recipe trains an EAGLE3 draft for Snowball/Grug step1903. It generates the
+This recipe trains an EAGLE3 draft for Snowball step1903, a checkpoint of the
+Grug mixture-of-experts model. It generates the
 target's responses, extracts offline states, fits a fresh draft and publishes a
 serving export. Training and serving run inside separate eight-H100 Iris tasks.
 They do not need an RL policy configuration.
@@ -8,8 +9,9 @@ They do not need an RL policy configuration.
 The [CLI](https://github.com/marin-community/marin/blob/main/experiments/post_training/standalone_draft.py)
 calls the reusable functions in
 [`marin.drafting`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/drafting.py).
-The recipe installs the pinned toolkit and trainer, stages the target, builds its
-training stub, and publishes the final toolkit export.
+The recipe installs the pinned toolkit and trainer, stages the target, builds a
+small training stub containing its embedding and output head, and publishes the
+final toolkit export.
 You supply storage access, Iris placement, prompts and an unused output location.
 Keep one writer per output. Use storage in the worker's region.
 
@@ -73,15 +75,17 @@ The twelve-problem sample produces eight training and four holdout rows.
 
 The target must have 26 layers, hidden size 2560 and native context 65,536.
 The recipe verifies the pinned tokenizer's bytes against the target. Extraction
-collects raw auxiliary slots `[2,13,23]` and raw final residual slot `26`.
+collects hidden states after layers `[2,13,23]` and the final residual at layer
+`26`, before the target applies its output normalization and gate.
 The trainer applies the target's RMSNorm and learned sigmoid gate to that final
 residual before computing teacher logits. Managed RL hidden-state captures use
 a different convention; they are not inputs to this offline path.
 
 The returned JSON contains the export URI and its weight SHA256, taken from the
 toolkit's `export_manifest.json`. `RUN` is a standard embedding-free HF draft:
-`config.json`, `model.safetensors`, original vocabulary maps and the toolkit
-manifest. `training.json` records the target objects, pinned tokenizer, input
+`config.json`, `model.safetensors`, vocabulary maps and the toolkit manifest.
+The maps identify which target vocabulary entries each draft entry represents;
+changing them would reinterpret learned weights. `training.json` records the target objects, pinned tokenizer, input
 and response hashes, task split, teacher convention, runtime pins and final
 validation metrics. The prompt and response JSONL are retained beside it.
 
@@ -95,9 +99,11 @@ after the export upload, and verifies the recorded weight hash.
 
 These commands support fresh training. They do not implement cloud recovery or
 warm starts. Warm starts save training time when a compatible learned draft
-already exists; recovery saves work after a failed long fit. Warm starts require a compatible export and its original vocabulary maps.
-Recovery also requires native checkpoints and their original data. They are unnecessary for
-this small example and add staging and recovery obligations to every caller.
+already exists; recovery saves work after a failed long fit. Warm starts require
+a compatible export and its original vocabulary maps. Recovery also requires
+native checkpoints and their original data. Supporting both adds initializer
+staging, optimizer-precision handling and checkpoint restoration code. This
+small example restarts a failed fit.
 
 For a longer custom fit, use the pinned [toolkit's training and adaptation
 commands](https://github.com/lukedhlee/grugmoe-eagle3/tree/8b1558baa74cafb6c7440f1dca2ebb9ab71dc054#2-train-a-base-draft-or-adapt-one)
@@ -139,7 +145,7 @@ curl "$ENDPOINT/v1/chat/completions" -H 'Content-Type: application/json' \
 
 `--timeout-hours 0.5` stops the serving process after half an hour of service.
 The export is downloaded and its weight hash checked; the target loads
-from its real checkpoint URI. Standard EAGLE3 proposes three tokens per step.
+from its real checkpoint URI. This recipe sets EAGLE3 to propose three tokens per step.
 Compilation and CUDA graphs stay enabled, with the target's native 65,536-token
 context.
 
@@ -160,12 +166,10 @@ qualified here at source `01911be34fac8715347962a8d791ca34a879e01e`.
 The ordinary Marin CPU environment remains separate. The handoffs between these
 environments are files and HTTP requests.
 
-The earlier Iris qualification checked the Grug teacher equation, preserved
-vocabulary maps and real speculative HTTP generation. This cleanup retains the
-same extraction and training commands. The fresh-fit, final-export and ordinary
-serving handoff is checked separately after lifecycle changes. A tiny fit tests
-compatibility; it does not measure convergence, useful acceptance, quality or
-speedup.
+The [training qualification](https://github.com/marin-community/marin/pull/10704)
+checks the Grug teacher equation, vocabulary maps, a fresh fit, the durable export
+and real speculative HTTP generation. A tiny fit tests compatibility; it does
+not measure convergence, useful acceptance, quality or speedup.
 
 Ongoing RL refresh is optional. Existing SkyRL runs configure
 `generator.speculative_decoding` with an EAGLE3 `model` source and a `training`
@@ -189,15 +193,18 @@ trainer and held-out promotion checks remain owned by
 and SkyRL's trainer. The standalone commands above do not import that lifecycle.
 
 Online refresh keeps a long-lived one-GPU trainer with its own FP32 optimizer
-masters and RNG state. It uses sealed proposal-aware captures whose teacher
-states already passed the target head's normalization/gate convention. Offline
+masters and RNG state. It uses completed rollout windows that include proposal attention masks; their
+teacher states already passed the target head's normalization and gate. Offline
 extraction supplies raw residuals and lets Speculators apply that transform.
 The datasets and recovery states are different, so the two loops remain separate.
 
 An accepted online candidate uploads its native recovery state and serving
 weights to an immutable revision directory. One atomic `latest.json` record is
 written after upload and size verification. Refresh readers check source lineage
-and weight size, then use the existing safe refresh boundary. The held-out gate,
+and weight size. Inference workers use vLLM's draft-only weight-update session
+to install the new weights. The held-out gate,
 rejection rollback and optimizer restore path remain unchanged. Old draft
-publication records are unsupported; use a new draft checkpoint root after this
-change. Historical artifacts and policy checkpoints are preserved.
+publication records that point to `complete.json` are unsupported. Start a new
+SkyRL run/checkpoint root when adopting this format. SkyRL derives its draft
+checkpoint root at `trainer.ckpt_path/drafts`; it is separate from the standalone `RUN`
+export above. Historical artifacts and policy checkpoints are preserved.
