@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from typing import Annotated, Any, get_args, get_origin
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from .model import FrozenMap, Section
 
@@ -39,10 +39,17 @@ def parse_setting(model: type[Section], key: str, raw: str) -> Any:
 
 
 def _parse_value(annotation: Any, raw: str) -> Any:
-    try:
+    if raw == "null":
+        return None
+    if raw.lstrip().startswith("{") and any(
+        isinstance(option, type) and issubclass(option, Section) for option in _annotations(annotation)
+    ):
         return json.loads(raw)
-    except json.JSONDecodeError:
-        return TypeAdapter(annotation).validate_strings(raw)
+    adapter = TypeAdapter(annotation)
+    try:
+        return adapter.validate_json(raw, strict=True)
+    except ValidationError:
+        return adapter.validate_strings(raw)
 
 
 def _annotations(annotation: Any):
