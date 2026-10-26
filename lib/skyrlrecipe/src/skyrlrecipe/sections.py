@@ -9,9 +9,24 @@ from typing import Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
-from . import declared
-from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
 from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
+
+
+class EvalSamplingParams(Section):
+    max_generate_length: int = unset_field()
+    repetition_penalty: int | float = field(1.0)
+    temperature: int | float = field(0.0)
+    top_p: int | float = field(1.0)
+    min_p: int | float = field(0.0)
+    top_k: int = field(-1)
+    logprobs: NonNegativeInt | None = field(None)
+    stop: tuple[str, ...] | None = field(None)
+    min_tokens: NonNegativeInt = unset_field()
+
+
+# Callback annotations use the evaluation sampling class above.
+from . import declared  # noqa: E402
+from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting  # noqa: E402
 
 
 class Sampling(Section):
@@ -696,18 +711,6 @@ class SpeculativeDecoding(Section):
 class SamplingParams(Section):
     repetition_penalty: int | float = field(1.0)
     temperature: int | float = field(1.0)
-    top_p: int | float = field(1.0)
-    min_p: int | float = field(0.0)
-    top_k: int = field(-1)
-    logprobs: NonNegativeInt | None = field(None)
-    stop: tuple[str, ...] | None = field(None)
-    min_tokens: NonNegativeInt = unset_field()
-
-
-class EvalSamplingParams(Section):
-    max_generate_length: int = unset_field()
-    repetition_penalty: int | float = field(1.0)
-    temperature: int | float = field(0.0)
     top_p: int | float = field(1.0)
     min_p: int | float = field(0.0)
     top_k: int = field(-1)
