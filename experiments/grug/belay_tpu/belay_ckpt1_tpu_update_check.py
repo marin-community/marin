@@ -153,6 +153,7 @@ def main():
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
+    parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
     parser.add_argument(
         "--streaming-movement", action="store_true", help="Accumulate expert routes without full restores"
     )
@@ -239,6 +240,7 @@ def main():
     output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
     tpu = os.environ.get("BELAY_TPU", "v4-64")
     config = build_config(run_id, output_root, verified_tokenizer(), tpu, 0, local_experts=args.local_experts)
+    config = dataclasses.replace(config, model=dataclasses.replace(config.model, tpu_attention=args.attention_kernel))
     if args.saved_output and config.model.moe_shared_placement == model.SharedExpertPlacement.OVERLAP:
         raise ValueError("Saved-output diagnostic requires the non-overlapped Ckpt 1 expert path")
     if args.compile_only:
@@ -271,6 +273,7 @@ def main():
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
             "diagnostic/kda_state_precision": args.kda_state_precision,
+            "diagnostic/attention_kernel": args.attention_kernel,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,

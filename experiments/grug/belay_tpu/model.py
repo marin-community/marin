@@ -740,6 +740,8 @@ class GrugModelConfig:
     global_kv_heads: int | None = 1
     head_dim: int | None = 128
     gpu_attention: str = "gpu_fa4_cute"  # "gpu_pallas_fa4": Pallas fwd, FA4 bwd
+    tpu_attention: str = "xla"
+    """Saved-probability Inkling implementation: xla or pallas."""
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
@@ -1687,7 +1689,7 @@ class CausalSelfAttention(eqx.Module):
         def _attend(qh: jax.Array, kh: jax.Array) -> jax.Array:
             if fox_key_bias is None:
                 if jax.default_backend() == "tpu" and rel_bias is not None:
-                    return inkling_attention(qh, kh, kernel_v, mask, rel_bias, implementation="xla")
+                    return inkling_attention(qh, kh, kernel_v, mask, rel_bias, implementation=self.cfg.tpu_attention)
                 return attention(qh, kh, kernel_v, mask, implementation=attn_impl, rel_bias=rel_bias)
             qh, kh, vh = _fox_augment(qh, kh, kernel_v, fox_key_bias)
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
