@@ -338,7 +338,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command with logging, _extra_env merging, and error handling.
 
         Returns the ExecResult on success, raises RuntimeError on failure.
@@ -407,7 +407,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command as root (for system packages, symlinks, etc.)."""
         return await self._exec(
             environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
@@ -420,7 +420,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command as the default agent user."""
         return await self._exec(
             environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec
@@ -433,7 +433,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         *,
         env: dict[str, str],
         deadline: float | None,
-    ) -> Any:
+    ) -> ExecResult:
         """Run an installed agent under shellbox's shared process ownership contract."""
         remaining = deadline - monotonic() if deadline is not None else None
         if remaining is not None and remaining <= 0:
