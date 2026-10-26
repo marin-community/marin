@@ -483,7 +483,7 @@ def _get_tokens_on_this_cp_rank(
 
     for ind in shard_inds:
         slices[seq_dim] = slice(ind * shard_size, (ind + 1) * shard_size)
-        ids_chunks.append(input_ids[slices])
+        ids_chunks.append(input_ids[tuple(slices)])
 
     ids = torch.cat(ids_chunks, dim=seq_dim)
     return ids
@@ -543,9 +543,7 @@ class AllGatherCPTensor(torch.autograd.Function):
             *grad_output.shape[(seq_dim + 1) :],
         )
 
-        index = torch.tensor([cp_rank, (2 * cp_size - cp_rank - 1)], device="cpu", pin_memory=True).cuda(
-            non_blocking=True
-        )
+        index = torch.tensor([cp_rank, (2 * cp_size - cp_rank - 1)], device=grad_output.device)
 
         grad_input = grad_output.index_select(seq_dim, index)
         grad_input = grad_input.view(*grad_input.shape[0:seq_dim], -1, *grad_input.shape[(seq_dim + 2) :])
