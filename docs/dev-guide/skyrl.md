@@ -49,6 +49,38 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Batch assembly
+
+`trainer.batch_builder=driver` builds the full training batch in the driver.
+Policy workers can instead assemble their own contiguous data-parallel slices
+from shared rollout groups and a compact plan. Enable this with the existing
+Snowball experiment's override:
+
+```bash
+uv run python -m experiments.post_training.async_rl \
+  --set +trainer.batch_builder=worker
+```
+
+Set `trainer.batch_builder=verify` (`--set +trainer.batch_builder=verify` with
+`async_rl`) to compare each rank's forward and training inputs with a driver-side
+rebuild of the whole batch from the same plan. The frozen-driver comparison
+separately checks assembly against the driver's conversion. Verify mode retains
+that whole-batch rebuild and supports `trainer.dump_data_batch=true`;
+dumps use the configured local or object-store export path.
+
+Unsupported objectives and placement settings fail at startup. Unsupported row
+credit, checkpoint facts, route metadata or policy-mesh geometry fail when the
+first batch is prepared.
+
+`timing/load_worker_batch` measures reading shared groups and assembling
+worker slices after sharing finishes. `timing/prepare_worker_training_input` covers correction and
+advantage preparation. Verify adds `timing/verify_driver_preparation`,
+`timing/verify_driver_forward` and `timing/verify_driver_finalization`.
+`generator.r3_transport` controls driver mesh dispatch; worker mode reads shared
+rollout groups directly. Worker mismatch diagnostics report a shared histogram p99; driver diagnostics
+report exact p95 and p999. Training metrics and consumed-work counts use the
+same definitions in all modes.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,

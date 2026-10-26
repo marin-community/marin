@@ -28,24 +28,19 @@ from skyrl_train.group_admission import (
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
-from skyrl_train.trajectory_runners.trajectory_processing import (
-    get_outcome_rewards,
-    get_trajectory_passes,
-    graded_row_indices,
-    normalized_verifier_scores,
-    rollout_successes,
-)
+from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
-from skyrl_train.trajectory_runners.types import (
-    TrajectoryBatch,
-    TrajectoryRequestBatch,
-    BatchFields,
-    RewardShapingComponents,
-)
+from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
 from math import fsum
 import numpy as np
 from skyrl_gym.verification import VerificationStatus
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.trajectory_runners.trajectory_processing import (
+    graded_row_indices,
+    normalized_verifier_scores,
+    rollout_successes,
+)
+from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingComponents
 
 
 class BatchPolicy(StrEnum):
@@ -150,10 +145,13 @@ class RowFacts:
     spanning_policy_steps: tuple[bool, ...]
     prompt_len: np.ndarray
     response_len: np.ndarray
+    score: np.ndarray
+    loss_tokens: np.ndarray
     is_last_step: np.ndarray
     exclude_from_baseline: np.ndarray
     fields: BatchFields
     rewards: GroupRewards
+    scalar_rewards: bool
     loop_credit: bool
     shaping_components: tuple[RewardShapingComponents, ...] | None
     shaping_response_tokens: tuple[int, ...]
@@ -200,11 +198,22 @@ class RowFacts:
             spanning_policy_steps=tuple(bool(steps.size and steps.min() != steps.max()) for steps in stamped_steps),
             prompt_len=np.asarray([len(prompt) for prompt in batch["prompt_token_ids"]], dtype=np.int64),
             response_len=np.asarray([len(response) for response in responses], dtype=np.int64),
+            score=np.asarray(
+                [
+                    np.sum(reward, dtype=np.float32) if isinstance(reward, list) else float(reward) if response else 0.0
+                    for reward, response in zip(batch["rewards"], responses, strict=True)
+                ],
+                dtype=np.float32,
+            ),
+            loss_tokens=np.asarray([mask.sum() for mask in masks], dtype=np.int64),
             is_last_step=np.asarray(batch.get("is_last_step") or [True] * count, dtype=bool),
             exclude_from_baseline=np.asarray(batch.get("exclude_from_baseline") or [False] * count, dtype=bool),
             fields=BatchFields.from_batch(batch),
             rewards=rewards,
-            loop_credit=any((np.count_nonzero(row) for row in batch.get("loop_advantages") or ())),
+            scalar_rewards=all(
+                not isinstance(reward, list) or np.count_nonzero(reward) <= 1 for reward in batch["rewards"]
+            ),
+            loop_credit=any(np.count_nonzero(row) for row in batch.get("loop_advantages") or ()),
             shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
             if batch.get("reward_shaping_components") is not None
             else None,
@@ -212,13 +221,11 @@ class RowFacts:
             loop_incidence=tuple(bool(spans) for spans in batch.get("reward_shaping_loop_spans") or [[]] * count),
             reward_sign_totals=reward_sign_totals,
             metric_totals=tuple(
-                (sum(reward) if isinstance(reward, list) else float(reward) for reward in batch["rewards"])
+                sum(reward) if isinstance(reward, list) else float(reward) for reward in batch["rewards"]
             ),
             compensated_metric_totals=tuple(
-                (
-                    (fsum(reward) if isinstance(reward, list) else float(reward)) if index in graded else 0.0
-                    for index, reward in enumerate(batch["rewards"])
-                )
+                (fsum(reward) if isinstance(reward, list) else float(reward)) if index in graded else 0.0
+                for index, reward in enumerate(batch["rewards"])
             ),
             passes=tuple(get_trajectory_passes(batch)),
             rollout_passes=tuple(rollout_successes(batch["rewards"], results)),
@@ -227,22 +234,16 @@ class RowFacts:
             if results is not None
             else (False,) * count,
             verifier_task_pass=tuple(
-                (
-                    None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
-                    for result in results
-                )
+                None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
+                for result in results
             )
             if results is not None
             else (None,) * count,
             graded=tuple(index in graded for index in range(count)),
             verifier_scores=tuple(scores) if scores is not None else None,
             verifier_agents=tuple(
-                (
-                    agent
-                    if result is not None and isinstance((agent := result.diagnostics.get("agent")), str)
-                    else None
-                    for result in results
-                )
+                agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
+                for result in results
             )
             if results is not None
             else None,

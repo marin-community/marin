@@ -237,17 +237,11 @@ def _concatenate_environment_metrics(
         ]
 
 
-def concatenate_trajectory_batches(
-    trajectory_batches: List[TrajectoryBatch],
-    *,
-    require_rollout_logprobs: bool = False,
-    tis_lcs_alert_threshold: float,
-    metrics: dict[str, float] | None = None,
+def normalize_trajectory_batches(
+    trajectory_batches: Sequence[TrajectoryBatch], *, fields: BatchFields
 ) -> TrajectoryBatch:
-    """Concatenate and validate rollout rows using whole-batch channel presence."""
+    """Concatenate rows using whole-batch field presence and route geometry."""
     assert trajectory_batches
-    _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
-    fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
     any_has_logprobs = "rollout_logprobs" in fields.present
 
     # Handle mixed rollout_logprobs: if some batches have logprobs and others don't,
@@ -413,6 +407,22 @@ def concatenate_trajectory_batches(
         logger.info(f"Attempting to concatenate values for additional keys {additional_keys}")
     for key in additional_keys:
         result[key] = sum([trajectory_batch[key] for trajectory_batch in trajectory_batches], [])
+
+    return result
+
+
+def concatenate_trajectory_batches(
+    trajectory_batches: List[TrajectoryBatch],
+    *,
+    require_rollout_logprobs: bool = False,
+    tis_lcs_alert_threshold: float,
+    metrics: dict[str, float] | None = None,
+) -> TrajectoryBatch:
+    """Concatenate and validate rollout rows using whole-batch channel presence."""
+    assert trajectory_batches
+    _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
+    fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
+    result = normalize_trajectory_batches(trajectory_batches, fields=fields)
 
     if metrics is None:
         metrics = get_rollout_metrics(

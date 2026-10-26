@@ -27,7 +27,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
 )
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
-from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
+from skyrl_train.utils.importance_ratio_diagnostics import MetricReduction, mismatch_ratio_metrics
 
 
 def rollout_metrics(facts: Sequence[RowFacts], *, tis_lcs_alert_threshold: float) -> dict[str, float]:
@@ -213,7 +213,9 @@ def zero_std_group_fraction(uids: Sequence[str], rewards: Tensor) -> float:
     return flat / len(groups)
 
 
-def install_correction(batch: TrainingInputBatch, algorithm: DictConfig) -> dict[str, float]:
+def install_correction(
+    batch: TrainingInputBatch, algorithm: DictConfig, *, reduction: MetricReduction
+) -> dict[str, float]:
     """Install configured policy correction weights and return their diagnostics."""
     correction = off_policy_correction(algorithm)
     if not correction.rules:
@@ -221,7 +223,9 @@ def install_correction(batch: TrainingInputBatch, algorithm: DictConfig) -> dict
     rollout_logprobs = batch.get("rollout_logprobs")
     if rollout_logprobs is None:
         raise ValueError("off_policy_correction requires rollout_logprobs")
-    result = compute_correction(batch["action_log_probs"], rollout_logprobs, batch["loss_mask"], correction)
+    result = compute_correction(
+        batch["action_log_probs"], rollout_logprobs, batch["loss_mask"], correction, reduction=reduction
+    )
     batch["correction_weights"] = result.weights
     return result.metrics
 
@@ -231,6 +235,7 @@ def forward_metrics(
     *,
     staleness: Tensor,
     algorithm: DictConfig,
+    reduction: MetricReduction,
     training_metrics_enabled: bool,
     rollout_logprobs_enabled: bool,
 ) -> dict[str, float]:
@@ -247,6 +252,7 @@ def forward_metrics(
                 staleness,
                 eps_clip_low=algorithm.eps_clip_low,
                 eps_clip_high=algorithm.eps_clip_high,
+                reduction=reduction,
             )
         )
     if rollout_logprobs_enabled:
@@ -254,8 +260,8 @@ def forward_metrics(
         differences = (batch["rollout_logprobs"][valid] - batch["action_log_probs"][valid]).exp().abs()
         metrics.update(
             {
-                "policy/rollout_train_prob_diff_mean": differences.mean().item(),
-                "policy/rollout_train_prob_diff_std": differences.std().item(),
+                "policy/rollout_train_prob_diff_mean": reduction.mean(differences),
+                "policy/rollout_train_prob_diff_std": reduction.std(differences),
             }
         )
     return metrics
@@ -265,21 +271,25 @@ def advantage_metrics(
     batch: TrainingInputBatch,
     *,
     algorithm: DictConfig,
+    reduction: MetricReduction,
     step_wise: bool,
+    group_scores: tuple[Sequence[str], Tensor] | None = None,
 ) -> dict[str, float]:
     """Report reward and advantage diagnostics for finalized training credit."""
     metrics = {}
     rows = batch.batch_size - batch.metadata.get("pad_size", 0)
-    uids, group_rewards = batch.metadata["uids"][:rows], batch["rewards"][:rows]
+    uids, group_rewards = (
+        (batch.metadata["uids"][:rows], batch["rewards"][:rows]) if group_scores is None else group_scores
+    )
     if algorithm.advantage_estimator == AdvantageEstimator.GRPO and not step_wise:
         metrics["reward/zero_std_group_fraction"] = zero_std_group_fraction(uids, group_rewards.sum(-1))
     rewards = batch["rewards"].sum(-1)[:rows]
     if step_wise:
         rewards = rewards[batch["is_last_step"][:rows]]
     advantages = torch.masked_select(batch["advantages"][:rows], batch["response_mask"][:rows].bool())
-    average_reward = rewards.mean().item()
-    average_advantage = advantages.mean().item()
-    average_absolute = (advantages.abs()).mean().item()
+    average_reward = reduction.mean(rewards)
+    average_advantage = reduction.mean(advantages)
+    average_absolute = reduction.mean(advantages.abs())
     batch.metadata.setdefault("metrics", {}).update(
         avg_final_rewards=average_reward,
         avg_response_length=batch.metadata["avg_response_length"],
@@ -296,18 +306,20 @@ def advantage_metrics(
     return metrics
 
 
-def token_staleness_metrics(batch: TrainingInputBatch, facts: Sequence[RowFacts]) -> dict[str, float]:
+def token_staleness_metrics(
+    batch: TrainingInputBatch, facts: Sequence[RowFacts], *, reduction: MetricReduction
+) -> dict[str, float]:
     """Report loss-bearing token staleness and compact policy-stamp coverage."""
     trained = batch["loss_mask"] > 0
-    count = trained.sum().item()
+    count = reduction.sum(trained).item()
     if not count:
         return {}
     charged = batch["rollout_staleness"].masked_fill(~trained, 0)
     spanning = [value for group in facts for value in group.spanning_policy_steps]
     return {
-        "async/staleness_tokens_mean": charged.sum().item() / count,
-        "async/staleness_tokens_max": charged.max().item(),
-        "async/staleness_tokens_ratio": (charged != 0).sum().item() / count,
+        "async/staleness_tokens_mean": reduction.sum(charged).item() / count,
+        "async/staleness_tokens_max": reduction.combine(charged.max(), "max").item(),
+        "async/staleness_tokens_ratio": reduction.sum(charged != 0).item() / count,
         "async/staleness_tokens_stamped": sum(sum(group.stamped_loss_tokens) for group in facts) / count,
         "async/staleness_tokens_spanning": torch.tensor(spanning).float().mean().item() if spanning else 0.0,
     }
@@ -321,6 +333,24 @@ def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
         response_tokens=int(training_input["response_mask"][:real_rows].sum().item()),
         loss_tokens=int(training_input["loss_mask"][:real_rows].sum().item()),
     )
+
+
+def consumed_stop_metrics(stop_reasons: Sequence[str | None] | None, sequence_count: int) -> dict[str, float]:
+    """Count length stops on admitted sequences; the fraction needs every stop reason."""
+    reasons = [None] * sequence_count if stop_reasons is None else stop_reasons
+    known = sum(reason is not None and reason != "" for reason in reasons)
+    length_stops = sum(reason == "length" for reason in reasons)
+    metrics = {
+        "sequences": float(sequence_count),
+        "length_stop_count": float(length_stops),
+        "known_stop_count": float(known),
+        "unknown_stop_count": float(sequence_count - known),
+    }
+    if sequence_count:
+        metrics["stop_reason_coverage"] = known / sequence_count
+        if known == sequence_count:
+            metrics["length_stop_fraction"] = length_stops / sequence_count
+    return {f"consumed/{name}": value for name, value in metrics.items()}
 
 
 def rollout_staleness_metrics(
