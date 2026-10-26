@@ -56,7 +56,7 @@ from experiments.post_training.rsi.rollouts import (
     rollout_engine,
     write_jsonl,
 )
-from experiments.post_training.rsi.seed import CURRICULUM_URL, HELDOUT_URL, TaskPool
+from experiments.post_training.rsi.seed import FULL_VALIDATION_URL, TRAIN_URL, VALIDATION_URL, TaskPool
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +206,17 @@ def serve(options: PolicyOptions, weights: str | None = None) -> AbstractContext
 @policy_options
 @click.option("--output-dir", required=True)
 @click.option(
-    "--pool", "pool_url", type=click.Choice([HELDOUT_URL, CURRICULUM_URL]), default=HELDOUT_URL, show_default=True
+    "--pool",
+    "pool_url",
+    type=click.Choice([FULL_VALIDATION_URL, VALIDATION_URL, TRAIN_URL]),
+    default=FULL_VALIDATION_URL,
+    show_default=True,
 )
 @click.option("--tasks", type=int, default=200, show_default=True, help="Pool tasks, with the pool's strata weights.")
 @click.option("--samples", type=int, default=4, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 def baseline(output_dir: str, pool_url: str, tasks: int, samples: int, seed: int, **options) -> None:
-    """Pass rates of a base policy on a stratified sample of the held-out tasks or the curriculum."""
+    """Pass rates of a base policy on a stratified sample of the validation tasks or the training tasks."""
     asyncio.run(_baseline(PolicyOptions(**options), StoragePath(output_dir), pool_url, tasks, samples, seed))
 
 
@@ -255,7 +259,7 @@ def write_evaluation(output: StoragePath, model: str, evaluations: Mapping[str, 
 )
 @click.option("--probes", "probe_roots", multiple=True, help="An rsi output directory with held-out probes.")
 @click.option("--instances-per-task", type=int, default=32, show_default=True, help="As the rsi run made them.")
-@click.option("--pool-tasks", type=int, default=400, show_default=True, help="Held-out validation pool tasks.")
+@click.option("--pool-tasks", type=int, default=910, show_default=True, help="Held-out validation pool tasks.")
 @click.option("--samples", type=int, default=8, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
 def evaluate(
@@ -296,7 +300,7 @@ async def _evaluate(
     samples: int,
     seed: int,
 ) -> None:
-    validation = TaskPool.read(HELDOUT_URL).sample(pool_tasks, seed)
+    validation = TaskPool.read(FULL_VALIDATION_URL).sample(pool_tasks, seed)
     tasks = [task.task for task in validation]
     labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
     for probe, unseen in await read_probes(probe_roots, instances_per_task):
