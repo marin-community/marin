@@ -378,8 +378,19 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     assert client.submitted["egress_policy"] == egress
 
 
-def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path):
+@pytest.mark.parametrize("task_missing", [False, True])
+def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path, task_missing):
     task = LocalTask(TaskState.PENDING)
+    current_status = task.status
+
+    def status():
+        nonlocal task_missing
+        if task_missing:
+            task_missing = False
+            raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
+        return current_status()
+
+    task.status = status
     job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))

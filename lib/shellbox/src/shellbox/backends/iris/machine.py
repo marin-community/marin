@@ -348,14 +348,19 @@ class IrisMachineFactory:
         try:
             deadline = time.monotonic() + self.scheduling_timeout
             while time.monotonic() < deadline:
-                status = await asyncio.to_thread(machine.task.status)
-                if status.state == TaskState.RUNNING:
-                    created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
-                    if created.exit_code:
-                        raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
-                    return machine
-                if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                    raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                try:
+                    status = await asyncio.to_thread(machine.task.status)
+                except ConnectError as error:
+                    if error.code != Code.NOT_FOUND:
+                        raise
+                else:
+                    if status.state == TaskState.RUNNING:
+                        created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
+                        if created.exit_code:
+                            raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        return machine
+                    if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
+                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
         except BaseException:
