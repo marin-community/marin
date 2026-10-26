@@ -446,6 +446,7 @@ generator:
 
   chat_template_kwargs: {}
 
+  # load_format: dummy opts into expert_block-only loading; generation waits for verified initial weights.
   engine_init_kwargs: {}
 
   # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
