@@ -4,7 +4,6 @@
 """Submit/cancel Iris coordinators and deliver their completed results to ingestion."""
 
 import argparse
-import hashlib
 import logging
 import os
 import subprocess
@@ -21,7 +20,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
 
-from experiments.evaluation.agentx.artifacts import copy_file, read_record, unpack, write_record
+from experiments.evaluation.agentx.artifacts import copy_file, file_digest, read_record, unpack, write_record
 from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, recover_results, run_coordinator
 from experiments.evaluation.agentx.recipe import load_series
 
@@ -121,8 +120,7 @@ def materialize(result_uri: str, output: Path) -> dict:
             continue
         archive = output.parent / f"point-{index}.tar.zst"
         copy_file(receipt["artifacts_uri"], str(archive))
-        with archive.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        digest = file_digest(archive)
         if digest != receipt["artifacts_sha256"]:
             raise ValueError("Retained processed artifact checksum changed")
         unpack(archive, output)

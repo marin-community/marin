@@ -13,7 +13,14 @@ from pathlib import Path
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.evaluation.agentx.artifacts import copy_file, read_record, retain_artifacts, unpack, write_record
+from experiments.evaluation.agentx.artifacts import (
+    copy_file,
+    file_digest,
+    read_record,
+    retain_artifacts,
+    unpack,
+    write_record,
+)
 from experiments.evaluation.agentx.processes import run_logged
 from experiments.evaluation.agentx.recipe import (
     PREPARATION_VERSION,
@@ -70,8 +77,7 @@ def restore_workload(receipt: dict, bundle: Path) -> None:
     bundle.mkdir(parents=True, exist_ok=False)
     archive = bundle.parent / "workload.tar.zst"
     copy_file(receipt["archive_uri"], str(archive))
-    with archive.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    digest = file_digest(archive)
     if digest != receipt["archive_sha256"]:
         raise ValueError("Prepared workload bundle differs from its retained digest")
     unpack(archive, bundle)

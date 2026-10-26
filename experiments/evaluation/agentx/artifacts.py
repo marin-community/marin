@@ -65,4 +65,3 @@ def retain_artifacts(artifacts: Path, bundle: Path, prefix: str, *, name: str) -
     uri = prefix_join(prefix, f"{name}-{digest}.tar.zst")
     copy_file(str(bundle), uri)
     return uri, digest
-

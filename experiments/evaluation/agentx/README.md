@@ -16,8 +16,10 @@ and NCCL collectors default off.
 
 ## Normal use
 
-After human review and activation, configure `AGENTX_STATE_ROOT` as a durable
-object-storage prefix. Manual and Sunday 10:23 UTC submissions default to batch:
+After human review and activation, set the GitHub repository variable
+`AGENTX_STATE_ROOT` to a durable object-storage prefix. Use the same value as a
+local environment variable for control commands. Manual and Sunday 10:23 UTC
+submissions default to batch:
 
 ```sh
 gh workflow run agentx-performance.yaml -R marin-community/marin \
@@ -27,14 +29,16 @@ gh workflow run agentx-performance.yaml -R marin-community/marin \
 H100 uses one eight-GPU node in `cw-rno2a` or `cw-us-east-02a`; GB200 uses four GPUs
 in `cw-us-east-08a`. Verify GB200 capacity lies outside Hero's training allocation
 before using that profile. Admission and credentials must be checked before
-activation. Weekly execution requires `AGENTX_WEEKLY_ENABLED=true`.
+activation. Weekly execution requires the GitHub repository variable
+`AGENTX_WEEKLY_ENABLED=true`; leave it disabled until manual acceptance passes.
 
 Iris allows 48 hours in queue and five hours per GPU attempt, including setup.
 Its native budgets allow one failure retry and three preemption retries. CPU
 coordinators have a seven-day bound and no retries. The Action views logs for
 five minutes per coordinator; viewing expiry leaves Iris running. Use the exact
 job ID printed by submission to reattach. Explicit Action cancellation cancels
-the owned tree while the Action is running; after it ends, use the control CLI:
+the owned tree while the Action is running; after it ends, use the control CLI.
+`RUN_ID` and `ATTEMPT` below mean the original GitHub submission run and attempt:
 
 ```sh
 uv run iris --cluster=marin job logs /runner/agentx-RUN_ID-ATTEMPT-h100 --follow
@@ -48,19 +52,27 @@ See [Iris operations](../../../lib/iris/OPS.md#job-management) for job inspectio
 
 Edit the reviewed pins in `series.yaml`. Regenerate `requirements-harness.txt`
 with `uv pip compile --python 3.12` from the selected `agentx-harness` version.
-Regenerate `requirements-processor.txt` from the Git package reference returned
-by `recipe.processor_package(load_series())`. Keep all transitive pins. AgentX
-and InferenceX run through `uvx` in separate environments outside Marin's lock.
+Regenerate processor pins from the reviewed Git package reference:
+
+```sh
+uv run --no-sync python -c \
+  'from experiments.evaluation.agentx.recipe import load_series, processor_package; print(processor_package(load_series()))' \
+  | uv pip compile --python 3.12 -o experiments/evaluation/agentx/requirements-processor.txt -
+```
+
+Keep all transitive pins. AgentX and InferenceX run through `uvx` in separate
+environments outside Marin's lock.
 
 A cache miss verifies the pinned corpus digest and every session's context fit,
 then uses AgentX's native reconstruction, tokenization and mmap format on CPU.
-This release has no standalone preparation command; its configure adapter stays
+AgentX 1.0.12 has no standalone preparation command; Marin's adapter stays
 in `prepare.py`. A hit restores and checks that format offline. It skips Hugging
 Face lookups and reconstruction. Updating vLLM alone reuses the workload.
 
-The regional 30-day cache holds sources and derived bytes. Its key covers the
+The regional 30-day cache holds native data and tokenizer files. Its key covers the
 preparation inputs, code, version and dependency pins. A hit renews the verified
-archive before queueing. To prepare on CPU in rno2a, use a fresh output directory:
+archive before queueing. This CPU command warms the shared regional cache and
+writes a local receipt. Use a fresh output directory:
 
 ```sh
 marin-env env MARIN_TEMP_PREFIX=s3://marin-rno2a \
