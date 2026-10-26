@@ -38,7 +38,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.eval import TaggedEvaluator, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds
 from levanter.grug.grug_moe import (
@@ -355,11 +355,12 @@ def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
 class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
+    # Batch at the training length; other lengths preserve this total token budget.
     eval_batch_size: int = 512
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
-    # Keep packing fixed when comparing checkpoints trained at different context lengths.
-    max_seq_len: int | None = None
+    # None evaluates only at the training length. Each explicit length gets its own metric namespace.
+    seq_lens: tuple[int, ...] | None = None
     prefix: str = "eval"
     # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
     # the live parameters and `eval_ema` the EMA parameters; either one schedules the
@@ -572,7 +573,7 @@ def build_tagged_evaluator(
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
+    pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
@@ -620,6 +621,150 @@ def build_tagged_evaluator(
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
     )
+
+
+def _eval_batch_size(mesh: Mesh, *, seq_len: int, token_budget: int) -> int:
+    batch_shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    batch_size = token_budget // seq_len // batch_shards * batch_shards
+    if batch_size == 0:
+        raise ValueError(f"Eval length {seq_len} needs more context shards to fit the {token_budget}-token batch budget")
+    return batch_size
+
+
+def _dropless_eval_mesh(mesh: Mesh, *, seq_len: int, token_budget: int) -> Mesh:
+    """Trade batch shards for context shards so a long eval fits the same token budget."""
+    replica = mesh.shape["replica_dcn"]
+    model = mesh.shape["model"]
+    rack_devices = math.prod(mesh.shape[axis] for axis in ("data", "context", "expert"))
+    for context in range(mesh.shape["context"], rack_devices + 1):
+        if rack_devices % context or seq_len % context:
+            continue
+        data = rack_devices // context
+        if replica * data * seq_len > token_budget:
+            continue
+        return Mesh(
+            mesh.devices.reshape(replica, data, context, 1, model),
+            mesh.axis_names,
+            axis_types=mesh.axis_types,
+        )
+    raise ValueError(f"Eval length {seq_len} cannot fit the {token_budget}-token batch budget on this mesh")
+
+
+def _mesh_eval_hook(
+    evaluator: TaggedEvaluator,
+    *,
+    mesh: Mesh,
+    prefix: str,
+    training_length_prefix: str | None,
+    eval_current: bool,
+    eval_ema: bool,
+) -> Callable[..., None]:
+    last_step: int | None = None
+
+    def evaluate(step, *args, **kwargs):
+        nonlocal last_step
+        step_count = int(step.step)
+        if step_count < 0 or step_count == last_step:
+            return
+        with (
+            callbacks.progress_event_scope(
+                step.emit_event,
+                callbacks.ProgressEvent.EVALUATION_STARTED,
+                callbacks.ProgressEvent.EVALUATION_FINISHED,
+            ),
+            set_mesh(mesh),
+            jax_config.enable_pgle(False),
+        ):
+            sources = []
+            if eval_current:
+                sources.append((step.model, ""))
+            if eval_ema:
+                sources.append((step.eval_model, "/ema"))
+            for source, suffix in sources:
+                # The expert-collapsed copy must die before the next evaluator or training step.
+                model = _reshard_tree_to_mesh(source, mesh)
+                metrics = eval_model(evaluator, model, prefix=prefix + suffix)
+                del model
+                if training_length_prefix is not None:
+                    metrics.update(
+                        {
+                            training_length_prefix + suffix + key.removeprefix(prefix + suffix): value
+                            for key, value in list(metrics.items())
+                        }
+                    )
+                levanter.tracker.log(metrics, step=step_count)
+        last_step = step_count
+
+    return evaluate
+
+
+def build_eval_hooks(
+    *,
+    data_config: LmDataConfig,
+    train_seq_len: int,
+    mesh: Mesh,
+    eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
+    eval_ema: bool,
+) -> list[Callable[..., None]]:
+    """Build one evaluator per length and backend, with independent step deduplication."""
+    seq_lens = tuple(dict.fromkeys(eval_cfg.seq_lens if eval_cfg.seq_lens is not None else (train_seq_len,)))
+    if not seq_lens or any(length < 2 for length in seq_lens):
+        raise ValueError("Evaluation sequence lengths must contain at least two tokens")
+    token_budget = eval_cfg.eval_batch_size * train_seq_len
+    hooks = []
+    for seq_len in seq_lens:
+        if eval_cfg.eval_current or eval_ema:
+            if seq_len % mesh.shape["context"]:
+                raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
+            length_cfg = replace(
+                eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
+            )
+            with set_mesh(mesh):
+                evaluator = build_tagged_evaluator(
+                    data_config=data_config, max_seq_len=seq_len, mesh=mesh, eval_cfg=length_cfg, mp=mp
+                )
+            if evaluator is not None:
+                hooks.append(
+                    _mesh_eval_hook(
+                        evaluator,
+                        mesh=mesh,
+                        prefix=f"{eval_cfg.prefix}/seq_len_{seq_len}",
+                        training_length_prefix=eval_cfg.prefix if seq_len == train_seq_len else None,
+                        eval_current=eval_cfg.eval_current,
+                        eval_ema=eval_ema,
+                    )
+                )
+        if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
+            eval_mesh = _dropless_eval_mesh(mesh, seq_len=seq_len, token_budget=token_budget)
+            length_cfg = replace(
+                eval_cfg, eval_batch_size=_eval_batch_size(eval_mesh, seq_len=seq_len, token_budget=token_budget)
+            )
+            # Constants captured by the eval jit must be constructed under its explicit mesh.
+            with set_mesh(eval_mesh):
+                evaluator = build_tagged_evaluator(
+                    data_config=data_config,
+                    max_seq_len=seq_len,
+                    mesh=eval_mesh,
+                    eval_cfg=length_cfg,
+                    mp=mp,
+                    model_transform=functools.partial(
+                        _to_dropless_local, implementation=eval_cfg.dropless_eval_moe_implementation
+                    ),
+                )
+            if evaluator is not None:
+                prefix = f"{eval_cfg.prefix}_dropless"
+                hooks.append(
+                    _mesh_eval_hook(
+                        evaluator,
+                        mesh=eval_mesh,
+                        prefix=f"{prefix}/seq_len_{seq_len}",
+                        training_length_prefix=prefix if seq_len == train_seq_len else None,
+                        eval_current=True,
+                        eval_ema=False,
+                    )
+                )
+    return hooks
 
 
 def _compute_flops(
@@ -1144,48 +1289,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
 
         eval_cfg = config.eval
-        evaluator = None
-        dropless_evaluator = None
-        dropless_eval_mesh = None
-        eval_ema = False
+        eval_hooks = []
         if eval_cfg is not None:
-            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            train_mesh_eval = eval_cfg.eval_current or eval_ema
-            dropless = eval_cfg.dropless_eval and mesh.shape["expert"] > 1
-            if train_mesh_eval:
-                evaluator = build_tagged_evaluator(
-                    data_config=config.data,
-                    max_seq_len=config.model.max_seq_len,
-                    mesh=mesh,
-                    eval_cfg=eval_cfg,
-                    mp=trainer.mp,
-                )
-            # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
-            # weights dropless under the local backend on an expert-collapsed mesh (expert folded
-            # into `data`), which the local backend requires. FSDP runs already have expert=1.
-            if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
-                # Build under the eval mesh so every constant the evaluator captures at construction
-                # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
-                # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
-                # eval jit and fail the explicit-mesh check.
-                with set_mesh(dropless_eval_mesh):
-                    dropless_evaluator = build_tagged_evaluator(
-                        data_config=config.data,
-                        max_seq_len=config.model.max_seq_len,
-                        mesh=dropless_eval_mesh,
-                        eval_cfg=eval_cfg,
-                        mp=trainer.mp,
-                        model_transform=functools.partial(
-                            _to_dropless_local,
-                            implementation=eval_cfg.dropless_eval_moe_implementation,
-                        ),
-                    )
+            eval_hooks = build_eval_hooks(
+                data_config=config.data,
+                train_seq_len=config.model.max_seq_len,
+                mesh=mesh,
+                eval_cfg=eval_cfg,
+                mp=trainer.mp,
+                eval_ema=eval_cfg.eval_ema and config.trainer.ema_beta is not None,
+            )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
         # both use it so a head-of-schedule run reports against the steps it will actually take.
@@ -1241,54 +1354,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(log_device_memory, every=1)
         if eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
-            eval_hooks: list[Callable[..., None]] = []
-            if evaluator is not None:
-                eval_hooks.append(
-                    cb_tagged_evaluate(
-                        evaluator,
-                        prefix=eval_cfg.prefix,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    )
-                )
-            if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
-                # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
-                # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
-                # does not auto-reshard across explicit meshes), then the local backend sees
-                # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
-                dropless_prefix = f"{eval_cfg.prefix}_dropless"
-                # The forced end-of-run callback pass revisits the last step; skip it when the
-                # periodic cadence already scored that step, as `cb_tagged_evaluate` does.
-                last_dropless_eval_step: int | None = None
-
-                def dropless_eval_hook(
-                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
-                ):
-                    nonlocal last_dropless_eval_step
-                    step_count = int(step.step)
-                    if step_count < 0 or step_count == last_dropless_eval_step:
-                        return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
-                    with (
-                        callbacks.progress_event_scope(
-                            step.emit_event,
-                            callbacks.ProgressEvent.EVALUATION_STARTED,
-                            callbacks.ProgressEvent.EVALUATION_FINISHED,
-                        ),
-                        set_mesh(_mesh),
-                    ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
-                        with jax_config.enable_pgle(False):
-                            log_dict = eval_model(_ev, model, prefix=_prefix)
-                        levanter.tracker.log(log_dict, step=step_count)
-                    last_dropless_eval_step = step_count
-
-                eval_hooks.append(dropless_eval_hook)
-
             if config.trainer.gc_interval is not None:
                 eval_hooks = [_collect_after_eval(hook) for hook in eval_hooks]
 

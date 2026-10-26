@@ -170,12 +170,25 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
-decay. Eval packing follows the training context up to 65,536 tokens, so the
-`eval_dropless/*` series shift at switches up to that length. The scaling-ladder and diagnostic
-launchers cap `GrugEvalConfig.max_seq_len` at 65,536 for longer training contexts, including 262K:
-Paloma's PTB and WikiText-103 validation sets are shorter than one 262K sequence and would otherwise
-disappear from its group macro. This cap keeps all 16 Paloma subsets; it does not make the metric
-directly comparable to the earlier 4K or 16K evals.
+decay. On the next relaunch, the d6144 hero and eval-enabled diagnostics evaluate at 4096, 65,536,
+262,144 and the current training length, once each. All lengths run at every scheduled eval,
+including lengths beyond the training context. Set `GrugEvalConfig.seq_lens` to select other lengths;
+`None` evaluates only at the training length, as the smaller scaling-ladder rungs do.
+
+Each length has its own metrics, such as `eval_dropless/seq_len_4096/paloma/macro_loss`.
+The unqualified `eval_dropless/paloma/macro_loss` continues to report the training-length eval.
+The per-length series let checkpoints be compared at fixed packing across context switches.
+Continuous-text validation retains its final partial sequence with right padding, including a corpus
+shorter than one sequence. Padding is excluded from attention and loss, including the real-to-pad
+prediction. This keeps PTB and WikiText-103 in the 262K Paloma aggregate. Including the previously
+discarded tail can slightly change historical packing-matched comparisons.
+
+`eval_batch_size` specifies the batch at the training length. Other lengths keep its total token
+budget, rounded down to a whole number of batch shards. Dropless evals increase context parallelism
+within each rack when one sequence per batch shard would exceed that budget. With the current 16K
+hero and batch 704, 4K/16K/65K/262K evals use batches 2816/704/176/44 and CP1/CP1/CP4/CP16.
+Each holds 16,384 tokens per GPU; full-attention compute still increases with context length.
+The next relaunch needs an accelerator rehearsal of the four evals and their handoff back to training.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
@@ -444,7 +457,8 @@ checkpoint policy all follow `--size`:
 | d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
-batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+batch at the training length is 64 × racks (one sequence per device); other eval lengths follow
+the token budget and context layout described above. The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
