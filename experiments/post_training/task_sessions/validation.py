@@ -27,6 +27,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.storage_path import prefix_join
+from skyrlrecipe import SkyRLRecipe
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_record
@@ -156,12 +157,15 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     model = MODELS[DEFAULT_MODEL].step
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
-    recipe_fingerprint = fingerprint_hash(canonical_json({"config": config, "data": data_identity}))
+    identity_config = {**config, "trainer": {**config["trainer"], "seed": SEED, "max_ckpts_to_keep": 1}}
+    recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_config, "data": data_identity}))
+    authored = SkyRLRecipe.from_document(config)
+    recipe = authored
     run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
-            config_yaml=yaml.safe_dump(config, sort_keys=False),
+            config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",

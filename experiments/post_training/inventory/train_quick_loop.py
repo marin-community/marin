@@ -25,6 +25,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from skyrlrecipe import SkyRLRecipe
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
@@ -77,7 +78,6 @@ def training_recipe(steps: int) -> dict:
     )
     trainer = config["trainer"]
     trainer.update(
-        seed=SEED,
         project_name="marin-snowball-curriculum",
         eval_num_prompts=None,
         dump_eval_results=True,
@@ -97,7 +97,8 @@ def training_recipe(steps: int) -> dict:
         scheduler="constant_with_warmup",
         num_warmup_steps=0,
     )
-    return config
+    authored = SkyRLRecipe.from_document(config)
+    return authored.to_skyrl()
 
 
 def build_run(
