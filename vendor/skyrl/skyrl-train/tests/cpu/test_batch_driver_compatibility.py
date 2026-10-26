@@ -4,9 +4,13 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.training_batch import TrainingInputBatch
+from skyrl_train.trainer import DriverBatchSource
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
@@ -15,6 +19,22 @@ from transformers import PreTrainedTokenizerFast
 class RecordedRows:
     def set_trajectory_sink(self, sink):
         pass
+
+
+def test_batch_admission_counts_final_trials_in_stepwise_rows():
+    policy = GroupAdmissionPolicy(
+        GroupAdvantageInvariant.exact_physical(physical_group_size=2), rollout_logprobs_required=True
+    )
+    batch = {
+        "response_ids": [[1], [2], [3]],
+        "loss_masks": [[1], [1], [1]],
+        "rollout_logprobs": [np.asarray([-0.1])] * 3,
+        "is_last_step": [False, True, True],
+    }
+    (admission,) = policy.evaluate_batch(batch, ["a", "a", "a"])
+    assert admission.physical_count == 2
+    assert admission.row_indices == (0, 1, 2)
+    assert admission.decision.rejections == ()
 
 
 @pytest.fixture
@@ -124,3 +144,36 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
     assert batch["rollout_logprobs"] is None
     assert batch["student_topk_indices"][batch["ftpo_chosen_mask"]].tolist() == [candidates[1]]
     assert trainer.all_metrics["ftpo/selected_boundaries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_ftpo_batch_skips_actors_and_preserves_last_policy_version(config):
+    config.trainer.algorithm.ftpo = {}
+    validate_cfg(config)
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"[PAD]": 0, "x": 1}, unk_token="x")), pad_token="[PAD]"
+    )
+    trainer = RayPPOTrainer(
+        cfg=config,
+        tracker=None,
+        tokenizer=tokenizer,
+        train_dataset=range(config.trainer.train_batch_size),
+        inference_engine_client=None,
+        trajectory_runner=RecordedRows(),
+        context=None,
+        callbacks=[],
+    )
+    trainer.global_step = 1
+    trainer._finish_policy_update({"policy_update_steps": 1.0})
+    trainer.global_step = 2
+    source = DriverBatchSource(trainer)
+    source.batch = TrainingInputBatch(
+        {
+            "ftpo_chosen_mask": torch.zeros((2, 3, 2), dtype=torch.bool),
+            "loss_mask": torch.zeros((2, 3)),
+        }
+    )
+    status = await trainer._run_training(source)
+    assert status["policy_update_steps"] == 0
+    assert trainer.all_metrics["ftpo/empty_batch"] == 1
+    assert trainer.policy_version_step == 1
