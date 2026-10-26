@@ -17,6 +17,7 @@ from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
 from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
     REQUIRED_HEADINGS,
+    BuildItem,
     Environment,
     Grounding,
     ProposalFormatError,
@@ -281,35 +282,27 @@ def checked_proposal(
 ) -> TaskProposal:
     """Parse a writer reply and enforce every source- and campaign-fixed field."""
     proposal = parse(text)
-    expected = {
-        "id": proposal_id(bundle, slot),
-        "source": source_ref(bundle),
-        "grounding": Grounding.GROUNDED,
-        "environment": config.environment,
-        "solver_machine": config.solver_machine,
-        "verification": Verification.LLM_AS_JUDGE,
-        "composite": (),
-        "research_need": ResearchNeed.NOT_NEEDED,
-        "research": (),
-        "resources": tuple(resource.path for resource in bundle.solver_resources),
-    }
-    observed = {
-        "id": proposal.header.id,
-        "source": proposal.header.source,
-        "grounding": proposal.header.grounding,
-        "environment": proposal.header.environment,
-        "solver_machine": proposal.header.solver_machine,
-        "verification": proposal.header.verification,
-        "composite": proposal.header.composite,
-        "research_need": proposal.header.research_need,
-        "research": proposal.header.research,
-        "resources": proposal.header.resources,
-    }
-    changed = [name for name, value in expected.items() if observed[name] != value]
-    if changed:
-        details = ", ".join(f"{name}: expected {expected[name]!r}, got {observed[name]!r}" for name in changed)
-        raise ProposalFormatError(f"open-ended locked fields changed: {details}")
-    return proposal
+    header = ProposalHeader(
+        id=proposal_id(bundle, slot),
+        source=source_ref(bundle),
+        grounding=Grounding.GROUNDED,
+        null_reason=proposal.header.null_reason,
+        environment=config.environment,
+        solver_machine=config.solver_machine,
+        verification=Verification.LLM_AS_JUDGE,
+        composite=(),
+        research_need=ResearchNeed.NOT_NEEDED,
+        research_reason="the hydrated bundle contains every permitted input",
+        research=(),
+        build=(
+            BuildItem(
+                name="open-ended-task",
+                description="instruction, private reference, frozen rubric, controls, and exact solver resources",
+            ),
+        ),
+        resources=tuple(resource.path for resource in bundle.solver_resources),
+    )
+    return parse(render(TaskProposal(header=header, body=proposal.body)))
 
 
 def null_slot_proposal(

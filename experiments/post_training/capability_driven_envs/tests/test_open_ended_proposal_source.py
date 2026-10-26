@@ -75,18 +75,19 @@ def test_source_plans_slots_and_writes_only_the_non_null_proposals():
     assert second.header.source.hash == bundle().content_digest
 
 
-def test_writer_repairs_a_changed_locked_field_once():
+def test_writer_cannot_change_campaign_owned_proposal_fields():
     model = ScriptedModel()
-    valid = filled_document(1)
-    changed = valid.replace("verification: llm_as_judge", "verification: decision_model")
+    changed = filled_document(1).replace("verification: llm_as_judge", "verification: decision_model")
+    changed = changed.replace("workspace/data/counts.csv", "workspace/data/wrong.csv")
     model.reply(plan(slot(1)))
     model.reply(changed)
-    model.reply(valid)
 
     batch = asyncio.run(OpenEndedProposalSource(model, LLMPolicy(), CONFIG).propose(bundle(), 1))
 
     outcome = batch.slots[0]
     assert isinstance(outcome, SlotProposal)
-    assert outcome.repair_error is not None and "verification" in outcome.repair_error
-    assert len(outcome.completions) == 2
-    assert checked_proposal(valid, bundle(), 1, CONFIG) == outcome.proposal
+    assert outcome.repair_error is None
+    assert len(outcome.completions) == 1
+    assert outcome.proposal.header.verification.value == "llm_as_judge"
+    assert outcome.proposal.header.resources == ("workspace/data/counts.csv",)
+    assert checked_proposal(changed, bundle(), 1, CONFIG) == outcome.proposal
