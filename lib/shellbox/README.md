@@ -21,6 +21,22 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 ## Machine API
 
+Docker (including gVisor) and Daytona use a shared Linux child subreaper for each
+`Machine.run()` command. Their task images must supply Python 3 and Linux procfs;
+creation fails if Python is absent. The supervisor reaps detached and orphaned
+children on completion, deadline, or cancellation. Cancellation uses an independent
+provider request and waits for teardown before returning. A late launch observes
+its cancellation marker before starting work. Failed cleanup closes the machine
+and prevents reuse. This process ownership mechanism is not a security boundary
+against code running with the supervisor's own privileges.
+
+Local bubblewrap commands use their existing PID namespace instead. Local, Docker,
+and Daytona machines reject new commands once close begins and drain active commands
+before releasing resources. Cleanup survives repeated caller cancellation. Successful
+command cleanup preserves files for the next command or verifier; closing the machine
+discards them. Control markers remain private to the command's execution user and are
+retained until machine disposal so a delayed submission cannot restart cancelled work.
+
 `factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
@@ -208,15 +224,11 @@ between trials. Download outputs through machine handles before closing them.
 An ordinary command timeout or caller cancellation closes the whole local
 machine or group; successful commands preserve background processes.
 
-Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
-A failed stop without confirmed completion raises an infrastructure error and closes the machine.
-Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
-
-Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
-Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
-Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
-Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
-Model commands that run as root can stop other root-owned processes.
+Docker and Daytona preserve the machine after confirmed command teardown, including
+caller cancellation. If teardown cannot be confirmed, they close the machine and
+raise an infrastructure error. Docker supervises and cancels as the execution user;
+Daytona supervises as root before switching to the command user. Non-root Daytona
+commands require a guest account and util-linux `su --session-command`.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import harbor.environments.factory as environment_factory
 import pytest
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -467,3 +469,12 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
     assert [
         error["exception_type"] for error in persisted["secondary_exception_info"]
     ] == ["UnicodeDecodeError"]
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, HangingAgent)
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.CODEX, QuickAgent)
+    monkeypatch.setitem(
+        AgentFactory._AGENT_MAP, AgentName.OPENCODE, TruncatedOutputAgent
+    )

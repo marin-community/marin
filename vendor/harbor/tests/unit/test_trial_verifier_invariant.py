@@ -36,6 +36,8 @@ from pathlib import Path
 
 import harbor.environments.factory as environment_factory
 import pytest
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -244,3 +246,8 @@ class TestVerifierResultInvariant:
                 "emitted result.json should record the terminal AddTestsDirError, "
                 f"not the masked benign timeout, got {exc.get('exception_type')}"
             )
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, TimeoutAgent)

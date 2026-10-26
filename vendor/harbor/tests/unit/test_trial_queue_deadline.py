@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from harbor.environments.base import SandboxDiskFullError
+from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor_config import ErrorCategory, error_category
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import TaskConfig, TrialConfig
@@ -815,3 +815,25 @@ async def test_hung_terminal_hook_is_bounded_and_quarantines_capacity(
     assert result.exception_info.exception_type == "TrialTimeoutError"
     assert next_started.is_set()
     assert following_result.exception_info is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ending", ["complete", "timeout"])
+async def test_unconfirmed_remote_teardown_is_not_a_scoreable_timeout(ending):
+    async def reap_command(command):
+        raise RuntimeError("Provider could not confirm command termination")
+
+    environment = SimpleNamespace(reap_command=reap_command)
+    trial = _phase_trial(cleanup_grace=1)
+
+    async def phase():
+        async with BaseEnvironment.scoped_command(environment, "cancel"):
+            if ending == "timeout":
+                await asyncio.Future()
+
+    with pytest.raises(PhaseCancellationError):
+        await trial._await_phase(
+            phase(),
+            timeout_sec=0.01,
+            timeout_error=AgentTimeoutError("phase expired"),
+        )

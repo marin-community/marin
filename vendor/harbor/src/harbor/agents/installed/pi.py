@@ -4,6 +4,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from upath import UPath
@@ -601,6 +602,11 @@ fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        deadline = (
+            monotonic() + environment.agent_timeout_sec
+            if environment.agent_timeout_sec is not None
+            else None
+        )
         escaped_instruction = shlex.quote(instruction)
 
         if not self.model_alias or "/" not in self.model_alias:
@@ -688,7 +694,7 @@ fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
             )
             cli_flags += f"--extension {extension_path} "
         try:
-            await self.exec_as_agent(
+            await self.run_agent_command(
                 environment,
                 command=(
                     f"{runtime_prelude}"
@@ -701,6 +707,7 @@ fs.writeFileSync(path.join(directory, 'mcp.json'), process.argv[1]);
                     f"stdbuf -oL tee /logs/agent/{self._OUTPUT_FILENAME}"
                 ),
                 env=env,
+                deadline=deadline,
             )
         except NonZeroAgentExitCodeError as error:
             error_lines = (
