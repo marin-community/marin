@@ -6,10 +6,12 @@
 Seams: local synthetic HF/data receipts and their hash pins; a tiny 26-layer
 Snowball checkpoint; an eight-row ListAsyncDataset in place of cached chats;
 the factory's CPU/data options; CPU slice metadata standing in for four hosts;
-an already-completed Gloo bootstrap; a local alias for routing evidence; and
+an external Iris endpoint-registry/client fake; a local alias for routing evidence; and
 Trainer.train_step replaced only to stop before its computation. The worker functions, precision checks,
-backend-state queries, frozen-input loader, audits, HF loader and gathers are not
-patched. Four processes expose eight CPU devices each; no optimizer update runs.
+backend-state queries, frozen-input loader, audits, HF loader, distributed initialization and gathers are not
+patched on the valid path. Iris task environment variables drive Levanter's normal initializer. The sensitivity
+arm deliberately inserts a real gather before that initializer. Four processes expose eight CPU devices each;
+no optimizer update runs.
 """
 
 import base64
@@ -21,6 +23,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import draccus
 import haliax as hax
@@ -28,6 +32,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from iris.client.client import IrisContext, iris_ctx_scope
 from jax._src import xla_bridge
 from jax.sharding import Mesh
 from levanter import trainer as trainer_module
@@ -43,6 +48,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
+from experiments.interp.snowball_identity.multihost import gather_host_scalar
 from experiments.post_training.identity_context_distill import dataset_audit, runtime_recipe, sft, sft_launch
 from experiments.post_training.identity_context_distill.precision_source_audit import INDEX, SOURCE_FILES
 
@@ -275,10 +281,9 @@ def cpu_mesh(*, ici_axes, dcn_axes, axis_types=None, **kwargs):
     )
 
 
-def child(root, rank, port):
+def child(root, rank, port, mode):
     jax.config.update("jax_cpu_collectives_implementation", "gloo")
-    jax.distributed.initialize(f"localhost:{port}", num_processes=4, process_id=rank)
-    assert not xla_bridge.backends_are_initialized()
+    assert not jax.distributed.is_initialized() and not xla_bridge.backends_are_initialized()
     pins = json.loads((root / "pins.json").read_bytes())
     source = str(root / "source")
     with pytest.MonkeyPatch.context() as patch:
@@ -303,14 +308,19 @@ def child(root, rank, port):
         def config_factory(*args):
             config = factory(*args)
             data = StartupDataConfig(**{field.name: getattr(config.data, field.name) for field in fields(LmDataConfig)})
-            trainer = replace(
-                config.trainer,
-                require_accelerator=False,
-                distributed=replace(config.trainer.distributed, initialize_jax_distributed=False),
-            )
+            assert config.trainer.distributed.initialize_jax_distributed is True
+            trainer = replace(config.trainer, require_accelerator=False)
             return replace(config, data=data, trainer=trainer)
 
         patch.setattr(sft_launch, "sft_config", config_factory)
+        if mode == "early_gather":
+            initialize = sft_launch.initialize
+
+            def gather_before_initialize(config):
+                gather_host_scalar(np.int32(0))
+                initialize(config)
+
+            patch.setattr(sft_launch, "initialize", gather_before_initialize)
         rounding_path = "s3://marin-rno2a/fixture/routing.json"
         storage_path = sft_launch.StoragePath
         patch.setattr(
@@ -346,6 +356,8 @@ def child(root, rank, port):
 
         def before_step(trainer, state, batch):
             assert int(state.step) == 0 and xla_bridge.backends_are_initialized()
+            assert jax.distributed.is_initialized() and jax.process_count() == 4
+            assert jax.process_index() == rank
             assert batch.tokens.array.shape == (8, 8192)
             runtime_recipe.check_xla_precision("default")
             os.environ["XLA_FLAGS"] = "--xla_allow_excess_precision=false"
@@ -355,16 +367,35 @@ def child(root, rank, port):
             raise BeforeTrainStep
 
         patch.setattr(Trainer, "train_step", before_step)
+
+        def register(name, address):
+            assert name == "jax_coordinator-attempt-0" and address == f"127.0.0.1:{port}"
+            (root / "coordinator.json").write_text(json.dumps({"name": name, "address": address}))
+            return "fixture-endpoint"
+
+        context = cast(
+            IrisContext,
+            SimpleNamespace(
+                registry=SimpleNamespace(register=register, unregister=lambda identifier: None),
+                resolver=SimpleNamespace(
+                    resolve=lambda name: SimpleNamespace(
+                        is_empty=False, first=lambda: SimpleNamespace(url=f"127.0.0.1:{port}")
+                    )
+                ),
+                client=SimpleNamespace(complete_job=lambda job: None),
+            ),
+        )
         try:
-            sft_launch.bound_sft_worker(
-                str(root / "run"),
-                "startup",
-                receipt_bytes,
-                digest(receipt_bytes),
-                data_bytes,
-                {"path": str(root / "source-receipt.json"), "sha256": pins["source_receipt_sha"]},
-                {"path": str(root / "objects.json"), "sha256": pins["objects_sha"]},
-            )
+            with iris_ctx_scope(context):
+                sft_launch.bound_sft_worker(
+                    str(root / "run"),
+                    "startup",
+                    receipt_bytes,
+                    digest(receipt_bytes),
+                    data_bytes,
+                    {"path": str(root / "source-receipt.json"), "sha256": pins["source_receipt_sha"]},
+                    {"path": str(root / "objects.json"), "sha256": pins["objects_sha"]},
+                )
         except BeforeTrainStep:
             report = json.loads((root / "run/audits/dataset-step-0.json").read_bytes())
             assert len(report["updates"]) == report["same_iterator_batches_buffered"] == 64
@@ -376,7 +407,7 @@ def child(root, rank, port):
     jax.distributed.shutdown()
 
 
-def run_children(root, *, workdir):
+def run_children(root, *, workdir, mode):
     with socket.socket() as sock:
         sock.bind(("localhost", 0))
         port = str(sock.getsockname()[1])
@@ -390,13 +421,16 @@ def run_children(root, *, workdir):
         "AWS_ACCESS_KEY_ID": "fixture",
         "AWS_SECRET_ACCESS_KEY": "fixture",
         "CUDA_VISIBLE_DEVICES": "",
+        "IRIS_NUM_TASKS": "4",
+        "IRIS_ADVERTISE_HOST": "127.0.0.1",
+        "IRIS_PORT_JAX": port,
         "PYTHONPATH": os.pathsep.join([str(workdir), *(str(path) for path in workdir.glob("lib/*/src"))]),
     }
     processes = [
         subprocess.Popen(
-            [sys.executable, __file__, "--child", str(root), str(rank), port],
+            [sys.executable, __file__, "--child", str(root), str(rank), port, mode],
             cwd=workdir,
-            env=env,
+            env={**env, "IRIS_TASK_ID": f"/test/sft-startup/{rank}"},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -418,7 +452,7 @@ def run_children(root, *, workdir):
 @pytest.mark.timeout(900)
 def test_bound_sft_startup_reaches_training_after_the_real_frozen_input_gather(tmp_path):
     write_fixture(tmp_path)
-    results = run_children(tmp_path, workdir=Path.cwd())
+    results = run_children(tmp_path, workdir=Path.cwd(), mode="normal")
     ranks = set()
     for code, output, error in results:
         assert code == 0, error[-6000:]
@@ -426,8 +460,18 @@ def test_bound_sft_startup_reaches_training_after_the_real_frozen_input_gather(t
         assert report["before_train_step"] is True and report["buffered_updates"] == 64
         ranks.add(report["process"])
     assert ranks == set(range(4))
+    assert json.loads((tmp_path / "coordinator.json").read_bytes())["name"] == "jax_coordinator-attempt-0"
+    assert not (tmp_path / "run/sft-result.json").exists()
+
+
+@pytest.mark.timeout(900)
+def test_sft_startup_rejects_a_collective_before_code_owned_distributed_init(tmp_path):
+    write_fixture(tmp_path)
+    results = run_children(tmp_path, workdir=Path.cwd(), mode="early_gather")
+    for code, _, error in results:
+        assert code != 0 and "jax.distributed.initialize() must be called before any JAX calls" in error
     assert not (tmp_path / "run/sft-result.json").exists()
 
 
 if __name__ == "__main__":
-    child(Path(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
+    child(Path(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5])

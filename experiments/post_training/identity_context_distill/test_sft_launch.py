@@ -136,7 +136,7 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
     monkeypatch.setattr(sft_launch, "run_identity_sft", run)
     audits = sft_launch.SftAudits(lambda it, config: (it, {}), lambda batch, update: {}, lambda state, path: None)
     sft_launch.sft_worker(
-        RUN_ROOT, "t310-sft", receipt_bytes, receipt_sha, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, audits
+        RUN_ROOT, "t310-sft", receipt_bytes, receipt_sha, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, lambda: audits
     )
     return calls, audits
 
@@ -199,7 +199,7 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
     assert dict(config.trainer.mesh.dcn_axes) == {"replica_dcn": 1, "context": 4}
     assert kwargs["runtime_receipt"] == json.loads(receipt_bytes)
     assert kwargs["lr0_source"] == LR0_SOURCE and kwargs["source_objects"] == SOURCE_OBJECTS
-    assert kwargs["run_root"] == RUN_ROOT and kwargs["audits"] is audits
+    assert kwargs["run_root"] == RUN_ROOT and kwargs["load_audits"]() is audits
     # The result write is collective: the worker calls it on every rank, not behind a rank-0 guard.
     assert calls["writer"] == 1
     assert calls["result"] == (f"{RUN_ROOT}/sft-result.json", {"completed_updates": 16})
@@ -431,10 +431,11 @@ def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
     )
     monkeypatch.setattr(sft_launch, "sft_worker", lambda *args: calls.append(("worker", args)))
     sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
-    assert calls[:2] == ["storage", ("frozen", sft_launch.MIXTURE_ROOT, sft_launch.INVENTORY_PATH)]
-    worker_args = calls[2][1]
+    assert calls[0] == "storage"
+    worker_args = calls[1][1]
     assert worker_args[:7] == (RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
-    audits = worker_args[7]
+    audits = worker_args[7]()
+    assert calls[2] == ("frozen", sft_launch.MIXTURE_ROOT, sft_launch.INVENTORY_PATH)
     audits.audit_iterator("B", "C")
     audits.check_batch("batch", 3)
     audits.save_audit("state", "export")

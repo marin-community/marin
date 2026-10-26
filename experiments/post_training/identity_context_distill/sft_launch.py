@@ -37,10 +37,12 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from pathlib import Path
 
 import draccus
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
@@ -298,7 +300,7 @@ def run_identity_sft(
     lr0_source: dict,
     source_objects: dict,
     run_root: str,
-    audits: SftAudits,
+    load_audits: Callable[[], SftAudits],
 ) -> dict:
     """Load the pinned source, bind the cheap checks, run 16 checked updates, checkpoint, export and audit.
 
@@ -332,6 +334,9 @@ def run_identity_sft(
         raise ValueError("Source object list differs from the one the launch cited")
     object_list = json.loads(object_list_bytes)
     initialize(config)
+    if jax.process_count() != REPLICAS:
+        raise RuntimeError(f"SFT requires {REPLICAS} JAX processes, found {jax.process_count()}")
+    audits = load_audits()
     started = time.monotonic()
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
@@ -436,7 +441,7 @@ def sft_worker(
     data_config_bytes: bytes,
     lr0_source: dict,
     source_objects: dict,
-    audits: SftAudits,
+    load_audits: Callable[[], SftAudits],
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
@@ -467,27 +472,16 @@ def sft_worker(
         lr0_source=lr0_source,
         source_objects=source_objects,
         run_root=run_root,
-        audits=audits,
+        load_audits=load_audits,
     )
     # Collective: every rank calls it; process 0 writes.
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "sft-result.json", result))
 
 
-def bound_sft_worker(
-    run_root: str,
-    run_id: str,
-    receipt_bytes: bytes,
-    receipt_sha256: str,
-    data_config_bytes: bytes,
-    lr0_source: dict,
-    source_objects: dict,
-) -> None:
-    """The job entrypoint: ``sft_worker`` with the frozen dataset audit and the trained-export audit bound."""
-    runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
-    require_xla_precision(runtime_receipt["xla_precision"])
-    check_pod_storage()
+def load_sft_audits(run_root: str, lr0_source: dict) -> SftAudits:
+    """Load collective audit inputs after the trainer initializes distributed JAX."""
     frozen = load_dataset_audit_inputs(MIXTURE_ROOT, INVENTORY_PATH)
-    audits = SftAudits(
+    return SftAudits(
         audit_iterator=lambda batches, config: audit_training_iterator(
             batches,
             config=config,
@@ -505,7 +499,31 @@ def bound_sft_worker(
             expected_hashes=SOURCE_FILE_HASHES,
         ),
     )
-    sft_worker(run_root, run_id, receipt_bytes, receipt_sha256, data_config_bytes, lr0_source, source_objects, audits)
+
+
+def bound_sft_worker(
+    run_root: str,
+    run_id: str,
+    receipt_bytes: bytes,
+    receipt_sha256: str,
+    data_config_bytes: bytes,
+    lr0_source: dict,
+    source_objects: dict,
+) -> None:
+    """Check flags before backend startup; defer collective inputs to trainer initialization."""
+    runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
+    require_xla_precision(runtime_receipt["xla_precision"])
+    check_pod_storage()
+    sft_worker(
+        run_root,
+        run_id,
+        receipt_bytes,
+        receipt_sha256,
+        data_config_bytes,
+        lr0_source,
+        source_objects,
+        partial(load_sft_audits, run_root, lr0_source),
+    )
 
 
 def read_remote(path: str) -> bytes:
