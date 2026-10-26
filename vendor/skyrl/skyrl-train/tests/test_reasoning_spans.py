@@ -6,7 +6,7 @@ import asyncio
 import pytest
 from rolloutengine.models import ConversationRecord, ModelTurn, RolloutStep, Transition
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.reasoning_spans import ReasoningViolation
+from verifyit.reasoning_markup import ReasoningViolation
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.rollouts.training_record import (

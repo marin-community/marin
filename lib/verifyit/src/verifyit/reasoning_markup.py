@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reasoning spans in a model reply.
+"""Classify reasoning-span markup in completed assistant text.
 
 A reply may hold one reasoning span before its answer, in any of the delimiter syntaxes below. A
 closing marker with no opening marker closes a span that the chat template opened in the prompt.

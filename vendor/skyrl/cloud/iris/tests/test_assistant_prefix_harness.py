@@ -22,7 +22,7 @@ from skyrl_train.trajectory_runners.model_clients import REASONING_VIOLATIONS_KE
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.reasoning_spans import ReasoningViolation
+from verifyit.reasoning_markup import ReasoningViolation
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,

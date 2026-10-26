@@ -3,7 +3,7 @@
 
 import pytest
 
-from taskcompendium.reasoning_spans import ReasoningViolation, reasoning_span_violation
+from verifyit.reasoning_markup import ReasoningViolation, reasoning_span_violation
 
 
 @pytest.mark.parametrize(

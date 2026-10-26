@@ -2,7 +2,7 @@
 
 import re
 
-from taskcompendium.reasoning_spans import REASONING_DELIMITERS
+from verifyit.reasoning_markup import REASONING_DELIMITERS
 
 from skyrl_gym.envs.aime.utils import last_boxed_only_string, remove_boxed
 

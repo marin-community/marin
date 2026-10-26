@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
-from taskcompendium.reasoning_spans import ReasoningViolation
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.reasoning_markup import ReasoningViolation
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"

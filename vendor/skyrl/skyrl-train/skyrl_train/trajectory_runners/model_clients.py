@@ -11,7 +11,7 @@ import numpy as np
 from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
-from taskcompendium.reasoning_spans import REASONING_DELIMITERS, ReasoningViolation, reasoning_span_violation
+from verifyit.reasoning_markup import REASONING_DELIMITERS, ReasoningViolation, reasoning_span_violation
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,

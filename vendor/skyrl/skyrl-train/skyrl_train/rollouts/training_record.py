@@ -8,7 +8,7 @@ from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, R
 from skyrl_gym.task_records import FOLDED_GRADE_HARNESSES, StepReward, fold_grades
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
-from taskcompendium.reasoning_spans import ReasoningViolation
+from verifyit.reasoning_markup import ReasoningViolation
 
 REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
 
