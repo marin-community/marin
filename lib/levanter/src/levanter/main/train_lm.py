@@ -36,7 +36,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.trainer_state import trainables_only
+from levanter.trainer_state import FrozenParameterStorage, cast_params_by_trainability, trainables_only
 from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
@@ -118,15 +118,17 @@ def _load_lm_model_from_configured_source(
     parameter_axis_mapping,
     trainer: Trainer,
 ) -> LmHeadModel:
+    frozen_storage = config.trainer.frozen_parameter_storage
     if config.initialize_from_hf:
         assert converter is not None
         model = converter.load_pretrained(
             config.model.model_type,
             config=config.model if not config.use_hf_model_config else None,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,
+            dtype=None if frozen_storage == FrozenParameterStorage.NATIVE else trainer.mp.compute_dtype,
         )
-        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+        if frozen_storage == FrozenParameterStorage.COMPUTE:
+            model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
         config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
     ):
@@ -137,12 +139,22 @@ def _load_lm_model_from_configured_source(
         model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
         model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=parameter_axis_mapping)
         model = hax.shard(model, parameter_axis_mapping)
-        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+        if frozen_storage == FrozenParameterStorage.COMPUTE:
+            model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     else:
         model = config.model.build(Vocab, key=model_key)
 
     if not isinstance(config.adapter, NoAdaptorConfig):
         model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
+
+    if frozen_storage == FrozenParameterStorage.NATIVE:
+        cast_model = functools.partial(
+            cast_params_by_trainability,
+            mp=trainer.mp,
+            is_trainable=config.adapter.trainable_filter(model),
+            frozen_parameter_storage=frozen_storage,
+        )
+        model = named_jit(cast_model, parameter_axis_mapping)(model)
 
     return model
 
@@ -404,7 +416,7 @@ def main(config: TrainLmConfig):
 
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
-            model = trainer.mp.cast_to_compute(model)
+            model = trainer.compute_model(model)
             activations, _ = split_activations(
                 model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
             )
