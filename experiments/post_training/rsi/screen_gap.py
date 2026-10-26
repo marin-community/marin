@@ -39,6 +39,8 @@ class TypeScreen:
     mean_reward: float
     pass_rate: float
     """The share of attempts with the full reward."""
+    scorer_errors: int
+    """Attempts whose reply the scorer could not parse; they count as reward 0."""
 
 
 def extract_answer(reply: str) -> str:
@@ -58,17 +60,23 @@ async def screen_type(policy, task: str, instances: int, samples: int, seed: int
     dataset = reasoning_gym.create_dataset(task, size=instances, seed=seed)
     score = reasoning_gym.get_score_answer_fn(task)
 
-    async def attempt(entry: dict) -> float:
+    async def attempt(entry: dict) -> float | None:
         request = ModelRequest(messages=({"role": "user", "content": entry["question"]},), options={})
         turn = await policy(request)
-        return float(score(extract_answer(turn.text), entry))
+        try:
+            return float(score(extract_answer(turn.text), entry))
+        except Exception:
+            # Some scorers raise on a malformed reply instead of returning 0; the attempt fails either way.
+            return None
 
-    rewards = await asyncio.gather(*(attempt(entry) for entry in dataset for _ in range(samples)))
+    scores = await asyncio.gather(*(attempt(entry) for entry in dataset for _ in range(samples)))
+    rewards = [0.0 if reward is None else reward for reward in scores]
     return TypeScreen(
         task=task,
         instances=instances,
         mean_reward=sum(rewards) / len(rewards),
         pass_rate=sum(reward == 1.0 for reward in rewards) / len(rewards),
+        scorer_errors=sum(reward is None for reward in scores),
     )
 
 
