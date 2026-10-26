@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 from concurrent.futures import Executor
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -71,6 +72,22 @@ class BlockingOperations:
             raise failure
 
 
+ROW_TEMPLATE_OPTIONS = ("chat_template_kwargs", "tools")
+
+
+def row_template_prompt(prompt: Prompt, extras: dict[str, Any]) -> Prompt:
+    """Apply a source row's own chat-template settings: ``chat_template_kwargs`` (e.g. ``enable_thinking``) and
+    ``tools`` (function schemas rendered by the template). Either may be stored as a JSON string."""
+    options = dict(prompt.options)
+    for key in ROW_TEMPLATE_OPTIONS:
+        value = extras.get(key)
+        if isinstance(value, str):
+            value = json.loads(value) if value else None
+        if value:
+            options[key] = value
+    return replace(prompt, options=options)
+
+
 class AnswerTaskSession:
     """Grade one model turn without a separate episode controller."""
 
@@ -92,7 +109,7 @@ class AnswerTaskSession:
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "The task has no completed turn")
 
     async def prepare(self) -> Prompt:
-        return episode_prompt(self.task)
+        return row_template_prompt(episode_prompt(self.task), self.extras)
 
     async def advance(self, turn: ModelTurn) -> TaskTransition:
         transition = await self.blocking.run(self.grader, turn, self.config, self.extras)
