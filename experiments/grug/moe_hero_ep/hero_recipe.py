@@ -69,8 +69,8 @@ def hero_rack_batch_size(seq_len: int) -> int:
 
 
 def hero_eval_seq_lens(train_seq_len: int) -> tuple[int, ...]:
-    """Evaluate fixed contexts and the current training context, once each."""
-    return tuple(sorted({train_seq_len, *HERO_FIXED_EVAL_SEQ_LENS}))
+    """Evaluate fixed contexts already reached by training and the current context."""
+    return tuple(length for length in sorted({train_seq_len, *HERO_FIXED_EVAL_SEQ_LENS}) if length <= train_seq_len)
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:

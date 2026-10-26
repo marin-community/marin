@@ -170,9 +170,9 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
-decay. On the next relaunch, the d6144 hero and eval-enabled diagnostics evaluate at 4096, 65,536,
-262,144 and the current training length, once each. All lengths run at every scheduled eval,
-including lengths beyond the training context. Set `GrugEvalConfig.seq_lens` to select other lengths;
+decay. On the next relaunch, the d6144 hero and eval-enabled diagnostics evaluate at 4096 and the
+current training length, adding fixed 65,536 and 262,144 evals once training reaches those lengths.
+Duplicate lengths run only once, at every scheduled eval. Set `GrugEvalConfig.seq_lens` to select other lengths;
 `None` evaluates only at the training length, as the smaller scaling-ladder rungs do.
 
 Each length has its own metrics, such as `eval_dropless/seq_len_4096/paloma/macro_loss`.
@@ -184,14 +184,13 @@ prediction. This keeps PTB and WikiText-103 in the 262K Paloma aggregate. Includ
 discarded tail can slightly change historical packing-matched comparisons.
 
 `eval_batch_size` specifies the batch at the training length. Other lengths keep its total token
-budget, rounded down to a whole number of batch shards. Dropless evals increase context parallelism
-within each rack when one sequence per batch shard would exceed that budget. With the current 16K
-hero and batch 704, 4K/16K/65K/262K evals use batches 2816/704/176/44 and CP1/CP1/CP4/CP16.
-Each holds 16,384 tokens per GPU; full-attention compute still increases with context length.
-Production use is blocked pending device-group reuse and an accelerator rehearsal of all four evals
-and their handoff back to training. [PR #10709](https://github.com/marin-community/marin/pull/10709)
-reports that new eval device groups retain additional NCCL communicator memory outside the allocator
-pool and can OOM the next training step. Holding the token budget fixed does not bound that memory.
+budget, rounded down to a whole number of batch shards. Dropless evals keep the training context
+width and fold its expert axis into data in place, using the device-group layout from
+[PR #10709](https://github.com/marin-community/marin/pull/10709). Each device retains its training
+context group and uses its training `(data, expert)` group for eval data. This avoids new NCCL
+communicators that can exhaust GPU memory when eval changes the device groups. With the current
+16K hero and batch 704, 4K/16K evals use batches 2816/704, both at CP1 and 16,384 tokens per GPU.
+GPU peak memory and wall time for multiple eval lengths have not been measured.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the

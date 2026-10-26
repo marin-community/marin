@@ -27,7 +27,7 @@ from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -499,20 +499,75 @@ def build_train_loader(
     )
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+_EXPERT_COLLAPSED_EVAL_AXIS_NAMES = ("replica_dcn", "context", "data", "expert", "model")
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Fold the training mesh's ``expert`` axis into ``data``, keeping every device's collective groups.
+
+    The dropless local MoE backend needs ``expert`` of size one. Each device's eval ``data`` group is its
+    training ``(data, expert)`` group and its ``context`` group is unchanged, so eval collectives reuse
+    the NCCL communicators training already holds instead of creating new ones that stay resident for
+    the life of the process. With training ``data`` of size one, the flat device order also matches
+    training.
+    """
+    order = [train_mesh.axis_names.index(name) for name in _EXPERT_COLLAPSED_EVAL_AXIS_NAMES]
+    r, c, d, e, m = (train_mesh.devices.shape[i] for i in order)
+    folded = train_mesh.devices.transpose(order).reshape(r, c, d * e, 1, m)
+    return Mesh(
+        folded,
+        _EXPERT_COLLAPSED_EVAL_AXIS_NAMES,
+        axis_types=tuple(AxisType.Explicit for _ in _EXPERT_COLLAPSED_EVAL_AXIS_NAMES),
+    )
+
+
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training-mesh PartitionSpec onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The eval ``data`` axis is the training ``(data, expert)`` pair, so ``("data", "expert")`` (or
+    ``"expert"`` alone when training ``data`` has size one) becomes eval ``"data"``. Every device then
+    holds the same shard it held in training and the move needs no collective. When training ``data``
+    is larger than one, no eval axis matches ``"expert"`` alone, so such a leaf is replicated over the
+    eval ``data`` axis and the move transfers it.
+    """
+    data_is_trivial = train_mesh.shape["data"] == 1
+
+    def rename(entry):
+        if entry is None:
+            return None
+        names = list(entry) if isinstance(entry, tuple) else [entry]
+        if "data" in names and "expert" in names:
+            i = names.index("data")
+            if names[i + 1 : i + 2] != ["expert"]:
+                raise ValueError(f"cannot fold expert into data for spec entry {entry!r}")
+            names.pop(i)
+        elif "data" in names and not data_is_trivial:
+            raise ValueError(f"spec entry {entry!r} shards over training data without expert, which the eval mesh folds")
+        elif "data" in names:
+            names.remove("data")
+        elif "expert" in names and not data_is_trivial:
+            names.remove("expert")
+        names = ["data" if name == "expert" else name for name in names]
+        if not names:
+            return None
+        return tuple(names) if len(names) > 1 else names[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _reshard_tree_to_mesh(tree, train_mesh: Mesh, eval_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto its expert-collapsed ``eval_mesh``.
+
+    Each leaf's spec is renamed by ``_expert_folded_spec``; when training ``data`` has size one, every
+    device keeps exactly the shard it already holds. The model's own ``reshard`` calls fix the layout the
+    forward needs, so any valid placement on the eval mesh suffices here. Non-array leaves pass through.
     """
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -627,32 +682,16 @@ def _eval_batch_size(mesh: Mesh, *, seq_len: int, token_budget: int) -> int:
     batch_shards = math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
     batch_size = token_budget // seq_len // batch_shards * batch_shards
     if batch_size == 0:
-        raise ValueError(f"Eval length {seq_len} needs more context shards to fit the {token_budget}-token batch budget")
-    return batch_size
-
-
-def _dropless_eval_mesh(mesh: Mesh, *, seq_len: int, token_budget: int) -> Mesh:
-    """Trade batch shards for context shards so a long eval fits the same token budget."""
-    replica = mesh.shape["replica_dcn"]
-    model = mesh.shape["model"]
-    rack_devices = math.prod(mesh.shape[axis] for axis in ("data", "context", "expert"))
-    for context in range(mesh.shape["context"], rack_devices + 1):
-        if rack_devices % context or seq_len % context:
-            continue
-        data = rack_devices // context
-        if replica * data * seq_len > token_budget:
-            continue
-        return Mesh(
-            mesh.devices.reshape(replica, data, context, 1, model),
-            mesh.axis_names,
-            axis_types=mesh.axis_types,
+        raise ValueError(
+            f"Eval length {seq_len} cannot fit one sequence per batch shard in the {token_budget}-token budget"
         )
-    raise ValueError(f"Eval length {seq_len} cannot fit the {token_budget}-token batch budget on this mesh")
+    return batch_size
 
 
 def _mesh_eval_hook(
     evaluator: TaggedEvaluator,
     *,
+    train_mesh: Mesh,
     mesh: Mesh,
     prefix: str,
     training_length_prefix: str | None,
@@ -682,7 +721,7 @@ def _mesh_eval_hook(
                 sources.append((step.eval_model, "/ema"))
             for source, suffix in sources:
                 # Release the resharded copy before the next evaluator or training step.
-                model = _reshard_tree_to_mesh(source, mesh)
+                model = source if mesh == train_mesh else _reshard_tree_to_mesh(source, train_mesh, mesh)
                 metrics = eval_model(evaluator, model, prefix=prefix + suffix)
                 del model
                 if training_length_prefix is not None:
@@ -712,14 +751,15 @@ def build_eval_hooks(
     if not seq_lens or any(length < 2 for length in seq_lens):
         raise ValueError("Evaluation sequence lengths must contain at least two tokens")
     token_budget = eval_cfg.eval_batch_size * train_seq_len
+    dropless_mesh = expert_collapsed_eval_mesh(mesh) if eval_cfg.dropless_eval and mesh.shape["expert"] > 1 else None
     hooks = []
     for seq_len in seq_lens:
+        if seq_len % mesh.shape["context"]:
+            raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
+        length_cfg = replace(
+            eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
+        )
         if eval_cfg.eval_current or eval_ema:
-            if seq_len % mesh.shape["context"]:
-                raise ValueError(f"Eval length {seq_len} must divide evenly over the context axis")
-            length_cfg = replace(
-                eval_cfg, eval_batch_size=_eval_batch_size(mesh, seq_len=seq_len, token_budget=token_budget)
-            )
             with set_mesh(mesh):
                 evaluator = build_tagged_evaluator(
                     data_config=data_config, max_seq_len=seq_len, mesh=mesh, eval_cfg=length_cfg, mp=mp
@@ -728,6 +768,7 @@ def build_eval_hooks(
                 hooks.append(
                     _mesh_eval_hook(
                         evaluator,
+                        train_mesh=mesh,
                         mesh=mesh,
                         prefix=f"{eval_cfg.prefix}/seq_len_{seq_len}",
                         training_length_prefix=eval_cfg.prefix if seq_len == train_seq_len else None,
@@ -735,17 +776,13 @@ def build_eval_hooks(
                         eval_ema=eval_ema,
                     )
                 )
-        if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
-            eval_mesh = _dropless_eval_mesh(mesh, seq_len=seq_len, token_budget=token_budget)
-            length_cfg = replace(
-                eval_cfg, eval_batch_size=_eval_batch_size(eval_mesh, seq_len=seq_len, token_budget=token_budget)
-            )
+        if dropless_mesh is not None:
             # Constants captured by the eval jit must be constructed under its explicit mesh.
-            with set_mesh(eval_mesh):
+            with set_mesh(dropless_mesh):
                 evaluator = build_tagged_evaluator(
                     data_config=data_config,
                     max_seq_len=seq_len,
-                    mesh=eval_mesh,
+                    mesh=dropless_mesh,
                     eval_cfg=length_cfg,
                     mp=mp,
                     model_transform=functools.partial(
@@ -757,7 +794,8 @@ def build_eval_hooks(
                 hooks.append(
                     _mesh_eval_hook(
                         evaluator,
-                        mesh=eval_mesh,
+                        train_mesh=mesh,
+                        mesh=dropless_mesh,
                         prefix=f"{prefix}/seq_len_{seq_len}",
                         training_length_prefix=prefix if seq_len == train_seq_len else None,
                         eval_current=True,
