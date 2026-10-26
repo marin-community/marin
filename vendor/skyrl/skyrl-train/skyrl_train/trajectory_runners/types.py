@@ -11,7 +11,7 @@ from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 
 
 TrainingPhase = Literal["train", "eval"]
-REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", "successful_length")
+REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", "successful_length", "reasoning_span")
 ROUTED_EXPERTS_KEY = "routed_experts"
 RESPONSE_POLICY_STEPS_KEY = "response_policy_steps"
 RESPONSE_SPAN_TAGS_KEY = "response_span_tags"
@@ -77,6 +77,7 @@ class RewardShapingComponents(TypedDict):
     non_termination: float
     overlong: float
     successful_length: float
+    reasoning_span: float
 
 
 class RewardShapingLoopSpan(TypedDict):
@@ -116,6 +117,9 @@ class TrajectoryBatch(TypedDict):
     reward_shaping_components: Optional[List[RewardShapingComponents]]
     reward_shaping_loop_spans: Optional[List[List[RewardShapingLoopSpan]]]
     loop_advantages: Optional[List[List[float]]]
+    # Malformed reasoning turns per row, and the response positions of those located on a marker token.
+    reasoning_span_violations: NotRequired[List[int]]
+    reasoning_span_violation_tokens: NotRequired[List[List[int]]]
     reward_shaping_versions: Optional[List[int]]
     verification_results: List[Optional[VerificationResult]]
     evidence_messages: List[Optional[list[dict[str, Any]]]]
