@@ -28,7 +28,7 @@ def ray_environment(address: str) -> dict[str, str]:
 
 
 def ray_start_command(*, host: str, address: str, leader: bool, chips: int, ports: dict[str, int]) -> list[str]:
-    """Reserve fixed Ray listeners through Iris; let the kernel pick worker ports."""
+    """Return a blocking head or worker command with the allocated Ray listeners."""
     command = [
         sys.executable,
         "-m",

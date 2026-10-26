@@ -286,6 +286,34 @@ def _mint_and_print_capability_url(
     click.echo("")
 
 
+def _wait_and_report_endpoint(
+    client: IrisClient,
+    job: Job,
+    endpoint: str,
+    wait_timeout: float,
+    proxy_url: str,
+    dashboard_url: str | None,
+    timeout_hours: float,
+) -> None:
+    """Wait, mint the scoped URL, and hold the tunnel independently of submission planning."""
+    click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
+    _wait_for_endpoint(client, job, endpoint, wait_timeout)
+    click.echo("")
+    click.echo(f"READY — dashboard: {proxy_url}/")
+    click.echo(f"        OpenAI:    {proxy_url}/v1")
+    if dashboard_url:
+        click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
+    click.echo("")
+    # Mint after the endpoint registers (the controller resolves the row for owner authz),
+    # so the token is bound to a live endpoint.
+    _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
+    click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
+    with contextlib.suppress(KeyboardInterrupt):
+        while True:
+            time.sleep(3600)
+    click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
+
+
 @click.command(context_settings={"show_default": True})
 @click.argument("model")
 @click.option(
@@ -656,22 +684,15 @@ def main(
                 click.echo("Submitted without waiting; no capability URL was minted.")
                 return
 
-            click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
-            _wait_for_endpoint(client, job, endpoint, wait_timeout)
-            click.echo("")
-            click.echo(f"READY — dashboard: {proxy_url}/")
-            click.echo(f"        OpenAI:    {proxy_url}/v1")
-            if dashboard_url:
-                click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
-            click.echo("")
-            # Mint after the endpoint registers (the controller resolves the row for owner authz),
-            # so the token is bound to a live endpoint.
-            _mint_and_print_capability_url(client, endpoint, dashboard_url, timeout_hours)
-            click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
-            with contextlib.suppress(KeyboardInterrupt):
-                while True:
-                    time.sleep(3600)
-            click.echo("\nDetached. The server remains available until its timeout or explicit stop.")
+            _wait_and_report_endpoint(
+                client,
+                job,
+                endpoint,
+                wait_timeout,
+                proxy_url,
+                dashboard_url,
+                timeout_hours,
+            )
 
 
 if __name__ == "__main__":

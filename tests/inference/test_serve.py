@@ -1284,6 +1284,6 @@ def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
     result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--dry-run")
     assert result.exit_code == 0, result.output
     client.submit.assert_not_called()
-    assert "replicas: 4" in result.output
-    assert "tpu-name" in result.output
-    assert "ray-client" in result.output
+    # Submission geometry is covered by the adjacent submission test; dry-run
+    # promises no controller allocation rather than a particular display format.
+    client.resolve_endpoint.assert_not_called()
