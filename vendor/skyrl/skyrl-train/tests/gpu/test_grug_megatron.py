@@ -6,6 +6,7 @@ at PP2, checks that exported weights moved while the frozen router bias did
 not, and checks that the exported HF checkpoint reproduces the post-update
 Megatron log-probabilities. The four-H100 test adds disaggregated vLLM
 serving: rollout, PP2 update, weight broadcast, serving readback, rollout.
+The resume test reloads a checkpoint saved with Megatron's CPU optimizer offload.
 """
 
 from __future__ import annotations
@@ -632,6 +633,46 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
         )
     finally:
         ray.util.remove_placement_group(shared_pg)
+        ray.shutdown()
+
+
+def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
+    """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
+
+    Training from the checkpoint again must repeat the step taken right after saving it: a
+    stale CPU master copy would instead restart that step from the later weights.
+    """
+    world_size = 2
+    require_hoppers(world_size)
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    write_tiny_checkpoint(model_path)
+    cfg = _config(str(model_path), world_size=world_size, pp=1, ep=1)
+    megatron = cfg.trainer.policy.megatron_config
+    megatron.optimizer_checkpoint_sharding_type = "dp_reshardable"
+    megatron.optimizer_config_kwargs.optimizer_cpu_offload = True
+    megatron.optimizer_config_kwargs.optimizer_offload_fraction = 1.0
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    batch = _padded_batch(tokenizer.pad_token_id)
+    checkpoint_dir = tmp_path / "checkpoint"
+    initialize_ray(cfg)
+    try:
+        policy = _init_policy(cfg, world_size)
+        _train_step(policy, batch)
+        saved = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        ray.get(policy.async_run_ray_method("pass_through", "save_checkpoint", str(checkpoint_dir), tokenizer))
+        _train_step(policy, batch)
+        after_saved_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+
+        ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", str(checkpoint_dir)))
+        restored = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        _train_step(policy, batch)
+        after_restored_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+
+        for name in PARAMETER_NAMES:
+            torch.testing.assert_close(restored[name], saved[name], rtol=0, atol=0)
+            torch.testing.assert_close(after_restored_step[name], after_saved_step[name], rtol=0, atol=0)
+    finally:
         ray.shutdown()
 
 
