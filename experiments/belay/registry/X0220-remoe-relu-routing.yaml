@@ -6,7 +6,7 @@ summary: 'Replace top-10 routing with ReMoE (arXiv 2412.14711): unnormalized rel
   per token (cap 20), and an L1 penalty on the gates (load-aware f_e weighting) whose coefficient adapts x1.2 per step from
   1e-8 to hold 10 active experts on average.'
 source: intake
-status: running
+status: closed
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6408728864
   author: armorfaye
@@ -20,3 +20,116 @@ knobs:
 - relu_l1
 - relu_l1_init
 - relu_l1_alpha
+trials:
+- id: t001
+  variant: 'ReMoE faithful: load-aware L1, alpha 1.2, lambda0 1e-8, cap 20'
+  rung: d512
+  protocol: equal_steps
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  baseline: Belay Ckpt 1 rm-top10 seed 0 (2.8717)
+  steps: 8821
+  delta:
+  - 0.0398
+  loss:
+  - 2.9115
+  wandb:
+  - rm-lb
+  settings:
+    routing: 'relu'
+    thresh_candidates: '20'
+  commit: b596015175
+  step_time_change: '+15% (0.200 vs 0.174 s/step median); fixed-time delta +0.0654'
+- id: t002
+  variant: 'plain L1, alpha 1.2 (lambda stuck in fp32 denormals from step 1025)'
+  rung: d512
+  protocol: equal_steps
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  baseline: Belay Ckpt 1 rm-top10 seed 0 (2.8717)
+  steps: 8821
+  delta:
+  - 0.3230
+  loss:
+  - 3.1947
+  wandb:
+  - rm-plain
+  settings:
+    routing: 'relu'
+    thresh_candidates: '20'
+    relu_l1: 'plain'
+  commit: b596015175
+  step_time_change: '+25% (0.217 vs 0.174 s/step median); fixed-time delta +0.3657'
+  note: 'lambda underflowed to 2.8e-45 and could not grow back; superseded by rm-plain-f'
+- id: t003
+  variant: 'load-aware, alpha 1.0667 (lambda stuck in fp32 denormals from step 1954)'
+  rung: d512
+  protocol: equal_steps
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  baseline: Belay Ckpt 1 rm-top10 seed 0 (2.8717)
+  steps: 8821
+  delta:
+  - 0.2248
+  loss:
+  - 3.0966
+  wandb:
+  - rm-lb-a1067
+  settings:
+    routing: 'relu'
+    thresh_candidates: '20'
+    relu_l1_alpha: '1.0667'
+  commit: b596015175
+  step_time_change: '+25% (0.218 vs 0.174 s/step median); fixed-time delta +0.2680'
+  note: 'lambda underflowed to 9.8e-45; superseded by rm-a1067-f'
+- id: t004
+  variant: 'plain L1, alpha 1.2, lambda floored at lambda0'
+  rung: d512
+  protocol: equal_steps
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  baseline: Belay Ckpt 1 rm-top10 seed 0 (2.8717)
+  steps: 8821
+  delta:
+  - 0.0945
+  loss:
+  - 2.9662
+  wandb:
+  - rm-plain-f
+  settings:
+    routing: 'relu'
+    thresh_candidates: '20'
+    relu_l1: 'plain'
+  commit: 053326cd69
+  step_time_change: '+23% (0.214 vs 0.174 s/step median); fixed-time delta +0.1342'
+- id: t005
+  variant: 'load-aware, alpha 1.0667, lambda floored at lambda0'
+  rung: d512
+  protocol: equal_steps
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  baseline: Belay Ckpt 1 rm-top10 seed 0 (2.8717)
+  steps: 8821
+  delta:
+  - 0.0618
+  loss:
+  - 2.9335
+  wandb:
+  - rm-a1067-f
+  settings:
+    routing: 'relu'
+    thresh_candidates: '20'
+    relu_l1_alpha: '1.0667'
+  commit: 053326cd69
+  step_time_change: '+20% (0.208 vs 0.174 s/step median); fixed-time delta +0.0954'
+events:
+- type: closed
+  batch: X0220
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409675987
+  note: faithful ReMoE +0.040 Paloma at equal steps (+0.065 fixed time, +15% step time), ~6x seed noise; no logit runaway but 10-72% of experts per layer die (dead ReLU gates) and load max/mean reaches 3.6-11.6 without QB; hedges lose more (+0.062 / +0.094 with the lambda floor)
