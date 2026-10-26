@@ -244,7 +244,7 @@ class TrainingContext:
         *,
         stall_timeout: float,
         on_admitted: Callable[[list[RolloutGroup]], Awaitable[None]],
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
+    ) -> tuple[list[RolloutGroup], RolloutBatchMetadata]:
         """Wait for the current step's batch and return its groups with selection and prompt-order metrics.
 
         Groups reach ``on_admitted`` as they are admitted, before the batch is complete. Every group judged for
@@ -262,7 +262,7 @@ class TrainingContext:
             await on_admitted(fetched)
 
         metadata = await self.next_batch_metadata(stall_timeout=stall_timeout, on_admitted=fetch_admitted)
-        return groups, metadata.metrics
+        return groups, metadata
 
     async def _fetch_groups(
         self, batch_id: int, selected: tuple[AdmittedRollout, ...], *, stall_timeout: float

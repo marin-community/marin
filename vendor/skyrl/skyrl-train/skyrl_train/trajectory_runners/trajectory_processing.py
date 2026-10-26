@@ -242,6 +242,7 @@ def concatenate_trajectory_batches(
     *,
     require_rollout_logprobs: bool = False,
     tis_lcs_alert_threshold: float,
+    metrics: dict[str, float] | None = None,
 ) -> TrajectoryBatch:
     """Concatenate and validate rollout rows using whole-batch channel presence."""
     assert trajectory_batches
@@ -413,32 +414,52 @@ def concatenate_trajectory_batches(
     for key in additional_keys:
         result[key] = sum([trajectory_batch[key] for trajectory_batch in trajectory_batches], [])
 
-    # Re-aggregate rollout metrics
-    rollout_metrics = get_rollout_metrics(
-        result["response_ids"],
-        result["rewards"],
-        result.get("env_metrics"),
-        result.get("env_classes"),
-        verification_results=result.get("verification_results"),
-    )
+    if metrics is None:
+        metrics = get_rollout_metrics(
+            result["response_ids"],
+            result["rewards"],
+            result.get("env_metrics"),
+            result.get("env_classes"),
+            verification_results=result.get("verification_results"),
+        )
+        metrics.update(
+            rollout_counter_metrics(
+                [batch.get("rollout_metrics") or {} for batch in trajectory_batches],
+                tis_lcs_alert_threshold=tis_lcs_alert_threshold,
+            )
+        )
+        result["rollout_metrics"] = metrics
+        refresh_trajectory_reward_shaping_metrics(result)
+    else:
+        result["rollout_metrics"] = metrics
 
+    num_prompts = len(result["prompt_token_ids"])
+    validate_trajectory_batch(num_prompts, result)
+
+    return result
+
+
+def rollout_counter_metrics(
+    group_metrics: Sequence[dict[str, float]], *, tis_lcs_alert_threshold: float
+) -> dict[str, float]:
+    """Aggregate token-weighted alignment and per-group failure and retention counters."""
+    rollout_metrics = {}
     # TIS alignment metrics use token-weighted fractions across batches.
     total_aligned = 0.0
     sum_exact = sum_lcs = sum_unaligned = 0.0
     sum_fail = sum_lcs_msgs = 0.0
     saw_tis = False
-    for output in trajectory_batches:
-        rm = output.get("rollout_metrics") or {}
-        n = rm.get(TIS_ALIGNED_TOKENS_METRIC)
+    for output in group_metrics:
+        n = output.get(TIS_ALIGNED_TOKENS_METRIC)
         if n is None:
             continue
         saw_tis = True
         total_aligned += n
-        sum_exact += rm.get(TIS_EXACT_MATCH_FRACTION_METRIC, 0.0) * n
-        sum_lcs += rm.get(TIS_LCS_FALLBACK_FRACTION_METRIC, 0.0) * n
-        sum_unaligned += rm.get(TIS_UNALIGNED_FRACTION_METRIC, 0.0) * n
-        sum_fail += rm.get(TIS_ALIGNMENT_FAIL_COUNT_METRIC, 0.0)
-        sum_lcs_msgs += rm.get(TIS_LCS_FALLBACK_MESSAGES_METRIC, 0.0)
+        sum_exact += output.get(TIS_EXACT_MATCH_FRACTION_METRIC, 0.0) * n
+        sum_lcs += output.get(TIS_LCS_FALLBACK_FRACTION_METRIC, 0.0) * n
+        sum_unaligned += output.get(TIS_UNALIGNED_FRACTION_METRIC, 0.0) * n
+        sum_fail += output.get(TIS_ALIGNMENT_FAIL_COUNT_METRIC, 0.0)
+        sum_lcs_msgs += output.get(TIS_LCS_FALLBACK_MESSAGES_METRIC, 0.0)
     if saw_tis:
         denom = max(total_aligned, 1.0)
         rollout_metrics[TIS_ALIGNED_TOKENS_METRIC] = total_aligned
@@ -449,51 +470,35 @@ def concatenate_trajectory_batches(
         rollout_metrics[TIS_LCS_FALLBACK_MESSAGES_METRIC] = sum_lcs_msgs
         lcs_alert = 1.0 if (sum_lcs / denom) > tis_lcs_alert_threshold else 0.0
         rollout_metrics[TIS_LCS_FALLBACK_ALERT_METRIC] = lcs_alert
-        total_tito_attempts = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
-            for output in trajectory_batches
-        )
+        total_tito_attempts = sum(output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0) for output in group_metrics)
         total_tito_successes = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_SUCCESS_FRACTION_METRIC, 0.0)
-            * (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
-            for output in trajectory_batches
+            output.get(TIS_TITO_FULL_SUCCESS_FRACTION_METRIC, 0.0) * output.get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
+            for output in group_metrics
         )
         rollout_metrics[TIS_TITO_FULL_ATTEMPTS_METRIC] = total_tito_attempts
         rollout_metrics[TIS_TITO_FULL_SUCCESS_FRACTION_METRIC] = (
             total_tito_successes / total_tito_attempts if total_tito_attempts else 0.0
         )
-        total_tito_declines = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0)
-            for output in trajectory_batches
-        )
+        total_tito_declines = sum(output.get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0) for output in group_metrics)
         rollout_metrics[TIS_TITO_FULL_DECLINE_COUNT_METRIC] = total_tito_declines
         rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = (
             1.0 if sum_unaligned > 0 or lcs_alert or total_tito_declines > 0 else 0.0
         )
         for reason in TitoFullDeclineReason:
             name = f"{TIS_TITO_FULL_DECLINE_METRIC_PREFIX}{reason.value}"
-            rollout_metrics[name] = sum(
-                (output.get("rollout_metrics") or {}).get(name, 0.0) for output in trajectory_batches
-            )
+            rollout_metrics[name] = sum(output.get(name, 0.0) for output in group_metrics)
 
-    rollout_metrics.update(_merge_batch_failure_metrics(trajectory_batches))
+    rollout_metrics.update(merge_batch_failure_metrics(group_metrics))
 
-    # Retention counts per group, and this rebuilds rollout_metrics from responses and rewards, so
-    # the per-group counters have to be carried across or the archives are written unobserved.
-    for output in trajectory_batches:
-        for name, value in (output.get("rollout_metrics") or {}).items():
+    # Retention, identity and task counters add across admitted groups.
+    for output in group_metrics:
+        for name, value in output.items():
             if name.startswith(
                 (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
 
-    result["rollout_metrics"] = rollout_metrics
-    refresh_trajectory_reward_shaping_metrics(result)
-
-    num_prompts = len(result["prompt_token_ids"])
-    validate_trajectory_batch(num_prompts, result)
-
-    return result
+    return rollout_metrics
 
 
 def validate_trajectory_batch(num_prompts: int, trajectory_batch: TrajectoryBatch) -> None:
@@ -583,27 +588,10 @@ def apply_overlong_filtering(
     ]
 
 
-def get_rollout_metrics(
-    responses: List[List[int]],
-    rewards: Union[List[float], List[List[float]]],
-    env_metrics: Optional[List[Dict[str, Any]]] = None,
-    env_classes: Optional[List[str]] = None,
-    verification_results: Optional[List[Optional[VerificationResult]]] = None,
-):
-    """
-    Computes rollout metrics including token statistics and optional environment-specific metrics.
-
-    Args:
-        responses: List of token ID sequences for each response
-        rewards: List of rewards (either per-trajectory or per-token)
-        env_metrics: Optional list of environment-specific metrics for each trajectory
-        env_classes: Optional list of environment class names for each trajectory
-        verification_results: Verifier verdicts that override reward-sign token statistics when present
-
-    Returns:
-        Dictionary of aggregated metrics
-    """
-    num_tokens_arr = np.array([len(response) for response in responses])
+def rollout_successes(
+    rewards: Sequence[float | Sequence[float]], verification_results: Sequence[VerificationResult | None] | None
+) -> list[bool]:
+    """Resolve rollout success from verifier verdicts with reward-sign fallback."""
     successes = _reward_sign_successes(rewards)
     if verification_results is not None:
         for index, result in enumerate(verification_results):
@@ -613,6 +601,17 @@ def get_rollout_metrics(
                 successes[index] = False
             else:
                 successes[index] = result.passed if result.passed is not None else float(result.score) > 0.0
+    return successes
+
+
+def rollout_length_metrics(
+    response_lengths: Sequence[int],
+    successes: Sequence[bool],
+    env_metrics: Sequence[dict[str, Any]] | None = None,
+    env_classes: Sequence[str] | None = None,
+) -> dict[str, float]:
+    """Aggregate response lengths, success flags, and environment observations."""
+    num_tokens_arr = np.array(response_lengths)
     non_zero_rewards_arr = np.array(successes, dtype=bool)
     zero_rewards_arr = ~non_zero_rewards_arr
     # average tokens for non zero rewards
@@ -647,6 +646,18 @@ def get_rollout_metrics(
     return rollout_metrics
 
 
+def get_rollout_metrics(
+    responses: List[List[int]],
+    rewards: Union[List[float], List[List[float]]],
+    env_metrics: Optional[List[Dict[str, Any]]] = None,
+    env_classes: Optional[List[str]] = None,
+    verification_results: Optional[List[Optional[VerificationResult]]] = None,
+):
+    """Aggregate response lengths and verifier-aware successes by environment."""
+    successes = rollout_successes(rewards, verification_results)
+    return rollout_length_metrics([len(response) for response in responses], successes, env_metrics, env_classes)
+
+
 _BATCH_FAILURE_COUNT_KEYS = (
     _NUM_TRIALS_METRIC,
     _NUM_FAILED_INSTANCES_METRIC,
@@ -655,13 +666,9 @@ _BATCH_FAILURE_COUNT_KEYS = (
 )
 
 
-def _merge_batch_failure_metrics(trajectory_batches: List[TrajectoryBatch]) -> dict[str, float]:
+def merge_batch_failure_metrics(metrics_by_group: Sequence[dict[str, float]]) -> dict[str, float]:
     """Sum failure counts across rollout groups and recompute their batch fraction."""
-    group_metrics = [
-        metrics
-        for metrics in (output.get("rollout_metrics") or {} for output in trajectory_batches)
-        if _NUM_TRIALS_METRIC in metrics
-    ]
+    group_metrics = [metrics for metrics in metrics_by_group if _NUM_TRIALS_METRIC in metrics]
     if not group_metrics:
         return {}
     for metrics in group_metrics:
