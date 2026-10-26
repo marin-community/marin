@@ -179,7 +179,7 @@ trainer:
       optimizer_kwargs: {}
     sequence_parallel_size: 1
   numerics:
-    mode: native # native | batch_invariant
+    mode: native # native | batch_invariant | exact
     check:
       every_weight_syncs: 0 # 0 disables the trainer-engine log-probability check (skyrl_train/exactness_check.py)
   algorithm:

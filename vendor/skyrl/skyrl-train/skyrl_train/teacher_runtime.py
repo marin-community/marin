@@ -170,6 +170,7 @@ async def _start_local_teacher_pool(
         decode_context_parallel_size=1,
         shared_pg=None,
         inference_engine_enable_sleep=False,
+        decode_invariant=False,
         max_logprobs=max_logprobs,
     )
     engine_kwargs = inference_engine_kwargs_from_config(
