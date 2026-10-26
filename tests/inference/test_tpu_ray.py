@@ -2,17 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 import sys
 import threading
-from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fray.types import JobRequest, ResourceConfig, create_environment
 from marin.inference import iris as serving
-from marin.inference import iris_tpu_vllm, tpu_ray_runtime
+from marin.inference import iris_tpu_vllm, iris_vllm, tpu_ray_runtime
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -93,24 +94,51 @@ def test_evaluation_gang_requests_all_hosts_on_one_slice(monkeypatch):
     assert submission["max_retries_preemption"] == 0
 
 
-def test_followers_never_load_a_model_or_publish_an_endpoint(monkeypatch):
+def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch):
     config = _config()
     service = serving.IrisServiceConfig(
         model=config.model, engine=config.engine, iris=config.iris, endpoint_name="/serve/test"
     )
+    job_info = SimpleNamespace(
+        num_tasks=4,
+        task_index=1,
+        job_id="serve-test",
+        advertise_host="127.0.0.1",
+        ports=dict(zip(iris_tpu_vllm.RAY_PORTS, [12000, 12001, 12002, 12003], strict=True)),
+    )
+    registry = MagicMock()
+    context = SimpleNamespace(registry=registry, resolver=object())
+    coordinator = MagicMock()
+    coordinator.vllm_primary_address.return_value = "127.0.0.1:12000"
+    coordinator.shutdown_requested.return_value = True
+    process = MagicMock()
+    process.poll.return_value = None
+    commands = []
+    real_popen = subprocess.Popen
 
-    @contextmanager
-    def follower(*_args, **_kwargs):
-        yield SimpleNamespace(leader=False)
+    def start_process(command, **kwargs):
+        # The vLLM backend imports GitPython lazily, which probes the git executable.
+        if Path(command[0]).name == "git":
+            return real_popen(command, **kwargs)
+        commands.append(command)
+        launch = json.loads(Path(command[-1]).read_text())
+        Path(launch["ready_path"]).write_text("{}")
+        return process
 
-    monkeypatch.setattr(serving, "tpu_ray_gang", follower)
-    resolved = MagicMock(side_effect=AssertionError("follower must not load model"))
-    register = MagicMock(side_effect=AssertionError("follower must not publish endpoint"))
-    monkeypatch.setattr(serving, "_resolved_model", resolved)
-    monkeypatch.setattr(serving, "_register_dashboard", register)
-    serving._run_tpu_service(service)
-    resolved.assert_not_called()
-    register.assert_not_called()
+    monkeypatch.setattr(serving, "get_job_info", lambda: job_info)
+    monkeypatch.setattr(iris_tpu_vllm, "get_job_info", lambda: job_info)
+    monkeypatch.setattr(serving, "iris_ctx", lambda: context)
+    monkeypatch.setattr(iris_tpu_vllm, "iris_ctx", lambda: context)
+    monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
+    monkeypatch.setattr(iris_vllm, "ActorClient", lambda *_args, **_kwargs: coordinator)
+    monkeypatch.setattr(iris_tpu_vllm.subprocess, "Popen", start_process)
+
+    serving.run_iris_service(service)
+
+    assert len(commands) == 1
+    registry.registered.assert_not_called()
+    coordinator.follower_stopped.assert_called_once_with(1)
+    process.terminate.assert_called()
 
 
 def test_ray_head_failure_interrupts_blocked_initialization(monkeypatch, tmp_path):
