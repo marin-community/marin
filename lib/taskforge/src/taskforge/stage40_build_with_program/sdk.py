@@ -435,8 +435,7 @@ async def checked_structured[T: BaseModel](
 
     Each failed submission joins the conversation as the assistant turn, followed by its problem as
     the next user turn. A check that hands back another check's coroutine, as ``return
-    accept(value)`` does, is awaited rather than read as a problem. ``structured_until`` calls this
-    with a step's context; validation calls it directly.
+    accept(value)`` does, is awaited rather than read as a problem.
 
     Physical context/output exhaustion propagates as ``IncompleteOutput`` so the coordinator holds.
     There is no per-step attempt cap; the coordinator owns the workpiece's revision budget.

@@ -240,7 +240,16 @@ async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client,
     assert isinstance(payload, Transcript)
     turn = payload.turns[0]
     assert isinstance(turn, AssistantToolCalls)
-    assert f"> {report}" in str(turn.calls[0].object_arguments()["command"])
+    machine = await ShellSimMachineFactory().create(MachineSpec(source=PackageSpec()))
+    try:
+        for call in turn.calls:
+            result = await machine.run(Command(argv=("sh", "-c", str(call.object_arguments()["command"]))))
+            assert result.exit_code == 0, result.stderr
+        contents = await machine.run(Command(argv=("cat", report)))
+    finally:
+        await machine.close()
+    assert contents.exit_code == 0, contents.stderr
+    assert contents.stdout == b"select 42;\n"
 
 
 def test_a_file_control_repeats_a_prototyped_candidate_only_with_the_same_files():

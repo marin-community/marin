@@ -76,8 +76,8 @@ async def run_workpieces(
     """Run each proposal ``proposals`` yields as workpiece ``workpiece_id``, starting it as it arrives.
 
     Each workpiece resumes from the coordinator's event store, as ``run_workpiece`` does with an
-    empty log. A workpiece whose run raised is ``HELD``; the error is logged, and a stage's error
-    is also recorded in the workpiece's ``TERMINAL`` event.
+    empty log. A workpiece whose run raised is ``HELD``, or ``ABANDONED`` after exhausting transient
+    infrastructure retries. The error is logged and recorded in its ``TERMINAL`` event when storage permits.
 
     Returns:
         The terminal of every workpiece started, once ``proposals`` is exhausted and each has one.

@@ -9,9 +9,6 @@ grader runs in a verifier machine from the grader-base image and checks the capt
 must create. Each is lowered for a laptop (``lowered``) onto ``FACTORIES``: ShellSim, and for the
 verifier machine the ShellSim-backed ``FixtureImageFactory`` registered as Docker; ``relower`` lowers
 a variant the same way.
-
-``TemplateTokenizer`` stands in for the server's chat template in control replay; the loop and queue
-tests import it.
 """
 
 import asyncio
