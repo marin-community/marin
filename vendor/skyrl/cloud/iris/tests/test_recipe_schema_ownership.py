@@ -15,16 +15,12 @@ from marinskyrl import runtime_options, speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
 from skyrlrecipe.documents import MISSING, get_path, leaves, set_path
 from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
-from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
 from scripts.recipe_schema_sidecar import OPEN, TYPES, UNDECLARED
 from skyrl_train.config.ftpo import FTPOBoundary, FTPOConfig
 from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
 
-PENDING_PR3 = {
-    "discard": frozenset({"data.train_data", "data.val_data"}),
-    "clamp": frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"}),
-}
+GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
 FILL_WHEN_UNSET = frozenset(
     {
@@ -37,13 +33,10 @@ FILL_WHEN_UNSET = frozenset(
 )
 
 
-def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pending_discards(tmp_path, monkeypatch):
+def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
     source.write_text("entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n")
     parsed = launcher.parse_rl_config(str(source))
-    parsed = replace(parsed, context_budget=schema.ContextBudget(**{
-        name: getattr(parsed.context_budget, name) for name in schema.ContextBudget.model_fields
-    }))
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
     full["terminal_bench"] = full.pop("terminal_bench_config")
@@ -86,20 +79,31 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
         set_path(seeded, path, False if path == "trainer.export_hf_artifact" else f"author-{suffix}")
-    for path in FILL_WHEN_UNSET | PENDING_PR3["clamp"]:
-        set_path(seeded, path, f"author-{suffix}" if path == "trainer.run_name" else number)
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
+        set_path(
+            seeded,
+            path,
+            f"author-{suffix}"
+            if path in {"trainer.run_name", "terminal_bench.installed_agent.output_path"}
+            else number,
+        )
     section_values = {
         name: seeded[name]
         for name in ("trainer", "generator", "data", "environment", "trajectory_runner", "terminal_bench")
     }
     injected = replace(parsed, **section_values)
-    filled = launcher._skyrl_config_sections(injected, parameters, SimpleNamespace(gpus_per_node=8))
+    authored_parameters = {
+        **parameters,
+        "train_data": seeded["data"]["train_data"],
+        "val_data": seeded["data"]["val_data"],
+    }
+    filled = launcher._skyrl_config_sections(injected, authored_parameters, SimpleNamespace(gpus_per_node=8))
     data = resolve_rl_train_data_with_sources(injected.data["terminal_bench_data"], kind="tasks", verbose=False)
     staged = launcher.apply_task_local_values(
         OmegaConf.create(filled),
         launcher.TaskLocalSkyRLValues(
-            train_data=tuple(parameters["train_data"]),
-            validation_data=tuple(parameters["val_data"]),
+            train_data=tuple(authored_parameters["train_data"]),
+            validation_data=tuple(authored_parameters["val_data"]),
             terminal_bench_data=tuple(data.paths),
         ),
     )
@@ -122,40 +126,30 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_pend
         ".".join(parts) for parts, before in leaves(section_values) if get_path(result, ".".join(parts)) != before
     }
     assert LAUNCH_PATHS <= changed
-    assert changed - LAUNCH_PATHS == PENDING_PR3["discard"]
-    for path in FILL_WHEN_UNSET | PENDING_PR3["clamp"]:
+    assert changed - LAUNCH_PATHS == frozenset()
+    for path in FILL_WHEN_UNSET | GPU_PATHS:
         assert get_path(result, path) == get_path(seeded, path)
     absent = copy.deepcopy(section_values)
     for path in FILL_WHEN_UNSET:
         set_path(absent, path, None)
-    defaults = launcher._skyrl_config_sections(replace(parsed, **absent), parameters, SimpleNamespace(gpus_per_node=8))
+    defaults = launcher._skyrl_config_sections(
+        replace(parsed, **absent), authored_parameters, SimpleNamespace(gpus_per_node=8)
+    )
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
-    oversized = copy.deepcopy(section_values)
-    for path in PENDING_PR3["clamp"]:
-        set_path(oversized, path, 31)
-    clamped = launcher._skyrl_config_sections(
-        replace(parsed, **oversized), parameters, SimpleNamespace(gpus_per_node=8)
-    )
-    for path in PENDING_PR3["clamp"]:
-        assert get_path(clamped, path) == 8
-    following = OmegaConf.create(full)
-    following.generator.max_turns = 987654
-    assert following.environment.task_sessions.session.max_turns == 987654
     derived = {}
-    context_paths = DERIVED_PATHS - {"environment.task_sessions.session.max_turns"}
+    context_paths = DERIVED_PATHS
     for path in context_paths:
         set_path(derived, path, 987654)
-    _, _, _, materialized = launcher._materialize_context_budget(derived, parsed.context_budget)
+    materialized = launcher._materialize_context_budget(derived, parsed.recipe.context_budget)
     assert {
         ".".join(parts) for parts, before in leaves(derived) if get_path(materialized, ".".join(parts)) != before
     } == context_paths
-    assert set(parsed.context_budget.derived_values({})) == DERIVED_PATHS
+    assert set(parsed.recipe.context_budget.derived_values({})) == DERIVED_PATHS
 
 
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
-    assert SKYRL_INTERNAL_ENGINE_KWARGS == launcher.SKYRL_INTERNAL_ENGINE_KWARGS
     for prefix, config in (
         ("trainer.algorithm.ftpo", FTPOConfig),
         ("generator.speculative_decoding.training", speculative_decoding.SpeculatorTrainingConfig),
