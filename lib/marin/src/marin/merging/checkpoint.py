@@ -24,10 +24,6 @@ INDEX_NAME = "model.safetensors.index.json"
 RECIPE_NAME = "merge-recipe.json"
 MANIFEST_NAME = "merge-manifest.json"
 INCOMPLETE_NAME = ".merge-incomplete"
-SUPPORTED_DTYPE_WIDENINGS = {
-    ("bfloat16", "float32"): torch.bfloat16,
-    ("float16", "float32"): torch.float16,
-}
 METADATA_NAMES = (
     "config.json",
     "generation_config.json",
@@ -79,9 +75,9 @@ class CheckpointReader:
         self.source = source
         self.widening_patterns = []
         for pattern, (from_dtype, to_dtype) in source.dtype_widenings.items():
-            stored_dtype = SUPPORTED_DTYPE_WIDENINGS.get((from_dtype, to_dtype))
-            if stored_dtype is None:
+            if to_dtype != "float32" or from_dtype not in ("bfloat16", "float16"):
                 raise ValueError("Only explicit bfloat16 or float16 -> float32 widening is supported")
+            stored_dtype = torch.bfloat16 if from_dtype == "bfloat16" else torch.float16
             self.widening_patterns.append((re.compile(pattern), stored_dtype))
         self.fs, self.path = filesystem_for(source.path)
         if self.fs.exists(prefix_join(self.path, INCOMPLETE_NAME)):
