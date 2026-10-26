@@ -13,7 +13,7 @@ from marin.testing.inference.sequence_parity import (
 )
 
 
-def observations(delta_after_window=0.0):
+def scored_sequence(delta_after_window=0.0):
     return ScoredSequence(
         "long",
         "fixed-input",
@@ -25,8 +25,8 @@ def observations(delta_after_window=0.0):
 
 
 def test_window_regression_is_localized_even_when_pooled_mean_passes():
-    reference = observations()
-    broken = observations(0.06)
+    reference = scored_sequence()
+    broken = scored_sequence(0.06)
     result = compare_sequences(
         [broken], [reference], boundaries=(0, 1024, 2048, 2304, 4097), thresholds=SequenceThresholds(0.04, 0.04, 0.03)
     )
@@ -38,7 +38,7 @@ def test_window_regression_is_localized_even_when_pooled_mean_passes():
 
 @pytest.mark.parametrize("fault", ["missing", "shifted", "nan"])
 def test_incomplete_or_invalid_teacher_response_cannot_pass(fault):
-    reference = observations()
+    reference = scored_sequence()
     tokens = list(reference.tokens)
     if fault == "missing":
         tokens.pop()
