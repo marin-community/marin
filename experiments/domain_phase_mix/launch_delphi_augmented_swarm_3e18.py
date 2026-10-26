@@ -86,7 +86,7 @@ LOCAL_ARTIFACT_DIR = REFERENCE_OUTPUT_DIR / "delphi_augmented_swarm_3e18_2026071
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
 )
 LABEL = "adamh_scaling_v6"
 SEQ_LEN_DELPHI = 4096
@@ -165,6 +165,9 @@ class DelphiSwarmTrainingConfig:
     steps_per_eval: int
     permanent_checkpoint_interval: int | None
     wandb_group: str | None = None
+    # Levanter's default export cadence; at 3,007 steps only the forced final export fires. The seed-replicate panel
+    # sets it to the phase switch so the Table-9 evaluator can score the end of phase 1.
+    hf_save_steps: int = 10_000
 
 
 @dataclass(frozen=True)
@@ -392,8 +395,7 @@ def load_source_panel(
     realized_train_tokens = candidate.train_steps * batch_size * SEQ_LEN_DELPHI
     if realized_train_tokens > SIMULATED_EPOCH_TARGET_BUDGET:
         raise ValueError(
-            f"Delphi train tokens {realized_train_tokens} exceed simulated-epoch target "
-            f"{SIMULATED_EPOCH_TARGET_BUDGET}"
+            f"Delphi train tokens {realized_train_tokens} exceed simulated-epoch target {SIMULATED_EPOCH_TARGET_BUDGET}"
         )
     non_embedding_params = int(candidate.model_config.total_trainable_params(0))
     total_params = int(candidate.model_config.total_trainable_params(completed_adamh_heuristic.vocab_size))
@@ -544,6 +546,7 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
         model=candidate.model_config,
         optimizer=candidate.optimizer_config,
         data_seed=run_spec.data_seed,
+        hf_save_steps=config.hf_save_steps,
     )
     resources = ResourceConfig.with_tpu(
         run_spec.tpu_type,
@@ -798,7 +801,7 @@ def main() -> None:
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=artifacts.steps,
         description=(
-            f"{EXPERIMENT_NAME}: exact 280-row augmented fit panel at Delphi 3e18 " "with native Table-9 evaluation"
+            f"{EXPERIMENT_NAME}: exact 280-row augmented fit panel at Delphi 3e18 with native Table-9 evaluation"
         ),
     )
 
