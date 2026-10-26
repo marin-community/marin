@@ -96,15 +96,6 @@ def _validate_flash_attention_mask(attention_mask: torch.Tensor) -> None:
     )
 
 
-def validate_grug_expert_parallel_runtime(*, use_grouped_mm: bool, ep_comm_backend: str) -> None:
-    """Validate the execution choices required by native Grug expert sharding."""
-
-    if not use_grouped_mm:
-        raise ValueError("Grug expert_model_parallel_size>1 requires use_grouped_mm=true")
-    if ep_comm_backend != GRUG_EP_COMM_BACKEND:
-        raise ValueError(f"Grug expert parallelism supports only ep_comm_backend={GRUG_EP_COMM_BACKEND}")
-
-
 def jax_top_k(values: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Return JAX-compatible top-k results, including its lower-index tie rule."""
 
@@ -400,12 +391,6 @@ class GrugMoeExperts(nn.Module, ExpertGradientAveraging):
         self.use_grouped_mm = False
         self.ep_size = 1
         self._grouped_mm_logged = False
-
-    def validate_expert_parallel_runtime(self, ep_comm_backend: str) -> None:
-        validate_grug_expert_parallel_runtime(
-            use_grouped_mm=self.use_grouped_mm,
-            ep_comm_backend=ep_comm_backend,
-        )
 
     def forward_eager(
         self,

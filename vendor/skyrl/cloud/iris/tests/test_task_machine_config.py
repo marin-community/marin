@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import Backend
 from marinskyrl.task_machine_factories import task_machine_factories
-from skyrl_gym.rollout_specs import rollout_spec, shell_harness
+from skyrl_gym.rollout_specs import shell_harness
 from skyrl_train.dataset.tasks import source_row_task
 
 from cloud.iris.launch_config import LaunchTopology
@@ -68,17 +68,16 @@ def test_empty_session_settings_preserve_published_limits_and_shell_timeout(tmp_
     config = composed_config(tmp_path, {"session": {}})
     config.generator.max_turns = 3
     config.trajectory_runner.command_timeout = 17
-    task = source_row_task(
+    spec = source_row_task(
         {
-            "env_class": "gsm8k",
+            "env_class": "shellbox",
             "prompt": [{"role": "user", "content": "1 + 1?"}],
             "reward_model": {"ground_truth": "2"},
         },
         0,
         source_name="empty-session-merge",
         environment_configs=OmegaConf.to_container(config.environment.task_sessions, resolve=True),
-    ).task
-    spec = rollout_spec(task, {**dict(config.environment.task_sessions.session), "task_session": "shellbox"})
+    )
 
     assert spec.limits.max_turns == 3
     assert shell_harness(spec.harness).command_timeout == 17

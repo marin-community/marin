@@ -5,7 +5,6 @@ import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
@@ -66,25 +65,6 @@ from .placement_geometry import validate_colocated_engine_geometry
 
 def moe_router_replay_requested(cfg: DictConfig, role: str = "policy") -> bool:
     return bool(cfg.trainer[role].megatron_config.get("moe_router_replay", False))
-
-
-def policy_strict_spread_eligible(cfg: DictConfig) -> bool:
-    """Whether to reserve policy nodes before inference engines start.
-
-    Pure (Ray-free) predicate so it is unit-testable. Eligible only when ALL of:
-      - `trainer.placement.policy_strict_spread_pg` is enabled (opt-in; default
-        false, so every existing run is byte-for-byte unchanged),
-      - the run is disaggregated (`colocate_all=false`), and
-      - a reference model, when used, shares the policy placement group.
-    """
-    placement = cfg.trainer.placement
-    if not bool(getattr(placement, "policy_strict_spread_pg", False)):
-        return False
-    if placement.colocate_all:
-        return False
-    algo = cfg.trainer.algorithm
-    use_ref_model = reference_model_required(algo)
-    return not use_ref_model or bool(placement.colocate_policy_ref)
 
 
 def resolve_pinned_local_rank(
@@ -199,9 +179,7 @@ def policy_force_cvd_mask_enabled(cfg: DictConfig) -> bool:
 def policy_per_gpu_bundles_enabled(cfg: DictConfig) -> bool:
     """Whether the dedicated policy PG should use per-GPU {GPU:1} bundles.
 
-    Pure (Ray-free) predicate. Only meaningful when the dedicated STRICT_SPREAD
-    policy PG is itself eligible (see `policy_strict_spread_eligible`); this just
-    reads the opt-in sub-flag. Default false → legacy whole-node {GPU:4} bundles.
+    Export and explicitly supplied policy placement groups select per-GPU bundles.
     """
     return bool(getattr(cfg.trainer.placement, "policy_per_gpu_bundles", False))
 
@@ -528,12 +506,6 @@ def validate_cfg(cfg: DictConfig):
     except ValueError as error:
         raise AssertionError(str(error)) from error
 
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
-
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
     )
@@ -681,7 +653,7 @@ def validate_generator_cfg(cfg: DictConfig):
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":
-        if cfg.generator.backend == "vllm" and not cfg.generator.run_engines_locally:
+        if not cfg.generator.run_engines_locally:
             # remote engines can be launched separately so we `enable` by default
             cfg.generator.override_existing_update_group = "enable"
         else:
@@ -1050,37 +1022,36 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         # TransformerEngine otherwise overrides the FlashAttention choice on Hopper+.
         env_vars["NVTE_FUSED_ATTN"] = "0"
 
-    if cfg.generator.backend == "vllm":
-        env_vars["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "true"
+    env_vars["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "true"
 
-        # NOTE (sumanthrh): In vllm >= 0.9.0, we need to explicitly allow for serialization via pickle for collective RPCs.
-        # During weight transfer, we use IPC handles, which contains a `function` object and requires pickling.
-        env_vars["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+    # NOTE (sumanthrh): In vllm >= 0.9.0, we need to explicitly allow for serialization via pickle for collective RPCs.
+    # During weight transfer, we use IPC handles, which contains a `function` object and requires pickling.
+    env_vars["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
-        # NOTE (sumanthrh): In vLLM >= 0.9.0, we've observed compilatiion failures with torch compile. removing the compilation directory and trying
-        # again does not fix the issue. Temporarily we disable compilation cache, which seems to fix the issue.
-        # This should not have any effect on performance - compilation will still happen, it's just not cached
-        # TODO (sumanthrh): remove this once vLLM fixes the issue
-        env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
+    # NOTE (sumanthrh): In vLLM >= 0.9.0, we've observed compilatiion failures with torch compile. removing the compilation directory and trying
+    # again does not fix the issue. Temporarily we disable compilation cache, which seems to fix the issue.
+    # This should not have any effect on performance - compilation will still happen, it's just not cached
+    # TODO (sumanthrh): remove this once vLLM fixes the issue
+    env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
 
-        if not os.environ.get("VLLM_USE_V1", False):
+    if not os.environ.get("VLLM_USE_V1", False):
+        logger.info(
+            "`VLLM_USE_V1` is not specified, setting `VLLM_USE_V1` to 1. To override, set `VLLM_USE_V1` explicitly"
+        )
+        env_vars["VLLM_USE_V1"] = "1"
+        # The `mp` executor backend (Qwen3-Next R3 capture path, opt-in
+        # generator.inference_engine_mp_backend) REQUIRES v1 multiprocessing to
+        # spawn its TP worker subprocesses; forcing it to 0 here (the default,
+        # for scheduling determinism) cancels the mp executor's shm message
+        # queue at warm-up. Keep it ON (unset => vLLM default 1) for mp.
+        mp_backend = bool(getattr(cfg.generator, "inference_engine_mp_backend", False))
+        if not mp_backend:
+            env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+        else:
             logger.info(
-                "`VLLM_USE_V1` is not specified, setting `VLLM_USE_V1` to 1. To override, set `VLLM_USE_V1` explicitly"
+                "inference_engine_mp_backend=true: NOT setting VLLM_ENABLE_V1_MULTIPROCESSING=0 "
+                "(the mp executor needs v1 multiprocessing to spawn TP workers)."
             )
-            env_vars["VLLM_USE_V1"] = "1"
-            # The `mp` executor backend (Qwen3-Next R3 capture path, opt-in
-            # generator.inference_engine_mp_backend) REQUIRES v1 multiprocessing to
-            # spawn its TP worker subprocesses; forcing it to 0 here (the default,
-            # for scheduling determinism) cancels the mp executor's shm message
-            # queue at warm-up. Keep it ON (unset => vLLM default 1) for mp.
-            mp_backend = bool(getattr(cfg.generator, "inference_engine_mp_backend", False))
-            if not mp_backend:
-                env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-            else:
-                logger.info(
-                    "inference_engine_mp_backend=true: NOT setting VLLM_ENABLE_V1_MULTIPROCESSING=0 "
-                    "(the mp executor needs v1 multiprocessing to spawn TP workers)."
-                )
 
     # Use max of available GPU counts, defaulting to 1 if none found
     gpu_counts = []
@@ -1402,11 +1373,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port

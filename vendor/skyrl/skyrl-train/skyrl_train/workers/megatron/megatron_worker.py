@@ -895,10 +895,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             weights=weights,
         )
 
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
-
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
         pass
@@ -986,10 +982,6 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
             ),
         )
         self._maybe_install_router_replay("ref")
-
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
 
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method

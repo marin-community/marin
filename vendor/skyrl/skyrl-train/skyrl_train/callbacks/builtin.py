@@ -1044,9 +1044,8 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
 
     # Inference stats callback (enabled when using the vLLM backend). This combines
     # engine and HTTP bridge stats without relying on Ray log-to-driver forwarding.
-    generator_backend = getattr(cfg.generator, "backend", None)
     inference_stats_interval = getattr(cfg.generator, "inference_stats_interval", 1)
-    if generator_backend == "vllm" and inference_stats_interval > 0:
+    if inference_stats_interval > 0:
         callbacks.append(
             InferenceStatsCallback(
                 log_every_steps=inference_stats_interval,

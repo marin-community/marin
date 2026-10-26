@@ -89,11 +89,13 @@ def test_native_adamw_recipe_matches_torch_weight_updates(megatron_overrides):
         torch.distributed.destroy_process_group()
 
 
-def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture):
+@pytest.mark.parametrize("use_entropy_loss", [False, True])
+def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture, use_entropy_loss):
     """Keep the selected FlashAttention backend usable through a CP2 policy step."""
     require_hoppers(2)
     cfg = get_test_actor_config(logger="console")
     cfg.trainer.strategy = "megatron"
+    cfg.trainer.algorithm.use_entropy_loss = use_entropy_loss
     cfg.trainer.flash_attn = True
     cfg.trainer.use_sample_packing = True
     cfg.trainer.placement.policy_num_gpus_per_node = 2
@@ -107,6 +109,8 @@ def test_megatron_flash_attention_cp2_forward_backward(ray_init_fixture):
     cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.trainer.micro_train_batch_size_per_gpu = 1
     batch = get_test_training_batch(4)
+    if use_entropy_loss:
+        batch["advantages"].zero_()
     batch.metadata["global_step"] = 0
 
     policy = init_worker_with_type("policy", shared_pg=None, colocate_all=False, num_gpus_per_node=2, cfg=cfg)

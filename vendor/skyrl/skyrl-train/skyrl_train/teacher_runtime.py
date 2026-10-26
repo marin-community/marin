@@ -174,6 +174,7 @@ async def _start_local_teacher_pool(
     )
     engine_kwargs = inference_engine_kwargs_from_config(
         cfg,
+        teacher_tokenizer,
         role=role,
         engine_init_kwargs=engine_init_kwargs,
     )

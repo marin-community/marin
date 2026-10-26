@@ -1806,9 +1806,9 @@ class RayPPOTrainer:
         for group in counts.values():
             record_event("consumed_staleness", group, attributes={"role": TRAINER_ROLE, "step": str(self.global_step)})
 
-    def build_models(self, PolicyWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
+    def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
         """
-        Initialize the actors for training, and handle colocation logic
+        Initialize policy/reference actors; CriticWorker is unused.
 
         Args:
             policy_pg: Optional placement group reserved before inference
@@ -2555,7 +2555,6 @@ class RayPPOTrainer:
             - `["sequences"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["response_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
             - `["loss_mask"]`: Integer[torch.Tensor, "batch_size seqlen"]
-            - `["values"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `["rewards"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `.metadata["uids"]`: List[str]
 
@@ -2571,9 +2570,7 @@ class RayPPOTrainer:
             index = np.array(data.metadata["uids"])
             adv_estimator = self.cfg.trainer.algorithm.advantage_estimator
             config = self.cfg.trainer.algorithm
-            values = data["values"]
             gamma = self.cfg.trainer.algorithm.gamma
-            lambd = self.cfg.trainer.algorithm.lambd
             grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
             last_step_rewards = token_level_rewards[is_last_step]
             # compatible with any advantage estimator
@@ -2582,10 +2579,8 @@ class RayPPOTrainer:
                 response_mask=response_mask[is_last_step],
                 index=index[is_last_step.cpu().numpy()],
                 adv_estimator=adv_estimator,
-                values=values[is_last_step] if values is not None else None,
                 config=config,
                 gamma=gamma,
-                lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
             )
@@ -2613,9 +2608,7 @@ class RayPPOTrainer:
                 index=data.metadata["uids"],
                 adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
                 config=self.cfg.trainer.algorithm,
-                values=data["values"],
                 gamma=self.cfg.trainer.algorithm.gamma,
-                lambd=self.cfg.trainer.algorithm.lambd,
                 grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
                 exclude_from_baseline=exclude_from_baseline,
                 token_level_shaping=token_level_shaping,
@@ -2786,7 +2779,6 @@ class RayPPOTrainer:
         Adds:
             - `["base_action_log_probs"]`: Float[torch.Tensor, "batch_size seqlen"]
             - `["action_log_probs"]`: Float[torch.Tensor, "batch_size seqlen"]
-            - `["values"]`: Float[torch.Tensor, "batch_size seqlen"]
         """
         # MoE router-replay (R3): the pre-update old-logprob / ref forward MUST
         # replay the SAME captured routing as the training forward, otherwise the
@@ -2871,7 +2863,6 @@ class RayPPOTrainer:
         # NOTE (sumanthrh): The slicing is needed to make sure that the batch dimension doesn't change for the tensordict.
         reference_scores = reference_scores[: len(sequences_all)] if reference_scores is not None else None
         action_log_probs = action_log_probs[: len(sequences_all)]
-        values = None
 
         if "ftpo_chosen_mask" in training_input:
             if reference_scores is None:
@@ -2881,7 +2872,6 @@ class RayPPOTrainer:
         base_log_probs = reference_scores
         training_input["base_action_log_probs"] = base_log_probs
         training_input["action_log_probs"] = action_log_probs
-        training_input["values"] = values
 
         # Only the mismatch statistics read token staleness, so the workers never receive it.
         rollout_staleness = training_input.pop("rollout_staleness")
@@ -3021,10 +3011,6 @@ class RayPPOTrainer:
         ray.get(empty_cache_refs)
 
         return policy_status
-
-    def _get_dp_group_models(self, rank: int, model_type: str = ""):
-        model = getattr(self, model_type)
-        return model._actor_handlers[rank]
 
     def _get_mesh_rank(self, rank: int, model_type: str = "") -> MeshRank:
         model: PPORayActorGroup = getattr(self, model_type)

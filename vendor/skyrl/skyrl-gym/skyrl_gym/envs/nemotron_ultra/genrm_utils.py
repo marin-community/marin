@@ -16,7 +16,6 @@
 """Utility functions for GenRM comparison server.
 
 This module provides:
-- Prompt key and conversation history extraction (for cohort grouping)
 - Comparison pair generation strategies (circular, all_pairs)
 - GenRM output parsing (JSON score extraction)
 - Response API object text extraction
@@ -33,7 +32,6 @@ import math
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-from pydantic import BaseModel
 
 
 logger = logging.getLogger(__name__)
@@ -69,19 +67,7 @@ class GenRMOutputParseError(ValueError):
 
 
 # =============================================================================
-# Prompt key and conversation history (for cohort-based verify)
 # =============================================================================
-
-
-def _to_jsonable_data(value: Any) -> Any:
-    """Recursively convert request payloads into JSON-serializable data."""
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if isinstance(value, dict):
-        return {str(k): _to_jsonable_data(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable_data(item) for item in value]
-    return value
 
 
 # =============================================================================

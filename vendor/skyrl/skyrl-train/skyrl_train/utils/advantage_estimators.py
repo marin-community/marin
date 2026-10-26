@@ -7,12 +7,11 @@ licensed under Apache 2.0.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional, Tuple
+from typing import Optional
 
 import loguru
 import numpy as np
 import torch
-from jaxtyping import Float
 from omegaconf import DictConfig
 
 from marinskyrl.runtime_options import AdvantageEstimator
@@ -352,37 +351,6 @@ def compute_rloo_n_pbs_advantage(
     return combined, combined
 
 
-@register_advantage_estimator(AdvantageEstimator.GAE, group_contract=NoGroupAdvantage())
-def compute_gae_advantage_return(
-    token_level_rewards: Float[torch.Tensor, "batch_size seqlen"],
-    values: Float[torch.Tensor, "batch_size seqlen"],
-    response_mask: Float[torch.Tensor, "batch_size seqlen"],
-    gamma: float,
-    lambd: float,
-    **kwargs,
-) -> Tuple[Float[torch.Tensor, "batch_size seqlen"], Float[torch.Tensor, "batch_size seqlen"]]:
-    """
-    Compute advantage and return for GAE.
-
-    Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py
-    """
-    with torch.no_grad():
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = token_level_rewards.shape[-1]
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = token_level_rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lambd * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-
-        returns = advantages + values
-        advantages = masked_whiten(advantages, response_mask)
-    return advantages, returns
-
-
 @register_advantage_estimator(AdvantageEstimator.GRPO, group_contract=ExactPhysicalGroup())
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
@@ -449,16 +417,15 @@ def compute_advantages_and_returns(
     exclude_from_baseline: Optional[np.ndarray] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Dispatch policy advantages; values and lambd are unused."""
     estimator_func = AdvantageEstimatorRegistry.get(adv_estimator)
 
     return estimator_func(
         token_level_rewards=token_level_rewards,
         response_mask=response_mask,
         index=index,
-        values=values,
         grpo_norm_by_std=grpo_norm_by_std,
         gamma=gamma,
-        lambd=lambd,
         config=config,
         exclude_from_baseline=exclude_from_baseline,
         **kwargs,

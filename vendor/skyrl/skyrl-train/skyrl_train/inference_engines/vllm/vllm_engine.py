@@ -576,7 +576,7 @@ class WorkerWrap:
         Materializes + runs ``process_weights_after_loading`` over the WHOLE weight
         set exactly once -> re-applies the FlashInfer-CUTLASS ``swap_w13_to_w31`` the
         per-chunk ``model.load_weights`` skips. Must be called after every chunk's
-        ``load_weights`` (and after ``end_weight_update``'s fused flush).
+        ``load_weights``.
         """
         if not getattr(self, "_skyrl_weight_update_active", False):
             raise RuntimeError("skyrl_begin_weight_reload must be called before skyrl_finish_weight_reload.")
@@ -594,197 +594,10 @@ class WorkerWrap:
         if speculative_config is not None and speculative_config.method == "eagle3":
             self.model_runner.refresh_online_eagle_target_owned_weights()
 
-    def begin_weight_update(self) -> None:
-        """Start accumulating weights for batched load_weights call.
-
-        When fused loading is requested, weights are accumulated instead of loaded
-        immediately. Call end_weight_update() to flush and apply them all at once
-        via model.load_weights(), which handles packed module mapping (qkv_proj, gate_up_proj).
-        Weights are stored on CPU to avoid GPU OOM during accumulation.
-        """
-        self._accumulated_weights = []
-
-    def _is_fp8_model(self):
-        """Check if the model uses FP8 quantization."""
-        quant_config = getattr(self.model_runner.model, "quant_config", None)
-        if quant_config is None:
-            return False
-        from vllm.model_executor.layers.quantization.fp8 import Fp8Config
-
-        return isinstance(quant_config, Fp8Config)
-
-    def _quantize_weights_for_fp8(self, weights):
-        """Quantize BF16 weights to FP8 before loading into FP8 model.
-
-        Follows verl's approach: quantize each weight tensor to FP8 with
-        per-tensor scale, then yield (name, fp8_tensor) and (name_scale, scale).
-        Non-linear weights (layernorm, embedding) are passed through as-is.
-        """
-        import torch
-        from vllm._custom_ops import scaled_fp8_quant
-
-        model = self.model_runner.model
-        # Build set of parameter names that are FP8 quantized
-        # These are the linear layer weights (not biases, not layernorms, not embeddings)
-        fp8_param_names = set()
-        for name, module in model.named_modules():
-            from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-
-            if hasattr(module, "quant_method") and isinstance(module.quant_method, Fp8LinearMethod):
-                for pname, _ in module.named_parameters():
-                    if "weight" in pname and "scale" not in pname:
-                        full_name = f"{name}.{pname}" if name else pname
-                        fp8_param_names.add(full_name)
-
-        for name, tensor in weights:
-            # Check if this weight maps to an FP8-quantized parameter
-            # The name might be "layers.0.self_attn.q_proj.weight" but the
-            # FP8 param is "layers.0.self_attn.qkv_proj.weight"
-            # We need to check the ORIGINAL unfused name against the fused params
-            is_fp8 = False
-            packed_mapping = getattr(model, "packed_modules_mapping", {})
-            # Reverse mapping: q_proj -> qkv_proj, gate_proj -> gate_up_proj
-            reverse_map = {}
-            for fused, originals in packed_mapping.items():
-                for orig in originals:
-                    reverse_map[orig] = fused
-
-            # Try to find the FP8 param name
-            check_name = name
-            parts = name.rsplit(".", 2)
-            if len(parts) >= 2:
-                module_part = parts[-2]  # e.g. "q_proj"
-                if module_part in reverse_map:
-                    check_name = name.replace(module_part, reverse_map[module_part])
-
-            if check_name in fp8_param_names or name in fp8_param_names:
-                is_fp8 = True
-
-            if is_fp8 and tensor.dtype != torch.float8_e4m3fn:
-                # Move to GPU, quantize, move back to CPU
-                gpu_tensor = tensor.to(device="cuda", dtype=torch.bfloat16)
-                fp8_tensor, scale = scaled_fp8_quant(gpu_tensor)
-                yield (name, fp8_tensor.cpu())
-                # Yield the scale with the FUSED param name
-                scale_name = check_name.replace(".weight", ".weight_scale")
-                yield (scale_name, scale.cpu())
-                del gpu_tensor, fp8_tensor
-            else:
-                yield (name, tensor)
-
-    def _restore_param_subclasses(self, model):
-        """Temporarily restore param __class__ to subclass_type for weight loading.
-
-        After process_weights_after_loading, params are plain Parameter but have
-        subclass_type saved. Restoring __class__ makes weight_loader dispatch work.
-        Returns list of (param, original_class) for cleanup.
-        """
-        patched = []
-        for name, param in model.named_parameters():
-            subclass_type = getattr(param, "subclass_type", None)
-            if subclass_type is not None and type(param) is not subclass_type:
-                original_class = type(param)
-                param.__class__ = subclass_type
-                patched.append((param, original_class))
-        return patched
-
-    def _undo_param_subclasses(self, patched):
-        """Undo the temporary __class__ patching."""
-        for param, original_class in patched:
-            param.__class__ = original_class
-
-    def end_weight_update(self) -> None:
-        """Flush accumulated weights via model.load_weights().
-
-        For FP8 models: quantizes BF16 weights to FP8 before loading,
-        following verl's approach. Also temporarily restores param subclass
-        types so weight_loader dispatch works correctly with FP8 params.
-        """
-        import gc
-
-        if hasattr(self, "_accumulated_weights") and self._accumulated_weights:
-            model = self.model_runner.model
-            if self._is_fp8_model():
-                import torch
-                import gc
-                from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-                from vllm._custom_ops import scaled_fp8_quant
-
-                # Receiver-side FP8 quantization: BF16 weights arrive via NCCL,
-                # fuse stacked params, quantize to FP8, write directly to model.
-                weight_index = {name: tensor for name, tensor in self._accumulated_weights}
-                stacked = [
-                    ("qkv_proj", "q_proj", "q"),
-                    ("qkv_proj", "k_proj", "k"),
-                    ("qkv_proj", "v_proj", "v"),
-                    ("gate_up_proj", "gate_proj", 0),
-                    ("gate_up_proj", "up_proj", 1),
-                ]
-
-                for mname, module in model.named_modules():
-                    if not (hasattr(module, "quant_method") and isinstance(module.quant_method, Fp8LinearMethod)):
-                        continue
-                    param = module.weight
-                    device = param.device
-                    is_stacked = any(mname.endswith(pn) for pn, _, _ in stacked)
-
-                    if is_stacked:
-                        shard_list = []
-                        for param_name, weight_name, shard_id in stacked:
-                            if not mname.endswith(param_name):
-                                continue
-                            src_name = mname.replace(param_name, weight_name) + ".weight"
-                            if src_name in weight_index:
-                                shard_list.append(weight_index[src_name])
-                        if shard_list:
-                            full_bf16 = torch.cat(shard_list, dim=0).to(
-                                device=device, dtype=torch.bfloat16, non_blocking=True
-                            )
-                            torch.cuda.current_stream().synchronize()
-                            fp8_full, scale = scaled_fp8_quant(full_bf16)
-                            param.data.copy_(fp8_full)
-                            if hasattr(module, "weight_scale"):
-                                module.weight_scale.data.copy_(scale.squeeze())
-                            del full_bf16, fp8_full, scale, shard_list
-                    else:
-                        src_name = mname + ".weight"
-                        if src_name in weight_index:
-                            bf16_w = weight_index[src_name].to(device=device, dtype=torch.bfloat16, non_blocking=True)
-                            torch.cuda.current_stream().synchronize()
-                            fp8_w, scale = scaled_fp8_quant(bf16_w)
-                            param.data.copy_(fp8_w)
-                            if hasattr(module, "weight_scale"):
-                                module.weight_scale.data.copy_(scale.squeeze())
-                            del bf16_w, fp8_w, scale
-
-                # Load non-FP8 params (layernorms, embeddings)
-                params_dict = dict(model.named_parameters())
-                for name, tensor in self._accumulated_weights:
-                    if name in params_dict:
-                        param = params_dict[name]
-                        if param.dtype != torch.float8_e4m3fn:
-                            param.data.copy_(tensor.to(device=param.device, dtype=param.dtype))
-
-                del weight_index
-
-                gc.collect()
-                torch.cuda.empty_cache()
-            else:
-                load_weights_into_vllm(model, self._accumulated_weights)
-            self._accumulated_weights.clear()
-            del self._accumulated_weights
-            gc.collect()
-            import torch
-
-            torch.cuda.empty_cache()
-
     def load_weights(self, request: NamedWeightsUpdateRequest) -> None:
         """Load weights using the receiver.
 
         This method is called via collective_rpc from VLLMWeightLoader.
-
-        When fused loading is requested and begin_weight_update() was called,
-        weights are accumulated on CPU instead of loaded immediately.
 
         Args:
             request: Weight update request with names, dtypes, shapes, etc.
@@ -793,16 +606,9 @@ class WorkerWrap:
         for name, tensor in self._weight_receiver.receive_weights(request):
             weight_list.append((name, tensor))
 
-        if hasattr(self, "_accumulated_weights"):
-            # Batched mode: move to CPU and accumulate for later flush
-            for name, tensor in weight_list:
-                self._accumulated_weights.append((name, tensor.cpu()))
-            del weight_list
-        else:
-            # Immediate mode (default): load right away
-            load_weights_into_vllm(self.model_runner.model, weight_list)
-            for weight in weight_list:
-                del weight
+        load_weights_into_vllm(self.model_runner.model, weight_list)
+        for weight in weight_list:
+            del weight
 
     # TODO (sumanthrh): Add destroy process group RPC as a atexit handler to Trainer code.
     def destroy_weights_update_group(self):
@@ -942,108 +748,6 @@ class WorkerWrap:
             except Exception as e:  # never crash the collective_rpc
                 out[name] = {"found": False, "error": repr(e)}
         return out
-
-    def read_expert_slots_raw(self, layer_idx: int):
-        """TEST-ONLY (D1/D2 disaggregated-receive diag): return THIS engine worker's
-        RAW per-local-slot FusedMoE expert weights + the engine's OWN expert_map for
-        ``layer_idx``, with NO assumption about global<->local placement.
-
-        Unlike ``read_named_weights`` (which maps a requested HF expert ``gj`` to a slot
-        via ``gj // n_local`` — a CONTIGUOUS-linear assumption that would HIDE a
-        receive-side placement bug), this dumps every local slot's bytes AS-IS plus the
-        engine's authoritative ``_expert_map`` (global->local, -1 if absent). The driver
-        then does a NON-circular cross-expert nearest-match vs the DISK base checkpoint,
-        so a slot carrying the wrong global expert (D2 placement) surfaces as m!=j even
-        though a per-name readback could not see it.
-
-        Returns dict:
-          __ranks__        : {tp_rank, tp_size, ep_rank, ep_size}
-          expert_map       : list[int] length global_num_experts (global->local slot, -1 absent)
-          slot_to_global   : list[int] length local_num_experts (inverse; -1 if ambiguous)
-          local_num_experts, global_num_experts, w13_inter_half (I), placement_strategy
-          slots            : {local_slot -> {"w13": cpu_fp32 [2I,H], "w2": cpu_fp32 [H,I]}}
-        Heavy (full local expert stack as fp32 CPU); call for ONE layer.
-        """
-        import torch as _torch
-
-        model = self.model_runner.model
-        params = dict(model.named_parameters())
-        buffers = dict(model.named_buffers())
-        all_params = {**params, **buffers}
-
-        try:
-            from vllm.distributed import parallel_state as _ps
-
-            tp_rank = _ps.get_tensor_model_parallel_rank()
-            tp_size = _ps.get_tensor_model_parallel_world_size()
-        except Exception:
-            tp_rank, tp_size = 0, 1
-        try:
-            ep_rank = _ps.get_ep_group().rank_in_group
-            ep_size = _ps.get_ep_group().world_size
-        except Exception:
-            ep_rank, ep_size = 0, 1
-
-        out = {"__ranks__": {"tp_rank": tp_rank, "tp_size": tp_size, "ep_rank": ep_rank, "ep_size": ep_size}}
-        prefix = f"model.layers.{layer_idx}.mlp"
-        w13 = all_params.get(f"{prefix}.experts.routed_experts.w13_weight")
-        w2 = all_params.get(f"{prefix}.experts.routed_experts.w2_weight")
-        if w13 is None or w2 is None:
-            cand = [k for k in all_params if k.startswith(f"{prefix}.experts.") and k.endswith("weight")]
-            out["error"] = f"no w13/w2 under {prefix}; candidates={cand}"
-            return out
-
-        # Find the FusedMoE module to read its authoritative expert_map + counts.
-        emap = None
-        local_num = int(w13.shape[0])
-        global_num = None
-        placement = None
-        for mod_name, mod in model.named_modules():
-            routed_experts_name = f"{prefix}.experts.routed_experts"
-            if mod_name == routed_experts_name or mod_name.endswith(routed_experts_name):
-                emap = getattr(mod, "_expert_map", None)
-                if emap is None:
-                    emap = getattr(mod, "expert_map", None)
-                local_num = int(getattr(mod, "local_num_experts", local_num))
-                global_num = getattr(mod, "global_num_experts", None)
-                placement = getattr(mod, "expert_placement_strategy", None)
-                break
-
-        # global->local slot map (the engine's OWN authority on placement).
-        if emap is not None:
-            emap_list = [int(x) for x in emap.detach().cpu().tolist()]
-        else:
-            emap_list = None
-        out["expert_map"] = emap_list
-        out["local_num_experts"] = local_num
-        out["global_num_experts"] = int(global_num) if global_num is not None else None
-        out["placement_strategy"] = str(placement) if placement is not None else None
-        out["w13_inter_half"] = int(w13.shape[1] // 2)
-
-        # Inverse: local slot -> global expert (per the engine's expert_map).
-        slot_to_global = [-1] * local_num
-        if emap_list is not None:
-            for g, loc in enumerate(emap_list):
-                if 0 <= loc < local_num:
-                    slot_to_global[loc] = g
-        out["slot_to_global"] = slot_to_global
-
-        slots = {}
-        for s in range(local_num):
-            slots[s] = {
-                "w13": w13[s].detach().to("cpu", dtype=_torch.float32).contiguous(),
-                "w2": w2[s].detach().to("cpu", dtype=_torch.float32).contiguous(),
-            }
-        out["slots"] = slots
-        return out
-
-    def report_host(self):
-        """TEST-ONLY (disaggregation proof): this engine worker's hostname (one per
-        TP/EP worker via collective_rpc) so the driver can prove the engine node is
-        DISJOINT from the policy nodes (=> the broadcast is genuinely cross-node)."""
-        import socket
-
-        return socket.gethostname()
 
     def report_device_placement(self) -> dict[str, str | int]:
         """This worker's host, GPU and ranks, as a plain dict."""
@@ -1858,16 +1562,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         # Use the weight loader to coordinate weight transfer
         return await self._weight_loader.load_weights(request)
 
-    async def begin_weight_update(self):
-        """Signal engines to start accumulating weights for batched loading."""
-        engine = self.llm
-        return await engine.collective_rpc("begin_weight_update")
-
-    async def end_weight_update(self):
-        """Flush accumulated weights via model.load_weights()."""
-        engine = self.llm
-        return await engine.collective_rpc("end_weight_update")
-
     async def read_engine_weights(self, hf_names, dump_inventory: bool = False):
         """TEST-ONLY (Stage 6 weight-equality gate): read engine-side weights back
         under the trainer's HF parameter names, gathered across all TP/EP workers.
@@ -1879,18 +1573,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         """
         engine = self.llm
         return await engine.collective_rpc("read_named_weights", args=(list(hf_names), dump_inventory))
-
-    async def read_engine_expert_slots_raw(self, layer_idx: int):
-        """TEST-ONLY (D1/D2 diag): per-engine-worker RAW FusedMoE local-slot weights +
-        the engine's own expert_map for ``layer_idx``. Returns List[Dict] (one per
-        engine worker rank). See ``WorkerWrap.read_expert_slots_raw``."""
-        engine = self.llm
-        return await engine.collective_rpc("read_expert_slots_raw", args=(int(layer_idx),))
-
-    async def report_engine_hosts(self):
-        """TEST-ONLY (disaggregation proof): hostname of every engine TP/EP worker."""
-        engine = self.llm
-        return await engine.collective_rpc("report_host")
 
     async def report_engine_placement(self):
         """Host, GPU and ranks of every worker of this engine."""

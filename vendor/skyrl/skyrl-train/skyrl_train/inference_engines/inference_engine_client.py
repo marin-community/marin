@@ -286,13 +286,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         if (prompts is None and prompt_token_ids is None) or (prompts is not None and prompt_token_ids is not None):
             raise ValueError("Either `prompts` or `prompt_token_ids` must be provided, but not both.")
         if prompt_token_ids is None:
-            prompt_token_ids = self.tokenizer.apply_chat_template(
-                prompts,
-                add_generation_prompt=True,
-                add_special_tokens=False,
-                return_dict=True,
-                tokenize=True,
-            )["input_ids"]
+            raise ValueError("prompt_token_ids must be provided.")
 
         num_prompts = len(prompt_token_ids)
         if per_prompt_sampling_params is not None and len(per_prompt_sampling_params) != num_prompts:
@@ -738,7 +732,7 @@ class InferenceEngineClient(InferenceEngineInterface):
 
             # Error responses have an error object instead of completion choices.
             if is_engine_error_response(partial_response):
-                error_info = partial_response.get("error", partial_response)
+                error_info = partial_response["error"]
                 error_msg = (
                     error_info.get("message", str(error_info)) if isinstance(error_info, dict) else str(error_info)
                 )
@@ -1352,7 +1346,7 @@ def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional
     """Return the first vLLM completion error as a client error, or None."""
     for result in results:
         if is_engine_error_response(result):
-            error_details = result.get("error", result)
+            error_details = result["error"]
             return ErrorResponse(
                 error=ErrorInfo(
                     message=f"In one of the engines that SkyRL manages, an error occurred: {error_details['message']}",

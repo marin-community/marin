@@ -13,7 +13,6 @@ sourced from PyTorch:
 from __future__ import annotations
 
 import os
-import socket
 from datetime import timedelta
 from typing import Any, Optional, Union, Tuple
 
@@ -85,12 +84,6 @@ def init_worker_process_group_with_device(timeout_seconds: int, backend: str = "
             timeout=timedelta(seconds=timeout_seconds),
             device_id=torch.device("cuda", local_rank),
         )
-
-
-def get_free_port():
-    with socket.socket() as sock:
-        sock.bind(("", 0))
-        return sock.getsockname()[1]
 
 
 # Copy from pytorch to allow creating multiple main groups.

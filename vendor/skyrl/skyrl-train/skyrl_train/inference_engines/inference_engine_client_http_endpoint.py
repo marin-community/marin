@@ -133,7 +133,7 @@ class _RequestOutcomeMiddleware:
 
 def is_engine_error_response(response: Dict[str, Any]) -> bool:
     """Recognize vLLM-compatible error responses."""
-    return "error" in response or response.get("object", "") == "error"
+    return "error" in response
 
 
 def set_global_state(inference_engine_client: InferenceHTTPBackend, uvicorn_server: uvicorn.Server | None):
@@ -362,7 +362,7 @@ async def handle_openai_request(
         response = await _await_with_disconnect(raw_request, backend_request)
 
         if is_engine_error_response(response):
-            error_code = response["error"]["code"] if "error" in response else response["code"]
+            error_code = response["error"]["code"]
             return _json_response(response, endpoint=endpoint, bridge_stats=bridge_stats, status_code=error_code)
         else:
             return _json_response(response, endpoint=endpoint, bridge_stats=bridge_stats)

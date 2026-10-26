@@ -124,10 +124,12 @@ class EntrypointSupervisor:
 def create_ray_wrapped_inference_engines_from_config(
     cfg: DictConfig,
     colocate_pg,
+    tokenizer: PreTrainedTokenizerBase,
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
 ):
+    """Create rollout engines from config; tokenizer is unused."""
     from skyrl_train.inference_engines.configuration import (
         InferenceEngineRoleConfig,
         inference_engine_kwargs_from_config,
@@ -154,11 +156,10 @@ def create_ray_wrapped_inference_engines_from_config(
         **OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True),
         "openai_sampling_params": OmegaConf.to_container(cfg.generator.sampling_params, resolve=True),
     }
-    if cfg.generator.backend == "vllm":
-        engine_init_kwargs["chat_template"] = get_custom_chat_template(cfg.generator.chat_template)
-        engine_init_kwargs["default_chat_template_kwargs"] = OmegaConf.to_container(
-            cfg.generator.chat_template_kwargs, resolve=True
-        )
+    engine_init_kwargs["chat_template"] = get_custom_chat_template(cfg.generator.chat_template)
+    engine_init_kwargs["default_chat_template_kwargs"] = OmegaConf.to_container(
+        cfg.generator.chat_template_kwargs, resolve=True
+    )
     engine_init_kwargs["tokenizer"] = cfg.trainer.policy.model.tokenizer_path
     tokenizer_revision = cfg.trainer.policy.model.get("tokenizer_revision")
     if tokenizer_revision is not None:
@@ -218,6 +219,7 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_init_kwargs["revision"] = model_revision
     engine_kwargs = inference_engine_kwargs_from_config(
         cfg,
+        tokenizer,
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
@@ -235,7 +237,7 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_kwargs["fully_sharded_loras"] = cfg.generator.fully_sharded_loras
 
         # TODO(devpatel): Bandaid solution, replace this once we have a better solution for LoRA performance degradation on the vLLM side
-        if cfg.generator.enforce_eager and cfg.generator.backend == "vllm":
+        if cfg.generator.enforce_eager:
             logger.warning(
                 "LoRA is enabled but generator.enforce_eager=true. "
                 "This combination causes significant performance degradation (2-3x slower generation). "
@@ -243,7 +245,7 @@ def create_ray_wrapped_inference_engines_from_config(
             )
             engine_kwargs["enforce_eager"] = False
 
-    if stream_policy_model and rollout_model_path.startswith("s3://") and cfg.generator.backend == "vllm":
+    if stream_policy_model and rollout_model_path.startswith("s3://"):
         retry = cfg.trainer.model_load_retry
 
         def create_engines(remaining_timeout_seconds: float):
@@ -300,11 +302,6 @@ class BasePPOExp:
         self.train_dataset = self.get_train_dataset()
         self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
-        # Reserve the policy/training placement group BEFORE the inference
-        # engines (which are created later, in `_setup_trainer`), so that in the
-        # disaggregated case the policy (and optional colocated reference)
-        # claims GPU slots before inference engines use the remainder.
-        self.policy_pg = self.get_policy_pg()
 
     def create_inference_engine_client(
         self, *, operation: EntrypointOperation = EntrypointOperation.TRAIN
@@ -323,6 +320,7 @@ class BasePPOExp:
             inference_engines = create_ray_wrapped_inference_engines_from_config(
                 self.cfg,
                 self.colocate_pg,
+                self.tokenizer,
                 entrypoint=entrypoint,
                 operation=operation,
             )
@@ -458,51 +456,6 @@ class BasePPOExp:
         else:
             return None
 
-    def get_policy_pg(self, timeout: int | None = None):
-        """Reserve policy GPU slots before starting inference engines.
-
-        Whole-node bundles use STRICT_SPREAD; per-GPU bundles use PACK. Both
-        reserve the policy footprint before the inference placement group.
-        Returns None when not eligible (see `policy_strict_spread_eligible`),
-        leaving model actors to reserve their placement group lazily.
-
-        A colocated reference model shares this group with the policy. Reserving
-        it here prevents inference actors from fragmenting the required nodes.
-        """
-        from skyrl_train.utils.utils import (
-            get_ray_pg_ready_with_timeout,
-            policy_per_gpu_bundles_enabled,
-            policy_spread_bundles,
-            policy_strict_spread_eligible,
-        )  # noqa: PLC0415
-
-        timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
-        if not policy_strict_spread_eligible(self.cfg):
-            return None
-
-        from ray.util.placement_group import placement_group as _placement_group
-
-        bundles = policy_spread_bundles(self.cfg)
-        per_gpu = policy_per_gpu_bundles_enabled(self.cfg)
-        # Per-GPU bundles ({GPU:1} x world_size) must NOT use STRICT_SPREAD
-        # (that would force each single-GPU bundle onto a distinct node).
-        # PACK packs them ~num_gpus_per_node-per-node; reserving all world_size
-        # GPU slots up front still forces the (PACK) inference engines onto the
-        # disjoint remaining nodes — the disjointness guarantee comes from the
-        # reservation ordering, not from the spread strategy. Whole-node bundles
-        # keep STRICT_SPREAD (one whole-node bundle per node) as before.
-        strategy = "PACK" if per_gpu else "STRICT_SPREAD"
-        pg = _placement_group(bundles, strategy=strategy)
-        get_ray_pg_ready_with_timeout(pg, timeout=timeout)
-        logger.info(
-            f"Reserved dedicated policy placement group (strategy={strategy}, "
-            f"{'per-GPU {GPU:1}' if per_gpu else 'whole-node {GPU:N}'} bundles): "
-            f"{self.cfg.trainer.placement.policy_num_nodes} node(s) x "
-            f"{self.cfg.trainer.placement.policy_num_gpus_per_node} GPU, "
-            f"reserved before inference-engine placement to guarantee disjoint nodes."
-        )
-        return pg
-
     def get_trajectory_runner(self, cfg, tokenizer, inference_engine_client):
         """Run all task families through the common rollout worker.
 
@@ -637,7 +590,7 @@ class BasePPOExp:
         # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, RefWorker, policy_pg=self.policy_pg)
+            trainer.build_models(PolicyWorker, None, RefWorker)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,

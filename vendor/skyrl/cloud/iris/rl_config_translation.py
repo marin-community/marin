@@ -354,17 +354,8 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         # Reserved engine aliases and worker-owned configuration
         "model_path",
         "tp_size",
-        "mem_fraction_static",
-        "random_seed",
-        "disable_radix_cache",
-        "max_prefill_tokens",
-        "max_running_requests",
-        "mm_attention_backend",
         "attention_backend",
-        "enable_memory_saver",
         "tokenizer",
-        "custom_weight_loader",
-        "skip_tokenizer_init",
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )

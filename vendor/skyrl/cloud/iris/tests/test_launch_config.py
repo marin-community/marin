@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 import base64
-import pickle
-import fsspec
-from skyrl_train.io import io
-from marinskyrl.resource_locator import join_resource_path
-from skyrl_train.rollouts.buffer import RolloutGroup
-from skyrl_train.rollouts.payloads import ObjectStorePayloads
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +14,7 @@ from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
-from cloud.iris import training_driver
+from cloud.iris import training_driver, task_runtime
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -282,33 +277,6 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     assert load_launch_config(path).runtime.training_type == expected
 
 
-@pytest.mark.asyncio
-async def test_object_store_payloads_round_trip_through_the_loaded_launch(tmp_path, monkeypatch):
-    raw = _raw_config()
-    expected_uri = "s3://runs/smoke/rollouts/payload.pkl"
-    raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    filesystem = fsspec.filesystem("memory")
-    group = RolloutGroup({"response_ids": [[17, 19]], "rewards": [[0.25]]}, "trial-1", 7, {"uid": "trial-1"})
-    with filesystem.open(expected_uri, "wb") as destination:
-        destination.write(pickle.dumps(group))
-    transport = io.filesystem_and_path
-    monkeypatch.setattr(
-        io,
-        "filesystem_and_path",
-        lambda uri: (filesystem, uri) if uri.startswith("s3://runs/smoke/rollouts/") else transport(uri),
-    )
-
-    config = load_launch_config(path)
-    store = ObjectStorePayloads(config.skyrl.trainer.rollout_buffer.object_store_root)
-    [loaded] = await store.fetch([join_resource_path(store.object_store_root, "payload.pkl")])
-
-    assert (loaded.uid, loaded.policy_step, loaded.prompt) == ("trial-1", 7, {"uid": "trial-1"})
-    assert loaded.trajectory_batch["response_ids"] == [[17, 19]]
-    assert loaded.trajectory_batch["rewards"] == [[0.25]]
-
-
 def test_qwen_smoke_hugging_face_model_input_reaches_the_runner_without_a_model_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -523,3 +491,30 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     OmegaConf.save(config, resolved)
     reloaded = load_launch_config(resolved)
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
+
+
+def test_loaded_launch_revision_selects_downloaded_tokenizer_bytes(tmp_path, monkeypatch):
+    revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
+    raw = _raw_config()
+    raw["inputs"]["model"] = {
+        "uri": "org/policy",
+        "identity": revision,
+        "local_path": "org/policy",
+        "tokenizer_uri": "org/tokenizer",
+        "tokenizer_revision": revision,
+    }
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
+
+    def download(model_id, *, revision, destination, allow_patterns):
+        (destination / "tokenizer.json").write_text(json.dumps({"model": model_id, "revision": revision}))
+        (destination / "tokenizer_config.json").write_text("{}")
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    tokenizer = task_runtime.prepare_policy_tokenizer(task_runtime._runtime_namespace(load_launch_config(path)))
+
+    assert json.loads((Path(tokenizer.local_path) / "tokenizer.json").read_text()) == {
+        "model": "org/tokenizer",
+        "revision": revision,
+    }

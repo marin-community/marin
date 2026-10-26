@@ -560,11 +560,6 @@ class DispatchRegistry:
             raise KeyError(f"Dispatch type '{name}' not registered")
         return cls._registry[name]
 
-    @classmethod
-    def list_registered(cls) -> Dict[str, Type[Dispatch]]:
-        """List all registered dispatch types."""
-        return cls._registry
-
 
 def concatenate_outputs_after_mesh_dispatch(
     actor_infos: List[ActorInfo], data_batches: List[TrainingOutputBatch]

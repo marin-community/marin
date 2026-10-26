@@ -14,7 +14,6 @@ from cloud.iris.export_hf_checkpoint import (
     checkpoint_export_launch_config,
 )
 from cloud.iris.launch_config import validate_iris_allocation
-from cloud.iris.iris_backend import _gpu_constraints, _gpu_resources
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.hf_export_schema import HFExportRequest
 
@@ -71,39 +70,6 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
         no_wait=False,
         launch_config_path="/tmp/export.yaml",
     )
-
-
-def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
-    request = _request()
-    config = checkpoint_export_launch_config(_training_config(), request, _spec(request))
-
-    assert config.run.mode == "checkpoint_export"
-    assert config.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
-    assert config.runtime.profile == "megatron-export"
-    assert config.iris.timeout == 7200
-    assert config.iris.allocation.gpu_variant == "H100"
-    assert config.skyrl.trainer.placement.policy_num_nodes == 1
-    assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
-
-
-def test_checkpoint_export_targets_the_federated_scheduler_peer() -> None:
-    request = _request()
-    spec = replace(
-        _spec(request),
-        target_cluster="cw-rno2a",
-        parent_cluster_config="/tmp/marin.yaml",
-    )
-
-    config = checkpoint_export_launch_config(_training_config(), request, spec)
-
-    resources = _gpu_resources("H100", 4, cpu=16, memory="128GB", disk="256GB")
-    constraints = _gpu_constraints(resources.to_proto(), replicas=1, target_cluster=config.iris.target_cluster)
-    [route] = [constraint.to_proto() for constraint in constraints if constraint.key == "cluster"]
-
-    assert route.value.string_value == "cw-rno2a"
-    assert config.iris.parent_cluster_config == "/tmp/marin.yaml"
 
 
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:

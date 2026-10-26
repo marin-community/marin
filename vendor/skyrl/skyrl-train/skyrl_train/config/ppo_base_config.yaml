@@ -89,9 +89,7 @@ trainer:
     ref_num_gpus_per_node: 4
     # PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
     # rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong.
-    policy_strict_spread_pg: false
     # PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
-    # Wrappers must preserve the compiled pool size and the assumptions of policy_strict_spread_pg.
     policy_per_gpu_bundles: false
     # PLACEMENT-SENSITIVE: this binds policy actors to Ray-assigned physical GPU IDs and is valid only with the
     # compatible per-GPU placement plan. It is not an independent device-selection convenience flag.
@@ -185,7 +183,6 @@ trainer:
     loss_reduction: "token_mean"
     grpo_norm_by_std: true
     rloo_n_filter_zero_reward_groups: true
-    lambd: 1.0
     gamma: 1.0
     eps_clip_low: 0.2
     eps_clip_high: 0.2
