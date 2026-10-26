@@ -9,8 +9,9 @@
   and ``hf_path == <run root>/hf/step-15``; its ``trained-precision-audit.json`` hash is recorded;
 - both arms: metadata file hashes (the baseline's must equal the LR0 source hashes; the candidate's
   template, tokenizer and generation config must equal the baseline's, except that ``tokenizer_config.json``
-  may carry the one addition the SFT export audit accepts, an embedded copy of the baseline
-  ``chat_template.jinja``; see ``accept_candidate_metadata``), shard sizes and ETags, and every
+  may carry an embedded copy of the baseline ``chat_template.jinja`` and ``generation_config.json`` may
+  differ in JSON formatting only, as the SFT export audit accepts; see ``accept_candidate_metadata``),
+  shard sizes and ETags, and every
   safetensors header: 502 tensors, the 26 ``mlp.router.bias`` F32 and the other 476 BF16.
 
 ``run`` repeats the preflight, checks for an idle whole H100 node on cw-rno2a, submits the serve in
@@ -170,19 +171,27 @@ def model_receipt(model: str) -> tuple[dict, dict[str, bytes]]:
 def accept_candidate_metadata(
     baseline: dict, candidate: dict, baseline_bytes: dict[str, bytes], candidate_bytes: dict[str, bytes]
 ) -> dict:
-    """SAME_AS_BASELINE files must be byte-identical, except one addition the SFT export audit accepts.
+    """SAME_AS_BASELINE files must be byte-identical, except two differences the SFT export audit accepts.
 
     Tokenizer saving may embed the source ``chat_template.jinja`` in ``tokenizer_config.json``. A candidate whose
-    only differing file is ``tokenizer_config.json`` passes when ``check_export_auxiliary_metadata`` accepts it
-    against the baseline with exactly that addition. The check runs on local copies of the bytes hashed in the two
-    receipts, so it reads the same routed objects. Returns the provenance fields that ``decide`` re-checks.
+    ``tokenizer_config.json`` differs passes when ``check_export_auxiliary_metadata`` accepts it against the
+    baseline with exactly that addition. The export may also rewrite ``generation_config.json`` with different
+    JSON formatting; it passes when its parsed value equals the baseline's, as in the SFT audit. The check runs on
+    local copies of the bytes hashed in the two receipts, so it reads the same routed objects. Returns the
+    provenance fields that ``decide`` re-checks.
     """
     differ = [name for name in SAME_AS_BASELINE if candidate["file_sha256"][name] != baseline["file_sha256"][name]]
-    raw_only = [name for name in differ if name != "tokenizer_config.json"]
+    raw_only = [name for name in differ if name not in ("tokenizer_config.json", m16_gate.REFORMATTED_FILE)]
     if raw_only:
         raise click.ClickException(f"Candidate {raw_only[0]} differs from the baseline")
+    reformatted: list[str] = []
+    if m16_gate.REFORMATTED_FILE in differ:
+        name = m16_gate.REFORMATTED_FILE
+        if json.loads(candidate_bytes[name]) != json.loads(baseline_bytes[name]):
+            raise click.ClickException(f"Candidate {name} differs from the baseline")
+        reformatted = [name]
     additions: list[str] = []
-    if differ:
+    if "tokenizer_config.json" in differ:
         with tempfile.TemporaryDirectory() as tmp:
             roots = {}
             for arm, files in (("baseline", baseline_bytes), ("candidate", candidate_bytes)):
@@ -198,10 +207,13 @@ def accept_candidate_metadata(
             raise click.ClickException("Candidate tokenizer_config.json differs from the baseline")
     return {
         "accepted_metadata_additions": additions,
+        "accepted_metadata_reformatted": reformatted,
         "metadata_acceptance": {
             "baseline_model": baseline["model"],
             "baseline_chat_template_sha256": baseline["file_sha256"]["chat_template.jinja"],
             "accepted_tokenizer_config_sha256": candidate["file_sha256"]["tokenizer_config.json"],
+            "baseline_generation_config_sha256": baseline["file_sha256"][m16_gate.REFORMATTED_FILE],
+            "accepted_generation_config_sha256": candidate["file_sha256"][m16_gate.REFORMATTED_FILE],
         },
     }
 

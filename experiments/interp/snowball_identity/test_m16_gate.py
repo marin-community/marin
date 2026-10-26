@@ -148,7 +148,7 @@ def test_serve_changes_are_refused():
     files = {name: name for name in m16_gate.SHARED_MODEL_FILES} | {"config.json": "base"}
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, "file_sha256": files}}
-    serve = {**serve, "accepted_metadata_additions": []}
+    serve = {**serve, "accepted_metadata_additions": [], "accepted_metadata_reformatted": []}
     own_weights = {**STRONG, "provenance": {**serve, "file_sha256": {**files, "config.json": "candidate"}}}
     assert m16_gate.decide(GATE, base, own_weights, byte_unchanged=False)["label"] == "NOT_TOO_WEAK"
     changed = [
@@ -235,10 +235,13 @@ def test_preflight_accepts_only_the_identical_embedded_template(damage):
         accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
         assert accepted == {
             "accepted_metadata_additions": ["tokenizer_config.json.chat_template"],
+            "accepted_metadata_reformatted": [],
             "metadata_acceptance": {
                 "baseline_model": "s3://bucket/base",
                 "baseline_chat_template_sha256": baseline["file_sha256"]["chat_template.jinja"],
                 "accepted_tokenizer_config_sha256": candidate["file_sha256"]["tokenizer_config.json"],
+                "baseline_generation_config_sha256": baseline["file_sha256"]["generation_config.json"],
+                "accepted_generation_config_sha256": candidate["file_sha256"]["generation_config.json"],
             },
         }
     else:
@@ -251,8 +254,8 @@ def test_preflight_keeps_raw_hashes_for_the_other_shared_files():
     baseline = model_files("s3://bucket/base", base_bytes)
     same = m16_gate_run.accept_candidate_metadata(baseline, baseline, base_bytes, base_bytes)
     assert same["accepted_metadata_additions"] == []
-    for name in ("tokenizer.json", "generation_config.json"):
-        cand_bytes = {**r7_metadata("export"), name: b"{ }"}
+    for name, data in (("tokenizer.json", b"{ }"), ("generation_config.json", b'{"bos_token_id": 1}')):
+        cand_bytes = {**r7_metadata("export"), name: data}
         with pytest.raises(click.ClickException, match=name):
             m16_gate_run.accept_candidate_metadata(
                 baseline, model_files("s3://bucket/cand", cand_bytes), base_bytes, cand_bytes
@@ -289,7 +292,56 @@ def test_decide_rechecks_the_recorded_metadata_acceptance():
         {**good, "metadata_acceptance": {**acceptance, "baseline_model": "s3://bucket/other"}},
         {**good, "file_sha256": {**files, "generation_config.json": "other"}},
         {**good, "accepted_metadata_additions": []},
+        {k: v for k, v in good.items() if k != "accepted_metadata_reformatted"},
+        {**good, "accepted_metadata_reformatted": ["tokenizer.json"]},
     ]
     for provenance in refused:
         with pytest.raises(ValueError):
             m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)
+
+
+SFT_R3_GENERATION_CONFIG = json.loads(
+    (Path(__file__).parent / "testdata" / "generation-config-sft-r3.json").read_bytes()
+)
+
+
+def sft_r3_metadata(arm: str) -> dict[str, bytes]:
+    """The r7 tokenizer pair with the real sft-m16-r3 generation_config pair (indented vs one-line JSON)."""
+    metadata = r7_metadata("source" if arm == "baseline" else "export")
+    metadata["generation_config.json"] = base64.b64decode(SFT_R3_GENERATION_CONFIG[f"{arm}-generation_config.json"])
+    return metadata
+
+
+def test_reformatted_generation_config_is_accepted_and_rechecked():
+    base_bytes, cand_bytes = sft_r3_metadata("baseline"), sft_r3_metadata("export")
+    assert base_bytes["generation_config.json"] != cand_bytes["generation_config.json"]
+    baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
+    accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+    assert accepted["accepted_metadata_additions"] == ["tokenizer_config.json.chat_template"]
+    assert accepted["accepted_metadata_reformatted"] == ["generation_config.json"]
+    acceptance = accepted["metadata_acceptance"]
+    assert acceptance["baseline_generation_config_sha256"] == baseline["file_sha256"]["generation_config.json"]
+    assert acceptance["accepted_generation_config_sha256"] == candidate["file_sha256"]["generation_config.json"]
+    serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
+    base = {**BASE, "provenance": {**serve, **baseline}}
+    good = {**serve, **candidate, **accepted}
+    decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": good}, byte_unchanged=False)
+    assert decision["accepted_metadata_reformatted"] == ["generation_config.json"]
+    files = good["file_sha256"]
+    for provenance in (
+        {**good, "file_sha256": {**files, "generation_config.json": "other"}},
+        {**good, "metadata_acceptance": {**acceptance, "baseline_generation_config_sha256": "other"}},
+        {**good, "accepted_metadata_reformatted": []},
+    ):
+        with pytest.raises(ValueError, match="generation_config"):
+            m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)
+
+
+def test_generation_config_with_a_different_parsed_value_is_refused():
+    base_bytes, cand_bytes = sft_r3_metadata("baseline"), sft_r3_metadata("export")
+    changed = json.loads(cand_bytes["generation_config.json"])
+    changed["eos_token_id"] = [128001]
+    cand_bytes["generation_config.json"] = json.dumps(changed).encode()
+    baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
+    with pytest.raises(click.ClickException, match="generation_config"):
+        m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)

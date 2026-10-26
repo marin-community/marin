@@ -324,38 +324,52 @@ def too_weak_value(
 SHARED_MODEL_FILES = ("chat_template.jinja", "tokenizer.json", "tokenizer_config.json", "generation_config.json")
 # The one metadata difference the candidate preflight may accept (an embedded copy of the baseline template).
 TEMPLATE_ADDITION = "tokenizer_config.json.chat_template"
+# The one shared file the preflight may accept when only its JSON formatting differs from the baseline's.
+REFORMATTED_FILE = "generation_config.json"
 
 
-def matched_model_files(base_prov: dict, cand_prov: dict) -> list[str]:
-    """Re-check the candidate preflight's metadata acceptance from the two receipts; returns the additions.
+def matched_model_files(base_prov: dict, cand_prov: dict) -> dict[str, list[str]]:
+    """Re-check the candidate preflight's metadata acceptance from the two receipts; returns what it accepted.
 
-    With no addition, every SHARED_MODEL_FILES hash must equal the baseline's. With the template addition,
-    ``tokenizer_config.json`` must be the file the preflight accepted against this baseline and its template;
-    the other shared files must still be byte-identical. A missing field or any other addition is refused.
+    ``chat_template.jinja`` and ``tokenizer.json`` must be byte-identical to the baseline's. ``tokenizer_config.json``
+    may carry the template addition and ``generation_config.json`` may be reformatted, each only as the preflight
+    recorded it against this baseline: the candidate's file must have the hash the preflight accepted. A missing
+    field or any other recorded acceptance is refused.
     """
     base_files, cand_files = base_prov["file_sha256"], cand_prov["file_sha256"]
     additions = cand_prov.get("accepted_metadata_additions")
-    if additions == []:
-        raw_hashed = SHARED_MODEL_FILES
-    elif additions == [TEMPLATE_ADDITION]:
-        accepted = cand_prov.get("metadata_acceptance") or {}
-        if accepted.get("baseline_model") != base_prov.get("model"):
-            raise ValueError("The candidate metadata was accepted against a different baseline model")
+    reformatted = cand_prov.get("accepted_metadata_reformatted")
+    if additions not in ([], [TEMPLATE_ADDITION]) or reformatted not in ([], [REFORMATTED_FILE]):
+        raise ValueError(
+            f"Arms are not matched on metadata: accepted_metadata_additions={additions!r}, "
+            f"accepted_metadata_reformatted={reformatted!r}"
+        )
+    accepted = cand_prov.get("metadata_acceptance") or {}
+    if (additions or reformatted) and accepted.get("baseline_model") != base_prov.get("model"):
+        raise ValueError("The candidate metadata was accepted against a different baseline model")
+    raw_hashed = ["chat_template.jinja", "tokenizer.json"]
+    if additions:
         if accepted.get("baseline_chat_template_sha256") != base_files["chat_template.jinja"]:
             raise ValueError("The candidate metadata was accepted against a different baseline template")
         if accepted.get("accepted_tokenizer_config_sha256") != cand_files["tokenizer_config.json"]:
             raise ValueError("The candidate tokenizer_config.json is not the one the preflight accepted")
-        raw_hashed = tuple(name for name in SHARED_MODEL_FILES if name != "tokenizer_config.json")
     else:
-        raise ValueError(f"Arms are not matched on metadata: accepted_metadata_additions={additions!r}")
+        raw_hashed.append("tokenizer_config.json")
+    if reformatted:
+        if accepted.get("baseline_generation_config_sha256") != base_files[REFORMATTED_FILE]:
+            raise ValueError("The candidate generation_config.json was accepted against a different baseline file")
+        if accepted.get("accepted_generation_config_sha256") != cand_files[REFORMATTED_FILE]:
+            raise ValueError("The candidate generation_config.json is not the one the preflight accepted")
+    else:
+        raw_hashed.append(REFORMATTED_FILE)
     for name in raw_hashed:
         if base_files[name] != cand_files[name]:
             raise ValueError(f"Arms are not matched on the model file {name}")
-    return additions
+    return {"accepted_metadata_additions": additions, "accepted_metadata_reformatted": reformatted}
 
 
-def check_matched(base: dict, candidate: dict) -> list[str] | None:
-    """Refuse to compare arms scored with different code, inputs or serves; returns the accepted additions."""
+def check_matched(base: dict, candidate: dict) -> dict[str, list[str] | None]:
+    """Refuse to compare arms scored with different code, inputs or serves; returns the metadata acceptance."""
     if base["arm"] != "baseline" or candidate["arm"] != "candidate":
         raise ValueError("decide takes the baseline receipt, then the candidate receipt")
     for key in ("scorer", "sampling", "native_plain_template_sha256", "prompt_sha256", "amendment_sha256"):
@@ -371,7 +385,9 @@ def check_matched(base: dict, candidate: dict) -> list[str] | None:
     base_files, cand_files = base_prov.get("file_sha256"), cand_prov.get("file_sha256")
     if (base_files is None) != (cand_files is None):
         raise ValueError("Only one arm records model file hashes")
-    return None if base_files is None else matched_model_files(base_prov, cand_prov)
+    if base_files is None:
+        return {"accepted_metadata_additions": None, "accepted_metadata_reformatted": None}
+    return matched_model_files(base_prov, cand_prov)
 
 
 def deciding_families(improvement: dict[str, float], too_weak: bool | None, threshold: float) -> list[str]:
@@ -391,7 +407,7 @@ def deciding_families(improvement: dict[str, float], too_weak: bool | None, thre
 
 def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None) -> dict:
     """The gate file's too_weak rule on the first passes, labelled INCONCLUSIVE per amendment A1."""
-    additions = check_matched(base, candidate)
+    accepted_metadata = check_matched(base, candidate)
     base_means = base["correct_continuation_NLL"]["family_mean_NLL_per_token"]
     cand_means = candidate["correct_continuation_NLL"]["family_mean_NLL_per_token"]
     improvement = {family: base_means[family] - cand_means[family] for family in FAMILY_SIZES}
@@ -429,7 +445,7 @@ def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None)
         "candidate_no_system_primary_wins": cand_wins,
         "base_no_system_primary_wins": base_wins,
         "saved_trainable_BF16_weights_byte_unchanged": byte_unchanged,
-        "accepted_metadata_additions": additions,
+        **accepted_metadata,
         "too_weak": {"rule": gate["too_weak"], "value": too_weak},
         "amendment_A1": {
             "amendment_sha256": A1_SHA256,
