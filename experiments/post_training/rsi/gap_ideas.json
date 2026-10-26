@@ -1,0 +1,77 @@
+[
+  {
+    "capability_id": "gap.search.shortest-state-machine-sequence",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate3-fixed-ideas-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "find the shortest action sequence in a state machine",
+      "outcome": "Plans the shortest sequence of actions that drives a small machine from its start state to a target, when each action's effect depends on a toggling mode, by searching the reachable states breadth first instead of guessing, and reports exactly the sequence in the requested notation.",
+      "includes": [
+        "breadth-first search over (value, mode) states",
+        "tracking a mode that every action toggles",
+        "actions whose effect depends on the mode",
+        "proving a sequence is shortest before answering",
+        "writing the sequence in the requested separator notation"
+      ],
+      "excludes": [],
+      "id": "gap.search.shortest-state-machine-sequence",
+      "evidence": []
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "18cdca1d9758d26752b4cb24e12741a39e34637d96ad7b7a2bfcdabc3f879ece"
+  },
+  {
+    "capability_id": "gap.strings.exact-lexicographic-sorting",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate3-fixed-ideas-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "sort words exactly by character codes",
+      "outcome": "Sorts a list of words in ascending or descending order by ASCII/Unicode code points, not by dictionary order: capital letters before lowercase, character by character, prefixes first, and returns exactly the requested delimited list with the original spelling and case.",
+      "includes": [
+        "code-point order versus case-insensitive order",
+        "comparing words character by character",
+        "prefix and equal-prefix cases",
+        "descending versus ascending order",
+        "exact comma-separated output with no extra words"
+      ],
+      "excludes": [],
+      "id": "gap.strings.exact-lexicographic-sorting",
+      "evidence": []
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "4adcd24ca8c35dd831e52126117f2ca875bc675d9c723e6f2b4967e336d66d90"
+  },
+  {
+    "capability_id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate3-fixed-ideas-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "compute antiderivatives by substitution and by parts",
+      "outcome": "Computes indefinite integrals that need a substitution (including of a composite inner function) or integration by parts, simplifies the result, includes the constant of integration, and writes the antiderivative in the requested symbolic syntax.",
+      "includes": [
+        "u-substitution with a linear or composite inner function",
+        "integration by parts, repeated when needed",
+        "powers of sine and cosine with a matching derivative factor",
+        "checking the result by differentiating",
+        "symbolic syntax with ** and explicit *"
+      ],
+      "excludes": [],
+      "id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+      "evidence": []
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "e5266b79635d2bb15ab71f0cfde61003bc7ae1227e98279132682c2e494c12cd"
+  }
+]

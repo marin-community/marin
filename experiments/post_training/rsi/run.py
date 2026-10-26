@@ -47,6 +47,7 @@ from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.rsi.feedback import (
     SYNTHESIZED_LABEL_PREFIX,
     AnalysisConfig,
+    FailedRun,
     SynthesisConfig,
     analyze_failed_runs,
     capability_of,
@@ -109,6 +110,10 @@ def feedback_options(function):
             click.option("--probes-per-task", type=int, default=8, show_default=True),
             click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time."),
             click.option("--agent-turns", type=int, default=300, show_default=True),
+            click.option(
+                "--ideas-file",
+                help="A JSON list of capability ideas that replace the failed-run analysis, to test synthesis alone.",
+            ),
             click.option("--eval-every", type=int, default=10, show_default=True, help="Steps between evaluations."),
             click.option("--eval-samples", type=int, default=4, show_default=True, help="Attempts at each task."),
             click.option(
@@ -150,6 +155,7 @@ class FeedbackOptions:
     probes_per_task: int
     sessions: int
     agent_turns: int
+    ideas_file: str | None
     eval_every: int
     eval_samples: int
     eval_gap_types: str
@@ -223,12 +229,28 @@ async def _feedback_boxes(
     eval_set = await asyncio.to_thread(evaluation_set, feedback.eval_gap_types)
     runner = PolicyRunner(rollout_engine(EVAL_GRADER_SLOTS), solver, POLICY_LIMITS, EVAL_CONCURRENCY)
     evaluate = evaluator(runner, eval_set, feedback.eval_samples, output)
+    analyze = partial(analyze_failed_runs, config=analysis, known=known_ideas(output))
+    if feedback.ideas_file is not None:
+        analyze = partial(fixed_ideas, ideas=read_ideas(feedback.ideas_file), known=known_ideas(output))
     return Boxes(
         train=trainer,
         eval_policy=partial(eval_policy, evaluate=evaluate, every=feedback.eval_every, step_of=policy_step),
-        analyze_failed_runs=partial(analyze_failed_runs, config=analysis, known=known_ideas(output)),
+        analyze_failed_runs=analyze,
         generate_tasks=generate,
     )
+
+
+def read_ideas(url: str) -> list[CapabilityIdea]:
+    return [CapabilityIdea.model_validate(idea) for idea in json.loads(StoragePath(url).read_text())]
+
+
+async def fixed_ideas(
+    batches: AsyncIterable[list[FailedRun]], *, ideas: list[CapabilityIdea], known: Collection[str]
+) -> AsyncIterator[CapabilityIdea]:
+    """The given ideas, at once and without any failed run, except the ideas that a resumed run already had."""
+    for idea in ideas:
+        if idea.capability_id not in known:
+            yield idea
 
 
 def evaluation_set(gap_types: str) -> EvalSet:
