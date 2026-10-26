@@ -79,6 +79,19 @@ def _packed_cp_reference(rank, rendezvous):
             torch.testing.assert_close(response.selected_logprobs[valid], expected_head[valid], atol=1e-5, rtol=1e-5)
             assert torch.isnan(response.selected_logprobs[~valid]).all()
 
+            positions = torch.tensor([[0, 5, 11], [0, 4, 9], [0, 1, 2]])
+            compact_ids = candidates.gather(1, positions[..., None].expand(-1, -1, 3))
+            with torch.no_grad():
+                compact = wrapper._response_logprobs(
+                    logits, sequences, attention, actions, packed, compact_ids, positions
+                )
+            compact_valid = compact_ids >= 0
+            compact_expected = expected_head.gather(1, positions[..., None].expand_as(compact_ids))
+            torch.testing.assert_close(
+                compact.selected_logprobs[compact_valid], compact_expected[compact_valid], atol=1e-5, rtol=1e-5
+            )
+            assert torch.isnan(compact.selected_logprobs[~compact_valid]).all()
+
             # Compare the actual SC term and its gradient with an independent dense
             # head-plus-proportional-tail expression, including all advantage signs.
             p = dense.exp()
