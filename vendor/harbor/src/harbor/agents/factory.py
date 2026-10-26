@@ -234,6 +234,12 @@ class AgentFactory:
         if config.name is not None and config.name in AgentName.values():
             name = AgentName(config.name)
             agent_kwargs = {**config.kwargs, **kwargs}
+            if config.pi is not None:
+                if "pi_config" in agent_kwargs:
+                    raise ValueError(
+                        "Pi capability must be supplied through AgentConfig.pi"
+                    )
+                agent_kwargs["pi_config"] = config.pi
             if config.override_setup_timeout_sec is not None:
                 agent_kwargs["override_setup_timeout_sec"] = (
                     config.override_setup_timeout_sec

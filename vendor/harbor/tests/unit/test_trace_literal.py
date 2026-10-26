@@ -24,7 +24,14 @@ from harbor.literal import (
     extract_literal_from_response,
     inject_literal_params,
 )
-from harbor.literal.proxy import CORRELATION_ID_HEADER, TASK_AGENT_HEADER, RecordProxy
+from harbor.literal.proxy import (
+    CORRELATION_ID_HEADER,
+    TASK_AGENT_HEADER,
+    RecordProxy,
+    _new_stream_accumulator,
+    accumulate_stream_chunk,
+    finalize_stream_literal,
+)
 from harbor.utils.traces_utils import (
     _extract_literal_turns,
     collect_conversations_from_trial,
@@ -564,6 +571,124 @@ def test_relay_and_record_non_200_relays_and_records_null_literal(tmp_path):
     entry = json.loads(log_path.read_text().strip())
     assert entry["status_code"] == 500
     assert entry["literal"] is None
+
+
+def test_stream_literal_preserves_fragmented_tool_call_for_continuation():
+    """Retain the served assistant, not just its IDs: chat templates add turn delimiters."""
+    state = _new_stream_accumulator()
+    chunks = [
+        {
+            "prompt_token_ids": [1, 2],
+            "choices": [
+                {
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": '{"command":"printf ',
+                                },
+                            }
+                        ],
+                        "provider_specific_fields": {"token_ids": [10]},
+                    },
+                    "logprobs": {"token_logprobs": [-0.2]},
+                }
+            ],
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": '1 > answer.txt"}'}}
+                        ],
+                        "provider_specific_fields": {"token_ids": [11]},
+                    },
+                    "logprobs": {"token_logprobs": [-0.3]},
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    ]
+    for chunk in chunks:
+        accumulate_stream_chunk(state, chunk)
+    literal = finalize_stream_literal(state)
+    assert literal["prompt_token_ids"] == [1, 2]
+    assert literal["completion_token_ids"] == [10, 11]
+    assert literal["logprobs"] == [-0.2, -0.3]
+    assert literal["assistant_message"] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "arguments": '{"command":"printf 1 > answer.txt"}',
+                },
+            }
+        ],
+    }
+
+
+def test_stream_literal_does_not_prove_unfinished_assistant():
+    state = _new_stream_accumulator()
+    accumulate_stream_chunk(state, {"choices": [{"delta": {"content": "partial"}}]})
+    assert finalize_stream_literal(state)["assistant_message"] is None
+
+
+def test_stream_literal_rejects_malformed_tool_delta():
+    state = _new_stream_accumulator()
+    accumulate_stream_chunk(
+        state,
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": True,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "bash", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    )
+    assert finalize_stream_literal(state)["assistant_message"] is None
+
+    state = _new_stream_accumulator()
+    accumulate_stream_chunk(
+        state,
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "unknown",
+                                "function": {"name": "bash", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    )
+    assert finalize_stream_literal(state)["assistant_message"] is None
 
 
 def test_open_upstream_stream_injects_literal_params_and_keeps_stream(tmp_path):
