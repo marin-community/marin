@@ -545,6 +545,8 @@ Only after the local lifecycle works:
 - strict packet inventory/digest verification and deterministic bundle loading;
 - self-verifying canonical JSON records and deterministic Parquet bundle files;
 - two-pass `OpenEndedProposalSource` with locked campaign fields, null slots, and one document repair;
+- content-identified local `ProposalBatch` persistence that prevents retry resampling;
+- pure bundle runner over persisted proposals and ordinary resumable Taskforge workpieces;
 - `OpenEndedTaskBundle` and `OpenEndedBuildInput`;
 - stable digest including private evidence and release status;
 - generic immutable build-input transport and cache identity;
@@ -555,13 +557,11 @@ Only after the local lifecycle works:
 
 ### Next local vertical slice
 
-1. Durable local `ProposalBatch` serialization and cache identity.
-2. Pure `run_open_ended_bundle(bundle, runtime, config)` orchestration.
-3. Bundle-aware author and validator wrappers using private evidence.
-4. Configurable role-specific model clients.
-5. Real MAIT local lifecycle through accepted/rejected `TaskSpec`.
-6. Pairwise judge request/response transport around the scorepad.
-7. Generic accepted-`TaskSpec` export to beta.
+1. Bundle-aware author and validator wrappers using private evidence.
+2. Configurable role-specific model clients.
+3. Real MAIT local lifecycle through accepted/rejected `TaskSpec`.
+4. Pairwise judge request/response transport around the scorepad.
+5. Generic accepted-`TaskSpec` export to beta.
 
 ### Distributed and training slice
 
