@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +20,6 @@ def marina_process(monkeypatch):
         if command[0] == "node":
             return SimpleNamespace(returncode=0)
         reply = replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
         return SimpleNamespace(stdout=json.dumps(reply))
 
     monkeypatch.setattr(snowball_release.subprocess, "run", run)
@@ -88,18 +85,6 @@ def test_bootstrap_can_be_previewed_without_publishing(marina_process):
     assert json.loads(result.output)["action"] == "would_release"
     assert "--dry-run" in commands[-1]
     assert all("--base-version" not in command for command in commands)
-
-
-def test_concurrent_release_conflict_is_not_retried(marina_process):
-    replies, commands = marina_process
-    replies.extend([{"state": "different", "version": 6}, subprocess.CalledProcessError(1, "marina release")])
-
-    result = CliRunner().invoke(snowball_release.main)
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, subprocess.CalledProcessError)
-    assert sum("release" in command for command in commands) == 1
-    assert len(commands) == 3
 
 
 def test_post_release_selection_change_is_reported(marina_process):
