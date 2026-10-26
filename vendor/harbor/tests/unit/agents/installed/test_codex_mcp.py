@@ -78,10 +78,12 @@ class TestCreateRunAgentCommandsMCP:
     """Test that run() handles MCP servers correctly."""
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_no_config_toml(self, temp_dir, monkeypatch):
+    async def test_no_mcp_servers_no_config_toml(
+        self, temp_dir, monkeypatch, mock_environment
+    ):
         monkeypatch.setenv("CODEX_FORCE_API_KEY", "1")
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
@@ -89,7 +91,9 @@ class TestCreateRunAgentCommandsMCP:
         assert not any("config.toml" in cmd for cmd in commands)
 
     @pytest.mark.asyncio
-    async def test_mcp_servers_writes_config_toml(self, temp_dir, monkeypatch):
+    async def test_mcp_servers_writes_config_toml(
+        self, temp_dir, monkeypatch, mock_environment
+    ):
         monkeypatch.setenv("CODEX_FORCE_API_KEY", "1")
         servers = [
             MCPServerConfig(
@@ -97,7 +101,7 @@ class TestCreateRunAgentCommandsMCP:
             )
         ]
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3", mcp_servers=servers)
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())

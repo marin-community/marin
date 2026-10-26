@@ -9,11 +9,13 @@ import time
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Generator, Sequence
+from collections.abc import AsyncIterator, Generator, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel
+from shellbox.lifecycle import finish_cleanup
+from shellbox.process import CLEANUP_TIMEOUT
 
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
@@ -32,6 +34,7 @@ from harbor.models.task.config import (
 )
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
+from harbor.trial.errors import PhaseCancellationError
 from harbor.utils.env import resolve_env_vars
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
@@ -362,6 +365,27 @@ class BaseEnvironment(ABC):
             yield
         finally:
             self.agent_timeout_sec = previous
+
+    @contextlib.asynccontextmanager
+    async def scoped_command(self, command: str) -> AsyncIterator[None]:
+        """Confirm remote teardown before releasing a command scope."""
+        try:
+            yield
+        finally:
+            try:
+                await finish_cleanup(
+                    asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT)
+                )
+            except Exception as error:
+                raise PhaseCancellationError(
+                    "Remote command teardown could not be confirmed"
+                ) from error
+
+    async def reap_command(self, command: str) -> None:
+        """Run cleanup independently of the cancelled execution transport."""
+        result = await self.exec(command, timeout_sec=CLEANUP_TIMEOUT)
+        if result.return_code != 0:
+            raise RuntimeError(f"Remote command teardown failed: {result.stderr}")
 
     def _merge_env(self, env: dict[str, str] | None) -> dict[str, str] | None:
         """Merge persistent, per-exec, and scoped environment variables."""

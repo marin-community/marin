@@ -5,6 +5,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from packaging.version import InvalidVersion, Version
@@ -91,7 +92,9 @@ lines.on("close", () => {
   }
   process.exitCode = 1;
 });
-""".replace("__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER)
+""".replace(
+            "__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER
+        )
         .replace("__CONTEXT_LENGTH_FAILURE_MARKER__", _CONTEXT_LENGTH_FAILURE_MARKER)
         .strip()
     )
@@ -596,6 +599,11 @@ export default function (pi) {
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        deadline = (
+            monotonic() + environment.agent_timeout_sec
+            if environment.agent_timeout_sec is not None
+            else None
+        )
         escaped_instruction = shlex.quote(instruction)
 
         if not self.model_alias or "/" not in self.model_alias:
@@ -682,7 +690,7 @@ export default function (pi) {
             )
             cli_flags += f"--extension {extension_path} "
         try:
-            await self.exec_as_agent(
+            await self.run_agent_command(
                 environment,
                 command=(
                     f"{runtime_prelude}"
@@ -695,6 +703,7 @@ export default function (pi) {
                     f"stdbuf -oL tee /logs/agent/{self._OUTPUT_FILENAME}"
                 ),
                 env=env,
+                deadline=deadline,
             )
         except NonZeroAgentExitCodeError as error:
             error_lines = (

@@ -1,5 +1,7 @@
 """Unit tests for the Pi installed agent."""
 
+import contextlib
+import sys
 import json
 import os
 import shlex
@@ -30,6 +32,8 @@ def temp_dir(tmp_path):
 
 
 def _local_pi_shell(temp_dir, monkeypatch, pi_script):
+    if sys.platform != "linux":
+        pytest.skip("Installed agents execute under a Linux subreaper")
     endpoint_path = temp_dir / "harbor-pi-endpoint.env"
     extension_path = temp_dir / "harbor-pi-context-budget.js"
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
@@ -49,7 +53,8 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
         fake_bin / "stdbuf": '#!/bin/sh\nshift\nexec "$@"\n',
-        fake_bin / "tee": (
+        fake_bin
+        / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
             'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
@@ -67,7 +72,15 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         "}\n"
     )
 
+    (bootstrap_bin / "python3").symlink_to(sys.executable)
+    (bootstrap_bin / "bash").symlink_to("/bin/bash")
+
     class LocalShellEnvironment:
+        agent_timeout_sec = None
+
+        def scoped_command(self, command):
+            return contextlib.nullcontext()
+
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
 
@@ -116,10 +129,10 @@ class TestPiAgent:
         ],
     )
     async def test_install_uses_version_compatible_package(
-        self, temp_dir, version, expected_package
+        self, temp_dir, version, expected_package, mock_environment
     ):
         agent = Pi(logs_dir=temp_dir, version=version)
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.install(mock_env)
@@ -132,17 +145,19 @@ class TestPiAgent:
         assert f"npm install -g --ignore-scripts {expected_package}" in install_command
 
     @pytest.mark.asyncio
-    async def test_install_rejects_invalid_package_version(self, temp_dir):
+    async def test_install_rejects_invalid_package_version(
+        self, temp_dir, mock_environment
+    ):
         agent = Pi(logs_dir=temp_dir, version="latest??")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         with pytest.raises(ValueError, match="not a valid package version"):
             await agent.install(mock_env)
 
     @pytest.mark.asyncio
-    async def test_run_command_structure(self, temp_dir):
+    async def test_run_command_structure(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
             await agent.run("Fix the bug", mock_env, AsyncMock())
@@ -157,34 +172,34 @@ class TestPiAgent:
         assert "pi.txt" in run_cmd
 
     @pytest.mark.asyncio
-    async def test_run_no_model(self, temp_dir):
+    async def test_run_no_model(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir)
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("Fix the bug", mock_env, AsyncMock())
 
     @pytest.mark.asyncio
-    async def test_run_no_slash_in_model(self, temp_dir):
+    async def test_run_no_slash_in_model(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir, model_name="claude-sonnet-4-5")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("Fix the bug", mock_env, AsyncMock())
 
     @pytest.mark.asyncio
-    async def test_run_with_any_provider(self, temp_dir):
+    async def test_run_with_any_provider(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("Fix the bug", mock_env, AsyncMock())
         run_command = mock_env.exec.call_args_list[-1].kwargs["command"]
         assert "--provider my-provider --model my-model" in run_command
 
     @pytest.mark.asyncio
-    async def test_api_key_forwarding_anthropic(self, temp_dir):
+    async def test_api_key_forwarding_anthropic(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         env_vars = {
             "ANTHROPIC_API_KEY": "ak-123",
@@ -198,9 +213,9 @@ class TestPiAgent:
         assert "UNRELATED_KEY" not in run_env
 
     @pytest.mark.asyncio
-    async def test_api_key_forwarding_openai(self, temp_dir):
+    async def test_api_key_forwarding_openai(self, temp_dir, mock_environment):
         agent = Pi(logs_dir=temp_dir, model_name="openai/gpt-4")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         env_vars = {
             "OPENAI_API_KEY": "sk-456",
@@ -221,9 +236,11 @@ class TestPiAgent:
             ("openai/gpt-4", "OPENAI_BASE_URL"),
         ],
     )
-    async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable):
+    async def test_provider_base_url_forwarding(
+        self, temp_dir, model_name, variable, mock_environment
+    ):
         agent = Pi(logs_dir=temp_dir, model_name=model_name)
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         endpoint = "https://provider.example.test/v1"
 
@@ -368,7 +385,7 @@ class TestPiAgent:
     ],
 )
 async def test_hosted_vllm_endpoint_registers_pi_provider(
-    temp_dir, model_name, thinking_format
+    temp_dir, model_name, thinking_format, mock_environment
 ):
     endpoint = "https://iris.example/proxy/t/cluster=cw/scoped-token/serve.inference/v1"
     served_id = "campaign-model"
@@ -381,7 +398,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
         thinking_format=thinking_format,
     )
-    mock_env = AsyncMock()
+    mock_env = mock_environment
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
     uploaded_files = {}
 
@@ -438,7 +455,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         ],
     }
     run_call = mock_env.exec.call_args_list[-1]
-    run_tokens = shlex.split(run_call.kwargs["command"])
+    run_tokens = shlex.split(shlex.split(run_call.kwargs["command"])[-1])
     assert run_tokens[run_tokens.index("--provider") + 1] == "hosted_vllm"
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
@@ -455,6 +472,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
 @pytest.mark.asyncio
 async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
     temp_dir,
+    mock_environment,
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
     extension_path = temp_dir / "harbor-pi-context-budget.js"
@@ -467,7 +485,7 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
-    environment = AsyncMock()
+    environment = mock_environment
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -529,6 +547,7 @@ process.stdout.write(JSON.stringify({ transformed, tokenizeRequest }));
 @pytest.mark.asyncio
 async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
     temp_dir,
+    mock_environment,
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
     extension_path = temp_dir / "harbor-pi-context-budget.js"
@@ -541,7 +560,7 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
-    environment = AsyncMock()
+    environment = mock_environment
 
     async def copy_extension(source_path, target_path):
         assert target_path == str(extension_path)
@@ -851,9 +870,11 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 
 
 @pytest.mark.asyncio
-async def test_builtin_provider_does_not_replace_models_document(temp_dir):
+async def test_builtin_provider_does_not_replace_models_document(
+    temp_dir, mock_environment
+):
     agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-    mock_env = AsyncMock()
+    mock_env = mock_environment
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
@@ -872,9 +893,11 @@ async def test_builtin_provider_does_not_replace_models_document(temp_dir):
     "model_alias", ["hosted_vllm", "/served-model", "hosted_vllm/"]
 )
 @pytest.mark.asyncio
-async def test_malformed_model_alias_fails_before_pi_starts(temp_dir, model_alias):
+async def test_malformed_model_alias_fails_before_pi_starts(
+    temp_dir, model_alias, mock_environment
+):
     agent = Pi(logs_dir=temp_dir, model_name=model_alias)
-    mock_env = AsyncMock()
+    mock_env = mock_environment
 
     with pytest.raises(ValueError, match="provider/model_name"):
         await agent.run("Fix the bug", mock_env, AgentContext())
@@ -930,6 +953,7 @@ def test_rollout_collection_stamps_a_unique_trial_header(temp_dir):
 @pytest.mark.asyncio
 async def test_hosted_vllm_failure_preserves_capability_url_and_redacts_api_key(
     temp_dir,
+    mock_environment,
 ):
     endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
     api_key = "secret-api-key"
@@ -940,7 +964,7 @@ async def test_hosted_vllm_failure_preserves_capability_url_and_redacts_api_key(
         api_key=api_key,
         thinking_format="qwen-chat-template",
     )
-    mock_env = AsyncMock()
+    mock_env = mock_environment
     mock_env.exec.return_value = SimpleNamespace(
         return_code=1,
         stdout="",

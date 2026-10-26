@@ -5,10 +5,10 @@
 
 import asyncio
 import os
-import shlex
 import shutil
 import signal
 import stat
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -365,7 +365,7 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
         async def exec(self, command, **kwargs):
             if "candidate-block" in command:
                 await asyncio.Future()
-            if "stop-command" in command:
+            if " cancel /tmp/.shellbox-process-" in command:
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
                 return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
@@ -388,7 +388,7 @@ def test_daytona_failed_timeout_cleanup_is_infrastructure_failure(tmp_path, inte
 
 
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
-def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_path, interruption):
+def test_daytona_user_probe_is_bounded_and_cancellation_preserves_the_machine(tmp_path, interruption):
     entered = asyncio.Event()
 
     class BlockedProbe(LocalProcess):
@@ -419,7 +419,7 @@ def test_daytona_user_probe_is_bounded_and_cancellation_closes_the_machine(tmp_p
                 pending.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await pending
-                assert client.closed and client.deleted
+                assert not client.closed and not client.deleted
             else:
                 result = await asyncio.wait_for(pending, timeout=0.5)
                 assert result.reason is ExitReason.TIMED_OUT
@@ -462,24 +462,30 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
     entered = asyncio.Event()
 
-    class BlockedCleanup(LocalProcess):
+    release = asyncio.Event()
+
+    class FailedCommand(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command:
                 raise OSError("Provider command failed")
-            if "rm -rf /tmp/.shellbox-" in command:
-                entered.set()
-                await asyncio.Future()
             return await super().exec(command, **kwargs)
 
+    class BlockedCleanup(LocalDaytona):
+        async def delete(self, sandbox):
+            entered.set()
+            await release.wait()
+            await super().delete(sandbox)
+
     async def scenario():
-        client = LocalDaytona()
-        client.sandbox.process = BlockedCleanup()
+        client = BlockedCleanup()
+        client.sandbox.process = FailedCommand()
         machine = await DaytonaMachineFactory(lambda: client).create(
             MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
         )
         pending = asyncio.create_task(machine.run(Command(("candidate-fail",))))
         await asyncio.wait_for(entered.wait(), timeout=5)
         pending.cancel()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
             await pending
         assert client.closed and client.deleted
@@ -487,7 +493,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
     asyncio.run(scenario())
 
 
-def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
+def test_daytona_output_failure_disposes_machine_and_preserves_cause():
     output_error = TimeoutError("Provider output request timed out")
 
     class FailedOutputAndCleanup(LocalProcess):
@@ -507,7 +513,6 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
         with pytest.raises(RuntimeError) as caught:
             await machine.run(Command(("printf", "ready")))
         assert caught.value.__cause__ is output_error
-        assert len(caught.value.__notes__) == 1
         assert client.closed and client.deleted
 
     asyncio.run(scenario())
@@ -553,29 +558,13 @@ def test_daytona_root_cleanup_does_not_execute_candidate_path_programs(tmp_path,
     asyncio.run(scenario())
 
 
-def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_path):
-    paths = []
-
+def test_daytona_completion_before_cancellation_preserves_the_machine(tmp_path):
     class CompletionDuringStop(LocalProcess):
         async def exec(self, command, **kwargs):
+            result = await super().exec(command, **kwargs)
             if "candidate-finished" in command:
-                argv = shlex.split(shlex.split(command)[2].partition("export PATH; ")[2])
-                index = argv.index("shellbox-command")
-                paths.extend(Path(path) for path in argv[index + 1 : index + 3])
-                await super().exec(command, **kwargs)
-                paths[1].unlink()
-                paths[0].write_text("99999999\n")
                 await asyncio.Future()
-            if "stop-command" in command:
-                # Complete after the first marker check and before PID consumption.
-                interleave = f'read() {{ : > "{paths[1]}"; /bin/rm -f "{paths[0]}"; return 1; }}; '
-                outer = shlex.split(command)
-                control, separator, script = outer[2].partition("export PATH; ")
-                argv = shlex.split(script)
-                argv[2] = interleave + argv[2]
-                outer[2] = control + separator + shlex.join(argv)
-                command = shlex.join(outer)
-            return await super().exec(command, **kwargs)
+            return result
 
     async def scenario():
         client = LocalDaytona()
@@ -619,7 +608,6 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
             await machine.run(Command(("printf", "candidate-fail")))
         if primary_failure:
             assert str(caught.value) == "Provider command failed"
-            assert "Daytona command cleanup failed" in caught.value.__notes__[0]
         assert client.closed and client.deleted
 
     asyncio.run(scenario())
@@ -911,3 +899,61 @@ def test_daytona_failed_snapshot_closes_client_without_starting_sandbox() -> Non
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
     assert client.params is None
     assert client.closed
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper and procfs contract")
+@pytest.mark.parametrize("ending", ["complete", "cancel", "close", "timeout"])
+def test_daytona_reaps_orphans_before_reuse_or_disposal(tmp_path, ending):
+    script = """
+import os, signal, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+r, w = os.pipe()
+if os.fork() == 0:
+    os.close(r)
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    (root / 'child').write_text(str(os.getpid()))
+    os.write(w, b'1')
+    os.close(w)
+    signal.pause()
+    os._exit(0)
+os.close(w)
+os.read(r, 1)
+(root / 'ready').touch()
+if sys.argv[2] != 'complete':
+    signal.pause()
+"""
+
+    async def scenario():
+        client = LocalDaytona()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
+        )
+        task = asyncio.create_task(
+            machine.run(
+                Command(("python3", "-c", script, str(tmp_path), ending), timeout=1 if ending == "timeout" else None)
+            )
+        )
+        try:
+            async with asyncio.timeout(10):
+                while not (tmp_path / "ready").exists():
+                    await asyncio.sleep(0)
+            if ending == "close":
+                await machine.close()
+            elif ending == "cancel":
+                task.cancel()
+            if ending in ("cancel", "close"):
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                result = await task
+                assert result.reason is (ExitReason.TIMED_OUT if ending == "timeout" else ExitReason.EXITED)
+            assert not Path(f"/proc/{(tmp_path / 'child').read_text()}").exists()
+            if ending != "close":
+                result = await machine.run(Command(("printf", "verifier-ready")))
+                assert result.stdout == b"verifier-ready"
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())

@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import json
 import shlex
@@ -392,8 +393,15 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     trajectory = tmp_path / "mini-swe-agent.trajectory.json"
 
     class HarnessEnvironment:
+        agent_timeout_sec = None
+
+        def scoped_command(self, command):
+            return contextlib.nullcontext()
+
         async def exec(self, *, command, env, **kwargs):
             words = shlex.split(command)
+            if "python3" in words and "run" in words:
+                words = shlex.split(words[-1])
             if "mini-swe-agent" not in words:
                 return ExecResult(return_code=0)
             start = words.index("mini-swe-agent") + 1

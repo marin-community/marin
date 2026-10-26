@@ -2078,7 +2078,7 @@ class _ReapFakeProcess:
 
     async def execute_session_command(self, session_id, request, timeout=None):
         self.executed.append((session_id, request.command, timeout))
-        return SimpleNamespace(cmd_id="cmd-1")
+        return SimpleNamespace(cmd_id="cmd-1", exit_code=0)
 
     async def delete_session(self, session_id):
         self.deleted.append(session_id)
@@ -2154,52 +2154,12 @@ async def test_disk_exhaustion_is_not_masked_by_session_recreation(
     assert raised.value.__cause__ is original
 
 
-class TestReapInflightAgentCommand:
-    """``_sandbox_exec`` launches the command ``run_async`` (detached
-    server-side); a cancelled poll must reap it, else a runaway opencode keeps
-    running and orphans the sandbox (auto_stop=0)."""
-
-    async def test_reap_creates_session_pkills_and_deletes(self, temp_dir):
-        env = _make_env(temp_dir)
-        env._sandbox = cast("object", _ReapFakeSandbox())
-        await env._reap_inflight_agent_command()
-        proc = env._sandbox.process
-        # One FRESH short-lived session, a scoped pkill, then torn down.
-        assert len(proc.created) == 1
-        assert proc.executed and "pkill -9 -f opencode" in proc.executed[0][1]
-        assert proc.deleted == proc.created
-
-    async def test_reap_is_noop_without_sandbox(self, temp_dir):
-        env = _make_env(temp_dir)
-        env._sandbox = None
-        # Must not raise (best-effort on a teardown path).
-        await env._reap_inflight_agent_command()
-
-    async def test_sandbox_exec_reaps_on_cancel_and_reraises(
-        self, temp_dir, monkeypatch
-    ):
-        env = _make_env(temp_dir)
-        env._sandbox = cast("object", _ReapFakeSandbox())
-        reaped = {"called": False}
-
-        async def _fake_reap():
-            reaped["called"] = True
-
-        async def _fake_ensure_session():
-            return "sess-1"
-
-        async def _fake_execute(session_id, request, timeout_sec):
-            return SimpleNamespace(cmd_id="cmd-1")
-
-        async def _fake_poll(session_id, cmd_id):
+async def test_cancelled_scope_uses_an_independent_daytona_session(temp_dir):
+    env = _make_env(temp_dir)
+    env._sandbox = cast("object", _ReapFakeSandbox())
+    with pytest.raises(asyncio.CancelledError):
+        async with env.scoped_command("printf stopped"):
             raise asyncio.CancelledError()
-
-        monkeypatch.setattr(env, "_reap_inflight_agent_command", _fake_reap)
-        monkeypatch.setattr(env, "_ensure_exec_session", _fake_ensure_session)
-        monkeypatch.setattr(env, "_execute_session_command_with_retry", _fake_execute)
-        monkeypatch.setattr(env, "_poll_response", _fake_poll)
-
-        with pytest.raises(asyncio.CancelledError):
-            await env._sandbox_exec("sleep 999")
-
-        assert reaped["called"] is True
+    process = env._sandbox.process
+    assert process.executed[0][1] == "bash -c 'printf stopped'"
+    assert process.deleted == process.created

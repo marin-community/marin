@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 
 from shellbox.backends.local import launch
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
+from shellbox.lifecycle import CommandLifetime, finish_cleanup
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
@@ -443,6 +444,7 @@ class LocalMachine:
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
+        self._commands = CommandLifetime()
 
     def _check_open(self) -> None:
         if self._closed:
@@ -474,6 +476,10 @@ class LocalMachine:
         return host
 
     async def run(self, command: Command) -> Result:
+        with self._commands.admit():
+            return await self._run(command)
+
+    async def _run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
     async def _control(
@@ -557,9 +563,7 @@ class LocalMachine:
             with contextlib.suppress(ProcessLookupError):  # The whole group may have exited already.
                 os.killpg(process.pid, signal.SIGKILL)
             # A reader that stopped with a full buffer pauses its pipe, and wait() needs both pipes at EOF.
-            await process.stdout.read()
-            await process.stderr.read()
-            await process.wait()
+            await finish_cleanup(process.communicate())
             if isinstance(interruption, TimeoutError):
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
             raise
@@ -609,6 +613,12 @@ class LocalMachine:
         if self._closed:
             return
         self._closed = True
+        try:
+            await self._commands.close()
+        finally:
+            await finish_cleanup(self._remove_files())
+
+    async def _remove_files(self) -> None:
         await asyncio.to_thread(_remove, self.root)
         if self.layers is not None:
             await asyncio.to_thread(_remove, self.layers)

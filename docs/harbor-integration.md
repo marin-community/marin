@@ -16,7 +16,7 @@ other than OpenAI. Set `model_info.max_input_tokens` and
 `model_info.max_output_tokens` for context and output limits. Optional
 `input_cost_per_token` and `output_cost_per_token` fields specify USD per token.
 Harbor does not look up limits or prices in a model registry. Agent CLI-reported
-costs and built-in prices for Cursor models remain available. Otherwise,
+costs remain available. Otherwise,
 CLI-agent cost estimates remain unset when `model_info` omits prices.
 
 For a proxy without `/tokenize`, set the Terminus agent kwarg
@@ -31,10 +31,19 @@ model adapter. The recording proxy translates Anthropic Messages and OpenAI
 Responses tool histories to the configured Chat Completions endpoint. It retains
 token IDs and log probabilities when the serving backend returns them.
 
-Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
-those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
-LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
-endpoint.
+Marin's vendored Harbor supports only `pi`, `mini-swe-agent`, `codex`, `opencode`,
+`terminus-2`, and `terminus-kira`. Other named agents, ACP registry aliases,
+local-mode adapters, and custom agent import paths raise an unsupported-agent
+error before construction. Import paths for the six supported classes remain valid.
+
+The four installed CLI agents share shellbox's Linux process supervisor. Python 3
+is installed during agent setup. Each invocation owns and reaps its tool processes,
+including detached and orphaned descendants, before returning. A remote deadline
+bounds execution; cancellation waits for confirmed cleanup. Daytona runs that
+cleanup through its existing independent control session, inside the main container
+for Compose tasks. Failed cleanup raises `PhaseCancellationError` and prevents
+verification. The sandbox's files remain available for verification after successful
+cleanup.
 
 ## Run a benchmark
 

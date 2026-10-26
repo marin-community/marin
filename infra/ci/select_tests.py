@@ -184,6 +184,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     ),
     "harbor-unit": (
         "vendor/harbor/",
+        "lib/shellbox/",
         "lib/finestore/",
         "lib/rigging/",
         "lib/marin/src/marin/evaluation/harbor/",

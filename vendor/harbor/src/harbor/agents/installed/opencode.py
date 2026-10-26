@@ -5,6 +5,7 @@ import re
 import shlex
 import uuid
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any
 
 from harbor.agents.installed.base import (
@@ -34,7 +35,6 @@ from harbor.models.trajectories import (
     ToolCall,
     Trajectory,
 )
-from harbor.trial.errors import AgentTimeoutError
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.trajectory_utils import format_trajectory_json
 
@@ -90,27 +90,6 @@ class OpenCode(BaseInstalledAgent):
     # exceed the served window.
     _DEFAULT_MODEL_WINDOW: int = 32768
     _DEFAULT_MAX_OUTPUT: int = 4096
-
-    # Server-side hard timeout for the opencode run exec. opencode has no native
-    # turn cap and harbor runs the ENTIRE agent loop as ONE detached (run_async)
-    # sandbox command, so a runaway ``opencode`` (looping forever) is otherwise
-    # only bounded by the trial-level ``asyncio.wait_for`` — which CANCELS the
-    # local poll but never kills the detached process, orphaning the sandbox
-    # (auto_stop=0) long past its deadline (observed: 51-82 min sandboxes vs a
-    # 30-min timeout, 0 completions). run() wraps the invocation in a shell
-    # ``timeout`` so the SANDBOX reaps opencode at the deadline regardless of
-    # client-side polling. The server-side TERM fires ``_SERVER_TIMEOUT_GRACE_SEC``
-    # before the app-level wait_for and the SIGKILL follows
-    # ``_SERVER_TIMEOUT_KILL_AFTER_SEC`` later — both strictly before the app
-    # deadline — so opencode is always reaped server-side FIRST, closing the
-    # un-killed-cancel race.
-    _SERVER_TIMEOUT_GRACE_SEC: int = 15
-    _SERVER_TIMEOUT_KILL_AFTER_SEC: int = 5
-    # GNU ``timeout`` returns 124 when its deadline expires without
-    # ``--preserve-status``. Signal exits such as 137 or 143 may instead come
-    # from opencode or a sandbox lifecycle event and must retain their original
-    # AgentKilledBySignalError classification.
-    _TIMEOUT_EXIT_CODE: int = 124
 
     def __init__(
         self,
@@ -917,6 +896,11 @@ class OpenCode(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        deadline = (
+            monotonic() + environment.agent_timeout_sec
+            if environment.agent_timeout_sec is not None
+            else None
+        )
         self._instruction = instruction
         escaped_instruction = shlex.quote(instruction)
 
@@ -1007,23 +991,19 @@ class OpenCode(BaseInstalledAgent):
         cli_flags = self.build_cli_flags()
         cli_flags_arg = (cli_flags + " ") if cli_flags else ""
 
-        timeout_prefix = self._server_timeout_prefix(environment)
         try:
-            await self.exec_as_agent(
+            await self.run_agent_command(
                 environment,
                 # Note that the --thinking flag just means thinking blocks will be included in the json formatted output
                 command=(
                     f"{self._NVM_SOURCE_COMMAND}; "
-                    f"{timeout_prefix}opencode --model={self.model_alias} run --format=json {cli_flags_arg}--thinking --auto -- {escaped_instruction} "
+                    f"opencode --model={self.model_alias} run --format=json {cli_flags_arg}--thinking --auto -- {escaped_instruction} "
                     f"2>&1 </dev/null | stdbuf -oL tee /logs/agent/opencode.txt"
                 ),
                 env=env,
+                deadline=deadline,
             )
         except NonZeroAgentExitCodeError as exc:
-            if timeout_prefix and self._is_timeout_exit(exc):
-                raise AgentTimeoutError(
-                    "opencode exceeded its agent-phase deadline and was terminated server-side"
-                ) from exc
             # A served-context overflow surfaces as opencode exit-1 with a
             # ContextOverflowError event already teed into opencode.txt before
             # the CLI exits. Reclassify it as the clean, passthrough-scored
@@ -1064,36 +1044,3 @@ class OpenCode(BaseInstalledAgent):
             raise NonZeroAgentExitCodeError(
                 "OpenCode emitted error event(s): " + "; ".join(messages[:3])
             )
-
-    def _server_timeout_prefix(self, environment: BaseEnvironment) -> str:
-        """Build the shell ``timeout`` prefix for the opencode run, or ``""``.
-
-        Reads the CURRENT agent-phase deadline the trial records on the
-        environment (``agent_timeout_sec`` — per-step in multi-step trials). The
-        server-side TERM fires ``_SERVER_TIMEOUT_GRACE_SEC`` before that deadline
-        and the SIGKILL ``_SERVER_TIMEOUT_KILL_AFTER_SEC`` after the TERM — both
-        strictly before the trial-level wait_for — so opencode is reaped
-        server-side first. Returns ``""`` when no deadline is set (unbounded, as
-        before), keeping the emitted command byte-identical.
-        """
-        agent_timeout = getattr(environment, "agent_timeout_sec", None)
-        # Only a real, positive number is a deadline. The trial always sets a
-        # ``float | None``; the isinstance guard also keeps this a no-op for a
-        # test double / any env that doesn't carry a numeric deadline.
-        if not isinstance(agent_timeout, (int, float)) or agent_timeout <= 0:
-            return ""
-        term_sec = max(1, int(agent_timeout) - self._SERVER_TIMEOUT_GRACE_SEC)
-        return f"timeout -k {self._SERVER_TIMEOUT_KILL_AFTER_SEC} -s TERM {term_sec} "
-
-    @staticmethod
-    def _is_timeout_exit(exc: NonZeroAgentExitCodeError) -> bool:
-        """True if the agent-exec failure was a shell ``timeout`` kill.
-
-        ``BaseInstalledAgent._exec`` formats non-zero failures as
-        ``Command failed (exit <code>): ...`` and raises rather than returning
-        the ExecResult, so the exit code is recovered from the message.
-        """
-        match = re.search(r"exit (\d+)", str(exc))
-        if not match:
-            return False
-        return int(match.group(1)) == OpenCode._TIMEOUT_EXIT_CODE
