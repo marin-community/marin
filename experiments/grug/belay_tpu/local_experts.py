@@ -112,18 +112,28 @@ def expert_mlp(rows, w_up, w_down, groups, active_rows):
     return grouped_dot(hidden, w_down, groups)
 
 
-def local_expert_mlp(x, selected, combine, w_up, w_down, *, accepted_counts):
-    """Compute locally after global capacity allocation, retaining activations."""
-    tokens, topk = selected.shape
-    experts = w_up.shape[0]
-    flat = selected.reshape(-1)
-    counts = jnp.bincount(flat, length=experts)
+def route_counts(flat, experts):
+    return jnp.bincount(flat, length=experts)
+
+
+def route_layout(flat, counts, accepted_counts):
+    experts = counts.shape[0]
     original_order = jnp.argsort(flat, stable=True)
     original_positions = jnp.argsort(original_order)
     cutoff = jnp.cumsum(counts) - counts + accepted_counts
     keep = original_positions < cutoff[flat]
     order = jnp.argsort(jnp.where(keep, flat, experts), stable=True)
     inverse = jnp.argsort(order)
+    return order, inverse, keep
+
+
+def local_expert_mlp(x, selected, combine, w_up, w_down, *, accepted_counts):
+    """Compute locally after global capacity allocation, retaining activations."""
+    tokens, topk = selected.shape
+    experts = w_up.shape[0]
+    flat = selected.reshape(-1)
+    counts = route_counts(flat, experts)
+    order, inverse, keep = route_layout(flat, counts, accepted_counts)
     active = jnp.arange(flat.size) < accepted_counts.sum()
     # Fill the unused suffix with zero rows in the last group. This keeps every
     # output initialized, including empty experts and completely rejected shards.
@@ -146,7 +156,7 @@ def gathered_expert_mlp(x, selected, combine, w_up, w_down, *, mesh, capacity_fa
     capacity = max(experts // capacity_pools, math.ceil(capacity_factor * selected.size / capacity_pools))
 
     def local(x_local, ids, weights, up, down):
-        counts = jnp.bincount(ids.reshape(-1), length=experts).astype(jnp.int32)
+        counts = route_counts(ids.reshape(-1), experts).astype(jnp.int32)
         all_counts = jax.lax.all_gather(counts, "expert")
         accepted = clip_capacity_pools(all_counts, pools=capacity_pools, capacity=capacity)
         local_accepted = accepted[jax.lax.axis_index("expert")]

@@ -36,6 +36,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     verified_tokenizer,
 )
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
+from experiments.grug.belay_tpu.capacity_layout import factorized_route_counts, interval_route_layout
 from experiments.grug.belay_tpu.expert_collectives import all_to_all_reduce_scatter, butterfly_reduce_scatter
 from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot, whole_width_tiling
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
@@ -154,6 +155,8 @@ def main():
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
+    parser.add_argument("--route-counts", choices=("source", "factorized"), default="source")
+    parser.add_argument("--capacity-layout", choices=("source", "intervals"), default="source")
     parser.add_argument("--streaming-scalars", choices=("gather", "sort"), default="gather")
     parser.add_argument(
         "--streaming-movement", action="store_true", help="Accumulate expert routes without full restores"
@@ -187,6 +190,12 @@ def main():
     model.chunk_kda_tpu = functools.partial(model.chunk_kda_tpu, state_precision=state_precision)
     if args.initial_checkpoint and args.reference_step1:
         parser.error("A continuation cannot compare its first update to the initialization reference")
+    if (args.route_counts != "source" or args.capacity_layout != "source") and not args.local_experts:
+        parser.error("Route counting and capacity layouts require --local-experts")
+    if args.route_counts == "factorized":
+        local_experts.route_counts = factorized_route_counts
+    if args.capacity_layout == "intervals":
+        local_experts.route_layout = interval_route_layout
     if args.expert_reduction != "native" and not args.local_experts:
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
     if args.whole_width_expert_tiles and not args.partitioned_expert_gradients:
@@ -275,6 +284,8 @@ def main():
             "diagnostic/local_movement": args.local_movement,
             "diagnostic/streaming_movement": args.streaming_movement,
             "diagnostic/streaming_scalars": args.streaming_scalars,
+            "diagnostic/route_counts": args.route_counts,
+            "diagnostic/capacity_layout": args.capacity_layout,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
