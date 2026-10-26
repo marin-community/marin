@@ -195,13 +195,14 @@ def _optional_at(config: dict[str, Any], path: str, default: Any = None) -> Any:
     return node
 
 
-def _local_generation(config: dict[str, Any]) -> bool:
-    return config.get("entrypoint") == "generate" and bool(_at(config, "generator.run_engines_locally"))
+def _local_generation(config: dict[str, Any], *, generate_only: bool) -> bool:
+    return generate_only and bool(_at(config, "generator.run_engines_locally"))
 
 
-def _role_plan_values(config: dict[str, Any]) -> _RolePlanValues:
+def _role_plan_values(config: dict[str, Any], *, generate_only: bool) -> _RolePlanValues:
     return _RolePlanValues(
-        colocate_all=bool(_at(config, "trainer.placement.colocate_all")) and not _local_generation(config),
+        colocate_all=bool(_at(config, "trainer.placement.colocate_all"))
+        and not _local_generation(config, generate_only=generate_only),
         colocate_policy_ref=bool(_optional_at(config, "trainer.placement.colocate_policy_ref", True)),
         policy_num_nodes=int(_at(config, "trainer.placement.policy_num_nodes")),
         policy_num_gpus_per_node=int(_at(config, "trainer.placement.policy_num_gpus_per_node")),
@@ -242,8 +243,8 @@ def _policy_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRoleC
     )
 
 
-def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[ModelRoleClaim]:
-    if _local_generation(config):
+def _core_model_claims(config: dict[str, Any], values: _RolePlanValues, *, generate_only: bool) -> list[ModelRoleClaim]:
+    if _local_generation(config, generate_only=generate_only):
         return []
     placement = _at(config, "trainer.placement")
     use_reference = reference_model_required(_at(config, "trainer.algorithm"))
@@ -389,7 +390,7 @@ def _rollout_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRole
     return claim
 
 
-def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
+def derive_role_plan(config: dict[str, Any], *, generate_only: bool) -> SkyRLRolePlan:
     """Derive every role-plan field from the RL config.
 
     Required geometry raises before submission, while omitted reference dimensions
@@ -398,11 +399,11 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     remote roles receive no Iris bundle, and each local colocation group becomes one
     physical whole-node footprint.
     """
-    values = _role_plan_values(config)
-    claims = _core_model_claims(config, values)
+    values = _role_plan_values(config, generate_only=generate_only)
+    claims = _core_model_claims(config, values, generate_only=generate_only)
     if inference_engines_required(config):
         claims.append(_rollout_claim(config, values))
-    if not _local_generation(config):
+    if not _local_generation(config, generate_only=generate_only):
         claims.extend(_teacher_claims(config))
         claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
@@ -410,7 +411,7 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
 
 def derive_policy_export_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     """Derive only the saved policy's footprint for checkpoint conversion."""
-    values = _role_plan_values(config)
+    values = _role_plan_values(config, generate_only=False)
     return _role_plan((_policy_claim(config, values),), values)
 
 
