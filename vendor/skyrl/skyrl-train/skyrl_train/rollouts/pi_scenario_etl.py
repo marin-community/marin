@@ -300,12 +300,31 @@ class TrainingRows(_Evidence):
     judge_score: int | None = None
 
 
+def _teacher_render_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Convert Pi's text-only OpenAI content blocks for student-tokenizer SFT.
+
+    vLLM normalizes text blocks before applying the model chat template. HF's
+    tokenizer does not: Qwen3 treats a list-valued user message as no user query,
+    changing the assistant prefix. Keep the captured evidence untouched and
+    fail rather than silently dropping unsupported multimodal blocks.
+    """
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    if not content or any(
+        not isinstance(part, dict) or part.get("type") != "text" or type(part.get("text")) is not str
+        for part in content
+    ):
+        raise ValueError("Pi teacher SFT only supports text content blocks")
+    return {**message, "content": "".join(part["text"] for part in content)}
+
+
 def _teacher_row(label: ModelEvidence, tokenizer: Any, reward: float | None) -> TrainingRow:
     options = {"tokenize": True, "tools": list(label.tools), **label.chat_template_kwargs}
-    prefix = _token_ids(tokenizer.apply_chat_template(list(label.messages), add_generation_prompt=True, **options))
-    full = _token_ids(
-        tokenizer.apply_chat_template([*label.messages, label.assistant], add_generation_prompt=False, **options)
-    )
+    messages = [_teacher_render_message(message) for message in label.messages]
+    assistant = _teacher_render_message(label.assistant)
+    prefix = _token_ids(tokenizer.apply_chat_template(messages, add_generation_prompt=True, **options))
+    full = _token_ids(tokenizer.apply_chat_template([*messages, assistant], add_generation_prompt=False, **options))
     if not prefix or full[: len(prefix)] != prefix or len(full) == len(prefix):
         raise ValueError("Teacher response does not align with the student tokenizer's visited context")
     response = tuple(full[len(prefix) :])

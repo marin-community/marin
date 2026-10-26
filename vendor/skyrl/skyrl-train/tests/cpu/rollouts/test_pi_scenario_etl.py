@@ -104,6 +104,45 @@ class StudentTokenizer:
 
 
 @pytest.mark.parametrize(
+    "block", [[{"type": "text", "text": "Make a file"}], [{"type": "image_url", "image_url": {"url": "test"}}]]
+)
+def test_teacher_sft_normalizes_text_blocks_without_changing_executed_evidence(block):
+    class TextOnlyTokenizer(StudentTokenizer):
+        def apply_chat_template(self, messages, *, add_generation_prompt, tokenize, tools):
+            assert all(not isinstance(message.get("content"), list) for message in messages)
+            return super().apply_chat_template(
+                messages, add_generation_prompt=add_generation_prompt, tokenize=tokenize, tools=tools
+            )
+
+    raw = trial(dagger=True, teacher_suffix=True)
+    for turn in raw["turns"]:
+        for key in ("executed", "teacher_label"):
+            if turn[key] is not None:
+                turn[key]["messages"][0]["content"] = block
+    evidence = HydratedPiTrial.model_validate(raw)
+    if block[0]["type"] != "text":
+        with pytest.raises(ValueError, match="only supports text content blocks"):
+            scenario_training_rows(
+                PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION,
+                evidence,
+                TextOnlyTokenizer(),
+                expected_trial_id="trial-1",
+                expected_policy_step=3,
+            )
+        return
+    rows = scenario_training_rows(
+        PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION,
+        evidence,
+        TextOnlyTokenizer(),
+        expected_trial_id="trial-1",
+        expected_policy_step=3,
+    )
+    assert len(rows.rows) == 2
+    assert evidence.turns[0].teacher_label.messages[0]["content"] == block
+    assert b"Make a file" in bytes(rows.rows[0].prompt_token_ids)
+
+
+@pytest.mark.parametrize(
     "preset,teacher_suffix,expected_count",
     [
         (PiScenario.DAGGER_MIXTURE, False, 2),
@@ -388,13 +427,19 @@ def test_pi_capture_and_rollout_failure_are_distinct_admission_errors():
     with pytest.raises(ValueError, match="InvalidFailureType"):
         _pi_training_payload({}, replace(failed, failure=RolloutFailure("private raw text\\n")))
     with pytest.raises(ValueError, match=r"VerifierRuntimeError/DaytonaError .*capture_present=False"):
-        _pi_training_payload(None, replace(failed, failure=RolloutFailure(
-            "VerifierRuntimeError", {"cause_error_type": "DaytonaError"}
-        )))
+        _pi_training_payload(
+            None, replace(failed, failure=RolloutFailure("VerifierRuntimeError", {"cause_error_type": "DaytonaError"}))
+        )
     with pytest.raises(ValueError) as error:
-        _pi_training_payload(None, replace(failed, failure=RolloutFailure(
-            "VerifierRuntimeError", {"cause_error_type": "sensitive URL https://example.test/token"}
-        )))
+        _pi_training_payload(
+            None,
+            replace(
+                failed,
+                failure=RolloutFailure(
+                    "VerifierRuntimeError", {"cause_error_type": "sensitive URL https://example.test/token"}
+                ),
+            ),
+        )
     assert "sensitive URL" not in str(error.value)
     successful = replace(failed, failure=None)
     with pytest.raises(ValueError, match="did not return a validated in-memory trajectory"):
@@ -803,8 +848,12 @@ def test_worker_binds_preset_to_one_hydrated_trial_without_lookups():
 async def test_rlaif_refuses_missing_judge_before_student_sampling(task_inputs):
     cfg = get_default_config().generator
     worker = TaskRolloutWorker(
-        cfg, WholeTaskProjection(cfg, StudentTokenizer()), InferenceClient(), {},
-        pi_scenario={"preset": "rlaif_pi_base"}, shutdown_timeout=1,
+        cfg,
+        WholeTaskProjection(cfg, StudentTokenizer()),
+        InferenceClient(),
+        {},
+        pi_scenario={"preset": "rlaif_pi_base"},
+        shutdown_timeout=1,
     )
     request = replace(
         task_inputs[1],
@@ -895,8 +944,13 @@ async def test_rlaif_rejects_reused_judge_identity_across_physical_trials(task_i
     cfg = get_default_config().generator
     judge = ReusedRequestJudge()
     worker = TaskRolloutWorker(
-        cfg, WholeTaskProjection(cfg, StudentTokenizer()), InferenceClient(), {},
-        pi_scenario={"preset": "rlaif_pi_base"}, pi_judge=judge, shutdown_timeout=1,
+        cfg,
+        WholeTaskProjection(cfg, StudentTokenizer()),
+        InferenceClient(),
+        {},
+        pi_scenario={"preset": "rlaif_pi_base"},
+        pi_judge=judge,
+        shutdown_timeout=1,
     )
     raw = trial()
     trajectory = PiCollatedTrajectory.model_validate(
@@ -904,9 +958,16 @@ async def test_rlaif_rejects_reused_judge_identity_across_physical_trials(task_i
         | {"critique_feedback": None, "critique": None}
     ).model_dump(mode="json")
     base = PiTrainingRollout(
-        task_id="task-1", messages=(), prompt_token_ids=(1,), response_token_ids=(999,),
-        loss_mask=(1,), logprobs=(-0.25,), grade=GradeResult(Outcome.GRADED, 0.0, passed=False),
-        stop_reason="stop", pi_trajectory=trajectory, session_id="trial-1",
+        task_id="task-1",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(999,),
+        loss_mask=(1,),
+        logprobs=(-0.25,),
+        grade=GradeResult(Outcome.GRADED, 0.0, passed=False),
+        stop_reason="stop",
+        pi_trajectory=trajectory,
+        session_id="trial-1",
     )
     second = replace(base, session_id="trial-2", pi_trajectory={**trajectory, "trial_id": "trial-2"})
     request = TaskRequestBatch(
@@ -917,6 +978,50 @@ async def test_rlaif_rejects_reused_judge_identity_across_physical_trials(task_i
     with pytest.raises(ValueError, match="reused a post-trial request identity"):
         await worker.training_batch(request, [base, second])
     assert judge.calls == ["trial-1", "trial-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "preset",
+    [
+        "verifier_grpo_base",
+        "teacher_distribution_pi_base",
+        "teacher_demo_pi_base",
+        "teacher_demo_pi_verified_base",
+        "dagger_pi_turn_mixture_base",
+        "student_prefix_teacher_completion_pi_base",
+        "critique_revision_pi_base",
+    ],
+)
+async def test_pi_scenarios_refuse_invalid_submission_as_reward_zero(preset, task_inputs):
+    cfg = get_default_config().generator
+    worker = TaskRolloutWorker(
+        cfg,
+        WholeTaskProjection(cfg, StudentTokenizer()),
+        InferenceClient(),
+        {},
+        pi_scenario={"preset": preset},
+        shutdown_timeout=1,
+    )
+    rollout = PiTrainingRollout(
+        task_id="task-1",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(999,),
+        loss_mask=(1,),
+        logprobs=(-0.25,),
+        grade=GradeResult(Outcome.SUBMISSION_FAILURE, 0.0),
+        stop_reason="stop",
+        pi_trajectory={},
+        session_id="trial-1",
+    )
+    request = TaskRequestBatch(
+        rows=task_inputs[1].rows,
+        trajectory_ids=(TrajectoryID("same-task", 0),),
+        batch_metadata=BatchMetadata(global_step=3, training_phase="train"),
+    )
+    with pytest.raises(ValueError, match="invalid submission cannot be admitted"):
+        await worker.training_batch(request, [rollout])
 
 
 @pytest.mark.asyncio
@@ -938,9 +1043,16 @@ async def test_rlaif_refuses_ungraded_failed_or_unleased_trials_before_judging(t
         | {"critique_feedback": None, "critique": None}
     ).model_dump(mode="json")
     base = PiTrainingRollout(
-        task_id="task-1", messages=(), prompt_token_ids=(1,), response_token_ids=(999,),
-        loss_mask=(1,), logprobs=(-0.25,), grade=GradeResult(Outcome.GRADED, 0.0, passed=False),
-        stop_reason="stop", pi_trajectory=trajectory, session_id="trial-1",
+        task_id="task-1",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(999,),
+        loss_mask=(1,),
+        logprobs=(-0.25,),
+        grade=GradeResult(Outcome.GRADED, 0.0, passed=False),
+        stop_reason="stop",
+        pi_trajectory=trajectory,
+        session_id="trial-1",
     )
     request = TaskRequestBatch(
         rows=task_inputs[1].rows,

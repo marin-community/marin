@@ -11,6 +11,39 @@ from skyrl_train.inference_engines.pi_external_vllm import ExternalPiTeacherEngi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["tokenize", "chat/completions"])
+async def test_external_teacher_http_errors_do_not_expose_endpoint_capability(monkeypatch, path):
+    monkeypatch.setenv("PI_EXTERNAL_TEST_KEY", "unit-only-key")
+    app = web.Application()
+
+    async def unavailable(request):
+        return web.Response(status=503)
+
+    app.router.add_post(f"/private-capability/v1/{path}", unavailable)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    teacher = ExternalPiTeacherEngine(
+        endpoint=f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/private-capability/v1",
+        model="teacher",
+        auth="env:PI_EXTERNAL_TEST_KEY",
+        max_model_len=128,
+    )
+    try:
+        request = {"json": {"model": "teacher", "messages": []}}
+        with pytest.raises(ValueError, match="HTTP 503") as error:
+            if path == "tokenize":
+                await teacher.tokenize(request)
+            else:
+                await teacher.chat_completion(request)
+        assert "private-capability" not in str(error.value)
+    finally:
+        await teacher.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("damage", ["bad_model", "missing_ids", "missing_logprobs", "partial_logprobs", "bad_tokenize"])
 async def test_external_teacher_rejects_missing_or_wrong_provenance(monkeypatch, damage):
     monkeypatch.setenv("PI_EXTERNAL_TEST_KEY", "unit-only-key")

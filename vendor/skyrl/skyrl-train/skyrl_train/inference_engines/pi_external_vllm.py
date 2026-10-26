@@ -25,20 +25,27 @@ class ExternalPiTeacherEngine:
             headers={"Authorization": f"Bearer {resolve_secret_spec(auth).value}"},
         )
 
+    async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Fail loudly without including a scoped endpoint capability in errors."""
+        try:
+            response = await self._client.post(f"{self.endpoint}/{path}", json=body)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ValueError(f"External Pi teacher {path} returned HTTP {error.response.status_code}") from None
+        except httpx.RequestError as error:
+            raise ValueError(f"External Pi teacher {path} transport failed: {type(error).__name__}") from None
+        return response.json()
+
     async def tokenize(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         """Return exact IDs from the same remote model used to generate replies."""
-        response = await self._client.post(f"{self.endpoint}/tokenize", json=request_payload["json"])
-        response.raise_for_status()
-        result = response.json()
+        result = await self._post("tokenize", request_payload["json"])
         if not isinstance(result.get("tokens"), list) or any(type(token) is not int for token in result["tokens"]):
             raise ValueError("External Pi teacher /tokenize did not return exact integer token IDs")
         return result
 
     async def chat_completion(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         """Require vLLM token evidence, not text-only OpenAI completions."""
-        response = await self._client.post(f"{self.endpoint}/chat/completions", json=request_payload["json"])
-        response.raise_for_status()
-        result = response.json()
+        result = await self._post("chat/completions", request_payload["json"])
         if result.get("model") != self.model or len(result.get("choices", [])) != 1:
             raise ValueError("External Pi teacher response has the wrong model or completion count")
         choice = result["choices"][0]
