@@ -24,7 +24,8 @@ from taskforge.stage10_proposal.model import Environment, SolverMachine
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft, step_output
 from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
-from taskforge.stage_coordinator.coordinator import STORE_DIR, VALIDATION_FILE
+from taskforge.stage_coordinator.coordinator import DECISION_FILE, STORE_DIR, VALIDATION_FILE
+from taskforge.stage_coordinator.event_log import EVENTS_FILE, WORKPIECES_DIR
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
@@ -146,17 +147,31 @@ def _services(controller_url: str) -> RLEnvBuildServices:
     )
 
 
-def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object, object]:
+def _workpiece_artifacts(root: Path, workpiece_id: str) -> dict[str, object]:
+    workpiece = root / WORKPIECES_DIR / workpiece_id
+    artifacts: dict[str, object] = {}
+    events = workpiece / EVENTS_FILE
+    if events.is_file():
+        artifacts["events"] = json.loads(events.read_bytes())
+    rounds = sorted((workpiece / "rounds").glob("*"))
+    if rounds:
+        for key, name in (("validation", VALIDATION_FILE), ("decision", DECISION_FILE)):
+            path = rounds[-1] / name
+            if path.is_file():
+                artifacts[key] = json.loads(path.read_bytes())
+    return artifacts
+
+
+def _accepted_artifacts(root: Path, workpiece_id: str) -> tuple[str, object]:
     rounds = sorted((root / "workpieces" / workpiece_id / "rounds").glob("*"))
     if not rounds:
         raise ValueError(f"accepted workpiece {workpiece_id!r} has no persisted round")
     draft = rounds[-1] / DRAFT_DIR
-    validation = rounds[-1] / VALIDATION_FILE
-    if not draft.is_dir() or not validation.is_file():
-        raise ValueError(f"accepted workpiece {workpiece_id!r} lacks its draft or validation evidence")
+    if not draft.is_dir():
+        raise ValueError(f"accepted workpiece {workpiece_id!r} lacks its draft")
     loaded = load_draft(draft)
     design = step_output(loaded, str(root / STORE_DIR), "design", OpenEndedTaskDesign)
-    return loaded.task.model_dump_json(), design.model_dump(mode="json"), json.loads(validation.read_bytes())
+    return loaded.task.model_dump_json(), design.model_dump(mode="json")
 
 
 async def run_bundle_lifecycle(
@@ -194,11 +209,12 @@ async def run_bundle_lifecycle(
     slots: list[dict[str, object]] = []
     for slot in result.slots:
         item = slot.model_dump(mode="json")
+        if slot.workpiece_id is not None:
+            item.update(_workpiece_artifacts(root / "coordinator", slot.workpiece_id))
         if slot.terminal is Terminal.ACCEPTED and slot.workpiece_id is not None:
-            task_json, design, validation = _accepted_artifacts(root / "coordinator", slot.workpiece_id)
+            task_json, design = _accepted_artifacts(root / "coordinator", slot.workpiece_id)
             item["task_json"] = task_json
             item["design"] = design
-            item["validation"] = validation
         slots.append(item)
     return {
         "bundle_id": result.bundle_id,
