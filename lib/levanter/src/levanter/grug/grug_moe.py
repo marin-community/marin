@@ -363,6 +363,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
+    combine_in_fp32: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(
@@ -379,6 +380,7 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
+        combine_in_fp32: bool = False,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -402,6 +404,7 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
+            combine_in_fp32=combine_in_fp32,
         )
 
     @named_call
@@ -431,6 +434,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
+            combine_in_fp32=self.combine_in_fp32,
         )
 
 
@@ -451,6 +455,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
+    combine_in_fp32: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -485,6 +490,10 @@ def moe_mlp(
     destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
     (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
+
+    `combine_in_fp32=True` weights and sums the expert outputs in float32 (float32 combine weights, and on the
+    ring paths a float32 psum-scatter), casting to `x`'s dtype once at the end. Only the `ring`,
+    `ring_gather_combine` and local `scatter` paths support it. Off, they cast the weights to `x`'s dtype first.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -510,6 +519,8 @@ def moe_mlp(
             f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
             f"dim ({x.shape[0]})"
         )
+    if combine_in_fp32:
+        combine_weights = combine_weights.astype(jnp.float32)
     if token_valid is None:
         token_valid = jnp.ones((x.shape[0],), dtype=jnp.bool_)
     elif token_valid.ndim != 1 or token_valid.shape[0] != x.shape[0]:
@@ -534,6 +545,12 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    expert_parallel = mesh is not None and not mesh.empty and has_expert_axis and expert_axis_size > 1
+    if combine_in_fp32 and expert_parallel and resolved_implementation not in ("ring", "ring_gather_combine"):
+        raise ValueError(
+            "combine_in_fp32 with expert parallelism is implemented only for ring and ring_gather_combine; "
+            f"got implementation={resolved_implementation!r}"
+        )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -547,6 +564,7 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
+            combine_in_fp32=combine_in_fp32,
         )
         if report_capacity_overflow:
             return out, dispatch_counts(
@@ -582,9 +600,17 @@ def moe_mlp(
             raise ValueError(f"{resolved_implementation} requires pooled_transport_capacity_factor")
 
         if resolved_implementation == "ring":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_local,
+                make_dispatch_combine=_scatter_add_dispatch_combine,
+                combine_in_fp32=combine_in_fp32,
+            )
         elif resolved_implementation == "ring_gather_combine":
-            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_local,
+                make_dispatch_combine=_gather_dispatch_combine,
+                combine_in_fp32=combine_in_fp32,
+            )
         elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(
                 _moe_mlp_ep_ring_filtered_local,
@@ -685,6 +711,7 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
+            combine_in_fp32=combine_in_fp32,
         )
         local_token_sharding_axes = _axis_names(x_spec[0])
         if report_capacity_overflow and local_token_sharding_axes:
