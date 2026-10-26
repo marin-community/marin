@@ -73,4 +73,4 @@ class GvisorMachineFactory(DockerMachineFactory):
 
     async def create(self, spec: MachineSpec) -> GvisorMachine:
         machine = await super().create(spec)
-        return GvisorMachine(machine.name, machine.spec)
+        return GvisorMachine(machine.name, machine.spec, machine._python)
