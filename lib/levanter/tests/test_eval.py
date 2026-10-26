@@ -16,6 +16,7 @@ from jax._src import config as jax_config
 
 from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text.examples import (
     GrugLmExample,
     LabeledLmExample,
@@ -82,6 +83,43 @@ async def test_tagged_evaluator_shuffle_reorders_combined_dataset_and_preserves_
     for example, tags in shuffled:
         expected_tags = [1, 0] if example.item() < 100 else [0, 1]
         assert tags.tolist() == expected_tags
+
+
+@pytest.mark.parametrize("compute_bpb", [False, True])
+def test_tagged_evaluator_macros_exclude_unscored_tags(compute_bpb):
+    EvalBatch = Axis("batch", len(jax.devices()))
+    first = ListAsyncDataset([jnp.array([0, 0], dtype=jnp.int32)] * EvalBatch.size)
+    second = ListAsyncDataset([jnp.array([4, 4], dtype=jnp.int32)] * (2 * EvalBatch.size))
+    empty = ListAsyncDataset([])
+    masked = ListAsyncDataset([jnp.array([8, 8], dtype=jnp.int32)] * EvalBatch.size)
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        return batch.astype(jnp.float32), (batch != 8).astype(jnp.float32), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[
+                (first, ["paloma/first"]),
+                (second, ["paloma/second"]),
+                (empty, ["paloma/empty"]),
+                (masked, ["paloma/masked"]),
+            ],
+            loss_fn=loss_fn,
+            tokenizer=PassthroughTokenizer(10) if compute_bpb else None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(jnp.zeros(()))
+
+    assert result.macro_avg_loss == pytest.approx(2.0)
+    assert result.tag_macro_losses["paloma"] == pytest.approx(2.0)
+    assert result.micro_avg_loss == pytest.approx(8 / 3)
+    if compute_bpb:
+        assert result.macro_bpb == pytest.approx(2.0 / np.log(2))
+        assert result.tag_macro_bpb["paloma"] == pytest.approx(2.0 / np.log(2))
+    else:
+        assert result.macro_bpb is None
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

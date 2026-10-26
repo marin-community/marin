@@ -268,7 +268,12 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, 2816 at 16K, and 704 at 65K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Do not lengthen the schedule
+decay. Eval packing follows the training context up to 65,536 tokens, so the
+`eval_dropless/*` series shift at switches up to that length. The scaling-ladder and diagnostic
+launchers cap `GrugEvalConfig.max_seq_len` at 65,536 for longer training contexts, including 262K:
+Paloma's PTB and WikiText-103 validation sets are shorter than one 262K sequence and would otherwise
+disappear from its group macro. This cap keeps all 16 Paloma subsets; it does not make the metric
+directly comparable to the earlier 4K or 16K evals. Do not lengthen the schedule
 to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
 [Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
 
