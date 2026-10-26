@@ -69,6 +69,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    RELU_ACTIVE_COUNT,
     THRESH_COUNT,
     THRESH_WEIGHT_SUM,
     DenseMLP,
@@ -624,12 +625,17 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
+    relu_l1_coef: jax.Array
+    """``Routing.RELU``'s adaptive L1 coefficient ``lambda_i`` (unused, zero, otherwise)."""
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     if isinstance(model.stacked_blocks.stacked.mlp, DenseMLP):
         # Dense blocks have no router (QB routing dropped), so there is no router_bias to set.
+        return model
+    if model.config.routing == Routing.RELU:
+        # ReMoE gates have no bias; QB's solve is logged only.
         return model
     new_bias = -qb_betas
     if model.config.routing == Routing.TOP_K:
@@ -661,6 +667,7 @@ def initial_state(
             (model_config.num_layers, model_config.num_experts),
             model_config.thresh_init_beta if model_config.routing == Routing.THRESHOLD else 0.0,
         ),
+        relu_l1_coef=jnp.asarray(model_config.relu_l1_init if model_config.routing == Routing.RELU else 0.0),
     )
 
 
@@ -886,6 +893,7 @@ def _loss_and_grads(
     extra_mlp_active: jax.Array | bool = True,
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
+    relu_l1_coef: jax.Array | None = None,
 ):
     """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
     back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
@@ -905,6 +913,7 @@ def _loss_and_grads(
             extra_mlp_active=extra_mlp_active,
             head_grad_probe=probes.get(GradProbeSite.POST_NORM),
             pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
+            relu_l1_coef=relu_l1_coef,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
@@ -933,6 +942,7 @@ def _accumulated_loss_and_grads(
     z_loss,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
+    relu_l1_coef: jax.Array | None = None,
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
@@ -941,7 +951,7 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active)
+        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active, relu_l1_coef=relu_l1_coef)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -990,14 +1000,25 @@ def _make_train_step(
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         extra_active = state.step >= extra_mlp_start_step
+        model_config = state.params.config
+        relu = model_config.routing == Routing.RELU
+        l1_coef = state.relu_l1_coef if relu else None
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active, l1_coef
             )
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(
-                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
+                qb_params,
+                batch,
+                mp,
+                z_loss,
+                layer_skip,
+                extra_active,
+                lm_head_grad_probe_site,
+                lm_head_grad_clip,
+                l1_coef,
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         with jax.named_scope("opt_update"):
@@ -1031,6 +1052,14 @@ def _make_train_step(
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
             pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
         )
+        if relu:
+            # ReMoE: lambda_{i+1} = lambda_i * alpha^sign(target sparsity - S_i).
+            target = 1.0 - model_config.num_experts_per_token / model_config.num_experts
+            sparsity = metrics["train/aux/remoe/sparsity"]
+            next_state = dataclasses.replace(
+                next_state,
+                relu_l1_coef=state.relu_l1_coef * model_config.relu_l1_alpha ** jnp.sign(target - sparsity),
+            )
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
             for layer in range(next_state.pending_qb_betas.shape[0]):
@@ -1546,9 +1575,12 @@ def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
         weight = jnp.ones(tokens.shape, jnp.float32)
         out = {"next_token_loss": model.next_token_loss(tokens, weight, mask=mask, reduction="none")}
-        if model.config.routing == Routing.THRESHOLD:
+        if model.config.routing != Routing.TOP_K:
             _, stats = model(tokens, mask=mask)
-            for name, key in (("thresh_count", THRESH_COUNT), ("thresh_weight", THRESH_WEIGHT_SUM)):
+            names = [("thresh_count", THRESH_COUNT), ("thresh_weight", THRESH_WEIGHT_SUM)]
+            if model.config.routing == Routing.RELU:
+                names.append(("relu_active_count", RELU_ACTIVE_COUNT))
+            for name, key in names:
                 per_layer = stats[key].reshape(stats[key].shape[0], *tokens.shape)
                 out[name] = jnp.transpose(per_layer, (1, 0, 2))
             out["qb_beta"] = stats["qb_beta_per_layer"]
@@ -1607,6 +1639,9 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
                 continue
             extra[f"resolved_{k}"] = np.concatenate([p[k] for p in resolved]).astype(np.float16)
         extra["expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in parts]), axis=0).astype(np.float32)
+    elif cfg.routing == Routing.RELU:
+        extra["expert_counts"] = np.sum(np.stack([p["expert_counts"] for p in parts]), axis=0).astype(np.float32)
+        extra["relu_l1_coef"] = np.asarray(state.relu_l1_coef, np.float32)
     if jax.process_index() != 0:
         return
     buffer = io.BytesIO()

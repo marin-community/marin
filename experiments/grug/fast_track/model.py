@@ -91,7 +91,9 @@ _OUTSTAT_PREFIX = "outstat/"
 THRESH_COUNT = "thresh_count"
 THRESH_WEIGHT_SUM = "thresh_weight_sum"
 THRESH_AUX_TERM = "thresh_aux_term"
-_THRESH_TOKEN_STATS = (THRESH_COUNT, THRESH_WEIGHT_SUM, THRESH_AUX_TERM)
+# ``Routing.RELU``: each token's count of experts with a positive ReLU gate before the cap (stop-gradient).
+RELU_ACTIVE_COUNT = "relu_active_count"
+_THRESH_TOKEN_STATS = (THRESH_COUNT, THRESH_WEIGHT_SUM, THRESH_AUX_TERM, RELU_ACTIVE_COUNT)
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -174,6 +176,23 @@ class Routing(StrEnum):
     ``thresh_candidates`` largest biased logits. QB solves ``b_e`` each step (applied next step) so each expert takes a
     ``num_experts_per_token / num_experts`` share of the tokens: ``num_experts_per_token`` experts per token on average,
     a variable count per token. Combine weights are not renormalized (``ThreshWeight``)."""
+    RELU = "relu"
+    """ReMoE (arXiv 2412.14711): gates ``R_e = relu(logit_e)`` with no bias, softmax or renormalization; a token takes
+    every expert with ``R_e > 0`` among its ``thresh_candidates`` largest logits (the cap that sizes the dispatch).
+    The loss adds ``lambda_i * L_reg`` (``ReluL1``), and ``lambda`` adapts each step to the sparsity target
+    ``1 - num_experts_per_token / num_experts``: ``lambda_{i+1} = lambda_i * relu_l1_alpha ** sign(target - S_i)``
+    from ``relu_l1_init``, with ``S_i`` the fraction of zero gates over every MoE layer, token and expert (before
+    the cap). The tiny ``lambda_0`` gives the paper's dense warm-up: about half the gates are positive at init."""
+
+
+class ReluL1(StrEnum):
+    """``Routing.RELU`` sparsity term ``L_reg = mean_{layers, tokens} sum_e c_{l,e} R_e``."""
+
+    LOAD_AWARE = "load_aware"
+    """``c_{l,e} = f_{l,e} = E / (k T) * #{t : R_te > 0}`` (stop-gradient), the paper's load-balancing refinement:
+    over-used experts are pushed down harder."""
+    PLAIN = "plain"
+    """``c_{l,e} = 1``: the plain L1 of the gates."""
 
 
 class ThreshWeight(StrEnum):
@@ -495,7 +514,8 @@ class GrugModelConfig:
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     routing: Routing = Routing.TOP_K
     thresh_candidates: int = 0
-    """``Routing.THRESHOLD``: the cap on a token's experts (its largest biased logits that may clear threshold)."""
+    """``Routing.THRESHOLD`` / ``RELU``: the cap on a token's experts (its largest biased logits that may clear
+    threshold, or its largest positive ReLU gates)."""
     thresh_weight: ThreshWeight = ThreshWeight.RELU
     thresh_weight_scale: float = 0.0
     """``Routing.THRESHOLD``: the fixed combine-weight scale (set so the routed output magnitude matches top-k at
@@ -514,6 +534,17 @@ class GrugModelConfig:
     """``ThreshAux`` sigmoid temperature in units of the layer's router-logit std."""
     thresh_aux_eps: float = 0.02
     """Loss floor (nats) of ``ThreshAux.SOFTCOUNT_INVLOSS``."""
+    relu_l1: ReluL1 = ReluL1.LOAD_AWARE
+    """``Routing.RELU``: the L1 term's per-expert coefficients."""
+    relu_l1_init: float = 1e-8
+    """``Routing.RELU``: ``lambda_0`` (the paper's value)."""
+    relu_l1_alpha: float = 1.2
+    """``Routing.RELU``: the multiplicative ``lambda`` update rate (the paper's value)."""
+
+    @property
+    def routing_aux_term(self) -> bool:
+        """Whether the MoE layers emit ``THRESH_AUX_TERM``, a per-token term the loss differentiates."""
+        return self.thresh_aux != ThreshAux.NONE or self.routing == Routing.RELU
 
     def __post_init__(self) -> None:
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -537,6 +568,13 @@ class GrugModelConfig:
                 raise ValueError("Routing.THRESHOLD needs a positive thresh_weight_scale and thresh_init_beta")
             if not self.moe_ungated_relu2:
                 raise ValueError("Routing.THRESHOLD supports only the ungated ReLU^2 experts (moe_ungated_relu2)")
+        if self.routing == Routing.RELU:
+            if not self.num_experts_per_token < self.thresh_candidates <= self.num_experts:
+                raise ValueError("Routing.RELU needs num_experts_per_token < thresh_candidates <= num_experts")
+            if self.relu_l1_init <= 0 or self.relu_l1_alpha <= 1:
+                raise ValueError("Routing.RELU needs relu_l1_init > 0 and relu_l1_alpha > 1")
+            if not self.moe_ungated_relu2:
+                raise ValueError("Routing.RELU supports only the ungated ReLU^2 experts (moe_ungated_relu2)")
         if (self.thresh_aux != ThreshAux.NONE) != (self.thresh_aux_weight > 0):
             raise ValueError("thresh_aux and a positive thresh_aux_weight go together")
         if self.thresh_aux != ThreshAux.NONE and self.routing != Routing.THRESHOLD:
@@ -1310,6 +1348,53 @@ class MoEMLP(eqx.Module):
             stats[f"{_OUTSTAT_PREFIX}thresh_soft_count"] = jax.lax.stop_gradient(jnp.mean(soft))
         return selected, weights, router_logits - cap_floor, stats
 
+    def _relu_selection(
+        self, router_logits: Float[Array, "T E"]
+    ) -> tuple[Int[Array, "T C"], Float[Array, "T C"], dict[str, jax.Array]]:
+        """``Routing.RELU``: gates ``relu(logit)``; the token's ``thresh_candidates`` largest logits are dispatched
+        where positive (an invalid id E and weight zero otherwise). The L1 term reads every gate, capped or not."""
+        cfg = self.cfg
+        num_experts = cfg.num_experts
+        cap = cfg.thresh_candidates
+        gates = jax.nn.relu(router_logits)
+        active = jax.lax.stop_gradient(router_logits) > 0
+        active_f = active.astype(jnp.float32)
+        # Fraction of the batch's tokens with a positive gate, per expert (global over the token shards).
+        load = jnp.mean(active_f, axis=0)
+        _, candidates = _small_top_k(router_logits, cap)
+        candidate_gates = jnp.take_along_axis(gates, candidates, axis=-1)
+        keep = candidate_gates > 0
+        selected = jnp.where(keep, candidates, num_experts)
+        weights = jnp.where(keep, candidate_gates, 0.0)
+        if cfg.relu_l1 == ReluL1.LOAD_AWARE:
+            coef = jax.lax.stop_gradient(load * (num_experts / cfg.num_experts_per_token))
+            l1 = jnp.sum(gates * coef[None, :], axis=-1)
+        else:
+            l1 = jnp.sum(gates, axis=-1)
+        count = jnp.sum(keep, axis=-1).astype(jnp.float32)
+        active_count = jnp.sum(active_f, axis=-1)
+        weight_sum = jax.lax.stop_gradient(jnp.sum(weights, axis=-1))
+        stats = {
+            THRESH_COUNT: reshard(count, P(_BATCH_AXES)),
+            THRESH_WEIGHT_SUM: reshard(weight_sum, P(_BATCH_AXES)),
+            THRESH_AUX_TERM: reshard(l1, P(_BATCH_AXES)),
+            RELU_ACTIVE_COUNT: reshard(active_count, P(_BATCH_AXES)),
+            f"{_OUTSTAT_PREFIX}thresh_count_mean": jnp.mean(count),
+            f"{_OUTSTAT_PREFIX}thresh_count_std": jnp.std(count),
+            f"{_OUTSTAT_PREFIX}thresh_frac_zero": jnp.mean((count == 0).astype(jnp.float32)),
+            f"{_OUTSTAT_PREFIX}thresh_frac_cap": jnp.mean((active_count >= cap).astype(jnp.float32)),
+            f"{_OUTSTAT_PREFIX}thresh_weight_sum": jnp.mean(weight_sum),
+            f"{_OUTSTAT_PREFIX}relu_active_count_mean": jnp.mean(active_count),
+            f"{_OUTSTAT_PREFIX}relu_l1": jax.lax.stop_gradient(jnp.mean(l1)),
+            f"{_OUTSTAT_PREFIX}relu_gate_load_cv": jnp.std(load) / jnp.maximum(jnp.mean(load), 1e-9),
+            f"{_OUTSTAT_PREFIX}relu_dead_experts": jnp.sum((load == 0).astype(jnp.float32)),
+            f"{_OUTSTAT_PREFIX}relu_logit_max": jnp.max(jax.lax.stop_gradient(router_logits)),
+            f"{_OUTSTAT_PREFIX}relu_logit_min": jnp.min(jax.lax.stop_gradient(router_logits)),
+        }
+        for n in range(cap + 1):
+            stats[f"{_OUTSTAT_PREFIX}thresh_hist{n:02d}"] = jnp.mean((count == n).astype(jnp.float32))
+        return selected, weights, stats
+
     @named_call
     def __call__(
         self, x: Float[Array, "B S D"], projected: list[jax.Array] | None = None
@@ -1329,6 +1414,10 @@ class MoEMLP(eqx.Module):
             selected_experts, combine_weights_f, qb_margins, thresh_stats = self._threshold_selection(
                 router_logits, biased_logits, x_flat
             )
+        elif self.cfg.routing == Routing.RELU:
+            # No bias: QB's solve below only feeds the logs (the trainer never applies it in this mode).
+            selected_experts, combine_weights_f, thresh_stats = self._relu_selection(router_logits)
+            qb_margins = router_logits
         else:
             # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
             topk_logits, selected_experts = _small_top_k(biased_logits, k + 1)
@@ -1593,10 +1682,10 @@ def _run_expert_bank(
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
-        # Routing.THRESHOLD hands the backends ``thresh_candidates`` slots per token, mostly invalid: size the ragged
-        # EP transport buffers for the ``num_experts_per_token`` valid ones a token takes on average.
+        # Routing.THRESHOLD / RELU hand the backends ``thresh_candidates`` slots per token, mostly invalid: size the
+        # ragged EP transport buffers for the ``num_experts_per_token`` valid ones a token takes on average.
         capacity_topk = None
-        if cfg.routing == Routing.THRESHOLD and em.implementation == "ragged_all_to_all":
+        if cfg.routing != Routing.TOP_K and em.implementation == "ragged_all_to_all":
             capacity_topk = cfg.num_experts_per_token
         return moe_mlp(
             routed_input,
@@ -1921,10 +2010,10 @@ def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, l
 @_attn_res_layer_remat.def_bwd
 def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
     del residuals, perturbed
-    # Router stats are logging-only and carry no cotangent, except the threshold aux's per-token soft count.
+    # Router stats are logging-only and carry no cotangent, except the routing aux's per-token term.
     d_partial, d_blocks, d_block_logits, d_stats = grad_out
     layer, blocks, block_logits, _, _, _ = diff_args
-    d_aux = d_stats.get(THRESH_AUX_TERM) if layer.attn.cfg.thresh_aux != ThreshAux.NONE else None
+    d_aux = d_stats.get(THRESH_AUX_TERM) if layer.attn.cfg.routing_aux_term else None
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
         lambda d, x: jnp.zeros_like(x) if d is None else d, d_block_logits, block_logits, is_leaf=_is_none
@@ -2383,10 +2472,11 @@ class Transformer(eqx.Module):
         count: jax.Array,
         expert_count: Float[Array, "L T"],
         aux_term: Float[Array, "L T"] | None,
+        relu_l1_coef: jax.Array | None,
     ) -> tuple[jax.Array, dict[str, jax.Array]]:
         """``Routing.THRESHOLD``'s ``ThreshAux`` term from this step's per-token loss (stop-gradient; the
-        cross-entropy plus its z-loss term) and each layer's soft count, plus the per-layer correlation of a token's
-        expert count with its loss (logging)."""
+        cross-entropy plus its z-loss term) and each layer's soft count, or ``Routing.RELU``'s ``relu_l1_coef *
+        L_reg``, plus the per-layer correlation of a token's expert count with its loss (logging)."""
         cfg = self.config
         loss_t = jax.lax.stop_gradient(per_token).astype(jnp.float32)
         layers = expert_count.shape[0]
@@ -2402,6 +2492,13 @@ class Transformer(eqx.Module):
             jnp.sum(weight * dc * dc, axis=(1, 2)) * jnp.sum(weight * dl * dl) + 1e-12
         )
         metrics = {f"train/aux/thresh/count_loss_corr_L{i}": corr[i] for i in range(layers)}
+        if cfg.routing == Routing.RELU:
+            assert aux_term is not None and relu_l1_coef is not None
+            l1 = aux_term.reshape(layers, *per_token.shape)
+            reg = jnp.mean(jnp.sum(weight[None] * l1, axis=(1, 2)) / count)
+            metrics["train/aux/remoe/l1_reg"] = jax.lax.stop_gradient(reg)
+            metrics["train/aux/remoe/l1_coef"] = relu_l1_coef
+            return jax.lax.stop_gradient(relu_l1_coef) * reg, metrics
         if cfg.thresh_aux == ThreshAux.NONE:
             return jnp.zeros((), jnp.float32), metrics
         assert aux_term is not None
@@ -2431,8 +2528,10 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
+        relu_l1_coef: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        """``train_terms`` adds the training-only objectives (the entropy head's loss); evals leave it off so they
+        """``relu_l1_coef`` is ``Routing.RELU``'s current ``lambda`` (the train state's). ``train_terms`` adds the
+        training-only objectives (the entropy head's loss, the routing aux terms); evals leave it off so they
         score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the lm_head cross-entropy's
         input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
         ``lm_head_grad_clip`` clips that gradient per token. ``pre_norm_grad_probe`` does the same at the stream
@@ -2451,6 +2550,7 @@ class Transformer(eqx.Module):
         thresh_count = router_metrics.pop(THRESH_COUNT, None)
         router_metrics.pop(THRESH_WEIGHT_SUM, None)
         thresh_aux_term = router_metrics.pop(THRESH_AUX_TERM, None)
+        router_metrics.pop(RELU_ACTIVE_COUNT, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         # Threshold routing's training terms read the per-token loss: take it unreduced and form the mean here.
@@ -2481,10 +2581,12 @@ class Transformer(eqx.Module):
             weight_f = loss_weight.astype(jnp.float32)
             count = jnp.maximum(jnp.sum(weight_f), 1.0)
             cross_entropy_loss = jnp.sum(per_token) / count
-            thresh_aux, thresh_metrics = self._thresh_terms(per_token, weight_f, count, thresh_count, thresh_aux_term)
+            thresh_aux, thresh_metrics = self._thresh_terms(
+                per_token, weight_f, count, thresh_count, thresh_aux_term, relu_l1_coef
+            )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
-        if self.config.thresh_aux != ThreshAux.NONE and thresh_terms:
+        if self.config.routing_aux_term and thresh_terms:
             loss = loss + thresh_aux.astype(loss.dtype)
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
@@ -2527,6 +2629,20 @@ class Transformer(eqx.Module):
         for name, per_layer in outstats.items():
             for i in range(per_layer.shape[0]):
                 summarized_metrics[f"train/aux/{name}_L{i}"] = per_layer[i]
+        # Selected-expert load imbalance per layer, from the assignment counts (logging-only).
+        loads = router_metrics["routing_counts_per_layer"].astype(jnp.float32)
+        load_mean = jnp.maximum(jnp.mean(loads, axis=-1), 1e-9)
+        load_cv = jnp.std(loads, axis=-1) / load_mean
+        load_max = jnp.max(loads, axis=-1) / load_mean
+        for i in range(loads.shape[0]):
+            summarized_metrics[f"train/aux/load_cv_L{i}"] = load_cv[i]
+            summarized_metrics[f"train/aux/load_max_over_mean_L{i}"] = load_max[i]
+        active_key = f"{_OUTSTAT_PREFIX}relu_active_count_mean"
+        if active_key in outstats:
+            # ReMoE's S_i: the fraction of zero gates over every MoE layer, token and expert.
+            summarized_metrics["train/aux/remoe/sparsity"] = (
+                1.0 - jnp.mean(outstats[active_key]) / self.config.num_experts
+            )
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         summarized_metrics["train/router/z_loss_logging_only"] = (
             jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
