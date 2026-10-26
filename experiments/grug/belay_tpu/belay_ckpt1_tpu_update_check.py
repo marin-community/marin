@@ -42,7 +42,11 @@ from experiments.grug.belay_tpu.expert_collectives import (
     butterfly_reduce_scatter,
     gather_expert_weights_with_owner_sum,
 )
-from experiments.grug.belay_tpu.expert_gradient_adapter import partitioned_grouped_dot, whole_width_tiling
+from experiments.grug.belay_tpu.expert_gradient_adapter import (
+    partitioned_grouped_dot,
+    weight_first_grouped_dot,
+    whole_width_tiling,
+)
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
 from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
@@ -155,6 +159,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
     parser.add_argument("--partitioned-expert-gradients", action="store_true")
+    parser.add_argument("--expert-gradient-order", choices=("free", "weight-first"), default="free")
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
@@ -221,6 +226,9 @@ def main():
         local_experts.route_layout = interval_route_layout
     if args.expert_reduction != "native" and not args.local_experts:
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
+    if args.expert_gradient_order != "free" and not args.partitioned_expert_gradients:
+        parser.error("Expert-gradient scheduling requires --partitioned-expert-gradients")
+    grouped_dot = weight_first_grouped_dot if args.expert_gradient_order == "weight-first" else partitioned_grouped_dot
     if args.whole_width_expert_tiles and not args.partitioned_expert_gradients:
         parser.error("Whole-width expert tiles require --partitioned-expert-gradients")
     if args.expert_row_partitions and (not args.partitioned_expert_gradients or args.whole_width_expert_tiles):
@@ -229,12 +237,10 @@ def main():
         if not args.local_experts or args.saved_relu2:
             parser.error("Partitioned expert gradients require --local-experts without --saved-relu2")
         local_experts.grouped_dot = (
-            functools.partial(partitioned_grouped_dot, tiling=whole_width_tiling)
-            if args.whole_width_expert_tiles
-            else partitioned_grouped_dot
+            functools.partial(grouped_dot, tiling=whole_width_tiling) if args.whole_width_expert_tiles else grouped_dot
         )
     if args.expert_row_partitions:
-        local_experts.grouped_dot = functools.partial(partitioned_grouped_dot, row_partitions=args.expert_row_partitions)
+        local_experts.grouped_dot = functools.partial(grouped_dot, row_partitions=args.expert_row_partitions)
     if args.local_movement:
         if not args.local_experts:
             parser.error("Expert-order combine requires --local-experts")
@@ -312,6 +318,7 @@ def main():
             "diagnostic/route_counts": args.route_counts,
             "diagnostic/capacity_layout": args.capacity_layout,
             "diagnostic/partitioned_expert_gradients": args.partitioned_expert_gradients,
+            "diagnostic/expert_gradient_order": args.expert_gradient_order,
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
             "diagnostic/kda_state_precision": args.kda_state_precision,
