@@ -705,12 +705,14 @@ class TaskRolloutWorker:
                         raise ValueError("Pi trial has no usable verifier outcome")
                     if status != "skipped" and rollout.grade.reward is None:
                         raise ValueError("Pi trial has no verifier score")
+                    if self.pi_scenario is PiScenario.RLAIF and status != "graded":
+                        raise ValueError("RLAIF requires a completed task-verifier grade before judging")
+                    if status == "submission_failure":
+                        raise ValueError("Pi invalid submission cannot be admitted as a reward-0 training trial")
                     if self.pi_scenario is PiScenario.TEACHER_TRACE_VERIFIED and (
                         status != "graded" or rollout.grade.passed is None
                     ):
                         raise ValueError("Verified Pi teacher SFT needs an explicit graded pass/fail verdict")
-                    if self.pi_scenario is PiScenario.RLAIF and status != "graded":
-                        raise ValueError("RLAIF requires a completed task-verifier grade before judging")
                     if "judge" in rollout.pi_trajectory:
                         raise ValueError("Pi capture cannot supply a post-trial judgment")
                     payload = {
