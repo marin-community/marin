@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Both identity OPD Iris jobs reach the controller with their time limits and no preemption retries.
+"""The identity OPD Iris jobs reach the controller with their time limits and no preemption retries.
 
-The coordinator is submitted from the RL main's request, and the training job from inside it through SkyRL's Iris
-launcher, as in a run, to one in-process Iris controller. Each job's stored request is then read back with
-GetJobStatus. The in-process controller has no federation peer, so the coordinator is submitted without its
-cw-rno2a pin; a run's training job is submitted on cw-rno2a itself, unpinned, as here.
+The coordinator is submitted from the RL main's request, and the training job and the terminal export job from inside
+it through SkyRL's Iris launcher, as in a run, to one in-process Iris controller. Each job's stored request is then
+read back with GetJobStatus. The in-process controller has no federation peer, so the coordinator is submitted without
+its cw-rno2a pin; a run's training and export jobs are submitted on cw-rno2a itself, unpinned, as here.
 """
 
 import dataclasses
 import getpass
+from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -36,7 +38,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import _coordinator_request
 
 from experiments.post_training.identity_opd import launch
-from experiments.post_training.identity_opd.test_identity_opd import _launch_doc
+from experiments.post_training.identity_opd.test_identity_opd import _launch_doc, _step2_export
 
 
 def _group(name: str, resources: ScaleGroupResources) -> ScaleGroupConfig:
@@ -110,16 +112,7 @@ def _submitted(controller: str, job_id: str) -> controller_pb2.Controller.Launch
         client.close()
 
 
-@pytest.mark.parametrize("arm", ["dry", "train"])
-def test_both_jobs_are_submitted_with_time_limits_and_no_preemption_retries(
-    arm, controller, task_context, tmp_path, monkeypatch
-):
-    iris_backend = pytest.importorskip("cloud.iris.iris_backend")
-    launch_config = pytest.importorskip("cloud.iris.launch_config")
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "pyproject.toml").write_text('[project]\nname = "workspace"\nversion = "0"\n')
-
+def _submit_coordinator(controller: str, arm: str, workspace: Path) -> str:
     unpinned = dataclasses.replace(launch.execution(arm), target_cluster=None, parent_cluster_config=None)
     step = ArtifactStep(
         name=f"checkpoints/{launch.EXPERIMENT_NAME}/{arm}",
@@ -130,26 +123,76 @@ def test_both_jobs_are_submitted_with_time_limits_and_no_preemption_retries(
         runtime_args={"skyrl_execution": unpinned},
     )
     _, request = _coordinator_request([step], launch.__name__, ("--arm", arm), 1, workspace, {})
-    coordinator = FrayIrisClient.from_iris_client(IrisClient.remote(controller, workspace=workspace)).submit(request)
-    coordinator_id = str(coordinator.job_id)
+    return str(
+        FrayIrisClient.from_iris_client(IrisClient.remote(controller, workspace=workspace)).submit(request).job_id
+    )
 
-    # Inside the coordinator's task: the launch document and the training-job submit run there.
+
+def _enter_task(controller: str, coordinator_id: str, workspace: Path, monkeypatch) -> Callable[[Path], str]:
+    """Run inside the coordinator's task; return a submit that launches one document there and gives the new job id."""
+    iris_backend = pytest.importorskip("cloud.iris.iris_backend")
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
     monkeypatch.setenv("IRIS_TASK_ID", f"{coordinator_id}/0")
     monkeypatch.setenv("IRIS_CONTROLLER_URL", controller)
-    launch_doc = _launch_doc(arm, tmp_path)
-    args = iris_backend._iris_submission_state(launch_doc, launch_config.load_launch_config(launch_doc))
     monkeypatch.setattr(iris_backend, "supervise_iris_job", lambda job: SimpleNamespace(exit_code=0))
-    iris_backend.launch(args, workspace)
-    jobs = {str(job.job_id) for job in IrisClient.remote(controller).list_jobs()}
-    [child_id] = [job_id for job_id in jobs if job_id != coordinator_id]
+
+    def submit(launch_doc: Path) -> str:
+        before = {str(job.job_id) for job in IrisClient.remote(controller).list_jobs()}
+        iris_backend.launch(
+            iris_backend._iris_submission_state(launch_doc, launch_config.load_launch_config(launch_doc)), workspace
+        )
+        [job_id] = {str(job.job_id) for job in IrisClient.remote(controller).list_jobs()} - before
+        return job_id
+
+    return submit
+
+
+@pytest.fixture
+def workspace(tmp_path) -> Path:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text('[project]\nname = "workspace"\nversion = "0"\n')
+    return workspace
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_both_jobs_are_submitted_with_time_limits_and_no_preemption_retries(
+    arm, controller, task_context, workspace, tmp_path, monkeypatch
+):
+    coordinator_id = _submit_coordinator(controller, arm, workspace)
+    child_id = _enter_task(controller, coordinator_id, workspace, monkeypatch)(_launch_doc(arm, tmp_path))
 
     training_seconds = launch.JOB_TIMEOUT_SECONDS[arm]
     coordinator_seconds = training_seconds + launch.EXPORT_TIMEOUT_SECONDS + launch.COORDINATOR_MARGIN_SECONDS
     submitted_coordinator = _submitted(controller, coordinator_id)
     submitted_child = _submitted(controller, child_id)
-    assert child_id.startswith(f"{coordinator_id}/"), jobs
+    assert child_id.startswith(f"{coordinator_id}/")
     assert submitted_coordinator.timeout.milliseconds == coordinator_seconds * 1000
     assert submitted_child.timeout.milliseconds == training_seconds * 1000
     for submitted in (submitted_coordinator, submitted_child):
         assert submitted.max_retries_preemption == 0
         assert submitted.max_retries_failure == 0
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_terminal_export_is_submitted_under_the_coordinator_with_its_limits(
+    arm, controller, task_context, workspace, tmp_path, monkeypatch
+):
+    """The coordinator derives the terminal export with ``export_terminal_policy`` and submits it as its command does."""
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    coordinator_id = _submit_coordinator(controller, arm, workspace)
+    submit = _enter_task(controller, coordinator_id, workspace, monkeypatch)
+    training_path = _launch_doc(arm, tmp_path)
+    export_hf, _, specs = _step2_export(launch_config.load_launch_config(training_path), monkeypatch, tmp_path)
+
+    export_hf.export_terminal_policy(training_path)
+    [spec] = specs
+    assert export_hf.build_command(spec)[-2:] == ["--config", spec.launch_config_path]
+    export_id = submit(Path(spec.launch_config_path))
+
+    submitted_export = _submitted(controller, export_id)
+    assert export_id.startswith(f"{coordinator_id}/"), export_id
+    assert "-export-2" in export_id.rsplit("/", 1)[-1]
+    assert submitted_export.timeout.milliseconds == launch.EXPORT_TIMEOUT_SECONDS * 1000
+    assert submitted_export.max_retries_preemption == 0
+    assert submitted_export.max_retries_failure == 0
