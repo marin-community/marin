@@ -5,7 +5,9 @@ Main entrypoint for training.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, wait
+from threading import Thread
 
 from skyrl_gym.task_factories import EpisodeFactory
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS
@@ -58,6 +60,19 @@ mp.set_start_method("spawn", force=True)
 
 config_dir = str(Path(__file__).parent.parent / "config")
 __all__ = ["BasePPOExp", "config_dir"]
+
+
+def _start_in_daemon_thread(fn: Callable[[], InferenceEngineClient], name: str) -> Future[InferenceEngineClient]:
+    future: Future[InferenceEngineClient] = Future()
+
+    def _run():
+        try:
+            future.set_result(fn())
+        except BaseException as error:
+            future.set_exception(error)
+
+    Thread(target=_run, name=name, daemon=True).start()
+    return future
 
 
 def resolve_entrypoint_node_id(node_ip: str) -> str:
@@ -554,7 +569,7 @@ class BasePPOExp:
         eval_dataset,
         inference_engine_client,
         trajectory_runner: TrajectoryRunner,
-        colocate_pg,
+        models,
     ):
         """Initializes the trainer, with the trajectory runner as its rollout workers.
 
@@ -584,7 +599,7 @@ class BasePPOExp:
                 if EvaluationRunner(cfg.trainer.evaluation_runner) is not EvaluationRunner.TRAINING
                 else trajectory_runner
             ),
-            colocate_pg=colocate_pg,
+            models=models,
         )
 
     def get_worker_classes(self):
@@ -611,7 +626,9 @@ class BasePPOExp:
         )
 
     def _setup_trainer(self, tracker):
-        """Construct the trainer and models with the experiment's active tracker."""
+        """Build models and engines, then construct one trainer with complete workers."""
+        from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
+
         logger.info(self.get_cfg_as_str(self.cfg))
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
@@ -622,10 +639,28 @@ class BasePPOExp:
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        inference_engine_client = self.create_inference_engine_client()
 
+        if self.cfg.trainer.placement.overlap_init:
+            future = _start_in_daemon_thread(self.create_inference_engine_client, "engine-startup")
+        else:
+            future: Future[InferenceEngineClient] = Future()
+            future.set_result(self.create_inference_engine_client())
+        # Pass the policy placement group reserved before inference startup.
+        logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
+        models = RayPPOTrainer.build_models(
+            self.cfg,
+            tokenizer,
+            self.train_dataset,
+            PolicyWorker,
+            CriticWorker,
+            RefWorker,
+            colocate_pg=self.colocate_pg,
+            policy_pg=self.policy_pg,
+        )
+        while not future.done():
+            wait([future], timeout=1)
+        inference_engine_client = future.result()
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
-
         trainer = self.get_trainer(
             cfg=self.cfg,
             tracker=tracker,
@@ -634,13 +669,9 @@ class BasePPOExp:
             eval_dataset=self.eval_dataset,
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
-            colocate_pg=self.colocate_pg,
+            models=models,
         )
-
-        # Pass the policy placement group reserved before inference startup.
-        logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
