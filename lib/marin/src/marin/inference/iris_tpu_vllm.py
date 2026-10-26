@@ -11,28 +11,24 @@ import signal
 import subprocess
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from fray.client import JobHandle
-from fray.current_client import current_client
-from fray.types import JobRequest
-from iris.actor.server import ActorServer
-from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 
 from marin.inference import tpu_ray_runtime
-from marin.inference.iris_vllm import VllmCoordinatorActor, _coordinator_client, _wait_until
+from marin.inference.iris_vllm import (
+    IrisGangCoordinator,
+    iris_gang_coordinator,
+    iris_vllm_followers,
+    notify_iris_vllm_stopped,
+    wait_for_iris_vllm_shutdown,
+)
 from marin.inference.vllm_server import IsolatedTpuVllm
 
 logger = logging.getLogger(__name__)
 RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
-
-
-def submit_tpu_gang(request: JobRequest) -> JobHandle:
-    """Submit every TPU replica with the required named Ray listeners."""
-    return current_client().submit(replace(request, ports=RAY_PORTS))
 
 
 @dataclass(frozen=True)
@@ -63,7 +59,7 @@ def _stop_owned_process(process: subprocess.Popen) -> None:
 
 @contextlib.contextmanager
 def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seconds: float) -> Iterator[TpuRayGang]:
-    """Start Ray on every allocated host; only rank zero yields to the serving path.
+    """Start Ray on every allocated host and coordinate their shutdown.
 
     Followers wait for the leader to finish, then stop their own Ray node. Iris handles gang
     cancellation on failures; this context never stops a Ray process owned by another job.
@@ -73,26 +69,13 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
         raise ValueError("A multi-host TPU launch requires an Iris gang")
     ports = {name: info.ports[name] for name in RAY_PORTS}
     name = f"{str(info.job_id).strip('/').replace('/', '-')}-tpu-ray"
-    ctx = iris_ctx()
+    identity = IrisGangCoordinator(name, info.task_index, info.num_tasks)
     leader = info.task_index == 0
     os.environ["RAY_DEDUP_LOGS"] = "0"
     with contextlib.ExitStack() as stack:
-        if leader:
-            address = f"{info.advertise_host}:{ports['ray-gcs']}"
-            actor = ActorServer(host="0.0.0.0", port=0)
-            actor.register(name, VllmCoordinatorActor(address))
-            actor_port = actor.serve_background()
-            stack.callback(actor.stop)
-            stack.enter_context(ctx.registry.registered(name, f"http://{info.advertise_host}:{actor_port}"))
-        else:
-            address = ""
-
-            def find_head() -> bool:
-                nonlocal address
-                address = _coordinator_client(name).vllm_primary_address()
-                return True
-
-            _wait_until(find_head, error_message="Timed out discovering the TPU Ray head")
+        address = stack.enter_context(
+            iris_gang_coordinator(identity, info.advertise_host, f"{info.advertise_host}:{ports['ray-gcs']}")
+        )
         directory = Path(stack.enter_context(TemporaryDirectory(prefix="marin-ray-")))
         ready_path = directory / "ready.json"
         ray_log = directory / "ray-start.log"
@@ -140,39 +123,13 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
                 time.sleep(1)
             gang.check_alive()
             logger.info("TPU Ray gang ready: %d hosts, %d chips/host", info.num_tasks, chips_per_host)
-            coordinator = _coordinator_client(name)
             if leader:
-                yield gang
-
-                def request_shutdown() -> bool:
-                    coordinator.request_shutdown()
-                    return True
-
-                _wait_until(request_shutdown, error_message="Timed out requesting TPU Ray shutdown")
-                _wait_until(
-                    lambda: coordinator.followers_stopped(tuple(range(1, info.num_tasks))),
-                    error_message="Timed out stopping TPU Ray followers",
-                )
+                with iris_vllm_followers(identity):
+                    yield gang
             else:
-                stopped = False
-
-                def coordinator_available() -> bool:
-                    nonlocal stopped
-                    gang.check_alive()
-                    stopped = coordinator.shutdown_requested()
-                    return True
-
-                while not stopped:
-                    _wait_until(coordinator_available, error_message="Timed out contacting the TPU Ray leader")
-                    if not stopped:
-                        time.sleep(1)
+                wait_for_iris_vllm_shutdown(identity, gang.check_alive, maximum_poll_seconds=1.0)
                 _stop_owned_process(process)
-
-                def acknowledge_stop() -> bool:
-                    coordinator.follower_stopped(info.task_index)
-                    return True
-
-                _wait_until(acknowledge_stop, error_message="Timed out acknowledging TPU Ray follower shutdown")
+                notify_iris_vllm_stopped(identity)
                 yield gang
         except BaseException:
             for path in (supervisor_log, ray_log):

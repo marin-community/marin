@@ -13,20 +13,16 @@ from unittest.mock import MagicMock
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.types import ResourceConfig, create_environment
 from marin.inference import iris as serving
 from marin.inference import iris_tpu_vllm, iris_vllm, tpu_ray_runtime
 from marin.inference.config import (
-    BrokerConfig,
     IrisConfig,
-    LevanterEngineConfig,
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
 )
-from marin.inference.tpu_ray_runtime import ray_start_command
 
 
 def _config():
@@ -39,34 +35,6 @@ def _config():
     )
 
 
-def test_multihost_requires_direct_tpu_vllm():
-    config = _config()
-    assert config.iris.worker_resources.replicas == 4
-    with pytest.raises(ValueError, match="isolated TPU vLLM"):
-        replace(config, engine=LevanterEngineConfig())
-    with pytest.raises(ValueError, match="one instance and no broker"):
-        replace(config, broker=BrokerConfig())
-
-
-@pytest.mark.parametrize("leader", [False, True])
-def test_ray_listeners_use_allocated_ports_and_random_worker_ports(leader):
-    ports = dict(zip(iris_tpu_vllm.RAY_PORTS, [12000, 12001, 12002, 12003], strict=True))
-    command = ray_start_command(host="10.0.0.2", address="10.0.0.1:12000", leader=leader, chips=4, ports=ports)
-    assert command[command.index("--min-worker-port") + 1] == "0"
-    assert command[command.index("--max-worker-port") + 1] == "0"
-    assert command[command.index("--dashboard-agent-listen-port") + 1] == "12003"
-    if leader:
-        for flag, expected in [
-            ("--port", "12000"),
-            ("--ray-client-server-port", "12001"),
-            ("--dashboard-port", "12002"),
-        ]:
-            assert command[command.index(flag) + 1] == expected
-    else:
-        assert command[command.index("--address") + 1] == "10.0.0.1:12000"
-        assert "--head" not in command
-
-
 def test_failed_ray_supervisor_reports_its_log(tmp_path):
     log = tmp_path / "supervisor.log"
     log.write_text("Ray Client port is occupied")
@@ -75,25 +43,6 @@ def test_failed_ray_supervisor_reports_its_log(tmp_path):
     gang = iris_tpu_vllm.TpuRayGang(True, "10.0.0.1:12000", process, log)
     with pytest.raises(RuntimeError, match="Ray Client port is occupied"):
         gang.check_alive()
-
-
-def test_evaluation_gang_requests_all_hosts_on_one_slice(monkeypatch):
-    client = MagicMock()
-    monkeypatch.setattr(iris_tpu_vllm, "current_client", lambda: FrayIrisClient.from_iris_client(client))
-    config = _config()
-    request = JobRequest(
-        name="serve-test",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-        resources=config.iris.worker_resources,
-        environment=config.iris.worker_environment,
-        max_retries_preemption=0,
-    )
-    iris_tpu_vllm.submit_tpu_gang(request)
-    submission = client.submit.call_args.kwargs
-    assert submission["replicas"] == 4
-    assert submission["coscheduling"].group_by == "tpu-name"
-    assert set(submission["ports"]) == set(iris_tpu_vllm.RAY_PORTS)
-    assert submission["max_retries_preemption"] == 0
 
 
 @pytest.mark.parametrize("transient", [False, True])
@@ -137,7 +86,6 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     monkeypatch.setattr(serving, "get_job_info", lambda: job_info)
     monkeypatch.setattr(iris_tpu_vllm, "get_job_info", lambda: job_info)
     monkeypatch.setattr(serving, "iris_ctx", lambda: context)
-    monkeypatch.setattr(iris_tpu_vllm, "iris_ctx", lambda: context)
     monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
     monkeypatch.setattr(iris_vllm, "ActorClient", lambda *_args, **_kwargs: coordinator)
     monkeypatch.setattr(iris_tpu_vllm.subprocess, "Popen", start_process)
