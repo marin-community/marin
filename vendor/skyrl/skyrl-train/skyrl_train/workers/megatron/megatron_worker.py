@@ -14,12 +14,11 @@ import torch.distributed
 from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from omegaconf import OmegaConf
 from skyrl_train.distributed.dispatch import MeshRank
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
     get_model_config,
@@ -829,23 +828,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             await cache_reset_task
         torch.cuda.empty_cache()
         torch.distributed.barrier()
-
-    def grug_optimizer_route_snapshot(self):
-        """Return this rank and the optimizer route for each named parameter."""
-        if str(self.cfg.trainer.policy.optimizer_config.optimizer).lower() != "muonh":
-            raise ValueError("Optimizer route snapshot requires Grug MuonH")
-        names = {id(parameter): name for chunk in self.actor_module for name, parameter in chunk.named_parameters()}
-        optimizers = (
-            self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
-        )
-        routes = {}
-        for wrapped in optimizers:
-            default_route = "grug_muonh" if isinstance(wrapped.optimizer, MegatronGrugMuonH) else "adam"
-            for index, group in enumerate(wrapped.optimizer.param_groups):
-                route = group.get("optimizer", default_route)
-                for parameter in (*wrapped.float16_groups[index], *wrapped.fp32_from_fp32_groups[index]):
-                    routes[names[id(parameter)]] = route
-        return {"rank": torch.distributed.get_rank(), "routes": routes}
 
     def grug_validation_snapshot(self, names=()):
         """Return the calling rank and requested Grug weights in HF layout, gathered on rank 0.
