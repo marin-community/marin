@@ -157,7 +157,7 @@ def main() -> None:
         output=output,
         max_workers=1,
         logical_shards=1,
-        region=args.region,
+        region=args.region or None,
         preemptible=args.preemptible,
     )
     print(f"output={output}")
