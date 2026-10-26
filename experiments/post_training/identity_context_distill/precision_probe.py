@@ -143,7 +143,7 @@ def gated_zero_lr_step(
     return info.state, info.loss, witness, memory
 
 
-def _router_values(model) -> dict[str, np.ndarray]:
+def router_values(model) -> dict[str, np.ndarray]:
     tensors = model.to_state_dict()
     found = {name for name in tensors if name.endswith(".mlp.router.bias")}
     if found != ROUTER_KEYS or len(tensors) != 502:
@@ -258,7 +258,7 @@ def run_precision_probe(
                 {"approved": expected_runtime_receipt, "loaded_model_config": loaded_model_config},
             )
         )
-        source_biases = _router_values(model)
+        source_biases = router_values(model)
         state = trainer.initial_state(
             jax.random.PRNGKey(probe_config.trainer.seed),
             model=model,
@@ -266,13 +266,13 @@ def run_precision_probe(
         )
         del model
         check_restored_progress(probe_config, state, completed_updates=0)
-        for name, value in _router_values(state.model).items():
+        for name, value in router_values(state.model).items():
             np.testing.assert_array_equal(value, source_biases[name])
         state, measured_loss, witness, memory = gated_zero_lr_step(
             trainer, state, batch, pre_update_gate, master_audit, post_update_receipt
         )
         check_restored_progress(probe_config, state, completed_updates=1)
-        for name, value in _router_values(state.model).items():
+        for name, value in router_values(state.model).items():
             np.testing.assert_array_equal(value, source_biases[name])
         export_path = str(StoragePath(probe_config.hf_save_path) / "lr0-step-0")
         converter = converter.with_config_overrides(source_export_overrides(source))
