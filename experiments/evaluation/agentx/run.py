@@ -66,7 +66,12 @@ def run_point(manifest: dict, output: Path, bundle: Path) -> None:
     }
     record_path = output / "attempt.json"
     record_path.write_text(json.dumps(record, indent=2))
-    print("AGENTX_ATTEMPT " + json.dumps(record, sort_keys=True), flush=True)
+    print(
+        f"AGENTX_ATTEMPT {record['iris_task_id']}:{record['iris_attempt_uid']} "
+        f"profile={manifest['profile']} concurrency={manifest['concurrency']} "
+        f"workload={manifest['workload']['key']}",
+        flush=True,
+    )
     with (output / "hardware.txt").open("w") as log:
         for command in (
             ["nvidia-smi", "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv"],
