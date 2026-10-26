@@ -131,6 +131,36 @@ CoreWeave object-storage credentials are stored in GCP Secret Manager as
 `CW_KEY_ID` and `CW_KEY_SECRET` for `fsutil` without printing their values. An
 in-cluster CoreWeave job receives corresponding S3 configuration from Iris.
 
+## Lifecycle and Zephyr smoke
+
+`private/task_designs.json` now freezes each supported slot's instruction,
+reference, weighted rubric, output budget, and five required calibration
+controls. `manual_open_ended_coordinator` builds the ordinary `TaskSpec`, maps
+only solver resources into its worker files, checks the private-data boundary,
+and optionally scores every control through an explicitly configured judge
+endpoint. A failed control band rejects the workpiece. `open_ended_zephyr.py`
+runs proposal, triage, author, build, calibration, and review inside one
+`map_shard` lifecycle and emits the accepted `TaskSpec` plus calibration evidence.
+
+A rights-free synthetic live smoke completed on CoreWeave `cw-us-east-02a`:
+
+```text
+Iris job: /zack/taskforge-open-ended-zephyr-smoke-20261024l
+Output:   s3://marin-us-east-02a/marin/taskforge/open-ended-smoke/20261024l/result.jsonl
+Terminal: accepted
+Controls: reference=1.0, partial=0.5, severe_negative=0.0,
+          evaluator_injection=0.0, verbosity=0.0 (all in declared bands)
+```
+
+The working CoreWeave shape inherits the cluster region, uses non-preemptible CPU
+actors, resolves `/muchanem/glm53-relay-tok-02a` service `glm-5.3-tok` from the
+Zephyr worker, and supplies CoreWeave object-storage credentials on the
+federated root submission. Marin-local workers cannot reach that relay's private
+CoreWeave endpoint. This smoke validates live proposal generation, build,
+pointwise judge controls, review, Zephyr transport, and durable output; it does
+not substitute for solver trials or grant release eligibility. The MAIT bundle
+remains `unreviewed_do_not_publish` pending dataset-rights review.
+
 ## First gate
 
 Audit one source group at a time. The recommended order is:
