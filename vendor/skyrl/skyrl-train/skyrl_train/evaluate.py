@@ -368,6 +368,7 @@ async def evaluate_step_wise(
                 val for val, is_last_step in zip(concatenated_batch[key], is_last_step_mask) if is_last_step
             ]
     uids_last_step = [uid for uid, is_last_step in zip(rollouts.uids, is_last_step_mask) if is_last_step]
+    trajectory_batch_last_step["rollout_metrics"] = concatenated_batch.get("rollout_metrics") or {}
     data_sources_last_step = [
         data_source for data_source, is_last_step in zip(concat_data_sources, is_last_step_mask) if is_last_step
     ]

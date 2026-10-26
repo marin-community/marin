@@ -195,9 +195,13 @@ def _optional_at(config: dict[str, Any], path: str, default: Any = None) -> Any:
     return node
 
 
+def _local_generation(config: dict[str, Any]) -> bool:
+    return config.get("entrypoint") == "generate" and bool(_at(config, "generator.run_engines_locally"))
+
+
 def _role_plan_values(config: dict[str, Any]) -> _RolePlanValues:
     return _RolePlanValues(
-        colocate_all=bool(_at(config, "trainer.placement.colocate_all")) and config.get("entrypoint") != "generate",
+        colocate_all=bool(_at(config, "trainer.placement.colocate_all")) and not _local_generation(config),
         colocate_policy_ref=bool(_optional_at(config, "trainer.placement.colocate_policy_ref", True)),
         policy_num_nodes=int(_at(config, "trainer.placement.policy_num_nodes")),
         policy_num_gpus_per_node=int(_at(config, "trainer.placement.policy_num_gpus_per_node")),
@@ -239,7 +243,7 @@ def _policy_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRoleC
 
 
 def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[ModelRoleClaim]:
-    if config.get("entrypoint") == "generate":
+    if _local_generation(config):
         return []
     placement = _at(config, "trainer.placement")
     use_reference = reference_model_required(_at(config, "trainer.algorithm"))
@@ -398,7 +402,7 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     claims = _core_model_claims(config, values)
     if inference_engines_required(config):
         claims.append(_rollout_claim(config, values))
-    if config.get("entrypoint") != "generate":
+    if not _local_generation(config):
         claims.extend(_teacher_claims(config))
         claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
