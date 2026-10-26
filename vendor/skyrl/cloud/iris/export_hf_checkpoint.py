@@ -155,6 +155,8 @@ def checkpoint_export_launch_config(
     critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
+    # The mismatch probe belongs to the synchronous training loop; launch validation rejects it for an export.
+    config.skyrl.trainer.pop("mismatch_probe", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:
         config.skyrl.generator.speculative_decoding.training = None
 
@@ -411,7 +413,7 @@ def export_terminal_policy(training_config_path: Path) -> None:
         priority=str(training_config.iris.priority),
         gpu_variant=str(allocation.gpu_variant),
         job_name=f"{training_config.iris.job_name}-export-{step}",
-        timeout=DEFAULT_HF_EXPORT_TIMEOUT,
+        timeout=int(training_config.iris.export_timeout),
         no_wait=False,
         cluster_config=str(training_config.iris.cluster_config),
         target_cluster=training_config.iris.target_cluster,

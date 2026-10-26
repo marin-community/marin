@@ -294,6 +294,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         priority=iris["priority"],
         max_retries=int(iris["max_retries"]),
         timeout=int(iris["timeout"]),
+        max_retries_preemption=iris["max_retries_preemption"],
         no_wait=submission == SubmissionMode.DETACH,
         dry_run=submission == SubmissionMode.PREPARE,
         target_cluster=iris["target_cluster"],
@@ -850,6 +851,13 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     )
     print(f"[rl-iris] Per node:   cpu={args.cpu} memory={args.memory} disk={args.disk}", flush=True)
     print(f"[rl-iris] Priority:   {args.priority}", flush=True)
+    preemption_retries = "iris default" if args.max_retries_preemption is None else args.max_retries_preemption
+    print(
+        f"[rl-iris] Limits:     timeout={f'{args.timeout}s' if args.timeout else 'none'} "
+        f"max_retries_failure={args.max_retries} "
+        f"max_retries_preemption={preemption_retries}",
+        flush=True,
+    )
     print(f"[rl-iris] Launch config:  {args.launch_config}  model={args.model_path}", flush=True)
     storage_paths = args.storage_paths
     if not _is_checkpoint_export(args):
@@ -1083,6 +1091,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             max_task_failures=args.max_retries,
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
+            **({} if args.max_retries_preemption is None else {"max_retries_preemption": args.max_retries_preemption}),
         )
         full_job_id = str(job.job_id)
         print(

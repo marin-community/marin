@@ -134,6 +134,7 @@ async def _model_turn(
     max_context_length: int,
     max_prompt_length: int | None,
     chat_template_kwargs: dict[str, Any],
+    tool_choice: str | None,
     session_id: str,
 ) -> ModelTurn:
     """Convert an inference response to the common exact-token record."""
@@ -141,6 +142,12 @@ async def _model_turn(
     template_kwargs = {**chat_template_kwargs, **options.get("chat_template_kwargs", {})}
     if template_kwargs and request.prompt_token_ids is None:
         options["chat_template_kwargs"] = template_kwargs
+    if tool_choice is not None and request.prompt_token_ids is None:
+        if options.get("tool_choice", tool_choice) != tool_choice:
+            raise ValueError(
+                f"Request tool_choice {options['tool_choice']!r} conflicts with generator.tool_choice {tool_choice!r}"
+            )
+        options["tool_choice"] = tool_choice
     continuation = None
     if request.continuation is not None:
         continuation = ChatContinuation(
@@ -352,6 +359,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
+        self.tool_choice = trajectory_runner_cfg.get("tool_choice")
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -471,6 +479,7 @@ class TaskRolloutWorker:
                     max_context_length=max_context_length,
                     max_prompt_length=max_input_length,
                     chat_template_kwargs=self.chat_template_kwargs,
+                    tool_choice=self.tool_choice,
                     session_id=session_id,
                 )
 

@@ -672,7 +672,7 @@ def build_arm(
             max_retries=1,
             target_cluster=policy.cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=72,
+            coordinator_timeout_seconds=72 * 3600,
             wandb_entity="marin-community",
         ),
         export_hf=True,

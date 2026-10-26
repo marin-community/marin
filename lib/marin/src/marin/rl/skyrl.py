@@ -430,17 +430,24 @@ class IrisSkyRLExecution:
     max_retries: int
     target_cluster: str | None
     parent_cluster_config: str | None
-    coordinator_timeout_hours: int
+    coordinator_timeout_seconds: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    # None keeps the Iris and fray defaults; the coordinator and the training job share the value.
+    max_retries_preemption: int | None = None
+    export_timeout_seconds: int = 7200
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
 
     def __post_init__(self) -> None:
-        if self.coordinator_timeout_hours <= 0:
-            raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.coordinator_timeout_seconds <= 0:
+            raise ValueError("SkyRL coordinator_timeout_seconds must be positive")
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
+        if self.max_retries_preemption is not None and self.max_retries_preemption < 0:
+            raise ValueError("SkyRL max_retries_preemption cannot be negative")
+        if self.export_timeout_seconds <= 0:
+            raise ValueError("SkyRL export_timeout_seconds must be positive")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
@@ -457,7 +464,7 @@ _FINGERPRINT_EXECUTION = IrisSkyRLExecution(
     max_retries=0,
     target_cluster=None,
     parent_cluster_config=None,
-    coordinator_timeout_hours=1,
+    coordinator_timeout_seconds=3600,
 )
 
 
@@ -834,6 +841,8 @@ def _launch_config_yaml(
             "priority": execution.priority,
             "max_retries": execution.max_retries,
             "timeout": execution.job_timeout_seconds,
+            "max_retries_preemption": execution.max_retries_preemption,
+            "export_timeout": execution.export_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
         },

@@ -191,7 +191,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             max_retries=0,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=2,
+            coordinator_timeout_seconds=2 * 3600,
             wandb_entity=None,
             job_timeout_seconds=3600,
         ),

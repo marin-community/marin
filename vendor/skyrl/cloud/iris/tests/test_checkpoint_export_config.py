@@ -15,6 +15,7 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.hf_export_schema import HFExportRequest
 
 
@@ -86,6 +87,15 @@ def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
 
+
+def test_checkpoint_export_config_drops_the_training_mismatch_probe() -> None:
+    training = OmegaConf.merge(_training_config(), {"skyrl": {"trainer": {"mismatch_probe": {"enabled": True}}}})
+    request = _request()
+
+    config = checkpoint_export_launch_config(training, request, _spec(request))
+
+    assert "mismatch_probe" not in config.skyrl.trainer
+    validate_mismatch_probe_config(OmegaConf.to_container(config.skyrl), synchronous=False)
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:
     request = _request()

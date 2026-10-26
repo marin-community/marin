@@ -146,7 +146,7 @@ def build_run(
             max_retries=0,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=36,
+            coordinator_timeout_seconds=36 * 3600,
             job_timeout_seconds=24 * 60 * 60,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             wandb_entity="marin-community",
