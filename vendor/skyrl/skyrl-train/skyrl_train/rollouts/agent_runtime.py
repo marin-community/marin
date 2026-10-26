@@ -20,7 +20,7 @@ from harbor.models.agent.pi_trajectory import PiCollatedTrajectory
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
-from harbor_config.models.trial.pi import PiAgentConfig, PiDaggerPlan
+from harbor_config.models.trial.pi import PiAgentConfig, PiCritiquePlan, PiDaggerPlan
 from harbor.trial.trial import Trial
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -41,6 +41,7 @@ from skyrl_train.rollouts.diagnostic_spool import DiagnosticSpool
 from skyrl_train.rollouts.installed_agent import run_installed_agent
 from skyrl_train.rollouts.pi_teacher_binding import PiTeacherBinding
 from skyrl_train.rollouts.pi_prefix_schedule import PiPrefixSchedule
+from skyrl_train.rollouts.pi_turn_schedule import PiTurnMixtureSchedule
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 
@@ -60,6 +61,8 @@ class InstalledAgentSettings(BaseModel):
     agent: AgentConfig
     teacher: PiTeacherBinding | None = None
     prefix_schedule: PiPrefixSchedule | None = None
+    turn_mixture_schedule: PiTurnMixtureSchedule | None = None
+    critique_principle: str | None = None
     output_path: str
     setup_timeout: float
     run_timeout: float
@@ -73,9 +76,14 @@ class InstalledAgentSettings(BaseModel):
     def require_supported_pi_contract(self) -> "InstalledAgentSettings":
         """Reject unattributed teacher execution and unimplemented actor plans."""
         pi = self.agent.pi
-        if self.prefix_schedule is not None:
+        controls = (self.prefix_schedule, self.turn_mixture_schedule, self.critique_principle)
+        if sum(value is not None for value in controls) > 1:
+            raise ValueError("Pi scenarios require exactly one execution or feedback control")
+        if any(value is not None for value in controls):
             if pi is None or pi.mode != "literal" or self.teacher is None:
-                raise ValueError("Pi prefix collection needs a student template and a distinct teacher")
+                raise ValueError("Pi mixed execution and critique need a student template and distinct teacher")
+            if self.critique_principle is not None and not self.critique_principle.strip():
+                raise ValueError("Pi critique requires a nonempty feedback principle")
             return self
         if pi is None or pi.mode == "literal":
             if self.teacher is not None:
@@ -137,7 +145,11 @@ class InstalledAgentRuntime:
         max_turns: int | None = None,
     ):
         self.settings = settings
-        if settings.teacher is not None and settings.prefix_schedule is None and (
+        dual_model = any(
+            value is not None
+            for value in (settings.prefix_schedule, settings.turn_mixture_schedule, settings.critique_principle)
+        )
+        if settings.teacher is not None and not dual_model and (
             backend.model_name != settings.teacher.model
             or backend.model_revision != settings.teacher.revision
             or backend.source_kind != settings.teacher.source
@@ -146,15 +158,16 @@ class InstalledAgentRuntime:
             raise ValueError(
                 "Pi teacher backend source, model or revision differs from the independent teacher binding"
             )
-        if settings.prefix_schedule is not None and (
+        if dual_model and (
             settings.teacher is None
             or settings.agent.model_name not in (None, f"hosted_vllm/{backend.model_name}")
             or backend.teacher_model_name != settings.teacher.model
             or type(max_turns) is not int
             or max_turns <= 0
-            or settings.prefix_schedule.max.end > max_turns
+            or (settings.prefix_schedule is not None and settings.prefix_schedule.max.end > max_turns)
+            or (settings.critique_principle is not None and max_turns < 2)
         ):
-            raise ValueError("Pi prefix routing needs a bound teacher and turn budget")
+            raise ValueError("Pi dual-model routing needs a bound teacher and turn budget")
         self.backend = backend
         self.max_turns = max_turns
         self.endpoint_factory = registered_agent_endpoint if endpoint_factory is None else endpoint_factory
@@ -168,7 +181,11 @@ class InstalledAgentRuntime:
     @property
     def student_only(self) -> bool:
         pi = self.settings.agent.pi
-        return pi is not None and pi.mode == "literal" and self.settings.prefix_schedule is None
+        return pi is not None and pi.mode == "literal" and all(
+            value is None for value in (
+                self.settings.prefix_schedule, self.settings.turn_mixture_schedule, self.settings.critique_principle
+            )
+        )
 
     async def startup(self) -> None:
         set_global_state(
@@ -475,21 +492,32 @@ class InstalledAgentRuntime:
         ):
             api_base = await endpoint.api_base(required_lifetime=capability_lifetime)
             source = self.settings.agent if agent is None else agent
-            if self.settings.prefix_schedule is not None:
+            if self.settings.prefix_schedule is not None or self.settings.turn_mixture_schedule is not None:
                 teacher = self.settings.teacher
                 if teacher is None or trial_id is None or self.max_turns is None:
-                    raise ValueError("Pi prefix plan needs a leased trial and independent teacher")
+                    raise ValueError("Pi DAgger plan needs a leased trial and independent teacher")
+                schedule = self.settings.prefix_schedule or self.settings.turn_mixture_schedule
+                assert schedule is not None
                 plan = PiDaggerPlan(
-                    protocol="prefix_takeover",
+                    protocol="prefix_takeover" if self.settings.prefix_schedule is not None else "turn_mixture",
                     teacher_model=teacher.model,
                     teacher_api_base=api_base,
-                    executors=self.settings.prefix_schedule.executors(
-                        trial_id=trial_id, policy_step=policy_step, max_turns=self.max_turns
-                    ),
+                    executors=schedule.executors(trial_id=trial_id, policy_step=policy_step, max_turns=self.max_turns),
                     trial_id=trial_id,
                     policy_step=policy_step,
                 )
                 source = source.model_copy(update={"pi": PiAgentConfig(mode="dagger", plan=plan)})
+            elif self.settings.critique_principle is not None:
+                teacher = self.settings.teacher
+                if teacher is None or trial_id is None:
+                    raise ValueError("Pi critique plan needs a leased trial and independent teacher")
+                source = source.model_copy(update={"pi": PiAgentConfig(
+                    mode="critique_revision",
+                    critique=PiCritiquePlan(
+                        teacher_model=teacher.model, teacher_api_base=api_base,
+                        principle=self.settings.critique_principle, trial_id=trial_id,
+                    ),
+                )})
             if trial_id is not None:
                 yield trial_agent_config(
                     source,

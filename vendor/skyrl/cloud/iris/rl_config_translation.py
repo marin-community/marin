@@ -551,6 +551,8 @@ def parse_rl_config(
             "teacher_demo_pi_base",
             "teacher_demo_pi_verified_base",
             "student_prefix_teacher_completion_pi_base",
+            "dagger_pi_turn_mixture_base",
+            "critique_revision_pi_base",
         ):
             raise ValueError(f"Scenario {scenario['preset']!r} has no launchable shared-engine objective")
         config_groups["scenario"] = scenario["preset"]

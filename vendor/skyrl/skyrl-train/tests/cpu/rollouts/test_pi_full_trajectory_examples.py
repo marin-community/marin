@@ -388,6 +388,7 @@ async def test_complete_trial_worker_to_trainer_or_fails_closed_on_missing_judge
         PiScenario.TEACHER_TRACE_VERIFIED,
         PiScenario.DAGGER_MIXTURE,
         PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION,
+        PiScenario.CRITIQUE_REVISION,
     )
     if sft:
         cfg.trainer.algorithm.policy_loss_type = "sft"
@@ -455,11 +456,7 @@ async def test_complete_trial_worker_to_trainer_or_fails_closed_on_missing_judge
         4
         if scenario is PiScenario.VERIFIER_GRPO
         else 2
-        if scenario in (
-            PiScenario.DAGGER_MIXTURE,
-            PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION,
-            PiScenario.CRITIQUE_REVISION,
-        )
+        if scenario in (PiScenario.DAGGER_MIXTURE, PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION)
         else 1
     )
     assert len(batch["trajectory_ids"]) == len(batch["response_ids"])
@@ -483,7 +480,7 @@ async def test_complete_trial_worker_to_trainer_or_fails_closed_on_missing_judge
     trainer.compute_advantages_and_returns(inputs)
     assert inputs["sequences"].shape[0] == len(batch["response_ids"])
     assert inputs["loss_mask"].sum() == sum(map(sum, batch["loss_masks"]))
-    assert (inputs["rollout_logprobs"] is None) == sft
+    assert (inputs["rollout_logprobs"] is None) == (sft and scenario is not PiScenario.CRITIQUE_REVISION)
     assert torch.isfinite(inputs["advantages"]).all()
     # Check the production model forward on both launch-relevant objectives;
     # other presets still exercise production collation, advantage and loss.
@@ -493,6 +490,8 @@ async def test_complete_trial_worker_to_trainer_or_fails_closed_on_missing_judge
         PiScenario.TEACHER_TRACE,
         PiScenario.TEACHER_TRACE_VERIFIED,
         PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION,
+        PiScenario.DAGGER_MIXTURE,
+        PiScenario.CRITIQUE_REVISION,
     ):
         model_path = build_tiny_policy(tmp_path / "policy", max_position_embeddings=4096)
         model = CausalLMPolicy(AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32))

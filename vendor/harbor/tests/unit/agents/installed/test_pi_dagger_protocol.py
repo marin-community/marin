@@ -155,7 +155,7 @@ def test_teacher_label_is_private_and_attributed(tmp_path):
             "request_id": "student-action",
             "status_code": 200,
             "actor": "student",
-            "request": {"model": "student", "messages": initial},
+            "request": {"model": "student", "messages": initial, "logprobs": True, "top_logprobs": 1},
             "literal": {
                 "prompt_token_ids": [1],
                 "completion_token_ids": [2],

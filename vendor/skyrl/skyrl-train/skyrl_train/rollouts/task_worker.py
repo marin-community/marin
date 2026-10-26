@@ -460,9 +460,11 @@ class TaskRolloutWorker:
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
         teacher_complete = None
-        if self.pi_scenario is PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION and phase != "eval":
+        if self.pi_scenario in (
+            PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION, PiScenario.DAGGER_MIXTURE, PiScenario.CRITIQUE_REVISION
+        ) and phase != "eval":
             if self.teacher_model_client is None or not self.teacher_max_context_length:
-                raise ValueError("Pi prefix trial requires a separately bound teacher model client")
+                raise ValueError("Pi dual-model trial requires a separately bound teacher model client")
 
             async def teacher_complete(request: Prompt) -> ModelTurn:
                 assert self.teacher_model_client is not None and self.teacher_max_context_length is not None
@@ -569,11 +571,11 @@ class TaskRolloutWorker:
                     raise ValueError("Unknown Pi execution model routing")
                 executed_teacher = execution_model == "teacher"
                 if executed_teacher and (
-                    self.pi_scenario is not PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION
+                    self.pi_scenario not in (PiScenario.STUDENT_PREFIX_TEACHER_COMPLETION, PiScenario.DAGGER_MIXTURE)
                     or self.teacher_model_client is None
                     or self.teacher_max_context_length is None
                 ):
-                    raise ValueError("Teacher execution requires the bound prefix-completion scenario")
+                    raise ValueError("Teacher execution requires a bound DAgger scenario")
                 routed_request = replace(
                     request, options={key: value for key, value in request.options.items()
                                       if key != PI_EXECUTION_MODEL_OPTION}
@@ -908,7 +910,9 @@ class TaskRolloutWorkerSpec:
                     client_config, {"generator": {"engine_init_kwargs": {"served_model_name": teacher.model}}}
                 )
                 teacher_inference = InferenceEngineClient(teacher_engines, teacher_tokenizer, teacher_config)
-                if settings.prefix_schedule is not None:
+                if any(value is not None for value in (
+                    settings.prefix_schedule, settings.turn_mixture_schedule, settings.critique_principle
+                )):
                     teacher_model_client = DirectModelClient(teacher_inference)
                     backend = AgentInferenceBackend(
                         inference.model_name,
@@ -938,7 +942,7 @@ class TaskRolloutWorkerSpec:
                 backend,
                 int(runner_config.sampling_params.max_generate_length),
                 owned_teacher_transport=owned_teacher_transport,
-                max_turns=None if settings.prefix_schedule is None else int(runner_config.max_turns),
+                max_turns=int(runner_config.max_turns) if teacher_model_client is not None else None,
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:

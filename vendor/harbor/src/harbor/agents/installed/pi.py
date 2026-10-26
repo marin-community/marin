@@ -849,7 +849,12 @@ export default function (pi) {
         if self._capture_actor is not None:
             env["HARBOR_PI_CAPTURE_ACTOR"] = self._capture_actor
         if self._critique_plan is not None:
+            if not self.rollout_correlation_id:
+                raise ValueError("Pi private critique requires model-request correlation")
             env["HARBOR_PI_CRITIQUE_PLAN"] = json.dumps(asdict(self._critique_plan))
+            # The physical trial ID attributes evidence; the per-attempt request
+            # correlation ID selects the live model session for a private call.
+            env["HARBOR_PI_CORRELATION_ID"] = self.rollout_correlation_id
         keys: list[str] = []
 
         if self._api_base is None:
@@ -1068,10 +1073,14 @@ export default function (pi) {
             build_pi_trial_evidence([*entries[:index], {**label, "actor": "teacher"}])
             label_request = label["request"]
             executed_request = entry["request"]
+            # A student action requests sampled logprobs; its private teacher
+            # label does not. Those scoring controls are not part of the visited
+            # pre-action state, unlike messages, tools and template options.
+            sampling_fields = {"model", "logprobs", "top_logprobs"}
             if {
-                key: value for key, value in label_request.items() if key != "model"
+                key: value for key, value in label_request.items() if key not in sampling_fields
             } != {
-                key: value for key, value in executed_request.items() if key != "model"
+                key: value for key, value in executed_request.items() if key not in sampling_fields
             } or label_request.get("model") != plan.teacher_model:
                 raise ValueError(
                     "Pi DAgger teacher label and executed action have different pre-action states"

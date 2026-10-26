@@ -278,6 +278,8 @@ function requireLiteral(record, teacher = false) {
 }
 
 async function requestCritique(toolResults) {
+  const correlationId = process.env.HARBOR_PI_CORRELATION_ID;
+  if (!correlationId) throw new Error('Pi critique requires model-request correlation');
   if (!critiquePlan || critique || records.length !== 1 || critiqueFailure) {
     throw new Error('Pi critique requires exactly one executed student turn');
   }
@@ -301,6 +303,7 @@ async function requestCritique(toolResults) {
   const request = { model: critiquePlan.teacher_model, messages, stream: false };
   const response = await fetch(new URL('chat/completions', critiquePlan.teacher_api_base + '/'), {
     method: 'POST', headers: { 'content-type': 'application/json',
+      'x-ot-trial-id': correlationId,
       authorization: `Bearer ${process.env.HARBOR_PI_TEACHER_API_KEY ?? 'not-needed'}` },
     body: JSON.stringify(request),
   });
@@ -383,7 +386,13 @@ export function startRecorder() {
     server.listen(0, '127.0.0.1', () => {
       resolve({ url: `http://127.0.0.1:${server.address().port}/v1`, records, daggerTurns,
         get critique() { return critique; }, get critiqueFailure() { return critiqueFailure; },
-        failCritique(error) { critiqueFailure = String(error); }, requestCritique,
+        failCritique(error) {
+          const message = String(error);
+          const httpStatus = /^Error: Pi critique teacher returned HTTP ([45][0-9]{2})$/.exec(message);
+          critiqueFailure = message === 'Revision attempted a tool call' ? 'revision_tool_call'
+            : httpStatus ? `teacher_http_${httpStatus[1]}`
+            : message === 'unexpected_turn_count' ? 'unexpected_turn_count' : 'critique_unavailable';
+        }, requestCritique,
         recordObservation, buildTrajectory, server,
         async waitForIdle() { await Promise.all([...active]); } });
     });

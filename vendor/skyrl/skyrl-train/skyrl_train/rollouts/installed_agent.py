@@ -167,7 +167,11 @@ async def run_installed_agent(
                 sandbox_diagnostics = agent.logs_dir / "pi-sandbox-diagnostics.jsonl"
                 if sandbox_diagnostics.is_file():
                     retain_pi_sandbox_diagnostics(sandbox_diagnostics, evidence_dir / sandbox_diagnostics.name)
-            agent.populate_context_post_run(context)
+            # Pi cannot collate evidence after a failed run. Preserve the
+            # original error instead of replacing it with a missing-capture
+            # error during cleanup; failed attempts never enter training.
+            if primary_error is None or not isinstance(agent, Pi):
+                agent.populate_context_post_run(context)
             (evidence_dir / "agent-context.json").write_text(context.model_dump_json(indent=2))
             (evidence_dir / "agent-info.json").write_text(agent.to_agent_info().model_dump_json(indent=2))
     # Pi owns this trial-local capture. The persisted turn trace is diagnostic,
