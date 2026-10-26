@@ -7,15 +7,16 @@ import haliax as hax
 import haliax.nn as hnn
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from chex import assert_trees_all_close
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import Fp8DotGeneralOp
-from jax.sharding import NamedSharding, PartitionSpec
-from levanter.testing.cpu_devices import run_on_cpu_devices
-from levanter.testing.helpers import use_test_mesh
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 
 from levanter.grad_accum import microbatched
+from levanter.testing.devices import use_test_devices
+from levanter.testing.helpers import use_test_mesh
 
 
 pytestmark = pytest.mark.tpu
@@ -131,30 +132,20 @@ def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
 
 @pytest.mark.timeout(120)
 def test_microbatch_explicit_batch_and_context_sharding_matches_full_batch():
-    run_on_cpu_devices(
-        """
-        import equinox as eqx
-        import haliax as hax
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh
-        from levanter.grad_accum import microbatched
-
-        mesh = Mesh(np.asarray(jax.devices()).reshape(4, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
+    with use_test_devices(8) as devices:
+        mesh = Mesh(np.asarray(devices).reshape(4, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
         Batch, Pos = hax.Axis("batch", 8), hax.Axis("position", 8)
         mapping = {"batch": "data", "position": "context"}
         with jax.set_mesh(mesh), hax.axis_mapping(mapping):
-            inputs = hax.shard(hax.named(jnp.arange(64, dtype=jnp.float32).reshape(8, 8)/64, (Batch, Pos)))
-            weight = hax.shard(hax.named(jnp.arange(8, dtype=jnp.float32)/8, Pos))
+            inputs = hax.shard(hax.named(jnp.arange(64, dtype=jnp.float32).reshape(8, 8) / 64, (Batch, Pos)))
+            weight = hax.shard(hax.named(jnp.arange(8, dtype=jnp.float32) / 8, Pos))
+
             def objective(w, x):
-                return hax.mean(hax.square(w*x)).scalar(), {}
+                return hax.mean(hax.square(w * x)).scalar(), {}
+
             gradient = eqx.filter_value_and_grad(objective, has_aux=True)
             accumulated = microbatched(gradient, Batch, 4, mapping, mapping)
             (expected_loss, _), expected_grad = eqx.filter_jit(gradient)(weight, inputs)
             (actual_loss, _), actual_grad = eqx.filter_jit(accumulated)(weight, inputs)
             np.testing.assert_allclose(actual_loss, expected_loss, atol=1e-5, rtol=1e-5)
             np.testing.assert_allclose(actual_grad.array, expected_grad.array, atol=1e-5, rtol=1e-5)
-        """,
-        device_count=8,
-    )

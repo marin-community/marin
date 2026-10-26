@@ -12,6 +12,7 @@ import dataclasses
 import importlib
 import json
 import logging
+import tempfile
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -20,20 +21,22 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
-from levanter.checkpoint import CheckpointerConfig
+from jax.sharding import AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
@@ -85,55 +88,57 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
     ) == (1, 4, 1, 1, 1)
 
 
+@pytest.mark.multidevice
 def test_compact_grug_mesh_axis_sizes():
     """Distinct context and expert widths detect swapped axis positions."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(8):
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = jax.devices()
+        device_count = len(devices)
+        if device_count % 8:
+            pytest.skip("compact Grug topology requires a device count divisible by eight")
         mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
         assert tuple(mesh.shape.items()) == (
             ("replica_dcn", 1),
-            ("data", 1),
+            ("data", device_count // 8),
             ("context", 2),
             ("expert", 4),
             ("model", 1),
         ), mesh.shape
-        """,
-    )
 
 
+@pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_unit_context_axis():
     """Adding a size-one context axis preserves checkpoint values and placement."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        import tempfile
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.checkpoint import load_checkpoint, save_checkpoint
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(8):
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = jax.devices()
+        device_count = len(devices)
+        if device_count % 8:
+            pytest.skip("compact Grug topology requires a device count divisible by eight")
         legacy_mesh = Mesh(
-            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
         mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 4, "context": 1, "expert": 2, "model": 1}, mesh.shape
+        assert dict(mesh.shape) == {
+            "replica_dcn": 1,
+            "data": device_count // 2,
+            "context": 1,
+            "expert": 2,
+            "model": 1,
+        }, mesh.shape
 
         spec = P(("replica_dcn", "data", "expert"), None)
-        shape = (8, 4)
+        shape = (device_count, 4)
         legacy_sharding = NamedSharding(legacy_mesh, spec)
         sharding = NamedSharding(mesh, spec)
         assert sharding.devices_indices_map(shape) == legacy_sharding.devices_indices_map(shape)
 
-        written = jax.device_put(jnp.arange(32, dtype=jnp.float32).reshape(shape), legacy_sharding)
+        written = jax.device_put(jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape), legacy_sharding)
         with tempfile.TemporaryDirectory() as tmpdir:
             with jax.set_mesh(legacy_mesh):
                 save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
@@ -146,38 +151,37 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
 
         assert restored.sharding == sharding, restored.sharding
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
-        """,
-    )
 
 
+@pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_context_sharding():
     """A legacy expert checkpoint restores with its target context partitioning."""
-    run_on_cpu_devices(
-        device_count=8,
-        script="""
-        import tempfile
-
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.checkpoint import load_checkpoint, save_checkpoint
-        from levanter.grug.sharding import compact_grug_mesh
-
+    with use_test_devices(8):
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = jax.devices()
+        device_count = len(devices)
+        if device_count % 8:
+            pytest.skip("compact Grug topology requires a device count divisible by eight")
         legacy_mesh = Mesh(
-            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
         mesh = compact_grug_mesh(expert_axis_size=2, context_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 2, "context": 2, "expert": 2, "model": 1}, mesh.shape
+        assert dict(mesh.shape) == {
+            "replica_dcn": 1,
+            "data": device_count // 4,
+            "context": 2,
+            "expert": 2,
+            "model": 1,
+        }, mesh.shape
 
         # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
         # mesh that wrote it.
-        shape = (4, 3, 2)
+        shape = (device_count // 2, 3, 2)
         written = jax.device_put(
-            jnp.arange(24, dtype=jnp.float32).reshape(shape),
+            jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape),
             NamedSharding(legacy_mesh, P("expert", None, None)),
         )
         sharding = NamedSharding(mesh, P(("expert", "context"), None, None))
@@ -195,8 +199,6 @@ def test_legacy_checkpoint_restore_with_context_sharding():
 
         assert restored.sharding == sharding, restored.sharding
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
-        """,
-    )
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
