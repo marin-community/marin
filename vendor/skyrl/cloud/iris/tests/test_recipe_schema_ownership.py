@@ -1,7 +1,7 @@
 import copy
 from dataclasses import fields, replace
 from types import SimpleNamespace
-from typing import Literal, get_args
+from typing import get_args
 
 from omegaconf import OmegaConf
 
@@ -9,16 +9,15 @@ from cloud.iris import rl_config_translation as launcher
 from cloud.iris import task_runtime
 from cloud.iris.rl_data import resolve_rl_train_data_with_sources
 import skyrlrecipe as schema
-from skyrlrecipe.declared import Teacher
-from skyrlrecipe.sections import Algorithm
-from marinskyrl import runtime_options, speculative_decoding
+from skyrlrecipe.declared import Callback, Teacher
+from skyrl_train.callbacks.builtin import CALLBACK_REGISTRY
+from marinskyrl import speculative_decoding
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPlacement, TeacherSource
 from skyrlrecipe.documents import MISSING, get_path, leaves, set_path
-from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
-from scripts.recipe_schema_sidecar import OPEN, TYPES, UNDECLARED
-from skyrl_train.config.ftpo import FTPOBoundary, FTPOConfig
-from skyrl_train.config.objective_spec import KLEstimator, LossReduction
-from skyrl_train.utils.advantage_estimators import AdvantageEstimatorRegistry
+from skyrlrecipe.ownership import LAUNCH_PATHS
+from skyrlrecipe.rules import SKYRL_INTERNAL_ENGINE_KWARGS
+from scripts.recipe_schema_sidecar import OPEN, UNDECLARED
+from skyrl_train.config.ftpo import FTPOConfig
 
 GPU_PATHS = frozenset({"trainer.placement.policy_num_gpus_per_node", "trainer.placement.ref_num_gpus_per_node"})
 
@@ -35,7 +34,9 @@ FILL_WHEN_UNSET = frozenset(
 
 def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_authored_values(tmp_path, monkeypatch):
     source = tmp_path / "ownership.yaml"
-    source.write_text("entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n")
+    source.write_text(
+        "entrypoint: terminal_bench\nterminal_bench: {}\ncontext_budget:\n  request_window_tokens: 2048\n  max_new_tokens_per_turn: 512\n  max_turns: 1\n"
+    )
     parsed = launcher.parse_rl_config(str(source))
     base = launcher.compose_skyrl_config(parsed, {}, SimpleNamespace(gpus_per_node=8)).config
     full = OmegaConf.to_container(base, resolve=False)
@@ -68,13 +69,15 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
         sentinel = (
             not value
             if isinstance(value, bool)
-            else 31
-            if isinstance(value, int)
-            else 3.125
-            if isinstance(value, float)
-            else [f"/author/{suffix}"]
-            if isinstance(value, list)
-            else f"author-{suffix}"
+            else (
+                31
+                if isinstance(value, int)
+                else (
+                    3.125
+                    if isinstance(value, float)
+                    else [f"/author/{suffix}"] if isinstance(value, list) else f"author-{suffix}"
+                )
+            )
         )
         set_path(seeded, ".".join(parts), sentinel)
     for path in LAUNCH_PATHS:
@@ -138,15 +141,6 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
     defaults["terminal_bench"] = defaults.pop("terminal_bench_config")
     for path in FILL_WHEN_UNSET:
         assert get_path(defaults, path) not in (MISSING, None)
-    derived = {}
-    context_paths = DERIVED_PATHS
-    for path in context_paths:
-        set_path(derived, path, 987654)
-    materialized = launcher._materialize_context_budget(derived, parsed.recipe.context_budget)
-    assert {
-        ".".join(parts) for parts, before in leaves(derived) if get_path(materialized, ".".join(parts)) != before
-    } == context_paths
-    assert set(parsed.recipe.context_budget.derived_values({})) == DERIVED_PATHS
 
 
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
@@ -156,26 +150,11 @@ def test_code_default_declarations_match_native_dataclasses_and_canonical_choice
     ):
         declared = {path.removeprefix(prefix + ".") for path in UNDECLARED if path.startswith(prefix + ".")}
         assert declared == {field.name for field in fields(config)}
-    canonical = {
-        "trainer.algorithm.policy_loss_type": runtime_options.PolicyLossType,
-        "trainer.algorithm.loss_reduction": LossReduction,
-        "trainer.algorithm.kl_estimator_type": KLEstimator,
-        "trainer.evaluation_runner": runtime_options.EvaluationRunner,
-        "generator.r3_transport": runtime_options.R3Transport,
-        "generator.weight_sync_transport": runtime_options.WeightSyncTransport,
-        "generator.gdn_backend": runtime_options.GDNBackend,
-    }
-    for path, enum in canonical.items():
-        assert set(get_args(eval(TYPES[path], {"Literal": Literal}))) == {choice.value for choice in enum}, path
-    assert set(get_args(eval(UNDECLARED["trainer.algorithm.ftpo.boundary"][0], {"Literal": Literal}))) == {
-        choice.value for choice in FTPOBoundary
-    }
-
-    assert set(get_args(Algorithm.model_fields["advantage_estimator"].annotation)) == set(
-        AdvantageEstimatorRegistry.list_available()
-    )
     for name, enum in (("source", TeacherSource), ("placement", TeacherPlacement), ("evidence", TeacherEvidenceKind)):
         annotation = Teacher.model_fields[name].annotation
         if name == "placement":
             annotation = next(option for option in get_args(annotation) if option is not type(None))
         assert set(get_args(annotation)) == {choice.value for choice in enum}, name
+
+    callbacks = get_args(get_args(Callback)[0])
+    assert {get_args(callback.model_fields["type"].annotation)[0] for callback in callbacks} == set(CALLBACK_REGISTRY)

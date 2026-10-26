@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import AfterValidator, Field, PlainSerializer, PositiveInt
 
 from .model import FrozenMap, OpenMap, Section, SectionMap, field, thaw, unset_field
-from .sampling import EvalSamplingParams
+
+if TYPE_CHECKING:
+    from .sections import EvalSamplingParams
 
 
 class TeacherModel(Section):
@@ -96,6 +98,13 @@ class CheckpointCallback(Section):
     save_on_train_end: bool = unset_field()
 
 
+class BestCheckpointCallback(Section):
+    type: Literal["best_checkpoint"] = field()
+    initial_model_uri: str = field()
+    expected_tasks: int = field()
+    minimum_scored_tasks: int = field()
+
+
 class DistillationTokenBudgetCallback(Section):
     type: Literal["distillation_token_budget"] = field()
     token_budget: PositiveInt = field()
@@ -172,6 +181,7 @@ CorrectionRule = Annotated[TokenRule | SequenceRule, Field(discriminator="kind")
 
 Callback = Annotated[
     CheckpointCallback
+    | BestCheckpointCallback
     | DistillationTokenBudgetCallback
     | EvaluationCallback
     | HarborEvaluationCallback

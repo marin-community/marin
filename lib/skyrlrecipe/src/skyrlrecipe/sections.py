@@ -12,7 +12,6 @@ from pydantic import Field, NonNegativeInt, PositiveInt
 from . import declared
 from .declared import Callback, CorrectionRule, LoggingBackend, Teacher, TeacherRouting
 from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
-from .sampling import EvalSamplingParams
 
 
 class Sampling(Section):
@@ -198,14 +197,7 @@ class PolicyMegatronConfig(Section):
     model_config_kwargs: OpenMap = field({})
     torch_profiler_config: TorchProfilerConfig = Field(default_factory=TorchProfilerConfig)
     optimizer_config_kwargs: OptimizerConfigKwargs = Field(default_factory=OptimizerConfigKwargs)
-    transformer_config_kwargs: OpenMap = field(
-        {
-            "recompute_granularity": "full",
-            "recompute_modules": ["core_attn"],
-            "recompute_method": "uniform",
-            "recompute_num_layers": 1,
-        }
-    )
+    transformer_config_kwargs: OpenMap = unset_field()
     empty_cuda_cache: bool = field(True)
     logprob_chunk_size: int = field(1024)
     optimizer_checkpoint_sharding_type: Literal["fully_reshardable", "dp_reshardable"] = field("fully_reshardable")
@@ -427,7 +419,7 @@ class Distillation(Section):
 
 class Algorithm(Section):
     batch_invariant: bool = field(False)
-    advantage_estimator: Literal["gae", "grpo", "rloo", "rloo_n", "rloo_n_pbs", "reinforce++", "uniform", "reward"] = (
+    advantage_estimator: Literal["uniform", "reward", "reinforce++", "rloo", "rloo_n", "rloo_n_pbs", "gae", "grpo"] = (
         field("grpo")
     )
     group_advantage_min_size: PositiveInt | None = field(None)
@@ -447,7 +439,6 @@ class Algorithm(Section):
     value_head_prefix: str = field("value_head")
     policy_loss_type: Literal[
         "regular",
-        "dpo",
         "dual_clip",
         "behavior_clip",
         "gspo",
@@ -457,6 +448,7 @@ class Algorithm(Section):
         "sapo",
         "sft",
         "ftpo",
+        "dpo",
         "importance_sampling",
     ] = field("regular")
     ftpo: Ftpo = Field(default_factory=Ftpo)
@@ -466,7 +458,7 @@ class Algorithm(Section):
     """DPO pairing parameters; set policy_loss_type=dpo (and loss_reduction=pair_mean,
     environment.env_class=preference_pair) to activate."""
     loss_reduction: Literal[
-        "token_mean", "pair_mean", "sequence_mean", "seq_mean_token_sum_norm", "seq_mean_token_sum_norm_global"
+        "token_mean", "sequence_mean", "pair_mean", "seq_mean_token_sum_norm", "seq_mean_token_sum_norm_global"
     ] = field("token_mean")
     grpo_norm_by_std: bool = field(True)
     rloo_n_filter_zero_reward_groups: bool = field(True)
@@ -712,6 +704,18 @@ class SamplingParams(Section):
     min_tokens: NonNegativeInt = unset_field()
 
 
+class EvalSamplingParams(Section):
+    max_generate_length: int = unset_field()
+    repetition_penalty: int | float = field(1.0)
+    temperature: int | float = field(0.0)
+    top_p: int | float = field(1.0)
+    min_p: int | float = field(0.0)
+    top_k: int = field(-1)
+    logprobs: NonNegativeInt | None = field(None)
+    stop: tuple[str, ...] | None = field(None)
+    min_tokens: NonNegativeInt = unset_field()
+
+
 class Loop(Section):
     max_period_tokens: int = field(64)
     tail_tokens: int = field(256)
@@ -862,298 +866,7 @@ class Generator(Section):
 
 class Environment(Section):
     env_class: str = field("gsm8k")
-    task_sessions: OpenMap = field(
-        {
-            "local": None,
-            "max_verifier_workers": 32,
-            "remote_judge": None,
-            "daytona": None,
-            "session": {
-                "max_turns": "${generator.max_turns}",
-                "model_turn_timeout": None,
-                "command_timeout": "${trajectory_runner.command_timeout}",
-                "tool_turn_timeout": 600,
-                "total_turn_timeout": None,
-                "attempt_timeout": None,
-                "verifier_timeout": None,
-                "cleanup_timeout": "${trajectory_runner.cleanup_timeout}",
-                "max_total_tokens": None,
-            },
-            "task_spec": {
-                "default_harness": "shellbox",
-                "harness_by_dataset": {"structure-closure": "assistant_prefix"},
-                "session": {
-                    "max_turns": 1,
-                    "max_total_tokens": None,
-                    "model_turn_timeout": 1800,
-                    "tool_turn_timeout": 90,
-                    "total_turn_timeout": 2400,
-                    "attempt_timeout": 3600,
-                    "verifier_timeout": 300,
-                    "cleanup_timeout": 60,
-                    "command_timeout": 30,
-                    "shell_tool": {},
-                },
-                "image_verifier": {
-                    "backend": "daytona",
-                    "cpus": 2,
-                    "memory_mb": 4096,
-                    "storage_mb": 10240,
-                    "gpus": 0,
-                    "network": "allow",
-                    "user": None,
-                    "startup_timeout": 600,
-                    "cleanup_timeout": 60,
-                },
-                "package_verifier": {
-                    "backend": "local",
-                    "cpus": None,
-                    "memory_mb": None,
-                    "storage_mb": None,
-                    "gpus": 0,
-                    "network": "allow",
-                    "user": None,
-                    "startup_timeout": 600,
-                    "cleanup_timeout": 60,
-                },
-            },
-            "lcb": {
-                "machine": {
-                    "requirements": {
-                        "command_semantics": "linux_process",
-                        "docker_image": (
-                            "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                        ),
-                        "working_directory": "/workspace",
-                    },
-                    "runtime": {
-                        "backend": "docker",
-                        "network": "deny",
-                        "memory_mb": 8192,
-                        "cpus": 1,
-                        "storage_mb": None,
-                        "gpus": 0,
-                        "user": None,
-                        "startup_timeout": 600,
-                        "cleanup_timeout": None,
-                    },
-                }
-            },
-            "searchcode": {
-                "machine": {
-                    "requirements": {
-                        "command_semantics": "linux_process",
-                        "docker_image": (
-                            "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                        ),
-                        "working_directory": "/workspace",
-                    },
-                    "runtime": {
-                        "backend": "docker",
-                        "network": "deny",
-                        "memory_mb": 8192,
-                        "cpus": 1,
-                        "storage_mb": None,
-                        "gpus": 0,
-                        "user": None,
-                        "startup_timeout": 600,
-                        "cleanup_timeout": None,
-                    },
-                }
-            },
-            "text_to_sql": {
-                "machine": {
-                    "requirements": {
-                        "command_semantics": "linux_process",
-                        "docker_image": (
-                            "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                        ),
-                        "working_directory": "/workspace",
-                    },
-                    "runtime": {
-                        "backend": "docker",
-                        "network": "deny",
-                        "memory_mb": 8192,
-                        "cpus": 1,
-                        "storage_mb": None,
-                        "gpus": 0,
-                        "user": None,
-                        "startup_timeout": 600,
-                        "cleanup_timeout": None,
-                    },
-                }
-            },
-            "gsm8k": {"reward_method": "strict"},
-            "text2sql": {
-                "db_path": "/home/ray/default/sql_data",
-                "machine": {
-                    "requirements": {
-                        "command_semantics": "linux_process",
-                        "docker_image": (
-                            "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                        ),
-                        "working_directory": "/workspace",
-                    },
-                    "runtime": {
-                        "backend": "docker",
-                        "network": "deny",
-                        "memory_mb": 8192,
-                        "cpus": 1,
-                        "storage_mb": None,
-                        "gpus": 0,
-                        "user": None,
-                        "startup_timeout": 600,
-                        "cleanup_timeout": None,
-                    },
-                },
-            },
-            "llm_as_a_judge": {"model": "gpt-4o-mini", "base_url": None},
-            "search": {"log_requests": False, "search_url": "http://127.0.0.1:8000/retrieve", "topk": 3, "timeout": 30},
-            "nemotron_ultra": {
-                "grading": "verify",
-                "machines": {
-                    "ns_tools_simple_agent": {
-                        "requirements": {
-                            "command_semantics": "linux_process",
-                            "docker_image": (
-                                "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                            ),
-                            "working_directory": "/workspace",
-                        },
-                        "runtime": {
-                            "backend": "docker",
-                            "network": "deny",
-                            "memory_mb": 8192,
-                            "cpus": 1,
-                            "storage_mb": None,
-                            "gpus": 0,
-                            "user": None,
-                            "startup_timeout": 600,
-                            "cleanup_timeout": None,
-                        },
-                    },
-                    "code_gen_simple_agent": {
-                        "requirements": {
-                            "command_semantics": "linux_process",
-                            "docker_image": (
-                                "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                            ),
-                            "working_directory": "/workspace",
-                        },
-                        "runtime": {
-                            "backend": "docker",
-                            "network": "deny",
-                            "memory_mb": 8192,
-                            "cpus": 1,
-                            "storage_mb": None,
-                            "gpus": 0,
-                            "user": None,
-                            "startup_timeout": 600,
-                            "cleanup_timeout": None,
-                        },
-                    },
-                    "nvarc_inductive_simple_agent": {
-                        "requirements": {
-                            "command_semantics": "linux_process",
-                            "docker_image": (
-                                "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                            ),
-                            "working_directory": "/workspace",
-                        },
-                        "runtime": {
-                            "backend": "docker",
-                            "network": "deny",
-                            "memory_mb": 8192,
-                            "cpus": 1,
-                            "storage_mb": None,
-                            "gpus": 0,
-                            "user": None,
-                            "startup_timeout": 600,
-                            "cleanup_timeout": None,
-                        },
-                    },
-                    "math_formal_lean_refinement_agent": {
-                        "requirements": {
-                            "command_semantics": "linux_process",
-                            "docker_image": (
-                                "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104"
-                            ),
-                            "working_directory": "/lean4/my_project",
-                        },
-                        "runtime": {
-                            "backend": "docker",
-                            "network": "deny",
-                            "memory_mb": 8192,
-                            "cpus": 1,
-                            "storage_mb": None,
-                            "gpus": 0,
-                            "user": None,
-                            "startup_timeout": 600,
-                            "cleanup_timeout": None,
-                        },
-                    },
-                },
-                "lean_timeout": 30.0,
-                "code_verifier": {
-                    "per_test_timeout_seconds": 10,
-                    "total_timeout_seconds": 300,
-                    "max_memory_bytes": 4294967296,
-                },
-                "judges": {
-                    "general": {
-                        "base_url": "http://127.0.0.1:8001/v1",
-                        "model": "general-judge",
-                        "api_key": "dummy_key",
-                        "api_key_env": None,
-                        "timeout_seconds": 600.0,
-                        "response_transport": "responses_metadata",
-                        "reasoning_effort": None,
-                    },
-                    "safety": {
-                        "base_url": "http://127.0.0.1:8002/v1",
-                        "model": "safety-judge",
-                        "api_key": "dummy_key",
-                        "api_key_env": None,
-                        "timeout_seconds": 600.0,
-                        "response_transport": "responses_metadata",
-                        "reasoning_effort": None,
-                    },
-                },
-                "genrm": {
-                    "judge": {
-                        "base_url": "http://127.0.0.1:8003/v1",
-                        "model": "genrm-judge",
-                        "api_key": "dummy_key",
-                        "api_key_env": None,
-                        "timeout_seconds": 600.0,
-                        "response_transport": "responses_metadata",
-                        "reasoning_effort": None,
-                    },
-                    "max_concurrent_comparisons": 4,
-                    "default_score": 3.0,
-                    "max_output_tokens": 24576,
-                    "temperature": 1.0,
-                    "top_p": 0.95,
-                    "genrm_parse_retries": 1,
-                    "genrm_parse_retry_sleep_seconds": 0.2,
-                    "reasoning_bonus": 0.5,
-                    "answer_bonus": 0.5,
-                    "top_percentile": 0.2,
-                    "group_reasoning_length_penalty_coeff": 0.1,
-                    "group_answer_length_penalty_coeff": 0.1,
-                },
-            },
-            "aime": {
-                "evaluation_token_budget": 8192,
-                "strict_box_verify": False,
-                "length_penalty_weight": 0.0,
-                "target_length": 768,
-                "truncated_penalty": -2.0,
-                "min_response_length": 16,
-                "max_gen_length": 0,
-            },
-        }
-    )
+    task_sessions: OpenMap = unset_field()
 
 
 class RolloutWorkers(Section):
