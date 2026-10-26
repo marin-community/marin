@@ -254,9 +254,8 @@ def test_identity_teacher_sees_the_template_system_message_on_plain_and_tool_row
     assert rest.startswith("<|start_header_id|>system<|end_header_id|>\nYou are Marin Snowball")
 
 
-def _composed_skyrl(arm, tmp_path):
-    """The arm's ``skyrl`` config as the coordinator's launcher composes it (``load_launch_config``)."""
-    launch_config = pytest.importorskip("cloud.iris.launch_config")
+def _launch_doc(arm, tmp_path) -> Path:
+    """Write the arm's launch document as the coordinator writes it, and return its path."""
     spec = SimpleNamespace(
         config_yaml=launch.recipe(arm),
         topology=skyrl.SkyRLTopology(
@@ -305,7 +304,13 @@ def _composed_skyrl(arm, tmp_path):
         ),
     )
     (tmp_path / "launch.yaml").write_text(text)
-    return launch_config.load_launch_config(tmp_path / "launch.yaml").skyrl
+    return tmp_path / "launch.yaml"
+
+
+def _composed_skyrl(arm, tmp_path):
+    """The arm's ``skyrl`` config as the coordinator's launcher composes it (``load_launch_config``)."""
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    return launch_config.load_launch_config(_launch_doc(arm, tmp_path)).skyrl
 
 
 @pytest.mark.parametrize("arm", ["dry", "train"])
@@ -321,6 +326,48 @@ def test_arm_composes_through_the_skyrl_launcher(arm, tmp_path):
     # Megatron's param scheduler asserts warmup < decay steps, and decay steps are at most max_steps.
     assert trainer.policy.optimizer_config.num_warmup_steps < trainer.max_steps
     assert {callback.type: callback.get("save_steps") for callback in trainer.callbacks}["checkpoint"] == steps
+
+
+@pytest.mark.parametrize("arm", ["dry", "train"])
+def test_terminal_export_config_passes_launch_validation(arm, tmp_path, monkeypatch):
+    """The terminal export's launch document, derived by the coordinator from the arm's, passes launch validation.
+
+    Runs ``export_terminal_policy`` on the arm's launch document up to the submit, with the checkpoint step and its
+    export request stubbed as the dry run's step-2 checkpoint wrote them.
+    """
+    launch_config = pytest.importorskip("cloud.iris.launch_config")
+    export_hf = pytest.importorskip("cloud.iris.export_hf_checkpoint")
+    HFExportRequest = pytest.importorskip("skyrl_train.hf_export_schema").HFExportRequest
+
+    training_path = _launch_doc(arm, tmp_path)
+    training = launch_config.load_launch_config(training_path)
+    placement = training.skyrl.trainer.placement
+    checkpoint_root = str(training.artifacts.checkpoint_root)
+    request = HFExportRequest(
+        step=2,
+        checkpoint_base_path=checkpoint_root,
+        checkpoint_path=f"{checkpoint_root}/global_step_2",
+        export_path=str(training.artifacts.export_root),
+        model_path="/tmp/marinskyrl/model_metadata/model",
+        model_source_uri=str(training.inputs.model.uri),
+        model_source_identity=str(training.inputs.model.identity),
+        num_nodes=placement.policy_num_nodes,
+        gpus_per_node=placement.policy_num_gpus_per_node,
+    )
+    submitted = []
+    monkeypatch.setattr(export_hf.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(export_hf, "terminal_checkpoint_step", lambda root: 2)
+    monkeypatch.setattr(export_hf, "_read_hf_export_request", lambda path: request)
+    monkeypatch.setattr(export_hf, "submit_requested_export", lambda spec, command: submitted.append(spec))
+
+    export_hf.export_terminal_policy(training_path)
+
+    [spec] = submitted
+    exported = launch_config.load_launch_config(Path(spec.launch_config_path))
+    assert exported.run.mode == "checkpoint_export"
+    assert training.skyrl.trainer.mismatch_probe.enabled == (arm == "dry")
+    assert "mismatch_probe" not in exported.skyrl.trainer
+    launch_config.validate_launch_config(exported)
 
 
 SKYRL_OPTIMIZER = Path(__file__).parents[3] / "vendor/skyrl/skyrl-train/skyrl_train/distributed/megatron/optimizer.py"

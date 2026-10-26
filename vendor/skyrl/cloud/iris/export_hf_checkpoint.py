@@ -155,6 +155,8 @@ def checkpoint_export_launch_config(
     critic["model"]["path"] = None
     config.skyrl.pop("teachers", None)
     config.skyrl.pop("teacher_routing", None)
+    # The mismatch probe belongs to the synchronous training loop; launch validation rejects it for an export.
+    config.skyrl.trainer.pop("mismatch_probe", None)
     if config.skyrl.generator.get("speculative_decoding") is not None:
         config.skyrl.generator.speculative_decoding.training = None
 
