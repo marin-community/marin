@@ -105,3 +105,35 @@ Require successful training and export jobs, evidence that the fresh job
 loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
+
+## Author typed recipes
+
+Experiments can import `SkyRLRecipe` and generated section classes from `skyrlrecipe`, the
+unpublished `marin-skyrlrecipe` workspace library. SkyRL installs the same library from its editable
+path source. The library depends only on Pydantic; Hydra composes runtime defaults in SkyRL.
+
+```python
+from skyrlrecipe import ContextBudget, SkyRLRecipe
+from skyrlrecipe.sections import Trainer
+
+recipe = SkyRLRecipe(
+    context_budget=ContextBudget(request_window_tokens=2048, max_new_tokens_per_turn=512, max_turns=1),
+    trainer=Trainer(max_steps=2),
+)
+```
+
+Serialize `recipe.to_skyrl()` to YAML for `SkyRLSpec.config_yaml`. Supply the seed and checkpoint
+retention through the launch envelope. Closed sections reject unknown and launcher-owned fields;
+open mappings also check owned paths. `combine` rejects unequal leaves across named parts,
+including parent/descendant conflicts; `merge` and `with_settings` apply explicit overrides.
+An explicit empty mapping is retained, including `environment.task_sessions.local: {}`.
+
+After changing SkyRL YAML or group options, regenerate the author classes from the nested environment:
+
+```bash
+uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py
+uv run --project vendor/skyrl --frozen --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py --check
+```
+
+Types and open mappings that YAML cannot express belong in `vendor/skyrl/scripts/recipe_schema_sidecar.py`.
+A renamed or retired author key needs a migration message in `skyrlrecipe.ownership.REMOVED`.
