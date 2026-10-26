@@ -28,6 +28,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
 from experiments.interp.snowball_identity.precision_gate import device_memory_report, local_device_memory
+from experiments.post_training.identity_context_distill.precision_source_audit import ROUTER_KEYS
 from experiments.post_training.identity_context_distill.runtime_recipe import check_precision_runtime_receipt
 from experiments.post_training.identity_context_distill.sft import (
     BASE_MODEL,
@@ -83,7 +84,7 @@ def place_like_data_loader(batch: LmExample, trainer: Trainer) -> LmExample:
     """Lay a host batch out as ``trainer.data_loader`` does: one global array per leaf, built from host data with the
     loader's sharding (``sharding_for_axis`` under the trainer's mesh and compute mapping). Every process must pass
     the same host batch. ``train_step`` under explicit mesh axes needs this; a host or replicated batch fails the
-    fused loss's ``shard_map`` (lr0-r6)."""
+    fused loss's ``shard_map``."""
 
     def place(leaf):
         if not isinstance(leaf, hax.NamedArray):
@@ -144,12 +145,11 @@ def gated_zero_lr_step(
 
 def _router_values(model) -> dict[str, np.ndarray]:
     tensors = model.to_state_dict()
-    expected = {f"model.layers.{layer}.mlp.router.bias" for layer in range(26)}
     found = {name for name in tensors if name.endswith(".mlp.router.bias")}
-    if found != expected or len(tensors) != 502:
+    if found != ROUTER_KEYS or len(tensors) != 502:
         raise ValueError("Unexpected source/export tensor keys or router count")
     result = {}
-    for name in sorted(expected):
+    for name in sorted(ROUTER_KEYS):
         if tensors[name].dtype != jnp.float32 or tensors[name].shape != (256,):
             raise ValueError(f"Router bias is not native FP32: {name}")
         gathered = np.asarray(multihost_utils.process_allgather(tensors[name], tiled=True)).reshape(-1, 256)
@@ -185,7 +185,7 @@ def run_precision_probe(
     LR0 only. Source audit verifies regional tokenizer/template,
     headers and pinned keys. Export audit streams all 502 tensors against the source,
     requiring 476 BF16 plus 26 FP32 and exact LR0 values, plus tokenizer/generation
-    metadata. These bindings must be reviewed before this function is launchable.
+    metadata.
     """
     if config.initialize_from_hf != BASE_MODEL or not isinstance(config.optimizer, AdamConfig):
         raise ValueError("Probe requires pinned regional source and the recipe's Adam optimizer")

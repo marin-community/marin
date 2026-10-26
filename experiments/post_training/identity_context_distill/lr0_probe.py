@@ -88,8 +88,9 @@ logger = logging.getLogger(__name__)
 T310 = "s3://marin-rno2a/marin/experiments/snowball-identity/t310"
 INPUTS = f"{T310}/inputs-20261024-0252"
 FLOOR = f"{T310}/diag-torch-floor-r1"
-VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
 """The torch floor job: G1's ``receipt.json`` and ``batch1/top6.pt``, each checked against its pinned sha256."""
+VLLM_CAPTURE = f"{T310}/vllm-route-capture-r1"
+"""The vLLM route capture for G1a: pass-1 and pass-2 ``routes.pt`` and the capture's ``receipt.json``."""
 SOURCE_FILE_HASHES = {
     "config.json": "c7e1e7ac08e7b8b712d2728596765d2a5f954a7372ba1090cf87709e5fa9fbd5",
     "generation_config.json": "fef404c3c02c0c5120a18a55820caac75222b507f27e1aef0e4cd482ba887d73",
