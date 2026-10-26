@@ -37,7 +37,6 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
-    HERO_MAX_EVAL_SEQ_LEN,
     HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
@@ -49,6 +48,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_eval_seq_lens,
     hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
@@ -344,7 +344,7 @@ def build_diagnostic_run(
                 GrugEvalConfig(
                     steps_per_eval=eval_every,
                     eval_batch_size=batch_axes,
-                    max_seq_len=min(model.max_seq_len, HERO_MAX_EVAL_SEQ_LEN),
+                    seq_lens=hero_eval_seq_lens(model.max_seq_len),
                     eval_current=False,  # matches the ladder; see #8861
                     eval_ema=False,
                     compute_bpb=True,
