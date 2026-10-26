@@ -1053,13 +1053,13 @@ def _make_train_step(
             pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
         )
         if relu:
-            # ReMoE: lambda_{i+1} = lambda_i * alpha^sign(target sparsity - S_i).
+            # ReMoE: lambda_{i+1} = lambda_i * alpha^sign(target sparsity - S_i), floored at lambda_0: in float32 a
+            # long run of decreases reaches the denormals, where lambda * alpha rounds back to lambda and the
+            # controller never recovers (seen at d512 when the LM alone held the gates sparser than the target).
             target = 1.0 - model_config.num_experts_per_token / model_config.num_experts
             sparsity = metrics["train/aux/remoe/sparsity"]
-            next_state = dataclasses.replace(
-                next_state,
-                relu_l1_coef=state.relu_l1_coef * model_config.relu_l1_alpha ** jnp.sign(target - sparsity),
-            )
+            coef = state.relu_l1_coef * model_config.relu_l1_alpha ** jnp.sign(target - sparsity)
+            next_state = dataclasses.replace(next_state, relu_l1_coef=jnp.maximum(coef, model_config.relu_l1_init))
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
             for layer in range(next_state.pending_qb_betas.shape[0]):
