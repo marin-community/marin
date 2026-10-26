@@ -24,6 +24,8 @@
   "tensor_parallel": 1,
   "precision": "bf16",
   "cache": "native",
+  "collect_marin_metrics": false,
+  "collect_nccl": false,
   "ready_timeout": 3600,
   "prepare_timeout": 1800,
   "task_timeout": 10800,

@@ -15,8 +15,15 @@ cross-Action execution state machine or automatic coordinator recovery.
 `series.json` pins `snowball011-native-256k-v0`: Snowball v0.1.1, the official
 256K corpus's 393 sessions, 262,144 runtime context, supported 900-second windows,
 concurrency 8/32 and native KV cache. Each point and replacement attempt starts a new
-server/cache. Compilation and CUDA graphs remain enabled. The harness alone owns
+server and KV-cache state. Compilation and CUDA graphs remain enabled. The harness alone owns
 session replay, warmup and measurement. No interrupted windows are stitched.
+
+`IsolatedCudaVllm` installs the adopted release. `VllmEnvironment` owns server startup,
+readiness, native logs and process-group cleanup, using its managed compilation cache.
+`collect_marin_metrics` and `collect_nccl` in `series.json` default to false. AgentX's
+own measurement and server-metrics collection remain enabled. Attempts record the
+effective server argv, selected nonsecret environment, compilation-cache policy and
+collectors that actually started.
 
 Preparation checks the corpus revision before and after the released loader, verifies
 its download SHA256 and checks the pinned tokenizer. No additional whole-session
@@ -26,7 +33,7 @@ filtering is applied. The official corpus already removes requests above 256,000
 The source checkout resolves Marin's adopted vLLM once per run, including wheel hashes
 for both architectures. Manifests retain that release, source GitHub run/attempt/commit,
 recipe fingerprint, complete serving/harness argv and native Iris attempt UID. The GPU
-command is unchanged by the coordinator change. The recipe requires an uncancelled,
+settings retain BF16, native prefix caching and the profile's parallelism. The recipe requires an uncancelled,
 valid 900-second window, required timing coverage and at most 1% profiling request
 errors. Warmup records are excluded from the error ratio; diagnostics remain inspectable.
 

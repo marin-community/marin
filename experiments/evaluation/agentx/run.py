@@ -13,18 +13,31 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from marin.external_dependencies import VLLM_GPU_RELEASE
-from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
+from marin.inference.config import InferenceModelConfig, VllmCompilationCacheMode
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 
 SERIES_PATH = Path(__file__).with_name("series.json")
 REQUIREMENTS_PATH = Path(__file__).with_name("requirements-harness.txt")
+SERVER_ENVIRONMENT_KEYS = (
+    "MODEL_IMPL_TYPE",
+    "TOKENIZERS_PARALLELISM",
+    "VLLM_ENGINE_READY_TIMEOUT_S",
+    "VLLM_CACHE_ROOT",
+    "VLLM_COMPILE_CACHE_SAVE_FORMAT",
+    "TORCHINDUCTOR_CACHE_DIR",
+    "TRITON_CACHE_DIR",
+    "CUDA_CACHE_PATH",
+    "NCCL_RAS_ENABLE",
+    "NCCL_DEBUG",
+    "NCCL_DEBUG_SUBSYS",
+)
 
 
 def logged_process(command: list[str], environment: dict[str, str], log: Path) -> subprocess.Popen:
@@ -48,22 +61,6 @@ def stop_group(process: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=15)
-
-
-def wait_ready(process: subprocess.Popen, url: str, model: str, timeout: int) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"vLLM exited before readiness: {process.returncode}")
-        try:
-            with urllib.request.urlopen(f"{url}/v1/models", timeout=5) as response:
-                models = json.load(response)
-            if any(item["id"] == model for item in models["data"]):
-                return
-        except (urllib.error.URLError, TimeoutError):
-            pass
-        time.sleep(5)
-    raise TimeoutError("vLLM readiness deadline exceeded")
 
 
 def interrupt(signum: int, _frame: object) -> None:
@@ -179,13 +176,13 @@ def run(manifest: dict, output: Path) -> None:
                 raise RuntimeError("AgentX preparation failed; see prepare.log")
         finally:
             stop_group(process)
-    launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+    launcher = VllmLauncherWithEnvironment(
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        {"VLLM_ENGINE_READY_TIMEOUT_S": str(series["ready_timeout"]), "TOKENIZERS_PARALLELISM": "false"},
+    )
     port = 38197
     url = f"http://127.0.0.1:{port}"
-    server = [
-        *launcher.command(),
-        "serve",
-        series["model"],
+    server_args = [
         "--revision",
         series["model_revision"],
         "--tokenizer",
@@ -194,10 +191,6 @@ def run(manifest: dict, output: Path) -> None:
         series["model_revision"],
         "--served-model-name",
         series["model"],
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
         "--dtype",
         {"bf16": "bfloat16"}[series["precision"]],
         "--tensor-parallel-size",
@@ -222,12 +215,49 @@ def run(manifest: dict, output: Path) -> None:
         "hermes",
     ]
     benchmark = benchmark_command(series, manifest["concurrency"], url, output / "aiperf_artifacts")
-    record.update({"server_command": server, "benchmark_command": benchmark, "status": "starting"})
+    record.update({"benchmark_command": benchmark, "status": "starting"})
     record_path.write_text(json.dumps(record, indent=2))
-    server_environment = environment | launcher.env() | {"VLLM_ENGINE_READY_TIMEOUT_S": str(series["ready_timeout"])}
-    with logged_process(server, server_environment, output / "server.log") as server_process:
-        try:
-            wait_ready(server_process, url, series["model"], series["ready_timeout"])
+    server = VllmEnvironment(
+        InferenceModelConfig(name=series["model"], path=None, engine_kwargs={}),
+        port=port,
+        timeout_seconds=series["ready_timeout"],
+        extra_args=server_args,
+        launcher=launcher,
+        compilation_cache_mode=VllmCompilationCacheMode.MANAGED,
+        collect_metrics=series["collect_marin_metrics"],
+        collect_nccl=series["collect_nccl"],
+        wait_for_ready=False,
+    )
+    native_log_dir = None
+    try:
+        with server:
+            handle = server.vllm_server
+            assert handle is not None
+            native_log_dir = Path(handle.log_dir)
+            effective_environment = handle.compilation_cache.environment()
+            record.update(
+                {
+                    "server_command": server.command,
+                    "server_environment": {
+                        key: effective_environment[key]
+                        for key in SERVER_ENVIRONMENT_KEYS
+                        if key in effective_environment
+                    },
+                    "compilation_cache": VllmCompilationCacheMode.MANAGED.value,
+                }
+            )
+            record_path.write_text(json.dumps(record, indent=2))
+            server.wait_until_ready()
+            if server.model_id != series["model"]:
+                raise RuntimeError("vLLM served model differs from the pinned recipe")
+            handle = server.vllm_server
+            assert handle is not None
+            record["collectors"] = {
+                "marin_metrics": handle.metrics_collector is not None,
+                "nccl": handle.nccl_probe is not None,
+                "agentx_measurements": True,
+                "agentx_server_metrics": True,
+            }
             record.update({"status": "measuring", "ready_unix": time.time()})
             record_path.write_text(json.dumps(record, indent=2))
             print("AGENTX_SERVER_READY", flush=True)
@@ -244,17 +274,17 @@ def run(manifest: dict, output: Path) -> None:
             exported = json.loads((output / "aiperf_artifacts" / "profile_export_aiperf.json").read_text())
             if not exported.get("metadata", {}).get("submission_valid") or exported.get("was_cancelled"):
                 raise RuntimeError("AgentX rejected the completed window; retain it as invalid diagnostics")
-            if server_process.poll() is not None:
-                raise RuntimeError("Server exited during the measurement")
+            server.check_alive()
             record["status"] = "succeeded"
-        except BaseException as error:
-            record.update({"status": "failed", "error": f"{type(error).__name__}: {error}"})
-            raise
-        finally:
-            stop_group(server_process)
-            record["finished_unix"] = time.time()
-            record_path.write_text(json.dumps(record, indent=2))
-            print(f"AGENTX_ATTEMPT_STATUS {record['status']}", flush=True)
+    except BaseException as error:
+        record.update({"status": "failed", "error": f"{type(error).__name__}: {error}"})
+        raise
+    finally:
+        record["finished_unix"] = time.time()
+        record_path.write_text(json.dumps(record, indent=2))
+        if native_log_dir is not None:
+            shutil.copytree(native_log_dir, output / "server-logs")
+        print(f"AGENTX_ATTEMPT_STATUS {record['status']}", flush=True)
 
 
 def main() -> None:

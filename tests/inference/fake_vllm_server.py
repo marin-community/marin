@@ -48,13 +48,18 @@ def _record_start(counter: str) -> int:
     return n
 
 
-def _serve() -> None:
+def _serve(scrape_log: Path | None = None) -> None:
     port = int(sys.argv[sys.argv.index("--port") + 1])
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(200)
             self.end_headers()
+            if self.path == "/metrics" and scrape_log is not None:
+                with scrape_log.open("a") as stream:
+                    stream.write("scrape\n")
+                self.wfile.write(b"# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running 7\n")
+                return
             self.wfile.write(b'{"data": [{"id": "fake-model"}]}')
 
         def log_message(self, *args) -> None:
@@ -67,6 +72,8 @@ def main() -> None:
     mode = sys.argv[1]
     if mode == "serve":
         _serve()
+    elif mode == "serve-metrics":
+        _serve(Path(sys.argv[2]))
     elif mode == "record-args":
         Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
         _serve()
