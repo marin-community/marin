@@ -154,6 +154,8 @@ def main():
     parser.add_argument("--whole-width-expert-tiles", action="store_true")
     parser.add_argument("--expert-row-partitions", type=int, choices=(0, 2), default=0)
     parser.add_argument("--kda-state-precision", choices=("highest", "high"), default="highest")
+    parser.add_argument("--kda-chunk-size", type=int, choices=(16, 32, 64), default=16)
+    parser.add_argument("--kda-solve-groups", type=int, choices=(0, 1, 4), default=0)
     parser.add_argument("--attention-kernel", choices=("xla", "pallas"), default="xla")
     parser.add_argument("--route-counts", choices=("source", "factorized"), default="source")
     parser.add_argument("--capacity-layout", choices=("source", "intervals"), default="source")
@@ -187,7 +189,14 @@ def main():
     )
     args = parser.parse_args()
     state_precision = jax.lax.Precision[args.kda_state_precision.upper()]
-    model.chunk_kda_tpu = functools.partial(model.chunk_kda_tpu, state_precision=state_precision)
+    if args.kda_chunk_size != 16 and not args.kda_solve_groups:
+        parser.error("Full-update larger chunks require the causal saved-solve implementation")
+    model.chunk_kda_tpu = functools.partial(
+        model.chunk_kda_tpu,
+        state_precision=state_precision,
+        chunk_size=args.kda_chunk_size,
+        solve_groups=args.kda_solve_groups,
+    )
     if args.initial_checkpoint and args.reference_step1:
         parser.error("A continuation cannot compare its first update to the initialization reference")
     if (args.route_counts != "source" or args.capacity_layout != "source") and not args.local_experts:
@@ -290,6 +299,8 @@ def main():
             "diagnostic/whole_width_expert_tiles": args.whole_width_expert_tiles,
             "diagnostic/expert_row_partitions": args.expert_row_partitions,
             "diagnostic/kda_state_precision": args.kda_state_precision,
+            "diagnostic/kda_chunk_size": args.kda_chunk_size,
+            "diagnostic/kda_solve_groups": args.kda_solve_groups,
             "diagnostic/attention_kernel": args.attention_kernel,
             "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
@@ -301,10 +312,11 @@ def main():
     if jax.device_count() != chips or jax.default_backend() != "tpu":
         raise AssertionError("Unexpected TPU topology")
     check_muon_gram_port()
-    check_packed_kda(state_precision=state_precision)
+    check_packed_kda(state_precision=state_precision, chunk_size=args.kda_chunk_size, solve_groups=args.kda_solve_groups)
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
     checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-after-first-update"
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
+    (output / "diagnostic-options.json").write_text(json.dumps(vars(args), indent=2) + "\n")
     (output / "resolved-config.json").write_text(json.dumps(draccus.encode(config), indent=2) + "\n")
     optimizer = config.optimizer.build(trainer.num_train_steps)
     step_fn, _ = train._build_train_step(config, optimizer)
