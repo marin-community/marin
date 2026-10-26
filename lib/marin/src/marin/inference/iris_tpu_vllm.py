@@ -31,7 +31,7 @@ RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
 
 
 def submit_tpu_gang(request: JobRequest) -> JobHandle:
-    """Use the common submission path with named Ray listeners per replica."""
+    """Submit every TPU replica with the required named Ray listeners."""
     return current_client().submit(replace(request, ports=RAY_PORTS))
 
 

@@ -542,6 +542,39 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
+def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_size: int | None) -> ModelSpec:
+    return ModelSpec(
+        weights=model.weights,
+        api_model=model.model_id,
+        num_chips=num_chips,
+        tensor_parallel_size=tensor_parallel_size,
+        dtype=model.dtype,
+        max_model_len=model.max_model_len,
+        chat_template_content=model.chat_template_content,
+        tokenizer=model.tokenizer,
+        revision=model.revision,
+        tokenizer_revision=model.effective_tokenizer_revision,
+    )
+
+
+@contextlib.contextmanager
+def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, backend_name):
+    environment.wait_until_ready()
+    running_model = RunningModel(
+        endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
+        tokenizer=model.tokenizer,
+    )
+    with _register_dashboard(
+        service,
+        running_model,
+        tensor_parallel_size=tensor_parallel_size,
+        backend_name=backend_name,
+        streaming=True,
+        chat_template_content=_model_tool_chat_template(model),
+    ):
+        yield
+
+
 def _run_tpu_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend, vllm_launcher  # noqa: PLC0415
     from marin.inference.vllm_server import IsolatedTpuVllm  # noqa: PLC0415
@@ -559,33 +592,16 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
         model, num_chips = _resolved_model(service.model, service.iris)
         backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
         with _staged_model(model) as model:
-            spec = ModelSpec(
-                weights=model.weights,
-                api_model=model.model_id,
-                num_chips=num_chips,
-                tensor_parallel_size=model.tensor_parallel_size,
-                dtype=model.dtype,
-                max_model_len=model.max_model_len,
-                chat_template_content=model.chat_template_content,
-                tokenizer=model.tokenizer,
-                revision=model.revision,
-                tokenizer_revision=model.effective_tokenizer_revision,
-            )
+            spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
             with backend.start(
                 spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
             ) as environment:
-                environment.wait_until_ready()
-                running_model = RunningModel(
-                    endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
-                    tokenizer=model.tokenizer,
-                )
-                with _register_dashboard(
+                with _ready_vllm_dashboard(
                     service,
-                    running_model,
+                    model,
+                    environment,
                     tensor_parallel_size=cast(int, model.tensor_parallel_size),
                     backend_name=backend.name,
-                    streaming=True,
-                    chat_template_content=_model_tool_chat_template(model),
                 ):
 
                     def check_alive() -> None:
@@ -602,18 +618,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
     assert geometry is not None
     assert isinstance(service.engine, VllmEngineConfig)
     model, num_chips = _resolved_model(service.model, service.iris)
-    spec = ModelSpec(
-        weights=model.weights,
-        api_model=model.model_id,
-        num_chips=num_chips,
-        tensor_parallel_size=None,
-        dtype=model.dtype,
-        max_model_len=model.max_model_len,
-        chat_template_content=model.chat_template_content,
-        tokenizer=model.tokenizer,
-        revision=model.revision,
-        tokenizer_revision=model.effective_tokenizer_revision,
-    )
+    spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
@@ -623,18 +628,12 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
-                    environment.wait_until_ready()
-                    running_model = RunningModel(
-                        endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
-                        tokenizer=model.tokenizer,
-                    )
-                    with _register_dashboard(
+                    with _ready_vllm_dashboard(
                         service,
-                        running_model,
+                        model,
+                        environment,
                         tensor_parallel_size=geometry.tensor_parallel_size,
                         backend_name=backend.name,
-                        streaming=True,
-                        chat_template_content=_model_tool_chat_template(service.model),
                     ):
                         _block_until_timeout(environment.check_alive, service.timeout_hours)
             else:
