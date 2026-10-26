@@ -65,30 +65,18 @@ jobs:
           project_id: hai-gcp-models
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
-      - name: Prepare fixed corpus and tokenizer on CPU
-        env:
-          HF_HOME: ${{ runner.temp }}/agentx-hf
-          HF_HUB_DISABLE_PROGRESS_BARS: '1'
-          TOKENIZERS_PARALLELISM: 'false'
-        run: |
-          set -eo pipefail
-          test -n "$STATE_ROOT"
-          uvx --python 3.12 --from agentx-harness==1.0.12 \
-            --with-requirements experiments/evaluation/agentx/requirements-harness.txt \
-            python -m experiments.evaluation.agentx.prepare \
-            --series experiments/evaluation/agentx/series.json --output "$RUNNER_TEMP/corpus.json" \
-            2>&1 | tee "$RUNNER_TEMP/preparation.log"
       - name: Install CPU control tools
         run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
-      - name: Freeze inputs and submit Iris CPU coordinators
+      - name: Submit Iris CPU coordinators
         id: submit
         run: |
           set -eo pipefail
+          test -n "$STATE_ROOT"
           point_args=()
           if [[ "$POINT" != all ]]; then point_args=(--concurrency "$POINT"); fi
           uv run --no-sync python -m experiments.evaluation.agentx.control submit \
             --root "$STATE_ROOT" --profile "$PROFILE" --cluster "$TARGET_CLUSTER" \
-            --priority "$PRIORITY" "${point_args[@]}"
+            --priority "$PRIORITY" --work "$RUNNER_TEMP/agentx-submission" "${point_args[@]}"
       - name: Observe Iris progress for a bounded window
         run: |
           uv run --no-sync python -m experiments.evaluation.agentx.control observe \
@@ -103,9 +91,6 @@ jobs:
         if: always()
         with:
           name: agentx-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/corpus.json
-            ${{ runner.temp }}/harness-requirements.txt
-            ${{ runner.temp }}/preparation.log
+          path: ${{ runner.temp }}/agentx-submission
           if-no-files-found: ignore
           retention-days: 90

@@ -1,94 +1,172 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prime the upstream public loader for offline replay without changing its corpus or sampler.
-
-Run in the separate, pinned AgentX environment. The released public loader has
-no revision option. Verify its main ref before and after priming, verify the raw
-bytes, then run the benchmark offline. A moved public ref fails closed.
-"""
+"""Build or check AgentX's native mmap cache in its separately pinned environment."""
 
 import argparse
+import asyncio
 import hashlib
 import importlib.metadata
 import json
-import subprocess
-import sys
+import resource
+import shutil
+import time
+import uuid
 from pathlib import Path
 
+from agentx_cli import app
+from aiperf.common import random_generator
+from aiperf.common.environment import Environment
+from aiperf.common.messages.command_messages import ProfileConfigureCommand
+from aiperf.common.models import DatasetMetadata
+from aiperf.common.scenario import get_scenario
+from aiperf.config import BenchmarkRun
+from aiperf.config.flags.resolver import resolve_config
+from aiperf.dataset import mmap_cache
+from aiperf.dataset.dataset_manager import DatasetManager
+from aiperf.dataset.loader.semianalysis_cc_traces_weka import SemiAnalysisCCTracesWekaLoader
 from aiperf.dataset.loader.weka_trace import _trace_peak_context_length
 from aiperf.dataset.loader.weka_trace_models import WekaTrace
-from datasets import load_dataset
-from huggingface_hub import HfApi, snapshot_download
-from transformers import AutoTokenizer
+from huggingface_hub import snapshot_download
+
+from experiments.evaluation.agentx.recipe import PREPARATION_VERSION, profile_arguments
 
 
-def prepare(series_path: Path, output: Path) -> None:
-    series = json.loads(series_path.read_text())
-    if importlib.metadata.version("agentx-harness") != series["harness_version"]:
-        raise RuntimeError("AgentX distribution differs from the series pin")
-    api = HfApi()
-    dataset = series["dataset"]
-    revision = series["dataset_revision"]
-    if api.dataset_info(dataset).sha != revision:
-        raise RuntimeError("Public corpus main moved; review a new series instead of silently changing it")
+class PreparationManager(DatasetManager):
+    """Run the pinned native preparation path without starting a service mesh."""
+
+    @classmethod
+    def get_service_type(cls):
+        return DatasetManager.get_service_type()
+
+    async def publish(self, message) -> None:
+        # There are no measurement workers during CPU preparation. Native dataset
+        # configuration and cache publication still run unchanged.
+        pass
+
+
+def file_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def prepare_sources(series: dict, bundle: Path) -> dict:
     snapshot = Path(
         snapshot_download(
-            dataset,
+            series["dataset"],
             repo_type="dataset",
-            revision=revision,
+            revision=series["dataset_revision"],
             allow_patterns=["traces.jsonl", "README.md", ".gitattributes"],
         )
     )
-    with (snapshot / "traces.jsonl").open("rb") as source:
-        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    digest = file_digest(snapshot / "traces.jsonl")
     if digest != series["dataset_sha256"]:
-        raise RuntimeError("Corpus bytes differ from the series pin")
-    rows = load_dataset(dataset, split="train")
+        raise RuntimeError("Corpus bytes differ from the reviewed pin")
     coverage = []
-    for row in rows:
-        trace = WekaTrace.model_validate(row)
-        peak = _trace_peak_context_length(trace)
-        if peak > series["max_context"]:
-            raise RuntimeError(f"Pinned 256K corpus contains an unsupported session: {trace.id} ({peak})")
-        coverage.append({"id": trace.id, "peak_context": peak})
-    if api.dataset_info(dataset).sha != revision:
-        raise RuntimeError("Public corpus moved during preparation")
-    # The offline tokenizer snapshot resolver also needs README, LICENSE and .gitattributes.
-    snapshot_download(series["model"], revision=series["model_revision"], ignore_patterns=["*.safetensors"])
-    tokenizer = AutoTokenizer.from_pretrained(series["model"], revision=series["model_revision"])
-    rendered = tokenizer.apply_chat_template(
-        [{"role": "user", "content": "ping"}], tokenize=True, add_generation_prompt=True
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.with_name("harness-requirements.txt").open("w") as requirements:
-        subprocess.run(["uv", "pip", "freeze", "--python", sys.executable], stdout=requirements, check=True)
-    output.write_text(
-        json.dumps(
-            {
-                "dataset": dataset,
-                "revision": revision,
-                "sha256": digest,
-                "traces": len(rows),
-                "eligible": coverage,
-                "filtered_sessions": 0,
-                "tokenizer": series["model"],
-                "tokenizer_revision": series["model_revision"],
-                "tokenizer_smoke_tokens": len(rendered),
-                "offline_profile": True,
-            },
-            indent=2,
+    with (snapshot / "traces.jsonl").open() as stream:
+        for line in stream:
+            trace = WekaTrace.model_validate_json(line)
+            peak = _trace_peak_context_length(trace)
+            if peak > series["max_context"]:
+                raise RuntimeError(f"Pinned corpus session exceeds the context: {trace.id} ({peak})")
+            coverage.append({"id": trace.id, "peak_context": peak})
+    if len(coverage) != series["sessions"]:
+        raise RuntimeError("Corpus session count differs from the reviewed pin")
+    tokenizer = Path(
+        snapshot_download(
+            series["model"],
+            revision=series["model_revision"],
+            ignore_patterns=["*.safetensors", "*.bin", "*.pt", "*.pth", "*.gguf", "*.onnx"],
         )
     )
-    print(f"Prepared all {len(rows)} sessions; no additional session filtering", flush=True)
+    repo_name = "models--" + series["model"].replace("/", "--")
+    destination = bundle / "hf" / "hub" / repo_name / "snapshots" / series["model_revision"]
+    shutil.copytree(tokenizer, destination, symlinks=False)
+    return {
+        "dataset": series["dataset"],
+        "dataset_revision": series["dataset_revision"],
+        "dataset_sha256": digest,
+        "sessions": len(coverage),
+        "eligible": coverage,
+        "filtered_sessions": 0,
+        "tokenizer": series["model"],
+        "tokenizer_revision": series["model_revision"],
+        "tokenizer_files": {
+            path.relative_to(tokenizer).as_posix(): file_digest(path)
+            for path in sorted(tokenizer.rglob("*"))
+            if path.is_file()
+        },
+    }
+
+
+def benchmark_run(series: dict, output: Path) -> BenchmarkRun:
+    _, bound, _ = app.parse_args(profile_arguments(series, 8, "http://127.0.0.1:38197", output))
+    config = resolve_config(bound.arguments["cli_config"], None)
+    random_generator.reset()
+    random_generator.init(config.random_seed)
+    return BenchmarkRun(
+        benchmark_id=uuid.uuid4().hex,
+        cfg=config.benchmark,
+        artifact_dir=output,
+        random_seed=config.random_seed,
+        variables=dict(config.variables),
+    )
+
+
+async def native_cache(series: dict, bundle: Path, *, check_only: bool) -> dict:
+    if importlib.metadata.version("agentx-harness") != series["harness_version"]:
+        raise RuntimeError("AgentX distribution differs from the reviewed pin")
+    run = benchmark_run(series, bundle.parent / "preparation-artifacts")
+    with Environment.defaults(get_scenario("agentx").environment_defaults):
+        key = mmap_cache.compute_cache_key_from_run(run)
+        if key is None:
+            raise RuntimeError("The pinned workload has no native cache key")
+        if not check_only:
+            # The released loader's existing revision field pins its HF read in
+            # this CPU-only process. Reconstruction stays in the native loader.
+            SemiAnalysisCCTracesWekaLoader.hf_revision = series["dataset_revision"]
+            manager = PreparationManager(run=run)
+            await manager._do_profile_configure(ProfileConfigureCommand(service_id="cpu-preparation"))
+        hit = mmap_cache.lookup(key, compressed=False)
+        if hit is None:
+            raise RuntimeError("Native cache is missing or incompatible; prepare it on CPU before submitting GPUs")
+        metadata = DatasetMetadata.model_validate_json(hit.manifest.dataset_metadata_json)
+        return {
+            "native_cache_key": key,
+            "native_manifest_version": mmap_cache.MANIFEST_VERSION,
+            "conversations": hit.manifest.num_conversations,
+            "turns": metadata.total_turn_count,
+            "metadata_sha256": hashlib.sha256(hit.manifest.dataset_metadata_json.encode()).hexdigest(),
+            "settings": mmap_cache._settings_payload_from_run(run),
+        }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--series", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    prepare(args.series, args.output)
+    series = json.loads(args.series.read_text())
+    started = time.monotonic()
+    sources = {} if args.check else prepare_sources(series, args.output)
+    native = asyncio.run(native_cache(series, args.output, check_only=args.check))
+    if args.check:
+        print("AGENTX_NATIVE_CACHE_HIT " + json.dumps(native, sort_keys=True), flush=True)
+        return
+    lineage = (
+        sources
+        | native
+        | {
+            "preparation_version": PREPARATION_VERSION,
+            "harness_version": series["harness_version"],
+            "harness_source": series["harness_source"],
+            "preparation_seconds": time.monotonic() - started,
+            "peak_memory_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        }
+    )
+    (args.output / "lineage.json").write_text(json.dumps(lineage, indent=2))
+    print("AGENTX_NATIVE_CACHE_BUILT " + json.dumps(native, sort_keys=True), flush=True)
 
 
 if __name__ == "__main__":

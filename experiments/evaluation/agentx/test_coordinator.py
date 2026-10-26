@@ -30,9 +30,9 @@ from experiments.evaluation.agentx.collect import (
     write_record,
 )
 from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
-from experiments.evaluation.agentx.coordinator import recover_results, run_points
-from experiments.evaluation.agentx.run import logged_process
-from experiments.evaluation.agentx.submit import SERIES_PATH
+from experiments.evaluation.agentx.coordinator import recover_results, resolve_plan, run_points
+from experiments.evaluation.agentx.processes import logged_process
+from experiments.evaluation.agentx.recipe import SERIES_PATH
 
 
 def job_status(job_id: JobName, state: JobState) -> JobStatus:
@@ -83,6 +83,8 @@ class FakeController:
         if self.stop_after is not None and len(self.waited) >= self.stop_after:
             raise InterruptedError("Coordinator lost before the next submission")
         job_id = JobName.from_string(self.plan["job_id"]).child(request["name"])
+        retained = read_record(str(Path(self.plan["retention_uri"]) / "plan.json"))
+        assert retained["points"] == self.plan["points"]
         # Sequential ownership: the previous child is terminal before submission.
         assert all(status.state != JobState.PENDING for status in self.jobs.values())
         self.jobs[str(job_id)] = job_status(job_id, JobState.PENDING)
@@ -107,7 +109,8 @@ def saved_batch(tmp_path):
         "repository": "fixture/fixture",
         "head_sha": "1" * 40,
     }
-    plan = coordinator_plan(source, "h100", "cw-rno2a", "batch", str(tmp_path / "retained"), None)
+    submission = coordinator_plan(source, "h100", "cw-rno2a", "batch", str(tmp_path / "retained"), None)
+    plan = resolve_plan(submission, {"key": "fixture", "archive_sha256": "a" * 64})
     return plan, str(tmp_path / "submission.json")
 
 
@@ -149,9 +152,22 @@ def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
     assert len(controller.jobs) == 1
 
 
+def test_recovery_after_preparation_loss_publishes_no_measurements(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
+    result = read_record(recover_results(controller, plan, tmp_path, tmp_path))
+    assert result["points"] == []
+    assert result["source"] == plan["source"]
+    assert list(controller.jobs) == [plan["job_id"]]
+
+
 def test_overlapping_sources_retain_independent_completed_results(saved_batch, tmp_path):
     plan, _ = saved_batch
-    second = coordinator_plan(plan["source"] | {"run_id": 124}, "h100", "cw-rno2a", "batch", plan["root"], 8)
+    second = resolve_plan(
+        coordinator_plan(plan["source"] | {"run_id": 124}, "h100", "cw-rno2a", "batch", plan["root"], 8),
+        plan["points"][0]["manifest"]["workload"],
+    )
     for submission in (plan, second):
         with pytest.raises(RuntimeError):
             run_points(FakeController(submission), submission, tmp_path, tmp_path)
@@ -236,10 +252,10 @@ def exported_window(tmp_path, saved_batch):
 
 
 def test_complete_window_uses_phase_coverage_and_excludes_warmup_errors(exported_window):
-    directory, manifest, _ = exported_window
+    directory, manifest, export = exported_window
     result = validate_window(directory, manifest, "winner")
     assert result["profiling_requests"] == 1
-    assert result["coverage"]["expected_duration_seconds"] == 900
+    assert result["coverage"] == export["metadata"]["metric_duration_coverage"][0]
     assert result["submission_valid"] is True
 
 

@@ -24,7 +24,7 @@ from rigging.timing import Duration
 
 from experiments.evaluation.agentx.collect import copy_file, read_record, unpack, write_record
 from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, prepare_processor, recover_results
-from experiments.evaluation.agentx.submit import SERIES_PATH, point_manifest
+from experiments.evaluation.agentx.recipe import SERIES_PATH
 
 
 def action_output(name: str, value: str) -> None:
@@ -56,7 +56,7 @@ def submission_uri(root: str, run_id: int, attempt: int, profile: str) -> str:
 def coordinator_plan(
     source: dict, profile: str, cluster: str, priority: str, root: str, concurrency: int | None
 ) -> dict:
-    """Freeze source, adopted vLLM and point inputs before submitting to Iris."""
+    """Freeze the Action identity and requested grid; Iris resolves the recipe."""
     series = json.loads(SERIES_PATH.read_text())
     name = f"agentx-{source['run_id']}-{source['run_attempt']}-{profile}"
     return {
@@ -68,8 +68,8 @@ def coordinator_plan(
         "priority": priority,
         "root": root,
         "retention_uri": prefix_join(root, f"runs/{source['run_id']}/{source['run_attempt']}/{profile}"),
-        "points": [
-            {"name": f"c{value}", "manifest": point_manifest(profile, value, source)}
+        "concurrencies": [
+            value
             for value in series["profiles"][profile]["concurrencies"]
             if concurrency is None or value == concurrency
         ],
@@ -99,7 +99,7 @@ def submit_coordinator(client: IrisClient, plan: dict):
             workdir_files={"agentx-plan.json": json.dumps(plan).encode()},
         ),
         name=plan["name"],
-        resources=ResourceSpec(cpu=2, memory="8GB", disk="32GB"),
+        resources=ResourceSpec(cpu=2, memory="32GB", disk="64GB"),
         environment=EnvironmentSpec(setup_scripts=[]),
         constraints=[
             Constraint.create(key="cluster", op=ConstraintOp.EQ, value=plan["cluster"]),
@@ -197,6 +197,8 @@ def main() -> None:
                             source, profile, args.cluster, args.priority, args.root, args.concurrency
                         )
                         write_record(uri, plan)
+                    if args.work is not None:
+                        write_record(str(args.work / f"{profile}-submission.json"), plan)
                     job = submit_coordinator(client, plan)
                     if str(job.job_id) != plan["job_id"]:
                         raise ValueError("Iris job identity differs from the retained submission")

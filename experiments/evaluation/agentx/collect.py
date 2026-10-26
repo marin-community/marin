@@ -26,7 +26,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.submit import SERIES_PATH
+from experiments.evaluation.agentx.recipe import SERIES_PATH
 
 STREAM_LOG_LINE_LIMIT = 20_000
 
@@ -111,7 +111,7 @@ def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
     record = json.loads((point / "attempt.json").read_text())
     if record["status"] != "succeeded" or record["iris_attempt_uid"] != attempt_uid:
         raise ValueError("Output does not belong to this successful Iris attempt")
-    for key in ("series_sha256", "recipe_fingerprint", "profile", "concurrency", "vllm_release", "source"):
+    for key in ("series_sha256", "recipe_fingerprint", "profile", "concurrency", "vllm_release", "source", "workload"):
         if record[key] != manifest[key]:
             raise ValueError(f"Output changed a pinned input: {key}")
     export = json.loads((point / "aiperf_artifacts" / "profile_export_aiperf.json").read_text())

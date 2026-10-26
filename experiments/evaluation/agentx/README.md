@@ -1,6 +1,6 @@
 # Snowball AgentX performance
 
-An Iris CPU coordinator owns each hardware grid. GitHub submits it and observes logs
+An Iris CPU coordinator prepares the workload and owns each hardware grid. GitHub submits it and observes logs
 for a bounded window. Iris owns GPU queueing and whole-attempt retries. The coordinator
 processes and durably retains each completed point before submitting the next one.
 A separate collection Action delivers completed results to the existing dashboard importer.
@@ -12,8 +12,9 @@ cross-Action execution state machine or automatic coordinator recovery.
 
 ## Fixed measurement
 
-`series.json` pins `snowball011-native-256k-v0`: Snowball v0.1.1, the official
-256K corpus's 393 sessions, 262,144 runtime context, supported 900-second windows,
+`series.json` pins `snowball011-native-256k-1h-v1`: Snowball v0.1.1 at
+`59852d6f07261722bbec1edb6ab148317156b58e`, AgentX 1.0.12, the official
+`062126-256k` corpus's 393 sessions, 262,144 runtime context, one-hour measurement windows,
 concurrency 8/32 and native KV cache. Each point and replacement attempt starts a new
 server and KV-cache state. Compilation and CUDA graphs remain enabled. The harness alone owns
 session replay, warmup and measurement. No interrupted windows are stitched.
@@ -25,17 +26,66 @@ own measurement and server-metrics collection remain enabled. Attempts record th
 effective server argv, selected nonsecret environment, compilation-cache policy and
 collectors that actually started.
 
-Preparation checks the corpus revision before and after the released loader, verifies
-its download SHA256 and checks the pinned tokenizer. No additional whole-session
-filtering is applied. The official corpus already removes requests above 256,000 tokens.
-`requirements-harness.txt` freezes its isolated environment outside Marin dependencies.
+The pinned `agentx` preset owns agentic replay, 25–75% session starts, ten warmup
+requests per lane and first-turn prefix cache-busting. Seed 42 and a 30-minute warmup
+grace remain explicit. The 1% profiling-error ceiling is stricter than the preset's
+10% default. Label comparisons as Snowball v0.1.1, `062126-256k`, BF16/native KV,
+262,144 context and the actual TP/DP/EP/concurrency. The standalone upstream example
+uses the full corpus; it is a different workload. Supported shorter windows are
+validation runs. Their recipe fingerprints differ from this one-hour series and the
+earlier 15-minute points.
 
-The source checkout resolves Marin's adopted vLLM once per run, including wheel hashes
+The Iris coordinator resolves the source checkout's adopted vLLM once per run, including wheel hashes
 for both architectures. Manifests retain that release, source GitHub run/attempt/commit,
 recipe fingerprint, complete serving/harness argv and native Iris attempt UID. The GPU
-settings retain BF16, native prefix caching and the profile's parallelism. The recipe requires an uncancelled,
-valid 900-second window, required timing coverage and at most 1% profiling request
+settings retain BF16, native prefix caching and the profile's parallelism. Scheduled
+Actions check out Marin main, so adoption is frozen from that source rather than
+refreshed during the grid. The recipe requires an uncancelled,
+valid one-hour window, required timing coverage and at most 1% profiling request
 errors. Warmup records are excluded from the error ratio; diagnostics remain inspectable.
+
+## Prepared workload and data pins
+
+The data pins live in `series.json`; `requirements-harness.txt` freezes the separate
+AgentX environment. On a miss, the CPU coordinator downloads the exact corpus and
+tokenizer revisions, checks the corpus SHA256 and every source session's context fit,
+then runs AgentX's native reconstruction and mmap-cache publication. No additional
+whole-session filtering is applied. The official corpus already removes requests above
+256,000 tokens. Preparation uses one reconstruction worker and a CPU allocation of
+2 cores, 32 GB RAM and 64 GB disk. It finishes before requesting any GPU.
+
+The bundle contains AgentX's native cache and the pinned tokenizer snapshot. Existing
+regional storage and `marin_temp_bucket(30, ...)` select `tmp/ttl=30d/agentx-workload`.
+The key includes source revisions/digest, AgentX version, preparation version/code,
+dependency lock, seed and data settings. Updating vLLM alone reuses the workload.
+An existing bundle restores offline, without HF lookups, reconstruction or repeated
+Marin context scans. AgentX keeps its native format, metadata and runtime-validity
+checks. Preparation and replay use the pinned preset and explicit CLI inputs; inherited
+`AIPERF_*` overrides are excluded.
+
+A verified hit republishes the same archive bytes to renew its TTL before GPU queueing.
+
+To prepare or regenerate the pinned data on CPU in rno2a:
+
+```sh
+marin-env env MARIN_TEMP_PREFIX=s3://marin-rno2a \
+  uv run --frozen --package marin-core --extra cpu --no-default-groups \
+  python -m experiments.evaluation.agentx.workload --output /tmp/agentx-preparation-RUN
+```
+
+Use a fresh output directory. For east-08a, select its existing regional scratch prefix.
+Change the reviewed data or preparation pins to select a new recipe; a missing TTL
+pointer or blob rebuilds the existing recipe. Each publication uses a checksum-named
+archive and a `KEY/workload.json` pointer. Archive metadata and its byte digest may
+change on regeneration while the preparation recipe stays the same. The saved point
+manifest freezes the exact publication used by its retries.
+
+Results durably retain source revisions and file digests, preparation code/version and
+settings, recipe identity, publication URI and actual bundle digest. The resolved plan
+is saved before the first child is submitted. Downloaded sources and reconstructed
+bytes may expire; historical rerun capability is not required. An unavailable pinned
+source fails preparation and never falls back to a newer revision. Workload data stays
+outside the task image.
 
 ## Submit, observe and cancel
 
@@ -56,9 +106,10 @@ placement must verify spare GB200 capacity and exclude Hero's allocation before 
 that profile. Check the GitHub submission identity's admission before using east-02a;
 the validated GitHub path uses rno2a.
 
-GPU queue allowance is 48 hours, task allowance three hours, failure retry budget one
+GPU queue allowance is 48 hours, task allowance five hours, failure retry budget one
 and preemption retry budget three. Coordinators have no automatic retries and a seven-day
-bound. Separate source run/attempt names isolate overlapping submissions; Iris owns
+bound. Task and client deadlines include installation, restore, readiness, warmup,
+measurement and drain. Separate source run/attempt names isolate overlapping submissions; Iris owns
 admission and priority. Each coordinator submits its own points serially.
 
 The Action's five-minute viewing window per coordinator can end while Iris keeps
@@ -91,7 +142,8 @@ uv run --frozen --package marin-core --extra cpu --no-default-groups \
 ```
 
 Repeat for `gb200` if that coordinator was affected. Recovery can wait up to ten minutes for Iris output finalization. It reads the immutable
-`submissions/RUN_ID-ATTEMPT-PROFILE.json`, retains existing terminal children and publishes
+`submissions/RUN_ID-ATTEMPT-PROFILE.json` and the resolved `plan.json` under that
+submission's retained run prefix, retains existing terminal children and publishes
 completed output. It never submits a GPU job or restarts a measurement. Completed valid
 siblings keep their original identities. Submit a fresh Action for unfinished points:
 
@@ -103,7 +155,8 @@ gh workflow run agentx-performance.yaml -R marin-community/marin \
 That is a new source run using its newly frozen adoption; it does not fill an interrupted
 window in the old run. A cancelled source is retained for inspection but excluded from
 performance ingestion. If the coordinator failed before submitting any child, there is
-nothing to salvage and a fresh submission is sufficient.
+nothing to salvage and a fresh submission is sufficient. A coordinator lost during
+preparation has no resolved plan and no GPU children; recovery publishes no measurements.
 
 Collection verifies Iris uploader hashes, retains all available attempts outside the
 seven-day Iris TTL and processes only a final successful, valid window. Native metadata
@@ -137,8 +190,9 @@ an operator recovery case, not an automatic remediation loop.
 
 Run preparation and CPU control checks before GPU allocation. Check native retry/attempt
 identity, retained output, explicit cancellation, overlapping sources, coordinator-loss
-recovery and observation expiration. Validate one normal-duration H100 point through the
-coordinator, then processing, repeated import, SQL/API values and retained UI views.
+recovery and observation expiration. Check offline native restoration, rebuilding after
+TTL expiry and invalidation when preparation inputs change. Validate one one-hour H100
+concurrency-8 point from GitHub through the coordinator, then existing processing and import.
 Repeat GB200 measurement if its ARM/device execution changes. Reuse existing unchanged
 performance sweeps and label local evidence separately from deployment acceptance.
 

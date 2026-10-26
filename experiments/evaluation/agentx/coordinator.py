@@ -18,14 +18,28 @@ from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.types import JobName
 from iris.resources.state import is_job_finished
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration, ExponentialBackoff
 
-from experiments.evaluation.agentx.collect import collect_terminal, write_record
-from experiments.evaluation.agentx.submit import SERIES_PATH, submit_point
+from experiments.evaluation.agentx.collect import collect_terminal, read_record, write_record
+from experiments.evaluation.agentx.recipe import SERIES_PATH
+from experiments.evaluation.agentx.submit import point_manifest, submit_point
+from experiments.evaluation.agentx.workload import prepare_workload
 
 logger = logging.getLogger(__name__)
 COORDINATOR_TIMEOUT = 7 * 86400
+
+
+def resolve_plan(plan: dict, workload: dict) -> dict:
+    """Resolve the source checkout's adopted release once for the prepared grid."""
+    release = json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE)))
+    return plan | {
+        "points": [
+            {"name": f"c{value}", "manifest": point_manifest(plan["profile"], value, plan["source"], workload, release)}
+            for value in plan["concurrencies"]
+        ]
+    }
 
 
 def prepare_processor(destination: Path) -> None:
@@ -94,6 +108,9 @@ def publish_results(plan: dict, points: list[dict]) -> str:
 
 def run_points(client: IrisClient, plan: dict, work: Path, processor: Path) -> None:
     """Submit children serially. Iris alone retries whole measurement attempts."""
+    # Commit exact preparation lineage before any child can exist. Recovery reads
+    # this resolved plan even if the CPU coordinator dies during GPU queueing.
+    write_record(prefix_join(plan["retention_uri"], "plan.json"), plan)
     completed = []
     for point in plan["points"]:
         logger.info("Submitting %s concurrency=%s; queue ETA unknown", plan["profile"], point["manifest"]["concurrency"])
@@ -111,6 +128,11 @@ def recover_results(client: IrisClient, plan: dict, work: Path, processor: Path)
     """Salvage terminal children after coordinator loss; never submit or retry work."""
     if not is_job_finished(client.job_status(JobName.from_string(plan["job_id"])).state):
         raise ValueError("Coordinator is still live; reattach or explicitly cancel it before recovery")
+    try:
+        plan = read_record(prefix_join(plan["retention_uri"], "plan.json"))
+    except FileNotFoundError:
+        # Preparation never reached the durable-before-submit boundary.
+        return publish_results(plan, [])
     completed = []
     for point in plan["points"]:
         job_id = JobName.from_string(plan["job_id"]).child(point["name"])
@@ -135,7 +157,9 @@ def main() -> None:
         prepare_processor(processor)
         client = iris_ctx().client
         assert client is not None
-        run_points(client, json.loads(args.plan.read_text()), work, processor)
+        workload = prepare_workload(work / "workload")
+        plan = resolve_plan(json.loads(args.plan.read_text()), workload)
+        run_points(client, plan, work, processor)
 
 
 if __name__ == "__main__":

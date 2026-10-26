@@ -6,7 +6,6 @@
 import dataclasses
 import hashlib
 import json
-from pathlib import Path
 
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
@@ -14,20 +13,25 @@ from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.timing import Duration
 
-SERIES_PATH = Path(__file__).with_name("series.json")
+from experiments.evaluation.agentx.recipe import SERIES_PATH
 
 
-def point_manifest(profile: str, concurrency: int, source: dict) -> dict:
+def point_manifest(profile: str, concurrency: int, source: dict, workload: dict, release: dict) -> dict:
     series = json.loads(SERIES_PATH.read_text())
     requirements = SERIES_PATH.with_name("requirements-harness.txt").read_bytes()
-    recipe = {"series": series, "harness_requirements_sha256": hashlib.sha256(requirements).hexdigest()}
+    recipe = {
+        "series": series,
+        "harness_requirements_sha256": hashlib.sha256(requirements).hexdigest(),
+        "preparation_key": workload["key"],
+    }
     fingerprint = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
     return {
         "series_sha256": hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest(),
         "recipe_fingerprint": fingerprint,
         "profile": profile,
         "concurrency": concurrency,
-        "vllm_release": json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE))),
+        "vllm_release": release,
+        "workload": workload,
         "source": source,
     }
 
