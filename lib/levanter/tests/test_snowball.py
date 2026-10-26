@@ -28,6 +28,7 @@ from safetensors.numpy import load_file
 
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.main.train_lm import preserve_hf_runtime_settings
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -326,6 +327,14 @@ def test_snowball_route_observer_is_output_identical():
     assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
     assert ((routes >= 0) & (routes < cfg.num_experts)).all()
     np.testing.assert_array_equal(routes[0], expected)
+
+
+def test_hf_reload_keeps_requested_runtime_settings():
+    requested = _tiny_config(router_dot_fp32=True, moe_implementation="ring")
+    reloaded = _tiny_config(moe_implementation=None)
+    restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
+    assert restored.router_dot_fp32
+    assert restored.moe_implementation == "ring"
 
 
 @pytest.mark.parametrize(

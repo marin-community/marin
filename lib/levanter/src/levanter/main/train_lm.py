@@ -112,12 +112,11 @@ def _restore_lm_model_from_partial_checkpoint(
 def preserve_hf_runtime_settings(
     reloaded: LmConfig, requested: LmConfig, compute_dtype_overrides: dict[str, str] | None
 ) -> LmConfig:
-    """Keep explicit runtime-only Snowball settings AFTER native HF architecture reload.
+    """Reapply the requested Snowball runtime settings after an HF config reload.
 
-    HF remains authoritative for every architecture field. The router flag is not
-    exported in HF metadata, so it must be reapplied here, not encoded as a fake
-    source config field. Pinned checkpoint/tokenizer IO settings are also retained.
-    Measured authorization remains the experiment's pre-update routing gate.
+    The HF config is authoritative for every architecture field. The FP32 router dot
+    flag and the MoE implementation are not in HF metadata, so they are copied from the
+    requested config. The requested reference checkpoint and tokenizer are kept too.
     """
     if not isinstance(requested, SnowballConfig):
         return reloaded
@@ -128,6 +127,7 @@ def preserve_hf_runtime_settings(
     return replace(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
+        moe_implementation=requested.moe_implementation,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )
