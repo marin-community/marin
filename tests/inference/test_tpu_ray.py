@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from fray.types import JobRequest, ResourceConfig, create_environment
 from marin.inference import iris as serving
-from marin.inference import iris_tpu_vllm
+from marin.inference import iris_tpu_vllm, tpu_ray_runtime
 from marin.inference.config import (
     BrokerConfig,
     IrisConfig,
@@ -22,7 +22,6 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
 )
-from marin.inference import tpu_ray_runtime
 from marin.inference.tpu_ray_runtime import ray_start_command
 
 
