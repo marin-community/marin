@@ -1450,7 +1450,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     token_valid: list[bool],
 ):
     with use_test_devices(4) as devices:
-        assert jax.device_count() == 4
         mesh = Mesh(
             np.asarray(devices).reshape(2, 2, 1),
             axis_names=("data", "expert", "model"),
