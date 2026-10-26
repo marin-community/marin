@@ -380,6 +380,18 @@ def _trajectory_groups(output: TrajectoryBatch, batch_size: int) -> list[list[in
     return groups
 
 
+def _reasoning_span_evidence(
+    output: TrajectoryBatch, batch_size: int
+) -> tuple[list[int], list[list[int]], list[float]]:
+    """Per-row violation counts, violation token positions, and marker charges; empty when absent."""
+    violations = output.get("reasoning_span_violations") or [0] * batch_size
+    violation_tokens = output.get("reasoning_span_violation_tokens") or [[] for _ in range(batch_size)]
+    token_penalties = output.get("reasoning_span_token_penalties") or [0.0] * batch_size
+    if not (len(violations) == len(violation_tokens) == len(token_penalties) == batch_size):
+        raise ValueError("reasoning span evidence must have one entry per generated row")
+    return violations, violation_tokens, token_penalties
+
+
 def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     """Recompute shaping metrics after concatenation, filtering, or replacement."""
     components = output.get("reward_shaping_components")
@@ -392,9 +404,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     outcomes = output.get("unshaped_rewards")
     spans = output.get("reward_shaping_loop_spans")
     loop_advantages = output.get("loop_advantages")
-    violations = output.get("reasoning_span_violations") or [0] * batch_size
-    violation_tokens = output.get("reasoning_span_violation_tokens") or [[] for _ in range(batch_size)]
-    token_penalties = output.get("reasoning_span_token_penalties") or [0.0] * batch_size
+    violations, violation_tokens, token_penalties = _reasoning_span_evidence(output, batch_size)
     if (
         outcomes is None
         or spans is None
@@ -404,8 +414,6 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         or len(loop_advantages) != batch_size
     ):
         raise ValueError("shaped outputs must retain outcomes, loop spans, and loop advantages for every generated row")
-    if not (len(violations) == len(violation_tokens) == len(token_penalties) == batch_size):
-        raise ValueError("reasoning span evidence must have one entry per generated row")
     # Marker penalties share the loop channel; report them as reasoning-span charges, not loop credit.
     loop_advantages = [list(row) for row in loop_advantages]
     for index, penalty in enumerate(token_penalties):
@@ -569,10 +577,7 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
     if len(excluded) != batch_size:
         raise ValueError("exclude_from_baseline must have one entry per trajectory")
 
-    reasoning_violations = output.get("reasoning_span_violations") or [0] * batch_size
-    violation_tokens = output.get("reasoning_span_violation_tokens") or [[] for _ in range(batch_size)]
-    if not (len(reasoning_violations) == len(violation_tokens) == batch_size):
-        raise ValueError("reasoning span violations must have one entry per trajectory")
+    reasoning_violations, violation_tokens, _ = _reasoning_span_evidence(output, batch_size)
 
     token_penalties = [0.0] * batch_size
     components = [_empty_components() for _ in range(batch_size)]
