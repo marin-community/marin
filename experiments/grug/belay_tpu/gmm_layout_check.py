@@ -3,6 +3,7 @@
 
 """Measure whole-width grouped GEMM tiles without optimizer updates."""
 
+import argparse
 import functools
 import json
 import os
@@ -17,9 +18,13 @@ from jax.experimental.pallas.ops.tpu.megablox.gmm import gmm
 from experiments.grug.belay_tpu.kernel_check import measure_errors
 from experiments.grug.belay_tpu.local_experts import _tiling
 from experiments.grug.belay_tpu.operator_check import initialize_operator_check
+from experiments.grug.belay_tpu.row_partitioned_gmm import row_partitioned_gmm
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--row-partitions", action="store_true")
+    args = parser.parse_args()
     output, operator_topology, reference_topology = initialize_operator_check()
     tracker.log_summary({"kernel_check/input_seed": 420})
     with jax.default_device(jax.local_devices()[0]):
@@ -41,9 +46,20 @@ def main():
             weights = jnp.asarray(0.1 * rng.standard_normal(weight_shape, dtype=np.float32), jnp.bfloat16)
             variants = [("source", _tiling)]
             variants.extend((f"whole_width_{tile}", (tile, width, out_width)) for tile in (128, 256, 512, 1024))
+            variants = [
+                (name, functools.partial(gmm, preferred_element_type=x.dtype, tiling=tiling, transpose_rhs=transpose))
+                for name, tiling in variants
+            ]
+            if args.row_partitions:
+                variants.extend(
+                    (
+                        f"row_partitions_{count}",
+                        functools.partial(row_partitioned_gmm, partitions=count, transpose_rhs=transpose),
+                    )
+                    for count in (1, 2, 4)
+                )
             expected = None
-            for name, tiling in variants:
-                function = functools.partial(gmm, preferred_element_type=x.dtype, tiling=tiling, transpose_rhs=transpose)
+            for name, function in variants:
                 start = time.perf_counter()
                 compiled = jax.jit(function).lower(x, weights, groups).compile()
                 compile_seconds = time.perf_counter() - start

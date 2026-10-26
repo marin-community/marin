@@ -39,6 +39,7 @@ def main():
             "gmm-layout",
             "indexed-up",
             "feature-combine",
+            "row-gmm",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
@@ -92,6 +93,7 @@ def main():
         "gmm-layout": ("gmm_layout_check", []),
         "indexed-up": ("indexed_up_check", []),
         "feature-combine": ("feature_combine_check", []),
+        "row-gmm": ("gmm_layout_check", ["--row-partitions"]),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -170,6 +172,7 @@ def main():
             "gmm-layout",
             "indexed-up",
             "feature-combine",
+            "row-gmm",
         ):
             break
     raise SystemExit(1 if failed else 0)
