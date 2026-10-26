@@ -40,16 +40,20 @@ def xla_precision_in_process() -> str:
     raise ValueError(f"XLA_FLAGS {flags!r} is not a recipe XLA precision setting")
 
 
-def require_xla_precision(expected: str) -> None:
-    """Fail closed unless this process runs ``expected`` and XLA's backend has not started yet, so the setting is
-    the one XLA will read."""
+def check_xla_precision(expected: str) -> None:
+    """Verify the recorded flag selection, including after the backend starts."""
     if expected not in XLA_PRECISION_FLAGS:
         raise ValueError(f"Unknown XLA precision setting {expected!r}")
-    if xla_bridge.backends_are_initialized():
-        raise RuntimeError("XLA's backend started before the XLA precision setting was checked")
     found = xla_precision_in_process()
     if found != expected:
         raise ValueError(f"XLA precision {found!r} in this process, the receipt binds {expected!r}")
+
+
+def require_xla_precision(expected: str) -> None:
+    """Check the process's selection before XLA reads it at backend startup."""
+    check_xla_precision(expected)
+    if xla_bridge.backends_are_initialized():
+        raise RuntimeError("XLA's backend started before the XLA precision setting was checked")
 
 
 def xla_precision_env(setting: str) -> dict[str, str]:
