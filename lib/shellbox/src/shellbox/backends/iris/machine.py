@@ -344,9 +344,25 @@ class IrisMachineFactory:
         )
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
-        return await asyncio.to_thread(self._create_sync, spec, self._check_spec(spec))
+        machine = await asyncio.to_thread(self._submit_sync, spec, self._check_spec(spec))
+        try:
+            deadline = time.monotonic() + self.scheduling_timeout
+            while time.monotonic() < deadline:
+                status = await asyncio.to_thread(machine.task.status)
+                if status.state == TaskState.RUNNING:
+                    created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
+                    if created.exit_code:
+                        raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                    return machine
+                if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
+                    raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                await asyncio.sleep(2)
+            raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
+        except BaseException:
+            await machine.close()
+            raise
 
-    def _create_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
+    def _submit_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
         endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
         url, credentials = endpoint.url, endpoint.credentials
         client = None
@@ -382,21 +398,7 @@ class IrisMachineFactory:
                 max_retries_failure=0,
                 max_retries_preemption=0,
             )
-            deadline = time.monotonic() + self.scheduling_timeout
-            while time.monotonic() < deadline:
-                tasks = job.tasks()
-                if tasks:
-                    status = tasks[0].status()
-                    if status.state == TaskState.RUNNING:
-                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
-                        created = machine._exec_sync(["mkdir", "-p", spec.workdir])
-                        if created.exit_code:
-                            raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
-                        return machine
-                    if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
-                time.sleep(2)
-            raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
+            return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
         except BaseException:
             try:
                 if job is not None:

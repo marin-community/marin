@@ -84,10 +84,13 @@ class LocalJob:
     def __init__(self, task: LocalTask | None = None):
         self.cancelled = False
         self.killed = threading.Event()
-        self.task = task
+        self._task = task
 
     def tasks(self):
-        return [] if self.task is None else [self.task]
+        return [] if self._task is None else [self._task]
+
+    def task(self, index):
+        return self.tasks()[index]
 
     def cancel(self):
         self.cancelled = True
@@ -375,20 +378,29 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     assert client.submitted["egress_policy"] == egress
 
 
-def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
+def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path):
+    task = LocalTask(TaskState.PENDING)
+    job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     workdir = tmp_path / "workspace"
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+    existing, _ = local_machine(tmp_path)
 
     async def scenario():
-        machine = await factory.create(spec)
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        creation = asyncio.create_task(factory.create(spec))
+        command = asyncio.create_task(existing.run(Command(("printf", "ready"))))
+        done, _ = await asyncio.wait((command,), timeout=5)
+        task.state = TaskState.RUNNING
+        machine = await creation
         try:
+            assert command in done and command.result().stdout == b"ready"
             assert workdir.is_dir()
         finally:
+            await command
             await machine.close()
 
     asyncio.run(scenario())
