@@ -136,6 +136,11 @@ class SourceCounts:
     selected: int = 0
 
 
+def _grader_contract(task: TaskSpec) -> dict[str, Any]:
+    config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
+    return json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
+
+
 def validation_task(row: dict[str, Any], grader_environments: Mapping[str, EnvironmentRequirements]) -> TaskSpec:
     """Import a pinned original Snowball development task into the current schema."""
     raw = row["lowered_task_spec"]
@@ -156,8 +161,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:
         raise ValueError("The heldout source must use the one-turn Shellbox contract")
     if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
-        config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
-        dataset = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]["dataset"]
+        dataset = _grader_contract(task)["dataset"]
         component = f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}"
         if component not in grader_environments:
             raise ValueError(f"No admitted grader environment for {component}")
@@ -170,9 +174,7 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
 def validation_family(task: TaskSpec) -> str:
     if task.source.dataset == STRUCTURE_CLOSURE_DATASET:
         return "structural"
-    config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
-    contract = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
-    return HELDOUT_FAMILIES[contract["dataset"]]
+    return HELDOUT_FAMILIES[_grader_contract(task)["dataset"]]
 
 
 def select_heldout(
@@ -250,9 +252,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
         family = validation_family(task)
         passed = None
         if task.source.dataset != STRUCTURE_CLOSURE_DATASET:
-            config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
-            contract = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
-            passed = contract.get("pass_rate_passed")
+            passed = _grader_contract(task).get("pass_rate_passed")
         yield {
             "task_id": task.id,
             "family": family,
