@@ -41,16 +41,12 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     graded_row_indices,
     normalized_verifier_scores,
-    scalar_reward_token_credit,
     verifier_score_summary,
 )
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
-from skyrl_train.dataset.preprocess import (
-    collate_response_token_channel,
-    convert_prompts_responses_to_batch_tensors,
-)
+from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
-from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC, validate_distillation_attachment
+from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.distillation_adapters import AsyncRoutedTeacherScoreTicket, RoutedScoredDistillationBatch
 from skyrl_train.distillation_runtime import DistillationRuntime
 from skyrl_train.teacher_routing import route_row_metrics
@@ -70,8 +66,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.objective.teacher import teacher_advantages
-from skyrl_train.objective.correction import compute_correction
-from skyrl_train.config.objective_spec import off_policy_correction
+
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
     boundary_route_metrics,
@@ -115,7 +110,6 @@ from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_mod
 from skyrl_train.checkpoint_listing import extract_step_from_path
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
-    consumed_stop_metrics,
     cleanup_old_checkpoints,
     run_on_each_node,
     get_node_ids,
@@ -147,7 +141,6 @@ from skyrl_train.telemetry import (
     record_training_metrics,
 )
 from skyrl_train.rollout_observability import async_phase_window, monitor_event_loop_lag
-from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 from skyrl_train.timing_observability import StepWallTime, publish_startup_timings, publish_step_timings
 from skyrl_train.hf_export import (
@@ -167,6 +160,12 @@ from skyrl_train.hf_export_schema import (
     HFUploadMode,
     TRAINER_STATE_FILENAME,
 )
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
+from skyrl_train.batch_metrics import install_correction, token_staleness_metrics
+from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.trajectory_runners.trajectory_processing import token_reward_rows
+from skyrl_train.trajectory_runners.types import BatchFields
+from skyrl_train.utils.advantage_estimators import apply_loop_advantages, batch_advantages, drop_advantage_inputs
 
 
 @dataclass(frozen=True)
@@ -237,29 +236,6 @@ def _policy_revision(step: int) -> str:
     return f"policy-step-{step}"
 
 
-def _validated_distillation_tensors(
-    trajectory_batch: TrajectoryBatch,
-    response_mask: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    """Validate optional teacher evidence and return its learner-only tensors."""
-    evidence = trajectory_batch.get("teacher_evidence")
-    distillation = trajectory_batch.get("distillation")
-    if evidence is None and distillation is None:
-        return {}
-    if evidence is None or distillation is None:
-        raise ValueError("trajectory batches must carry teacher_evidence and prepared distillation together")
-    trajectory_ids = trajectory_batch.get("trajectory_ids")
-    if trajectory_ids is None:
-        raise ValueError("teacher evidence requires stable trajectory_ids")
-    validate_distillation_attachment(
-        evidence,
-        distillation,
-        trajectory_ids=tuple(trajectory_id.to_string() for trajectory_id in trajectory_ids),
-        response_mask=response_mask.to(torch.bool),
-    )
-    return distillation.training_tensors()
-
-
 def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
     """Count the rows and tokens an optimizer step consumed, excluding data-parallel padding."""
     real_rows = training_input.batch_size - training_input.metadata.get("pad_size", 0)
@@ -268,47 +244,6 @@ def consumed_work(training_input: TrainingInputBatch) -> ConsumedWork:
         response_tokens=int(training_input["response_mask"][:real_rows].sum().item()),
         loss_tokens=int(training_input["loss_mask"][:real_rows].sum().item()),
     )
-
-
-def _token_staleness(
-    lease_staleness: Sequence[int], policy_steps: torch.Tensor | None, response_mask: torch.Tensor, global_step: int
-) -> torch.Tensor:
-    """Each response token's staleness: its lease's, unless the engine recorded the policy step that sampled it."""
-    lease = torch.tensor(lease_staleness, dtype=torch.int32).unsqueeze(1)
-    staleness = lease * response_mask.to(torch.int32)
-    if policy_steps is None:
-        return staleness
-    stamped = (policy_steps != UNSTAMPED_POLICY_STEP) & (response_mask > 0)
-    staleness = torch.where(stamped, global_step - policy_steps, staleness)
-    assert bool(((staleness >= 0) & (staleness <= lease)).all()), (
-        "a token's policy step must fall between its lease's step and the training step"
-    )
-    return staleness
-
-
-def _token_staleness_metrics(
-    staleness: torch.Tensor, loss_mask: torch.Tensor, policy_steps: torch.Tensor | None
-) -> Dict[str, float]:
-    """Staleness of loss-masked response tokens by engine stamp, beside the lease family ``async/staleness_*``."""
-    trained = loss_mask > 0
-    count = trained.count_nonzero().item()
-    if not count:
-        return {}
-    charged = staleness.masked_fill(~trained, 0)
-    metrics = {
-        "async/staleness_tokens_mean": charged.sum().item() / count,
-        "async/staleness_tokens_max": charged.max().item(),
-        "async/staleness_tokens_ratio": charged.count_nonzero().item() / count,
-        "async/staleness_tokens_stamped": 0.0,
-        "async/staleness_tokens_spanning": 0.0,
-    }
-    if policy_steps is not None:
-        stamped = trained & (policy_steps != UNSTAMPED_POLICY_STEP)
-        steps = policy_steps.masked_fill(~stamped, UNSTAMPED_POLICY_STEP)
-        spanning = (stamped & (steps < steps.amax(dim=1, keepdim=True))).any(dim=1)
-        metrics["async/staleness_tokens_stamped"] = stamped.count_nonzero().item() / count
-        metrics["async/staleness_tokens_spanning"] = spanning.float().mean().item()
-    return metrics
 
 
 def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> float:
@@ -1668,16 +1603,7 @@ class RayPPOTrainer:
                 raise ValueError("distillation reward_mode=replace requires teacher evidence on every training batch")
             training_input["loss_mask"] = training_input["loss_mask"] * training_input["teacher_valid_mask"]
 
-        correction = off_policy_correction(self.cfg.trainer.algorithm)
-        if correction.rules:
-            rollout_logprobs = training_input.get("rollout_logprobs")
-            if rollout_logprobs is None:
-                raise ValueError("off_policy_correction requires rollout_logprobs")
-            result = compute_correction(
-                training_input["action_log_probs"], rollout_logprobs, training_input["loss_mask"], correction
-            )
-            training_input["correction_weights"] = result.weights
-            self.all_metrics.update(result.metrics)
+        self.all_metrics.update(install_correction(training_input, self.cfg.trainer.algorithm))
 
         if self.cfg.trainer.algorithm.use_kl_in_reward:
             with Timer("apply_reward_kl_penalty", self.all_timings):
@@ -2160,108 +2086,40 @@ class RayPPOTrainer:
     ) -> TrainingInputBatch:
         """Converts lists to a padded batch of tensors for training"""
         assert_training_groups_eligible(trajectory_batch, uids, self.group_advantage_invariant)
-        prompt_ids: List[List[int]] = trajectory_batch["prompt_token_ids"]
-        response_ids: List[List[int]] = trajectory_batch["response_ids"]
-        rewards: List[List[float]] = trajectory_batch["rewards"]
-        loss_masks: List[List[int]] = trajectory_batch["loss_masks"]
-
-        logprobs: Optional[List[np.ndarray]] = trajectory_batch.get("rollout_logprobs", None)
-
-        # MoE router-replay capture rail (Stage 1): only pull routed_experts when
-        # the flag is on. Gated so the flag-off TrainingInputBatch is byte-identical
-        # (the field is never even passed to the collator nor set on the batch).
-        moe_router_replay = moe_router_replay_requested(self.cfg)
-        routed_experts = trajectory_batch.get("rollout_routed_experts", None) if moe_router_replay else None
-        # Deterministic dtype for the compact rollout_routed_experts transport:
-        # resolve the model's expert count once (memoized) and pass it to the
-        # route rows so the narrowed dtype is keyed on num_experts (max possible id),
-        # NOT the per-batch observed max — otherwise ranks whose batch max straddles
-        # a dtype boundary diverge and a later collective on this tensor hangs NCCL.
-        # Only needed when we actually carry routed experts (moe_router_replay on).
-        num_experts = self._resolve_num_experts() if routed_experts is not None else None
-
-        # Loop-behavior reward shaping (Stage B / F5 + F4): only pull the per-token
-        # shaping channel + span tags when the channel is enabled. Gated so the
-        # flag-off TrainingInputBatch is byte-identical (the fields are never passed
-        # to the collator nor set on the batch). Mirrors moe_router_replay above.
-        enable_token_reward_channel = bool(self.cfg.trainer.algorithm.get("enable_token_reward_channel", False))
-        token_level_shaping = trajectory_batch.get("token_level_shaping", None) if enable_token_reward_channel else None
-        response_span_tags = trajectory_batch.get("response_span_tags", None) if enable_token_reward_channel else None
-        loop_advantages = trajectory_batch.get("loop_advantages")
-
-        (
-            sequences_tensor,
-            attention_masks_tensor,
-            response_masks_tensor,
-            rewards_tensor,
-            loss_masks_tensor,
-            rollout_logprobs_tensor,
-            token_level_shaping_tensor,
-            response_span_tags_tensor,
-        ) = convert_prompts_responses_to_batch_tensors(
-            self.tokenizer,
-            prompt_ids,
-            response_ids,
-            rewards,
-            loss_masks,
-            logprobs,
-            token_level_shaping,
-            response_span_tags,
+        facts = (RowFacts.from_batch(trajectory_batch),)
+        fields = BatchFields.from_batch(trajectory_batch)
+        routed_experts = (
+            trajectory_batch.get("rollout_routed_experts") if moe_router_replay_requested(self.cfg) else None
         )
-        if (
-            rollout_logprobs_required(
-                self.cfg.trainer.algorithm,
-                loss_spec=PolicyLossRegistry.spec(self.cfg.trainer.algorithm.policy_loss_type),
-            )
-            and rollout_logprobs_tensor is None
-        ):
-            raise ValueError("rollout_logprobs are required by the configured objective")
-        if rollout_logprobs_tensor is not None:
-            assert rollout_logprobs_tensor.shape == loss_masks_tensor.shape, "Logprobs should look like responses"
-        # Keep the response-window width for placement, without allocating its dense route canvas.
-        rollout_routed_experts_rows = None
-        if routed_experts is not None:
-            rollout_routed_experts_rows = RoutedExpertRows(
-                tuple(routed_experts), response_masks_tensor.shape[1], num_experts
-            )
-            if len(rollout_routed_experts_rows) != len(response_ids):
-                raise ValueError("routed experts must have one row per response")
-        distillation_tensors = _validated_distillation_tensors(trajectory_batch, response_masks_tensor)
-        # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
-        policy_steps = None
-        if rollout_staleness is None:
-            rollout_staleness_tensor = torch.zeros_like(response_masks_tensor, dtype=torch.int32)
-        else:
-            policy_steps = collate_response_token_channel(
-                trajectory_batch.get("rollout_policy_steps"),
-                response_masks_tensor,
-                dtype=torch.int32,
-                expected_lengths=[len(response) for response in response_ids],
-            )
-            rollout_staleness_tensor = _token_staleness(
-                rollout_staleness, policy_steps, response_masks_tensor, self.global_step
-            )
+        if routed_experts is None:
+            fields = fields.without_routes()
+        plan = BatchPlan(
+            global_step=self.global_step,
+            uids=tuple(uids),
+            facts=facts,
+            fields=fields,
+            rollout_staleness=tuple(rollout_staleness) if rollout_staleness is not None else None,
+            num_experts=self._resolve_num_experts() if routed_experts is not None else None,
+        )
+        training_input = assemble_slice(
+            plan,
+            range(len(uids)),
+            trajectory_batch,
+            pad_token_id=self.tokenizer.pad_token_id,
+            algorithm=self.cfg.trainer.algorithm,
+        )
         if self._training_metrics_enabled:
-            self.all_metrics.update(_token_staleness_metrics(rollout_staleness_tensor, loss_masks_tensor, policy_steps))
-        training_input = TrainingInputBatch(
-            {
-                "sequences": sequences_tensor,  # Full trajectories (padded and concatenated prompts and responses)
-                "attention_mask": attention_masks_tensor,
-                "response_mask": response_masks_tensor,
-                "rewards": rewards_tensor,
-                "loss_mask": loss_masks_tensor,
-                "rollout_logprobs": rollout_logprobs_tensor,
-                "rollout_staleness": rollout_staleness_tensor,
-                "is_last_step": (
-                    torch.tensor(trajectory_batch["is_last_step"], dtype=torch.bool)
-                    if trajectory_batch.get("is_last_step", None) is not None
-                    else None
-                ),
-            },
-            routed_expert_rows=rollout_routed_experts_rows,
-        )
-        training_input.update(distillation_tensors)
+            self.all_metrics.update(
+                token_staleness_metrics(training_input, facts if rollout_staleness is not None else ())
+            )
+        rollout_staleness_tensor = training_input["rollout_staleness"]
+        prompt_ids = trajectory_batch["prompt_token_ids"]
+        response_ids = trajectory_batch["response_ids"]
+        loss_masks = trajectory_batch["loss_masks"]
+        response_masks_tensor = training_input["response_mask"]
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
+        rewards = trajectory_batch["rewards"]
+        logprobs = trajectory_batch.get("rollout_logprobs")
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
                 trajectory_batch,
@@ -2335,9 +2193,9 @@ class RayPPOTrainer:
                     raise ValueError("Verified suffix repairs require an explicit repair_sft_weight")
                 if (
                     routed_experts is not None
-                    or token_level_shaping is not None
-                    or response_span_tags is not None
-                    or loop_advantages is not None
+                    or "token_level_shaping" in training_input
+                    or "response_span_tags" in training_input
+                    or trajectory_batch.get("loop_advantages") is not None
                 ):
                     raise ValueError("Closure repair training does not support sampled-token auxiliary channels")
                 # Preserve the recorded rollout. Only the learner's response
@@ -2356,7 +2214,7 @@ class RayPPOTrainer:
                     _,
                     _,
                 ) = convert_prompts_responses_to_batch_tensors(
-                    self.tokenizer,
+                    self.tokenizer.pad_token_id,
                     prompt_ids,
                     response_ids,
                     [
@@ -2412,6 +2270,7 @@ class RayPPOTrainer:
                         "ftpo_repair_mask": repair_mask,
                     }
                 )
+                training_input.metadata["response_length"] = width
                 self.all_metrics["closure/repair_tokens"] = float(repair_mask.sum())
             training_input["student_topk_indices"] = candidates
             training_input["ftpo_chosen_mask"] = chosen
@@ -2437,37 +2296,6 @@ class RayPPOTrainer:
                         training_input.get("ftpo_repair_mask"),
                     )
                 )
-        # Stage B (F5/F4): attach the per-token shaping channel + span tags ONLY
-        # when present, so the flag-off batch dict has exactly the same keys as
-        # today (TensorBatch.__eq__ compares key sets).
-        if token_level_shaping_tensor is not None:
-            training_input["token_level_shaping"] = token_level_shaping_tensor
-        if response_span_tags_tensor is not None:
-            training_input["response_span_tags"] = response_span_tags_tensor
-        pair_roles = trajectory_batch.get("pair_roles")
-        if pair_roles is not None:
-            if len(pair_roles) != len(response_ids):
-                raise ValueError("pair_roles must carry one role per response row")
-            training_input["pair_roles"] = torch.tensor(pair_roles, dtype=torch.float32)
-        loop_advantages_tensor = collate_response_token_channel(
-            loop_advantages,
-            response_masks_tensor,
-            dtype=torch.float,
-            expected_lengths=[len(response) for response in response_ids],
-        )
-        if loop_advantages_tensor is not None:
-            training_input["loop_advantages"] = loop_advantages_tensor
-        training_input.metadata = {"uids": uids}
-        # For RLOO-N: pass through exclude_from_baseline flags if present
-        if trajectory_batch.get("exclude_from_baseline") is not None:
-            training_input.metadata["exclude_from_baseline"] = np.array(
-                trajectory_batch["exclude_from_baseline"], dtype=bool
-            )
-        training_input.metadata["consumed_stop_metrics"] = consumed_stop_metrics(
-            trajectory_batch.get("stop_reasons"), len(response_ids)
-        )
-        # padded response length
-        training_input.metadata["response_length"] = response_masks_tensor.shape[1]
         if self.cfg.trainer.step_wise_training:
             assert "trajectory_ids" in trajectory_batch, (
                 "Expected `trajectory_ids` in trajectory batch for step wise training"
@@ -2480,10 +2308,8 @@ class RayPPOTrainer:
                 for sample_response_ids, is_last_step in zip(response_ids, trajectory_batch["is_last_step"])
                 if is_last_step
             ) / len(response_ids)
-        else:
-            training_input.metadata["avg_response_length"] = sum(
-                len(sample_response_ids) for sample_response_ids in response_ids
-            ) / len(response_ids)
+        elif ftpo is not None:
+            training_input.metadata["avg_response_length"] = sum(map(len, response_ids)) / len(response_ids)
 
         logger.info(f"Number of sequences before padding: {len(training_input['sequences'])}")
         training_input = self.pad_batch(training_input)
@@ -2527,24 +2353,7 @@ class RayPPOTrainer:
             [float(r) for r in step_rewards] if step_rewards and not isinstance(step_rewards[0], list) else []
         )
 
-        # these use the full trajectory batch
-        rewards: Union[List[float], List[List[float]]] = trajectory_batch["rewards"]
-        responses: List[List[int]] = trajectory_batch["response_ids"]
-        per_token_rewards: List[List[float]] = []
-
-        # Check if rewards are already token-level (List[List[float]]) or response-level (List[float])
-        if rewards and isinstance(rewards[0], list):
-            # Token-level rewards: rewards is List[List[float]]
-            per_token_rewards = rewards
-        else:
-            # Response-level rewards: rewards is List[float], convert to per-token rewards.
-            # Zero-token responses keep an empty credit list; see scalar_reward_token_credit.
-            per_token_rewards = [
-                scalar_reward_token_credit(reward, response) for reward, response in zip(rewards, responses)
-            ]
-
-        # re-assign reward but now it's per token rewards
-        trajectory_batch["rewards"] = per_token_rewards
+        trajectory_batch["rewards"] = token_reward_rows(trajectory_batch["rewards"], trajectory_batch["response_ids"])
         return trajectory_batch
 
     def _record_reward_metrics(self, trajectory_batch: TrajectoryBatch, uids: List[str]) -> None:
@@ -2659,27 +2468,8 @@ class RayPPOTrainer:
             advantages = last_step_advantages[traj_ids]
             returns = last_step_returns[traj_ids]
         else:
-            # For RLOO-N: pass exclude_from_baseline if present in metadata
-            exclude_from_baseline = data.metadata.get("exclude_from_baseline", None)
-            # Stage C (F6): thread the per-token PBS shaping channel into the
-            # advantage estimator when it is present. The dispatcher forwards it
-            # via **kwargs; only the rloo_n_pbs combiner consumes it (every other
-            # estimator ignores the extra kwarg), and when the key is absent
-            # (channel off) token_level_shaping is None -> byte-identical path.
-            token_level_shaping = data["token_level_shaping"] if "token_level_shaping" in data else None
-            advantages, returns = compute_advantages_and_returns(
-                token_level_rewards=token_level_rewards,
-                response_mask=data["response_mask"],
-                index=data.metadata["uids"],
-                adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
-                config=self.cfg.trainer.algorithm,
-                values=data["values"],
-                gamma=self.cfg.trainer.algorithm.gamma,
-                lambd=self.cfg.trainer.algorithm.lambd,
-                grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
-                exclude_from_baseline=exclude_from_baseline,
-                token_level_shaping=token_level_shaping,
-                group_advantage_invariant=self.group_advantage_invariant,
+            advantages, returns = batch_advantages(
+                data, self.cfg.trainer.algorithm, invariant=self.group_advantage_invariant
             )
         data["returns"] = returns
         data["advantages"] = advantages
@@ -2731,17 +2521,6 @@ class RayPPOTrainer:
         )
         return data
 
-    @staticmethod
-    def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
-        """Add loop credit after normalization, or return unchanged when the channel is absent."""
-        loop_advantages = data.get("loop_advantages")
-        if loop_advantages is None:
-            return data
-        advantages = data["advantages"]
-        loop_advantages = loop_advantages.to(device=advantages.device, dtype=advantages.dtype)
-        data["advantages"] = advantages + loop_advantages * data["response_mask"]
-        return data
-
     def finalize_advantages_for_training(self, data: TrainingInputBatch) -> TrainingInputBatch:
         """Normalize environment credit, add loop credit, then apply teacher credit."""
         if "ftpo_chosen_mask" in data:
@@ -2771,11 +2550,7 @@ class RayPPOTrainer:
 
     def apply_loop_credit_and_drop_advantage_inputs(self, data: TrainingInputBatch) -> TrainingInputBatch:
         """Apply loop credit, then remove rewards, loop_advantages, and uids before worker dispatch."""
-        data = self.apply_loop_advantages(data)
-        data.pop("rewards")
-        data.pop("loop_advantages", None)
-        data.metadata.pop("uids")
-        return data
+        return drop_advantage_inputs(apply_loop_advantages(data))
 
     def dump_data(self, data: TrainingInputBatch, file_name: str):
         """
@@ -2862,10 +2637,7 @@ class RayPPOTrainer:
         # identical (replay) path so step 1 is genuinely on-policy (log_ratio ~ 0).
         # Gated on presence: flag-off (8B / no router-replay) batches keep the
         # original forward inputs. Compact routes are carried as a side field.
-        fwd_keys = ["sequences", "attention_mask"]
-        if training_input.routed_experts is not None:
-            fwd_keys.append("rollout_routed_experts")
-        data_fwd_pass = training_input.select(keys=fwd_keys, metadata_keys=["response_length"])
+        data_fwd_pass = forward_input(training_input)
         data_fwd_pass.metadata["global_step"] = self.global_step
 
         def collect_results(actor_infos, results, key):
@@ -2894,9 +2666,8 @@ class RayPPOTrainer:
 
             reference_data = data_fwd_pass
             if "ftpo_chosen_mask" in training_input:
-                reference_data = training_input.select(
-                    keys=fwd_keys + ["ftpo_chosen_mask"], metadata_keys=["response_length"]
-                )
+                reference_data = forward_input(training_input)
+                reference_data["ftpo_chosen_mask"] = training_input["ftpo_chosen_mask"]
                 reference_data.metadata["global_step"] = self.global_step
             reference_score_refs = self.ref_model.async_run_ray_method("mesh", "forward", data=reference_data)
 
