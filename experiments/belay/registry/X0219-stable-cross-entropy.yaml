@@ -5,7 +5,7 @@ category: Output head and loss
 summary: Exclude the target from the final logsumexp and take loss = softplus(lse_{j!=t}(z_j) - z_t) (arXiv 2610.31642), so
   the target gradient cannot round to 0 when its probability rounds to 1; same loss, z-loss unchanged.
 source: intake
-status: running
+status: closed
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6370633702
   author: Helw150
@@ -16,3 +16,34 @@ papers:
 knobs:
 - ce_impl
 - ce_collapse_stats_stride
+trials:
+- id: t001
+  variant: ce_impl=stable_softplus (fused xla_fast_bwd_stable)
+  rung: d512
+  protocol: fixed_time
+  batch: X0219
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409482331
+  baseline: Belay Ckpt 1 belay-X0219-ctrl-s0/s1 (2.8716 / 2.8716)
+  steps: 8821
+  delta:
+  - -0.0021
+  - 0.0005
+  loss:
+  - 2.8695
+  - 2.8721
+  wandb:
+  - belay-X0219-stable-s0
+  - belay-X0219-stable-s1
+  settings:
+    ce_impl: stable_softplus
+    ce_collapse_stats_stride: '32'
+  commit: d24346c484
+  step_time_change: +0.0% (0.1752/0.1762 vs 0.1758/0.1756 s/step)
+  note: both arms ran with ce_collapse_stats_stride=32; fp32 collapse on 0 tokens, max margin 9.4 (cap bound 10.3), 19% of tokens past the bf16 cliff by the end
+events:
+- type: closed
+  batch: X0219
+  date: '2026-10-26'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409482331
+  note: noise (-0.0008 mean Paloma); fp32 CE + logit_soft_cap=10 make softmax collapse impossible (margin <= 10.3 < 16.6)
