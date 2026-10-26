@@ -52,8 +52,8 @@ def test_empty_settings_do_not_clear_existing_mapping_defaults(tmp_path):
 @pytest.mark.parametrize(
     "key,error",
     [
-        ("seed", "trainer.seed.*not a mapping"),
-        ("unknown_backend", "unknown key.*trainer.unknown_backend"),
+        ("seed", "trainer.seed: the launch document"),
+        ("unknown_backend", "trainer.unknown_backend.*\\n.*Extra inputs"),
     ],
 )
 def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):

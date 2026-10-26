@@ -12,7 +12,6 @@ from scripts.recipe_schema_sidecar import OPEN
 
 ROOT = Path(__file__).resolve().parents[3]
 
-BUNDLED_NORMALIZATION = {"trainer.max_ckpts_to_keep": frozenset({"snowball_mopd_ultra_32k", "snowball_mopd_ultra_async_32k_smoke"})}
 BASE = """defaults:
   - _self_
 data:
@@ -119,12 +118,6 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
     paths = sorted((ROOT / "cloud/iris/configs").glob("*.yaml"))
     recipes = generator.recipe_documents(ROOT / "cloud/iris/configs", generator.CONFIG_DIR, sources.groups)
     for path, document in zip(paths, recipes, strict=True):
-        for key, names in BUNDLED_NORMALIZATION.items():
-            if path.stem in names:
-                parent = document
-                for part in key.split(".")[:-1]:
-                    parent = parent.get(part, {})
-                parent.pop(key.rsplit(".", 1)[-1], None)
         assert schema.SkyRLRecipe.from_document(document).to_skyrl() == document, path.name
 
 
