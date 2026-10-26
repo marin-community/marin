@@ -216,7 +216,7 @@ class TinyTrainingExp(BasePPOExp):
     def get_worker_classes(self):
         if self.cfg.trainer.critic.model.path or self.cfg.trainer.algorithm.use_kl_loss:
             raise ValueError("the CPU backend provides only a policy worker")
-        return ray.remote(num_gpus=1)(CPUPolicyWorker), None
+        return ray.remote(num_gpus=1)(CPUPolicyWorker), None, None
 
     def create_inference_engine_client(
         self, *, operation: EntrypointOperation = EntrypointOperation.TRAIN
