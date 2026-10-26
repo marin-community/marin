@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from experiments.grug.belay_tpu.kda_chunk_prep import chunk_prep_midpoint
 from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
 from experiments.grug.belay_tpu.kda_state_tpu import state_pass
 from experiments.grug.moe.kda import _chunk_prep_xla, _prepare_qk, _segment_masks, doc_starts
@@ -32,9 +33,10 @@ def chunk_kda_tpu(
     initial_state: jax.Array | None = None,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
     state_tile: int = 1,
+    chunk_size: int = 16,
     state_precision: jax.lax.Precision = jax.lax.Precision.HIGHEST,
 ) -> tuple[jax.Array, jax.Array]:
-    """Evaluate packed KDA with 16-token chunks and a 128-wide saved state."""
+    """Evaluate packed KDA with a 128-wide saved state and bounded decay tiles."""
     if q.ndim != 4 or q.shape[-1] != 128 or any(x.shape != q.shape for x in (k, v, g)):
         raise ValueError("Ckpt 1 TPU KDA requires matching [B,H,L,128] q/k/v/g")
     if matmul_dtype not in (jnp.float32, jnp.bfloat16):
@@ -42,7 +44,9 @@ def chunk_kda_tpu(
     q, k = _prepare_qk(q, k, True)
     v, g, beta = (x.astype(jnp.float32) for x in (v, g, beta))
     b, h, length, d = q.shape
-    c = 16  # The source exponent bound is valid for log-decay >= -5 at C=16.
+    if chunk_size not in (16, 32, 64, 128) or (chunk_size != 16 and state_tile != 1):
+        raise ValueError("Larger KDA chunks require state_tile=1 and size 32, 64 or 128")
+    c = chunk_size
     pad = (-length) % c
 
     def padded(x):
@@ -66,7 +70,8 @@ def chunk_kda_tpu(
 
     qc, kc, vc, gc = (chunks(x) for x in (q, k, v, g))
     ec = kc if erase is None else kc * chunks(padded(erase.astype(jnp.float32)))
-    prep = _chunk_prep_xla(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
+    prepare = _chunk_prep_xla if c == 16 else chunk_prep_midpoint
+    prep = prepare(qc, kc, ec, vc, gc, beta.reshape(b, h, n, c), mm, matmul_dtype, c, masks)
     initial = jnp.zeros((b * h, d, d), jnp.float32)
     if initial_state is not None:
         initial = initial_state.astype(jnp.float32).reshape(b * h, d, d)

@@ -120,8 +120,8 @@ def _cost(body, operands, grid_size, inputs, outputs):
 
 def _forward_call(q, a, k, w, v, decay, initial, precision, matmul_dtype):
     groups, chunks, c, d = q.shape
-    if d != 128 or v.shape != q.shape or c not in (16, 32):
-        raise ValueError("TPU state prototype requires K=V=128 and C=16 or 32")
+    if d != 128 or v.shape != q.shape or c not in (16, 32, 64, 128):
+        raise ValueError("TPU state prototype requires K=V=128 and C=16, 32, 64 or 128")
     if any(x.dtype != jnp.float32 for x in (q, a, k, w, v, decay, initial)):
         raise ValueError("Prepared state-pass inputs must be FP32")
     if jax.default_backend() != "tpu":
