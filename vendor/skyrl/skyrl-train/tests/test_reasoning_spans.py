@@ -191,22 +191,36 @@ def test_a_marker_penalty_charges_the_violation_token_when_it_has_one(tokens, lo
 
     assert output["loop_advantages"] == [pytest.approx(loop_advantages)]
     assert output["rewards"] == [pytest.approx(reward)]
+    metrics = output["rollout_metrics"]
+    assert metrics["generate/reward_shaping/reasoning_span_penalty_mean"] == pytest.approx(-0.2)
+    assert metrics["generate/reward_shaping/reasoning_span_incidence"] == 1.0
+    assert metrics["generate/reward_shaping/loop_charged_tokens_mean"] == 0.0
+
+
+def _batch(**fields):
+    return {
+        "prompt_token_ids": [[3]],
+        "response_ids": [[4, 4]],
+        "rewards": [1.0],
+        "loss_masks": [[1, 1]],
+        "stop_reasons": ["stop"],
+        "rollout_logprobs": None,
+        **fields,
+    }
 
 
 def test_loop_credit_survives_concatenation_with_a_batch_that_did_not_shape_rewards():
-    def batch(loop_advantages):
-        output = {
-            "prompt_token_ids": [[3]],
-            "response_ids": [[4, 4]],
-            "rewards": [1.0],
-            "loss_masks": [[1, 1]],
-            "stop_reasons": ["stop"],
-            "rollout_logprobs": None,
-        }
-        if loop_advantages is not None:
-            output["loop_advantages"] = loop_advantages
-        return output
-
-    merged = concatenate_trajectory_batches([batch(None), batch([[-0.2, 0.0]])], tis_lcs_alert_threshold=1.0)
+    merged = concatenate_trajectory_batches(
+        [_batch(), _batch(loop_advantages=[[-0.2, 0.0]])], tis_lcs_alert_threshold=1.0
+    )
 
     assert merged["loop_advantages"] == [[0.0, 0.0], [-0.2, 0.0]]
+
+
+def test_reasoning_span_evidence_survives_concatenation_with_a_batch_that_has_none():
+    malformed = _batch(reasoning_span_violations=[1], reasoning_span_violation_tokens=[[1]])
+
+    merged = concatenate_trajectory_batches([malformed, _batch()], tis_lcs_alert_threshold=1.0)
+
+    assert merged["reasoning_span_violations"] == [1, 0]
+    assert merged["reasoning_span_violation_tokens"] == [[1], []]

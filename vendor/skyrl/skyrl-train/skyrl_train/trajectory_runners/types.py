@@ -120,6 +120,8 @@ class TrajectoryBatch(TypedDict):
     # Malformed reasoning turns per row, and the response positions of those located on a marker token.
     reasoning_span_violations: NotRequired[List[int]]
     reasoning_span_violation_tokens: NotRequired[List[List[int]]]
+    # Per row, the total reasoning-span penalty charged to marker tokens in ``loop_advantages``.
+    reasoning_span_token_penalties: NotRequired[List[float]]
     reward_shaping_versions: Optional[List[int]]
     verification_results: List[Optional[VerificationResult]]
     evidence_messages: List[Optional[list[dict[str, Any]]]]
