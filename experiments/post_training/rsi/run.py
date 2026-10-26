@@ -59,6 +59,14 @@ from experiments.post_training.rsi.resume import (
     untrained_instances,
 )
 from experiments.post_training.rsi.rollouts import TaskRollouts, group_record
+from experiments.post_training.rsi.gap import (
+    GAP_CAPABILITY_PREFIX,
+    fresh_tasks,
+    interleave,
+    scan_types,
+    training_indices,
+    without_generators,
+)
 from experiments.post_training.rsi.seed import TRAIN_URL, TaskPool
 from experiments.post_training.rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
 from experiments.post_training.rsi.streams import Source, from_iterable, mix
@@ -215,6 +223,9 @@ def skyrl_options(function):
             click.option("--tasks-per-step", type=int, required=True, help="The prompts of one SkyRL step."),
             click.option("--lookahead-steps", type=int, default=3, show_default=True, help="Feed tasks ahead."),
             click.option("--seed", type=int, default=0, show_default=True),
+            click.option(
+                "--exclude-generators", default="", help="Comma-separated Reasoning Gym task types dropped from the seed."
+            ),
         ]
     ):
         function = option(function)
@@ -233,6 +244,7 @@ class SkyrlOptions:
     tasks_per_step: int
     lookahead_steps: int
     seed: int
+    exclude_generators: str
 
     def feed(self) -> FeedConfig:
         return FeedConfig(
@@ -251,6 +263,17 @@ def skyrl_control(**arguments) -> None:
     asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=None))
 
 
+@main.command("skyrl-oracle")
+@skyrl_options
+@click.option("--oracle-types", required=True, help="Comma-separated Reasoning Gym task types of the oracle's tasks.")
+@click.option("--oracle-tasks", type=int, default=1200, show_default=True, help="Fresh tasks made, shared by the types.")
+@click.option("--synthesized-share", type=float, default=0.5, show_default=True)
+def skyrl_oracle(oracle_types: str, oracle_tasks: int, synthesized_share: float, **arguments) -> None:
+    """Feed seed tasks and fresh tasks of chosen types: an oracle synthesizer, or a placebo for another type."""
+    oracle = OracleOptions(oracle_types.split(","), oracle_tasks, synthesized_share)
+    asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=None, oracle=oracle))
+
+
 @main.command("skyrl-rsi")
 @skyrl_options
 @feedback_options
@@ -260,17 +283,30 @@ def skyrl_rsi(**arguments) -> None:
     asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=feedback))
 
 
-async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None) -> None:
+@dataclass(frozen=True)
+class OracleOptions:
+    types: list[str]
+    tasks: int
+    share: float
+
+
+async def _skyrl_run(
+    options: SkyrlOptions, *, feedback: FeedbackOptions | None, oracle: OracleOptions | None = None
+) -> None:
     output = StoragePath(options.output_dir)
     feed = options.feed()
     written = {task.id for task in (await asyncio.to_thread(written_tasks, feed.root)).values()}
     pool = TaskPool.read(TRAIN_URL)
+    if options.exclude_generators:
+        pool = without_generators(pool, frozenset(options.exclude_generators.split(",")))
     strata: dict[str, str] = {}
     # A restarted loop does not write the pool tasks of its feed again, but labels their groups with their stratum.
     seed_tasks = from_iterable(_remember_stratum(pool.stream(options.seed), strata, written=written))
     trainer = partial(skyrl_train, config=feed)
     async with AsyncExitStack() as stack:
-        if feedback is None:
+        if oracle is not None:
+            stream = trainer(await _with_oracle_tasks(seed_tasks, oracle, written, options.seed))
+        elif feedback is None:
             stream = trainer(seed_tasks)
         else:
             sampling = Sampling(temperature=1.0, top_p=1.0, max_tokens=options.max_tokens)
@@ -286,6 +322,18 @@ async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None)
             )
             stream = rsi_loop(seed_tasks, boxes, config)
         await _record_groups(stream, strata, output)
+
+
+async def _with_oracle_tasks(
+    seed_tasks: AsyncIterable[TaskSpec], oracle: OracleOptions, written: Collection[str], seed: int
+) -> AsyncIterator[TaskSpec]:
+    """The seed tasks mixed with fresh tasks of the oracle's types, which are ready from the start."""
+    types = await asyncio.to_thread(scan_types)
+    per_type = -(-oracle.tasks // len(oracle.types))
+    indices = {name: training_indices(types[name])[:per_type] for name in oracle.types}
+    fresh = await asyncio.to_thread(fresh_tasks, types, indices, GAP_CAPABILITY_PREFIX)
+    new_tasks = from_iterable(task for task in interleave(fresh) if task.id not in written)
+    return mix(Source(seed_tasks, share=1 - oracle.share), Source(new_tasks, share=oracle.share), seed=seed)
 
 
 async def _record_groups(stream: AsyncIterator[TaskRollouts], strata: Mapping[str, str], output: StoragePath) -> None:

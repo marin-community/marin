@@ -17,7 +17,7 @@ pandas. They grade with the host's Python environment, which has the same packag
 import random
 import re
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import islice
@@ -88,6 +88,10 @@ class TaskPool:
         with StoragePath(url).open("rb") as handle:
             payloads = pq.ParquetFile(handle).read(columns=[TASK_COLUMN])[TASK_COLUMN].to_pylist()
         return cls([PoolRow(family(row_id(payload)), payload) for payload in payloads])
+
+    def filtered(self, keep: Callable[[PoolRow], bool]) -> "TaskPool":
+        """The pool without the rows for which ``keep`` is false."""
+        return TaskPool([row for row in self._rows if keep(row)])
 
     @cached_property
     def strata(self) -> dict[str, list[int]]:
