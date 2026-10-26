@@ -38,7 +38,7 @@ RAY_PORTS = ("ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent")
 
 
 def submit_tpu_gang(request: JobRequest) -> IrisJobHandle:
-    """Use Iris's named ports as well as Fray's TPU slice placement rules."""
+    """Submit a TPU serving gang with Ray ports on every replica."""
     job = iris_ctx().client.submit(
         name=request.name,
         entrypoint=convert_entrypoint(request.entrypoint),
@@ -72,7 +72,7 @@ class TpuRayGang:
 
     def check_alive(self) -> None:
         if self.process.poll() is not None:
-            detail = self.log_path.read_text()[-12000:] if self.log_path.exists() else ""
+            detail = self.log_path.read_text()[-tpu_ray_runtime.RAY_LOG_TAIL_CHARS :] if self.log_path.exists() else ""
             raise RuntimeError(f"Ray supervisor exited {self.process.returncode}:\n{detail}")
 
 
@@ -185,5 +185,5 @@ def tpu_ray_gang(launcher: IsolatedTpuVllm, *, chips_per_host: int, timeout_seco
         except BaseException:
             for path in (supervisor_log, ray_log):
                 if path.exists():
-                    logger.error("%s:\n%s", path.name, path.read_text()[-12000:])
+                    logger.error("%s:\n%s", path.name, path.read_text()[-tpu_ray_runtime.RAY_LOG_TAIL_CHARS :])
             raise
