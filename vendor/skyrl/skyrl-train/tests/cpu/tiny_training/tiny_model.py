@@ -20,7 +20,15 @@ END_OF_TURN = "<|im_end|>"
 # ChatML, as Qwen's template renders conversations without tools or a default system prompt.
 CHAT_TEMPLATE = (
     "{%- for message in messages %}"
-    "{{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>\\n' }}"
+    "{{- '<|im_start|>' + message.role + '\\n' }}"
+    "{%- if message.tool_calls %}{%- for call in message.tool_calls %}"
+    "{{- '<tool_call>' + call.function.name + ':' + call.function.arguments + '</tool_call>' }}"
+    "{%- endfor %}"
+    "{%- elif message.content is string %}{{- message.content }}"
+    "{%- else %}{%- for block in message.content %}"
+    "{%- if block.type == 'text' %}{{- block.text }}"
+    "{%- else %}{{- raise_exception('tiny policy supports only text blocks') }}{%- endif %}"
+    "{%- endfor %}{%- endif %}{{- '<|im_end|>\\n' }}"
     "{%- endfor %}"
     "{%- if add_generation_prompt %}{{- '<|im_start|>assistant\\n' }}{%- endif %}"
 )
@@ -44,7 +52,7 @@ TRANSITIONS = (
 )
 
 
-def build_tiny_policy(output_dir: Path) -> Path:
+def build_tiny_policy(output_dir: Path, *, max_position_embeddings: int = 1024) -> Path:
     """Write the tiny policy and its tokenizer as a Hugging Face model directory."""
     tokenizer = _tiny_tokenizer()
     answer_ids = [_single_token_id(tokenizer, text) for text in ANSWER_TOKENS]
@@ -57,7 +65,7 @@ def build_tiny_policy(output_dir: Path) -> Path:
         num_hidden_layers=2,
         num_attention_heads=2,
         num_key_value_heads=1,
-        max_position_embeddings=1024,
+        max_position_embeddings=max_position_embeddings,
         tie_word_embeddings=False,
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.convert_tokens_to_ids(END_OF_TURN),

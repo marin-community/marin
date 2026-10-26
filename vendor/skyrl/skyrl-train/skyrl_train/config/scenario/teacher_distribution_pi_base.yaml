@@ -1,0 +1,29 @@
+# @package _global_
+# A pinned teacher and its single route are configured with teachers/teacher_routing.
+# SkyRL's standard admitted-group oracle scores the attributed student tokens.
+scenario:
+  preset: teacher_distribution_pi_base
+trainer:
+  # Multi-turn Pi prompts can be re-rendered. Score each exact sampled turn.
+  step_wise_training: true
+  algorithm:
+    policy_loss_type: importance_sampling
+    advantage_estimator: uniform
+    advantage_batch_normalize: false
+    use_kl_in_reward: false
+    use_kl_loss: false
+    dynamic_sampling:
+      type: null
+    distillation:
+      objective: sparse_forward_kl
+      reward_mode: replace
+generator:
+  n_samples_per_prompt: 1
+  sampling_params:
+    logprobs: 0
+terminal_bench_config:
+  installed_agent:
+    agent:
+      name: pi
+      pi:
+        mode: literal

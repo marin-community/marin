@@ -19,6 +19,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.objective_spec import validate_objective
+from skyrl_train.config.pi_training import validate_pi_training_config
 from skyrl_train.config.ftpo import FTPOConfig
 from skyrl_train.rollouts.harbor_settings import concurrent_trials
 
@@ -539,7 +540,25 @@ def parse_rl_config(
             f"{path}: {RESOLVED_HARBOR_CONFIG_KEY} is a resolved-config key; use terminal_bench in source recipes"
         )
 
-    config_groups = raw.get("config_groups", {})
+    config_groups = dict(raw.get("config_groups", {}))
+    scenario = raw.get("scenario")
+    if scenario is not None:
+        if not isinstance(scenario, dict) or set(scenario) != {"preset"}:
+            raise ValueError("RL scenarios require exactly scenario.preset")
+        if "scenario" in config_groups or "algorithm_recipe" in config_groups:
+            raise ValueError("Select a scenario once, with scenario.preset; do not combine it with an algorithm recipe")
+        if scenario["preset"] not in (
+            "verifier_grpo_base",
+            "rlaif_pi_base",
+            "teacher_distribution_pi_base",
+            "teacher_demo_pi_base",
+            "teacher_demo_pi_verified_base",
+            "student_prefix_teacher_completion_pi_base",
+        ):
+            raise ValueError(f"Scenario {scenario['preset']!r} has no launchable shared-engine objective")
+        config_groups["scenario"] = scenario["preset"]
+    elif "scenario" in config_groups:
+        raise ValueError("Select a reviewed scenario with scenario.preset, not config_groups.scenario")
     if "algorithm_recipe" in config_groups:
         recipe = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(recipe, resolve=False), raw), resolve=False)
@@ -889,6 +908,7 @@ def compose_skyrl_config(
     _resolve_max_in_flight(config)
     validate_nemotron_ultra_grading(config, parsed.distillation_plan)
     validate_objective(config)
+    validate_pi_training_config(config)
     return CompiledSkyRLConfig(
         entrypoint=registered_rl_entrypoint_module(parsed.entrypoint),
         config=config,
