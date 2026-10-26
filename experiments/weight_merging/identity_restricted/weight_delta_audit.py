@@ -123,6 +123,29 @@ def payload_sha256(fs, record: dict) -> str:
     return digest.hexdigest()
 
 
+def file_sha256(fs, path: str) -> str:
+    digest = hashlib.sha256()
+    with fs.open(path, "rb", cache_type="none", block_size=CHUNK_BYTES) as f:
+        while chunk := f.read(CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checkpoint_files(root: str) -> dict:
+    """Index sha256 plus size and sha256 of every shard the index names, read in full."""
+    fs, path = filesystem_for(root)
+    index = fs.cat_file(prefix_join(path, INDEX_NAME))
+    shards = sorted(set(json.loads(index)["weight_map"].values()))
+    return {
+        "root": root,
+        "index_sha256": hashlib.sha256(index).hexdigest(),
+        "shards": {
+            shard: {"bytes": fs.size(prefix_join(path, shard)), "sha256": file_sha256(fs, prefix_join(path, shard))}
+            for shard in shards
+        },
+    }
+
+
 def as_float32(payload: bytes, dtype: str) -> np.ndarray:
     if dtype == "BF16":
         return (np.frombuffer(payload, np.uint16).astype(np.uint32) << 16).view(np.float32)
@@ -146,7 +169,15 @@ def delta_stats(source: bytes, exported: bytes, dtype: str) -> dict:
     }
 
 
-def rehash(export_root: str, source_root: str, slice_set: set[str]) -> dict:
+def rehash(
+    export_root: str,
+    source_root: str,
+    slice_set: set[str],
+    *,
+    donor_root: str | None = None,
+    reference_root: str | None = None,
+) -> dict:
+    """Re-hash ``export_root``; optionally record the donor's files and the slice hashes of a reference export."""
     exported, source = shard_records(export_root), shard_records(source_root)
     missing = sorted(slice_set - set(exported))
     if missing:
@@ -173,7 +204,7 @@ def rehash(export_root: str, source_root: str, slice_set: set[str]) -> dict:
             "source_native_sha256": hashlib.sha256(source_payload).hexdigest(),
             **delta_stats(source_payload, export_payload, a["dtype"]),
         }
-    return {
+    result = {
         "export_root": export_root,
         "source_root": source_root,
         "hash": "sha256 of each raw safetensors payload, streamed in 64 MiB chunks",
@@ -181,6 +212,20 @@ def rehash(export_root: str, source_root: str, slice_set: set[str]) -> dict:
         "tensors": tensors,
         "slice_stats": stats,
     }
+    if donor_root is not None:
+        result["donor"] = checkpoint_files(donor_root)
+    if reference_root is not None:
+        reference = shard_records(reference_root)
+        reference_fs, _ = filesystem_for(reference_root)
+        result["reference_root"] = reference_root
+        result["reference_slice"] = {}
+        for name in sorted(slice_set):
+            digest = payload_sha256(reference_fs, reference[name])
+            result["reference_slice"][name] = {
+                "reference_sha256": digest,
+                "equal": digest == tensors[name]["export_sha256"],
+            }
+    return result
 
 
 def audit(
@@ -254,6 +299,11 @@ def audit(
             failures.append({"tensor": name, "reason": "frozen tensor changed: " + ", ".join(changed)})
         rows[name] = row
 
+    for name, ref in sorted(recomputed.get("reference_slice", {}).items()):
+        rows[name]["reference_equal"] = ref["equal"]
+        if not ref["equal"]:
+            failures.append({"tensor": name, "reason": "slice export differs from the reference export"})
+
     frozen = [r for r in rows.values() if r["class"] == "frozen-outside-slice"]
     sliced = {n: r for n, r in rows.items() if r["class"] == "trained-in-slice"}
     groups = {}
@@ -268,6 +318,8 @@ def audit(
         "slice_export_unchanged": sum(r["export_equal"] for r in sliced.values()),
         "rehash_mismatch": sum(r["rehash_export_sha256"] != r["export_sha256"] for r in rows.values()),
     }
+    if "reference_slice" in recomputed:
+        counts["slice_reference_equal"] = sum(r["equal"] for r in recomputed["reference_slice"].values())
     counts["frozen_equal"] = counts["frozen"] - counts["frozen_changed"]
     if trained_path is not None:
         counts["slice_master_changed"] = sum(not r["master_equal"] for r in sliced.values())
@@ -304,6 +356,8 @@ def main() -> None:
     rehash_parser.add_argument("--export-root", required=True)
     rehash_parser.add_argument("--source-root", required=True)
     rehash_parser.add_argument("--out", required=True, help="local path or object-store URL; must not exist")
+    rehash_parser.add_argument("--donor-root", help="record this checkpoint's index and per-shard sha256")
+    rehash_parser.add_argument("--reference-root", help="compare slice payloads with this export's")
     audit_parser.add_argument("--out", type=Path, required=True)
     audit_parser.add_argument("--source-receipt", type=Path, required=True)
     audit_parser.add_argument("--rehash", type=Path, required=True)
@@ -317,7 +371,13 @@ def main() -> None:
         fs, out = filesystem_for(args.out)
         if fs.exists(out):
             raise SystemExit(f"{args.out} exists")
-        result = rehash(args.export_root, args.source_root, slice_set)
+        result = rehash(
+            args.export_root,
+            args.source_root,
+            slice_set,
+            donor_root=args.donor_root,
+            reference_root=args.reference_root,
+        )
         fs.pipe_file(out, (json.dumps(result, indent=1, sort_keys=True) + "\n").encode())
         print(json.dumps({"tensor_count": result["tensor_count"], "slice_stats": len(result["slice_stats"])}))
         return

@@ -20,6 +20,7 @@ import resource
 import struct
 import time
 from dataclasses import asdict
+from urllib.parse import urlsplit
 
 import safetensors.torch
 import torch
@@ -28,7 +29,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.weight_merging.identity_restricted.weight_delta_audit import (
-    CHUNK_BYTES,
+    file_sha256,
     payload_sha256,
     shard_records,
 )
@@ -46,18 +47,16 @@ DONOR = CheckpointSource(
     "59852d6f07261722bbec1edb6ab148317156b58e",
 )
 VARIANTS = {"attn-qkvo-l18-23": range(18, 24), "attn-qkvo-all": range(26)}
+HEADER = {"tensors": 502, "dtypes": {"BF16": 476, "F32": 26}}
+
+
+def bucket_of(url: str) -> tuple[str, str]:
+    parts = urlsplit(url)
+    return parts.scheme, parts.netloc
 
 
 def slice_for(variant: str) -> list[str]:
     return [f"model.layers.{layer}.self_attn.{p}_proj.weight" for layer in VARIANTS[variant] for p in "qkvo"]
-
-
-def file_sha256(fs, path: str) -> str:
-    digest = hashlib.sha256()
-    with fs.open(path, "rb", cache_type="none", block_size=CHUNK_BYTES) as f:
-        while chunk := f.read(CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def shard_metadata(data: bytes) -> dict[str, str] | None:
@@ -96,6 +95,8 @@ def build(
 ) -> dict:
     start = time.monotonic()
     names = slice_for(variant)
+    if len({bucket_of(output), bucket_of(anchor.path), bucket_of(donor.path)}) != 1:
+        raise ValueError("Output, anchor and donor must be in the same bucket")
     fs, out = filesystem_for(output)
     if fs.exists(out) and fs.ls(out):
         raise ValueError(f"Output must be empty: {output}")
@@ -154,6 +155,9 @@ def build(
         dtypes[record["dtype"]] = dtypes.get(record["dtype"], 0) + 1
     if records.keys() != anchor_reader.weight_map.keys():
         raise ValueError("Written tensors differ from the anchor's")
+    header_counts = {"tensors": len(records), "dtypes": dict(sorted(dtypes.items()))}
+    if header_counts != HEADER:
+        raise ValueError(f"Written headers are {header_counts}, not {HEADER}")
     tensors = {
         name: {"dtype": r["dtype"], "shape": r["shape"], "export_sha256": payload_sha256(fs, r)}
         for name, r in sorted(records.items())
@@ -170,7 +174,7 @@ def build(
         "slice": sorted(names),
         "slice_unchanged_after_cast": unchanged,
         "slice_stats": slice_stats,
-        "header_counts": {"tensors": len(records), "dtypes": dict(sorted(dtypes.items()))},
+        "header_counts": header_counts,
         "metadata_byte_equal": metadata_equal,
         "objects": objects,
         "tensors": tensors,
@@ -186,8 +190,9 @@ def main() -> None:
     parser.add_argument("--variant", choices=sorted(VARIANTS), required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--code-revision", required=True)
+    parser.add_argument("--threads", type=int, default=16, help="torch CPU threads; match the job's CPU request")
     args = parser.parse_args()
-    torch.set_num_threads(16)
+    torch.set_num_threads(args.threads)
     receipt = build(args.variant, args.output, args.code_revision, ANCHOR, DONOR, ANCHOR_INDEX_SHA256)
     logger.info(
         "VERIFIED %s: %s, slice unchanged after cast %s, %.0f s",

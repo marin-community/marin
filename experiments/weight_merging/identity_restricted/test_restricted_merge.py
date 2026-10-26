@@ -62,6 +62,7 @@ def parents(tmp_path, monkeypatch):
         {".cache_metadata.json": json.dumps({"source_revision": "donor-rev"}).encode()},
     )
     monkeypatch.setitem(rm.VARIANTS, "test-l18", range(18, 19))
+    monkeypatch.setattr(rm, "HEADER", {"tensors": 8, "dtypes": {"BF16": 7, "F32": 1}})
     index_sha = sha((tmp_path / "anchor" / rm.INDEX_NAME).read_bytes())
     return tmp_path, anchor, donor, index_sha
 
@@ -191,3 +192,124 @@ def test_merge_receipt_slice_must_match_the_audit(parents, monkeypatch):
     build(tmp_path, index_sha)
     with pytest.raises(SystemExit, match="slice differs"):
         export_only(tmp_path, monkeypatch, {SLICE[0]})
+
+
+def replace_donor_tensor(tmp_path, name, value):
+    path = tmp_path / "donor" / "model-00001-of-00001.safetensors"
+    tensors = safetensors.torch.load(path.read_bytes())
+    tensors[name] = value
+    path.write_bytes(safetensors.torch.save(tensors, metadata={"format": "pt"}))
+
+
+def test_merge_refuses_an_absent_slice_name(parents, monkeypatch):
+    tmp_path, _, _, index_sha = parents
+    monkeypatch.setitem(rm.VARIANTS, "test-l18", range(18, 20))
+    with pytest.raises(ValueError, match="not in the anchor"):
+        build(tmp_path, index_sha)
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (torch.zeros(4, 8, dtype=torch.bfloat16), "not FP32"),
+        (torch.zeros(8, 4), "not FP32 with the anchor shape"),
+        (torch.full((4, 8), float("inf")), "Nonfinite"),
+    ],
+)
+def test_merge_refuses_a_bad_donor_tensor(parents, value, match):
+    tmp_path, _, _, index_sha = parents
+    replace_donor_tensor(tmp_path, SLICE[1], value)
+    with pytest.raises(ValueError, match=match):
+        build(tmp_path, index_sha)
+
+
+def test_merge_refuses_a_copied_shard_that_differs(parents, monkeypatch):
+    tmp_path, _, _, index_sha = parents
+    fs, _ = rm.filesystem_for(str(tmp_path))
+
+    def bad_copy(self, source, target, **kwargs):
+        with open(target, "wb") as f:
+            f.write(b"truncated")
+
+    monkeypatch.setattr(type(fs), "copy", bad_copy)
+    with pytest.raises(ValueError, match=r"Readback of model-00003-of-00003\.safetensors differs"):
+        build(tmp_path, index_sha)
+
+
+def test_merge_refuses_metadata_that_reads_back_different(parents, monkeypatch):
+    tmp_path, _, _, index_sha = parents
+    fs, _ = rm.filesystem_for(str(tmp_path))
+    pipe_file = type(fs).pipe_file
+
+    def corrupt_config(self, path, value, **kwargs):
+        if str(path).endswith("config.json"):
+            value = value + b" "
+        return pipe_file(self, path, value, **kwargs)
+
+    monkeypatch.setattr(type(fs), "pipe_file", corrupt_config)
+    with pytest.raises(ValueError, match="Metadata readback differs"):
+        build(tmp_path, index_sha)
+
+
+def test_merge_refuses_an_output_in_another_bucket(parents):
+    tmp_path, _, _, index_sha = parents
+    with pytest.raises(ValueError, match="same bucket"):
+        rm.build(
+            "test-l18",
+            "s3://another-bucket/merged",
+            "code-rev",
+            CheckpointSource(str(tmp_path / "anchor"), "anchor-rev"),
+            CheckpointSource(str(tmp_path / "donor"), "donor-rev"),
+            index_sha,
+        )
+
+
+def test_merge_refuses_unexpected_header_counts(parents, monkeypatch):
+    tmp_path, _, _, index_sha = parents
+    monkeypatch.setattr(rm, "HEADER", {"tensors": 8, "dtypes": {"BF16": 8}})
+    with pytest.raises(ValueError, match="Written headers"):
+        build(tmp_path, index_sha)
+
+
+def test_rehash_refuses_an_existing_out(parents, monkeypatch):
+    tmp_path, _, _, index_sha = parents
+    build(tmp_path, index_sha)
+    out = tmp_path / "rehash.json"
+    out.write_text("{}")
+    argv = ["weight_delta_audit", "rehash", "--layers", "18-18", "--projections", "q,k,v,o"]
+    argv += ["--export-root", str(tmp_path / "merged"), "--source-root", str(tmp_path / "anchor"), "--out", str(out)]
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(SystemExit, match="exists"):
+        wda.main()
+    assert out.read_text() == "{}"
+
+
+def test_rehash_records_the_donor_and_checks_a_reference_export(parents, monkeypatch):
+    tmp_path, _, donor, index_sha = parents
+    build(tmp_path, index_sha)
+    # A donor-cast reference export, as the earlier alpha 1 ladder wrote it: every tensor is the donor cast.
+    reference = {n: v if n.endswith("router.bias") else v.to(torch.bfloat16) for n, v in donor.items()}
+    write_checkpoint(tmp_path / "reference", {"model-00001-of-00001.safetensors": reference}, {})
+    rehashed = wda.rehash(
+        str(tmp_path / "merged"),
+        str(tmp_path / "anchor"),
+        set(SLICE),
+        donor_root=str(tmp_path / "donor"),
+        reference_root=str(tmp_path / "reference"),
+    )
+    donor_shard = tmp_path / "donor" / "model-00001-of-00001.safetensors"
+    assert rehashed["donor"]["index_sha256"] == sha((tmp_path / "donor" / rm.INDEX_NAME).read_bytes())
+    assert rehashed["donor"]["shards"]["model-00001-of-00001.safetensors"]["sha256"] == sha(donor_shard.read_bytes())
+    assert all(row["equal"] for row in rehashed["reference_slice"].values())
+
+    receipt_path = source_receipt(tmp_path, monkeypatch)
+    merge_path = tmp_path / "merged" / rm.RECEIPT_NAME
+    good, bad = tmp_path / "rehash-good.json", tmp_path / "rehash-bad.json"
+    good.write_text(json.dumps(rehashed))
+    result = wda.audit(receipt_path, good, set(SLICE), merge_path=merge_path)
+    assert result["verdict"] == "PASS" and result["counts"]["slice_reference_equal"] == len(SLICE)
+
+    rehashed["reference_slice"][SLICE[0]] = {"reference_sha256": sha(b"other"), "equal": False}
+    bad.write_text(json.dumps(rehashed))
+    result = wda.audit(receipt_path, bad, set(SLICE), merge_path=merge_path)
+    assert result["failures"] == [{"tensor": SLICE[0], "reason": "slice export differs from the reference export"}]
