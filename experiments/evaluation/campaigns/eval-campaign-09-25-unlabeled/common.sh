@@ -25,7 +25,7 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
-eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
+campaign_runtime_pins=$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
@@ -35,7 +35,8 @@ print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_has
 print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR_SOURCE.commit)}")
 print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
 PY
-)"
+)
+eval "$campaign_runtime_pins"
 export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
 
 die() {
