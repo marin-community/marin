@@ -19,6 +19,7 @@ from marinskyrl.distillation import (
     validate_distillation_runtime_support,
 )
 from rigging.secrets import resolve_secret_spec
+from skyrl_train.config.dummy_engine_weights import dummy_engine_weights_requested
 from skyrl_train.distillation_adapters import AsyncTeacherQueueLimits
 from skyrl_train.distillation_runtime import DistillationRuntime
 from skyrl_train.inference_engines.base import InferenceEngineInterface
@@ -153,6 +154,8 @@ async def _start_local_teacher_pool(
     max_logprobs = teacher.top_k if teacher.top_k is not None else 1
     engine_init_kwargs = dict(OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True))
     engine_init_kwargs.pop("openai_sampling_params", None)
+    if dummy_engine_weights_requested(engine_init_kwargs.get("load_format")):
+        engine_init_kwargs.pop("load_format")
     engine_init_kwargs["revision"] = teacher.model.revision
     engine_init_kwargs["served_model_name"] = teacher.model.path
     if "max_model_len" in engine_init_kwargs:
