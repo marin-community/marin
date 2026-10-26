@@ -127,6 +127,7 @@ def _softmax_backward(
 def softmax_forward(
     logits: torch.Tensor, targets: torch.Tensor | None, vocab_start: int, save_stats: bool
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Return fp32 token values and optional maximum, tail mass and entropy-moment row statistics."""
     entropy = targets is None
     output = torch.empty(logits.shape[:-1], dtype=torch.float32, device=logits.device)
     rows = output.numel()

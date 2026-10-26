@@ -16,7 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -35,9 +35,7 @@ def _parallel_logprobs(
     inference_only: bool,
     chunk_size: int | None,
 ) -> torch.Tensor:
-    return token_logprobs(
-        logits, targets, vocab_start_index, vocab_end_index, group, inference_only, chunk_size
-    ).contiguous()
+    return token_logprobs(logits, targets, vocab_start_index, vocab_end_index, group, inference_only, chunk_size)
 
 
 def from_parallel_logits_to_logprobs(

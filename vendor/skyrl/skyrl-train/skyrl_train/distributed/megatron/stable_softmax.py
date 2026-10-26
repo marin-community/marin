@@ -14,6 +14,7 @@ def _reduce(value: torch.Tensor, group: dist.ProcessGroup | None, op: dist.Reduc
 def _statistics(
     logits: torch.Tensor, group: dist.ProcessGroup | None, entropy: bool
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Return per-row maximum, tail mass excluding one argmax, and optional entropy moment."""
     x = logits.float()
     maximum, index = x.max(dim=-1, keepdim=True)
     maximum = maximum.clone()
@@ -23,6 +24,7 @@ def _statistics(
     _reduce(owner, group, dist.ReduceOp.MIN)
     margins = x - maximum
     probabilities = margins.exp()
+    # Excluding one argmax keeps log1p(tail) and tail / (1 + tail) accurate for confident tokens.
     probabilities.scatter_(-1, index, torch.where(owner == rank, 0.0, probabilities.gather(-1, index)))
     tail = probabilities.sum(dim=-1, keepdim=True)
     _reduce(tail, group)
@@ -61,7 +63,7 @@ def _torch_forward(
             target = targets[..., start:stop]
             owned = (target >= vocab_start) & (target < vocab_end)
             index = (target - vocab_start).masked_fill(~owned, 0)
-            selected = x.float().gather(-1, index.unsqueeze(-1)).squeeze(-1) - maximum
+            selected = x.gather(-1, index.unsqueeze(-1)).float().squeeze(-1) - maximum
             selected.masked_fill_(~owned, 0)
             _reduce(selected, group)
             output[..., start:stop] = selected - torch.log1p(tail)
@@ -85,13 +87,16 @@ class _StableSoftmax(torch.autograd.Function):
         chunk_size: int,
         save_stats: bool,
     ) -> torch.Tensor:
-        cuda = (
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        triton_path = (
             logits.is_cuda
             and logits.ndim in (2, 3)
             and logits.dtype in (torch.bfloat16, torch.float32)
             and (group is None or dist.get_world_size(group) == 1)
         )
-        if cuda:
+        if triton_path:
+            # Triton is optional for CPU and vocabulary-parallel execution.
             from skyrl_train.distributed.megatron.stable_softmax_kernel import softmax_forward
 
             output, stats = softmax_forward(logits, targets, vocab_start, save_stats)
@@ -104,14 +109,15 @@ class _StableSoftmax(torch.autograd.Function):
             ctx.vocab_start = vocab_start
             ctx.vocab_end = vocab_end
             ctx.chunk_size = chunk_size
-            ctx.cuda = cuda
+            ctx.triton_path = triton_path
         return output
 
     @staticmethod
     def backward(ctx: Any, grad_output: torch.Tensor) -> tuple:
         logits, stats, *targets = ctx.saved_tensors
         target = None if ctx.entropy else targets[0]
-        if ctx.cuda:
+        if ctx.triton_path:
+            # Triton is optional for CPU and vocabulary-parallel execution.
             from skyrl_train.distributed.megatron.stable_softmax_kernel import softmax_backward
 
             gradient = softmax_backward(logits, target, stats, grad_output, ctx.vocab_start)
@@ -158,21 +164,19 @@ def token_logprobs(
             vocab_start,
             vocab_end,
             group,
-            chunk_size or logits.shape[-2],
+            logits.shape[-2] if chunk_size is None else chunk_size,
             torch.is_grad_enabled() and logits.requires_grad,
         )
 
 
 def token_entropy(logits: torch.Tensor, group: dist.ProcessGroup | None, chunk_size: int | None = None) -> torch.Tensor:
     """Return fp32 entropy over the global vocabulary for each token."""
-    if chunk_size is not None and chunk_size <= 0:
-        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
     return _StableSoftmax.apply(
         logits,
         None,
         0,
         logits.shape[-1],
         group,
-        chunk_size or logits.shape[-2],
+        logits.shape[-2] if chunk_size is None else chunk_size,
         torch.is_grad_enabled() and logits.requires_grad,
     )

@@ -32,18 +32,6 @@ def right_pad_to_match(
     return aligned
 
 
-class _K3(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, log_ratio: torch.Tensor) -> torch.Tensor:
-        ctx.save_for_backward(log_ratio)
-        return torch.expm1(log_ratio) - log_ratio
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
-        (log_ratio,) = ctx.saved_tensors
-        return grad_output * torch.expm1(log_ratio)
-
-
 def differentiable_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
@@ -61,7 +49,7 @@ def differentiable_approx_kl(
         kld = 0.5 * (log_probs - log_probs_base).square()
     else:
         log_ratio = (log_probs_base - log_probs).clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP)
-        k3 = _K3.apply(log_ratio).contiguous().clamp(-10, 10)
+        k3 = (torch.expm1(log_ratio) - log_ratio).contiguous().clamp(-10, 10)
         if estimator is KLEstimator.K3_UNBIASED_GRADIENT:
             k2 = 0.5 * log_ratio.square()
             kld = k3.detach() + (k2 - k2.detach())

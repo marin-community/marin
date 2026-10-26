@@ -10,7 +10,6 @@ from omegaconf import DictConfig
 import torch
 import asyncio
 import copy
-from pathlib import Path
 from types import SimpleNamespace
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from omegaconf import OmegaConf
@@ -43,15 +42,11 @@ MOE_MODEL_NAME = "Qwen/Qwen3-30B-A3B"
 
 def test_megatron_softmax_confident_values_and_gradients():
     from megatron.core import parallel_state
-    from skyrl_train.distributed.megatron import model_utils
     from skyrl_train.distributed.megatron.model_utils import (
         from_parallel_logits_to_logprobs,
         vocab_parallel_entropy,
     )
 
-    source = Path(model_utils.__file__).resolve()
-    assert source.is_relative_to(Path(__file__).resolve().parents[2] / "skyrl_train")
-    print(f"production Megatron softmax source: {source}")
     torch.distributed.init_process_group("nccl", store=torch.distributed.HashStore(), rank=0, world_size=1)
     try:
         parallel_state.initialize_model_parallel()

@@ -9,6 +9,7 @@ from typing import ClassVar, Optional, Self
 import torch
 
 from marinskyrl.distillation import TeacherEvidenceKind
+from skyrl_train.distributed.megatron import stable_softmax
 
 INVALID_TOPK_INDEX = -1
 RETAINED_MASS_ATOL = 1e-6
@@ -652,10 +653,10 @@ def student_topk_logprobs(logits: torch.Tensor, topk_indices: torch.Tensor) -> t
     if torch.any(topk_indices[valid_indices] >= logits.shape[-1]):
         raise ValueError(f"selected top-K indices must be smaller than student vocabulary size {logits.shape[-1]}")
     safe_indices = topk_indices.masked_fill(~valid_indices, 0).long()
-    float_logits = logits.float()
-    maximum, argmax = float_logits.max(dim=-1, keepdim=True)
-    margins = float_logits - maximum
-    tail = margins.exp().scatter(-1, argmax, 0).sum(dim=-1, keepdim=True)
-    selected = torch.gather(margins, dim=-1, index=safe_indices)
-    normalized = selected - torch.log1p(tail)
+    maximum, argmax = logits.max(dim=-1, keepdim=True)
+    lp_top = stable_softmax.token_logprobs(
+        logits, argmax.squeeze(-1), 0, logits.shape[-1], None, chunk_size=1
+    ).unsqueeze(-1)
+    selected = logits.gather(-1, safe_indices).float() - maximum.float() + lp_top
+    normalized = torch.where(safe_indices == argmax, lp_top, selected)
     return normalized.masked_fill(~valid_indices, torch.nan)
