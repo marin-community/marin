@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind and submit the #310 identity SFT to its 16-update milestone: one finite 4 x H100x8 RNO2a job, no retries.
+"""Run 16 restricted-attention identity updates: one finite 4 x H100x8 RNO2a job, no retries.
+
+This branch's launcher requires explicit learning rate and parameter patterns. Only the q/k/v/o projection
+weights in layers 18--23 update; all other masters remain bit-identical through the optimizer-only mask.
+The schema-7 receipt binds that update policy separately from the unchanged forward. The original full-model
+launcher remains on its earlier pin.
 
 ``sft_worker`` runs on every replica. It builds the source-derived recipe with the measured router policy, replaces
 the factory's data with the frozen mixture (``mixture-seed310-v1``, data config checked by hash) and calls
@@ -96,6 +101,15 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
     check_source_metadata,
     checkpoint_records,
 )
+from experiments.post_training.identity_context_distill.restricted_update import (
+    BASE_RECEIPT_SHA256,
+    HF_NAMES,
+    RestrictedAdamConfig,
+    base_runtime_receipt,
+    restrict_updates,
+    selected_parameter_names,
+    update_policy,
+)
 from experiments.post_training.identity_context_distill.runtime_recipe import (
     check_precision_runtime_receipt,
     check_xla_precision,
@@ -113,6 +127,7 @@ from experiments.post_training.identity_context_distill.sft import (
     identity_sft_config,
     source_export_overrides,
 )
+from experiments.weight_merging.identity_restricted.weight_delta_audit import audit_receipts
 
 MIXTURE_ROOT = f"{T310}/mixture-seed310-v1"
 DATA_CONFIG_SHA256 = "91a6423d0f7b708cf0c9846bf04d90fed46b6242705b6089038594ba6aa044df"
@@ -127,22 +142,26 @@ AUDITED_UPDATES = 64
 """The dataset audit pre-reads the frozen 512 sequences: 64 updates of 8."""
 SOURCE_SHARDS = 39
 ROUTER_BIAS_DTYPES = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
-RUNTIME_RECEIPT_SHA256S = frozenset(
+RESTRICTED_UPDATE_RECEIPT_SHA256S = frozenset(
     {
-        "565cf0b2e09b0e1d58b647b698364a04d41b80615b47f8e6e1dbc7167f0d8e9e",
+        "86316bcbf4ff4f7238c122beee1b994e332a2077f2c804035b25b3427f3fcf4a",
+        "b3b050f67ad43930287904c329a2cb46e28fe2793d53ca7e44f2674ed00bb712",
     }
 )
 DISPATCH_METRICS = ("moe_dropped", "moe_sender_dropped", "moe_receiver_dropped")
 
 
 def sft_runtime_receipt(receipt_bytes: bytes, receipt_sha256: str) -> dict:
-    """Require the reviewed schema-6 arm-(a) forward."""
-    if receipt_sha256 not in RUNTIME_RECEIPT_SHA256S:
-        raise ValueError("SFT requires a reviewed schema-6 runtime receipt")
+    """Require a reviewed restricted-update receipt over the unchanged forward."""
+    if receipt_sha256 not in RESTRICTED_UPDATE_RECEIPT_SHA256S:
+        raise ValueError("SFT requires a reviewed schema-7 runtime receipt")
     receipt = approved_receipt(receipt_bytes, receipt_sha256)
+    base = base_runtime_receipt(receipt)
+    if receipt["update_policy"]["base_receipt_sha256"] != BASE_RECEIPT_SHA256:
+        raise ValueError("Restricted SFT requires the reviewed base forward receipt")
     model = receipt["runtime_model_config"]
     if (
-        receipt["schema_version"] != 6
+        base["schema_version"] != 6
         or model["moe_capacity_factor"] != 4.0
         or model["router_combine_fp32"] is not True
         or model["fp32_activations"] is not True
@@ -218,6 +237,9 @@ def sft_config(
     generation_bytes: bytes,
     data_config_bytes: bytes,
     runtime_receipt: dict,
+    *,
+    learning_rate: float,
+    trainable_param_patterns: tuple[str, ...],
 ) -> TrainLmConfig:
     """The factory recipe at ``hosts=4`` and 16 updates, with its data replaced by the frozen mixture."""
     data = frozen_data_config(data_config_bytes)
@@ -237,7 +259,9 @@ def sft_config(
         attention_implementation=runtime_receipt["runtime_model_config"]["attention_implementation"],
         stop_after_updates=STOP_AFTER_UPDATES,
     )
-    return replace(base, data=data)
+    return restrict_updates(
+        replace(base, data=data), learning_rate=learning_rate, trainable_param_patterns=trainable_param_patterns
+    )
 
 
 def source_bind(lr0_source_receipt: dict, source_objects: dict) -> dict:
@@ -275,7 +299,7 @@ def train_checked_updates(
     check_batch: Callable[[LmExample, int], dict],
     count: int,
 ) -> tuple[TrainerState, list[dict]]:
-    """Run ``count`` updates, checking each consumed batch immediately before its update."""
+    """Check every consumed batch and record the injected Adam rate actually used for each update."""
     first = int(state.step)
     updates = []
     for update in range(first, first + count):
@@ -288,7 +312,16 @@ def train_checked_updates(
         state = info.state
         if int(state.step) != update + 1 or not np.isfinite(info.loss):
             raise ValueError(f"Update {update} did not complete with a finite loss")
-        updates.append({**receipt, "update": update, "loss": float(info.loss), "dispatch": counts})
+        learning_rate = state.opt_state.inner_states["trained"].inner_state.hyperparams["learning_rate"]
+        updates.append(
+            {
+                **receipt,
+                "update": update,
+                "loss": float(info.loss),
+                "dispatch": counts,
+                "learning_rate": float(gather_global(learning_rate)),
+            }
+        )
     return state, updates
 
 
@@ -318,7 +351,7 @@ def run_identity_sft(
     rounding_path = runtime_receipt["routing_reference"]["path"]
     check_precision_runtime_receipt(
         config,
-        runtime_receipt,
+        base_runtime_receipt(runtime_receipt),
         config_bytes=config_bytes,
         generation_bytes=generation_bytes,
         rounding_bytes=StoragePath(rounding_path).read_bytes(),
@@ -360,6 +393,26 @@ def run_identity_sft(
         loaded_model_config = asdict(model.config)
         if loaded_model_config != runtime_receipt["runtime_model_config"]:
             raise ValueError("HF loader discarded or changed the approved runtime model config")
+        assert isinstance(config.optimizer, RestrictedAdamConfig)
+        physical_names = selected_parameter_names(model, config.optimizer.trainable_param_patterns)
+        canonical_names = {
+            name: hf_name
+            for name, hf_name in zip(
+                runtime_receipt["update_policy"]["physical_names"],
+                runtime_receipt["update_policy"]["hf_names"],
+                strict=True,
+            )
+        }
+        if set(physical_names) != set(canonical_names) or canonical_names != dict(
+            zip(
+                update_policy(config.optimizer)["physical_names"],
+                update_policy(config.optimizer)["hf_names"],
+                strict=True,
+            )
+        ):
+            raise ValueError("Loaded model update slice differs from the reviewed physical/HF names")
+        if not set(canonical_names.values()).issubset(model.to_state_dict()):
+            raise ValueError("Loaded model lacks the reviewed HF projection weights")
         source_biases = router_values(model)
         state = trainer.initial_state(
             jrandom.PRNGKey(config.trainer.seed), model=model, is_trainable=config.adapter.trainable_filter(model)
@@ -411,6 +464,7 @@ def run_identity_sft(
             lambda: check_export_metadata(source, json.loads((StoragePath(export_path) / "config.json").read_bytes()))
         )
         audits.save_audit(state, export_path)
+        weight_delta = run_on_export_writer(lambda: write_weight_delta(run_root, export_path, lr0_source_bytes))
         return {
             "completed_updates": int(state.step),
             "next_data_offset": config.trainer.batch_schedule.global_data_offset_by_step(int(state.step)),
@@ -425,6 +479,7 @@ def run_identity_sft(
             "save_seconds": save_seconds,
             "worker_seconds": time.monotonic() - started,
             "runtime_recipe_receipt": runtime_receipt,
+            "weight_delta_audit": weight_delta,
             "runtime_receipt_sha256": receipt_sha256,
             "xla_precision": runtime_receipt["xla_precision"],
             "device_memory": {"after_update": memory},
@@ -442,6 +497,9 @@ def sft_worker(
     lr0_source: dict,
     source_objects: dict,
     load_audits: Callable[[], SftAudits],
+    *,
+    learning_rate: float,
+    trainable_param_patterns: tuple[str, ...],
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
@@ -450,7 +508,16 @@ def sft_worker(
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
+    base = sft_config(
+        run_root,
+        run_id,
+        config_bytes,
+        generation_bytes,
+        data_config_bytes,
+        runtime_receipt,
+        learning_rate=learning_rate,
+        trainable_param_patterns=trainable_param_patterns,
+    )
     config, observed = configure_precision_runtime(
         base,
         config_bytes=config_bytes,
@@ -460,8 +527,11 @@ def sft_worker(
         rounding_sha256=reference["sha256"],
         xla_precision=xla_precision_in_process(),
     )
-    if observed != runtime_receipt:
+    if observed != base_runtime_receipt(runtime_receipt):
         raise ValueError("Derived runtime recipe differs from the reviewed receipt")
+    assert isinstance(config.optimizer, RestrictedAdamConfig)
+    if runtime_receipt["update_policy"] != update_policy(config.optimizer):
+        raise ValueError("Optimizer update policy differs from the reviewed receipt")
     if config.data != base.data:
         raise ValueError("The precision runtime changed the frozen data config")
     config = replace(config, trainer=replace(config.trainer, tracker=NoopConfig()))
@@ -509,6 +579,9 @@ def bound_sft_worker(
     data_config_bytes: bytes,
     lr0_source: dict,
     source_objects: dict,
+    *,
+    learning_rate: float,
+    trainable_param_patterns: tuple[str, ...],
 ) -> None:
     """Check flags before backend startup; defer collective inputs to trainer initialization."""
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
@@ -523,6 +596,8 @@ def bound_sft_worker(
         lr0_source,
         source_objects,
         partial(load_sft_audits, run_root, lr0_source),
+        learning_rate=learning_rate,
+        trainable_param_patterns=trainable_param_patterns,
     )
 
 
@@ -533,6 +608,16 @@ def read_remote(path: str) -> bytes:
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def write_weight_delta(run_root: str, export_path: str, source_receipt_bytes: bytes) -> dict:
+    """Fail on any outside-slice change using the two existing hash receipts."""
+    trained_bytes = (StoragePath(export_path) / "trained-precision-audit.json").read_bytes()
+    summary = audit_receipts(source_receipt_bytes, json.loads(trained_bytes), set(HF_NAMES), STOP_AFTER_UPDATES)
+    report = summary | {"trained_audit_sha256": sha256(trained_bytes)}
+    path = StoragePath(run_root) / "audits/weight-delta.json"
+    write_export_json(path, report)
+    return {"path": str(path), "sha256": sha256(path.read_bytes()), "mode": report["mode"]}
 
 
 def lr0_pass(lr0_root: str, runtime_receipt: dict) -> dict:
@@ -550,7 +635,7 @@ def lr0_pass(lr0_root: str, runtime_receipt: dict) -> dict:
     result = json.loads(result_bytes)
     if result.get("completed_updates") != 1:
         raise ValueError("LR0 result does not record one completed update")
-    if result.get("runtime_recipe_receipt") != runtime_receipt:
+    if result.get("runtime_recipe_receipt") != base_runtime_receipt(runtime_receipt):
         raise ValueError("LR0 used a different runtime recipe from the SFT forward")
     source_path = prefix_join(lr0_root, "audits/source-tensor-hashes.json")
     source_bytes = read_remote(source_path)
@@ -598,6 +683,7 @@ def plan(
     xla_precision: str,
 ) -> dict:
     assert isinstance(config.model, SnowballConfig)
+    assert isinstance(config.optimizer, RestrictedAdamConfig)
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
     return {
@@ -612,6 +698,7 @@ def plan(
             "weight_decay": config.optimizer.weight_decay,
             "max_grad_norm": config.optimizer.max_grad_norm,
         },
+        "update_policy": update_policy(config.optimizer),
         "batch": {
             "train_batch_size": config.trainer.train_batch_size,
             "per_device_parallelism": config.trainer.per_device_parallelism,
@@ -646,8 +733,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
-    parser.add_argument("--runtime-receipt", required=True, help="local reviewed schema-6 runtime receipt")
+    parser.add_argument("--runtime-receipt", required=True, help="local reviewed schema-7 runtime receipt")
     parser.add_argument("--runtime-receipt-sha256", required=True)
+    parser.add_argument("--learning-rate", type=float, choices=(2e-6, 1e-5), required=True)
+    parser.add_argument("--trainable-param-pattern", action="append", required=True)
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
     parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
@@ -675,7 +764,19 @@ def main() -> None:
     if sha256(generation_bytes) != SOURCE_FILE_HASHES["generation_config.json"]:
         raise SystemExit("source generation_config.json differs from the pinned hash")
     data_config_bytes, mixture = frozen_mixture()
-    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
+    config = sft_config(
+        run_root,
+        args.job_name,
+        config_bytes,
+        generation_bytes,
+        data_config_bytes,
+        runtime_receipt,
+        learning_rate=args.learning_rate,
+        trainable_param_patterns=tuple(args.trainable_param_pattern),
+    )
+    assert isinstance(config.optimizer, RestrictedAdamConfig)
+    if update_policy(config.optimizer) != runtime_receipt["update_policy"]:
+        raise SystemExit("Update policy differs from the reviewed runtime receipt")
     lr0 = lr0_pass(args.lr0_run_root.rstrip("/"), runtime_receipt) if args.lr0_run_root else None
     source_objects = source_object_list(args.source_object_list) if args.source_object_list else None
     job_plan = {
@@ -734,6 +835,8 @@ def main() -> None:
         data_config_bytes,
         lr0["source_receipt"],
         source_objects,
+        learning_rate=args.learning_rate,
+        trainable_param_patterns=tuple(args.trainable_param_pattern),
     )
     job_id = submit_entrypoint(
         args.job_name, entrypoint, args.timeout_seconds, args.priority, runtime_receipt["xla_precision"]

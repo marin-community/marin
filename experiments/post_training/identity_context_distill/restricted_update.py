@@ -116,23 +116,25 @@ def restricted_runtime_receipt(
         generation_bytes=generation_bytes,
         rounding_bytes=rounding_bytes,
     )
+    return base | {"schema_version": 7, "update_policy": update_policy(optimizer)}
+
+
+def update_policy(optimizer: RestrictedAdamConfig) -> dict:
+    """Describe the optimizer partition separately from the unchanged forward."""
     adam = asdict(optimizer)
     patterns = adam.pop("trainable_param_patterns")
-    return base | {
-        "schema_version": 7,
-        "update_policy": {
-            "schema": UPDATE_SCHEMA,
-            "base_receipt_sha256": BASE_RECEIPT_SHA256,
-            "trainable_param_patterns": list(patterns),
-            "physical_names": list(PHYSICAL_NAMES),
-            "hf_names": list(HF_NAMES),
-            "selected_count": len(PHYSICAL_NAMES),
-            "adam": adam,
-            "clip_scope": "selected_parameter_leaves_only",
-            "frozen_optimizer_state": "absent",
-            "frozen_updates": "None",
-            "frozen_gradients_computed": True,
-        },
+    return {
+        "schema": UPDATE_SCHEMA,
+        "base_receipt_sha256": BASE_RECEIPT_SHA256,
+        "trainable_param_patterns": list(patterns),
+        "physical_names": list(PHYSICAL_NAMES),
+        "hf_names": list(HF_NAMES),
+        "selected_count": len(PHYSICAL_NAMES),
+        "adam": adam,
+        "clip_scope": "selected_parameter_leaves_only",
+        "frozen_optimizer_state": "absent",
+        "frozen_updates": "None",
+        "frozen_gradients_computed": True,
     }
 
 

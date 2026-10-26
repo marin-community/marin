@@ -17,7 +17,7 @@ import pytest
 from haliax.quantization import apply_updates
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
-from levanter.optim.config import AdamConfig
+from levanter.optim.config import AdamConfig, LionConfig
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.post_training.identity_context_distill import restricted_update
@@ -172,3 +172,13 @@ def test_receipt_rederives_the_forward_and_binds_each_update_policy(monkeypatch)
             restricted_runtime_receipt(changed, base_receipt_bytes=base_bytes, **evidence)
     receipts[1]["update_policy"]["adam"]["learning_rate"] = 2e-6
     assert receipts[0] == receipts[1]
+
+
+def test_unreviewed_optimizer_learning_rate_and_receipt_schema_are_refused():
+    config, _ = inputs()
+    with pytest.raises(ValueError, match="Adam recipe"):
+        restrict_updates(replace(config, optimizer=LionConfig()), learning_rate=2e-6, trainable_param_patterns=PATTERNS)
+    with pytest.raises(ValueError, match="two reviewed"):
+        restrict_updates(config, learning_rate=5e-6, trainable_param_patterns=PATTERNS)
+    with pytest.raises(ValueError, match="Not a restricted"):
+        base_runtime_receipt({"schema_version": 6})

@@ -7,14 +7,20 @@ Seams: local synthetic HF/data receipts and their hash pins; a tiny 26-layer
 Snowball checkpoint; an eight-row ListAsyncDataset in place of cached chats;
 the factory's CPU/data options; CPU slice metadata standing in for four hosts;
 an external Iris endpoint-registry/client fake; a local alias for routing evidence; and
-Trainer.train_step replaced only to stop before its computation. The worker functions, precision checks,
+Trainer.train_step replaced to stop at the training boundary. In the masked-update arm that boundary runs two
+real updates on a sequence gathered to host, cropped to eight positions and loader-placed again after the
+full 512-row audit, using randomized tiny source weights and one frozen signed zero. The tiny model retains
+256 experts because the real source-layout audit requires that router-bias shape, plus 26 layers and all
+502 tensor names. The masked arm clears JAX compilation caches after
+startup and audits, before real updates, to fit the CPU memory budget. The worker functions, precision checks,
 backend-state queries, frozen-input loader, audits, HF loader, distributed initialization and gathers are not
 patched on the valid path. Iris task environment variables drive Levanter's normal initializer. The sensitivity
 arm deliberately inserts a real gather before that initializer. Four processes expose eight CPU devices each;
-no optimizer update runs.
+the optimizer and mask are not stubbed. The ordinary startup arm runs no optimizer update.
 """
 
 import base64
+import gc
 import hashlib
 import json
 import os
@@ -31,6 +37,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from iris.client.client import IrisContext, iris_ctx_scope
 from jax._src import xla_bridge
@@ -48,9 +55,12 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
-from experiments.interp.snowball_identity.multihost import gather_host_scalar
+from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows, gather_host_scalar
 from experiments.post_training.identity_context_distill import dataset_audit, runtime_recipe, sft, sft_launch
+from experiments.post_training.identity_context_distill.precision_probe import place_like_data_loader
 from experiments.post_training.identity_context_distill.precision_source_audit import INDEX, SOURCE_FILES
+from experiments.post_training.identity_context_distill.restricted_update import HF_NAMES, PHYSICAL_NAMES, update_policy
+from experiments.post_training.identity_context_distill.test_restricted_update import PATTERNS, named_arrays
 
 
 def digest(contents):
@@ -74,13 +84,13 @@ def example_arrays():
 
 @dataclass(frozen=True)
 class StartupDataConfig(LmDataConfig):
-    def train_set(self, position, batch_schedule, *, key):
+    def train_set(self, Pos, batch_schedule, *, key):
         tokens, weights, segments = example_arrays()
         examples = [
             LmExample(
-                hax.named(tokens[index], position),
-                hax.named(weights[index].astype(np.float32), position),
-                AttentionMask.causal().with_segment_ids(hax.named(segments[index], position)),
+                hax.named(tokens[index], Pos),
+                hax.named(weights[index].astype(np.float32), Pos),
+                AttentionMask.causal().with_segment_ids(hax.named(segments[index], Pos)),
             )
             for index in range(8)
         ]
@@ -110,10 +120,12 @@ def write_fixture(root):
         shapes = jax.eval_shape(
             lambda: SnowballLMHeadModel.init(hax.Axis("vocab", 32), config, key=jax.random.key(310)).to_state_dict()
         )
-    tensors = {
-        name: np.full(shape.shape, 0.125, dtype=np.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16)
-        for name, shape in shapes.items()
-    }
+    rng = np.random.default_rng(310)
+    tensors = {}
+    for name, shape in shapes.items():
+        values = np.ones(shape.shape) if "norm.weight" in name else rng.normal(0, 0.25, shape.shape)
+        tensors[name] = values.astype(np.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16)
+    tensors["lm_head.weight"].flat[0] = -0.0
     assert len(tensors) == 502
     save_file(tensors, str(source / "weights.safetensors"))
     write_json(
@@ -305,8 +317,8 @@ def child(root, rank, port, mode):
         patch.setattr(trainer_module, "create_mesh_from_axis_specs", cpu_mesh)
         factory = sft_launch.sft_config
 
-        def config_factory(*args):
-            config = factory(*args)
+        def config_factory(*args, **kwargs):
+            config = factory(*args, **kwargs)
             data = StartupDataConfig(**{field.name: getattr(config.data, field.name) for field in fields(LmDataConfig)})
             assert config.trainer.distributed.initialize_jax_distributed is True
             trainer = replace(config.trainer, require_accelerator=False)
@@ -338,6 +350,8 @@ def child(root, rank, port, mode):
             generation_bytes,
             data_bytes,
             {"runtime_model_config": {"attention_implementation": "torch_order"}},
+            learning_rate=2e-6,
+            trainable_param_patterns=PATTERNS,
         )
         _, receipt = runtime_recipe.configure_precision_runtime(
             base,
@@ -348,11 +362,15 @@ def child(root, rank, port, mode):
             rounding_sha256=pins["rounding_sha"],
             xla_precision="default",
         )
+        receipt = receipt | {"schema_version": 7, "update_policy": update_policy(base.optimizer)}
         receipt_bytes = json.dumps(receipt).encode()
-        patch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest(receipt_bytes)})
+        patch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {digest(receipt_bytes)})
 
         class BeforeTrainStep(Exception):
             pass
+
+        real_step = Trainer.train_step
+        update_report = {}
 
         def before_step(trainer, state, batch):
             assert int(state.step) == 0 and xla_bridge.backends_are_initialized()
@@ -364,6 +382,68 @@ def child(root, rank, port, mode):
             with pytest.raises(ValueError, match="XLA precision"):
                 runtime_recipe.check_xla_precision("default")
             os.environ.pop("XLA_FLAGS")
+            if mode == "masked_update":
+                axes = (batch.tokens.axes[0], hax.Axis("position", 8))
+                assert isinstance(batch.attn_mask, AttentionMask)
+                segments = batch.attn_mask.segment_ids
+                assert segments is not None
+                query_segments, key_segments = segments
+                small = LmExample(
+                    hax.named(gather_global(batch.tokens.array)[:, :8], axes),
+                    hax.named(gather_global(batch.loss_weight.array)[:, :8], axes),
+                    batch.attn_mask.with_segment_ids(
+                        hax.named(gather_global(query_segments.array)[:, :8], axes),
+                        hax.named(gather_global(key_segments.array)[:, :8], axes),
+                    ),
+                )
+                small = place_like_data_loader(small, trainer)
+                assert small.tokens.array.sharding.spec == batch.tokens.array.sharding.spec
+                jax.clear_caches()
+                gc.collect()
+
+                def local_bytes(model):
+                    return {
+                        name: tuple(
+                            (str(shard.index), np.asarray(shard.data).tobytes()) for shard in value.addressable_shards
+                        )
+                        for name, value in model.to_state_dict().items()
+                    }
+
+                before = local_bytes(state.model)
+                applied = []
+                for _ in range(2):
+                    dispatch = sft_launch.DispatchMetrics()
+                    with sft_launch.current_tracker(dispatch):
+                        info = real_step(trainer, state, small)
+                    assert np.isfinite(info.loss)
+                    assert all(not any(counts) for counts in dispatch.checked_counts().values())
+                    state = info.state
+                    applied.append(
+                        float(
+                            gather_global(
+                                state.opt_state.inner_states["trained"].inner_state.hyperparams["learning_rate"]
+                            )
+                        )
+                    )
+                np.testing.assert_array_equal(applied, np.asarray([0, 1e-6], dtype=np.float32))
+                after = local_bytes(state.model)
+                names = sorted(before)
+                changed = gather_host_rows(np.array([before[name] != after[name] for name in names], dtype=np.int32))
+                assert {name for name, differs in zip(names, np.any(changed, axis=0), strict=True) if differs} == set(
+                    HF_NAMES
+                )
+                adam_states = [
+                    value
+                    for value in jax.tree.leaves(
+                        state.opt_state, is_leaf=lambda value: isinstance(value, optax.ScaleByAdamState)
+                    )
+                    if isinstance(value, optax.ScaleByAdamState)
+                ]
+                assert len(adam_states) == 1 and int(gather_global(adam_states[0].count)) == 2
+                assert set(named_arrays(adam_states[0].mu)) == set(PHYSICAL_NAMES)
+                assert set(named_arrays(adam_states[0].nu)) == set(PHYSICAL_NAMES)
+                assert not jax.tree.leaves(state.opt_state.inner_states["frozen"])
+                update_report.update(masked_updates=2, trained_changed=24, frozen_unchanged=478, learning_rates=applied)
             raise BeforeTrainStep
 
         patch.setattr(Trainer, "train_step", before_step)
@@ -395,13 +475,18 @@ def child(root, rank, port, mode):
                     data_bytes,
                     {"path": str(root / "source-receipt.json"), "sha256": pins["source_receipt_sha"]},
                     {"path": str(root / "objects.json"), "sha256": pins["objects_sha"]},
+                    learning_rate=2e-6,
+                    trainable_param_patterns=PATTERNS,
                 )
         except BeforeTrainStep:
             report = json.loads((root / "run/audits/dataset-step-0.json").read_bytes())
             assert len(report["updates"]) == report["same_iterator_batches_buffered"] == 64
             masters = json.loads((root / "run/audits/master-step-0.json").read_bytes())
             assert masters["tensor_count"] == 502
-            print(json.dumps({"process": rank, "before_train_step": True, "buffered_updates": 64}), flush=True)
+            print(
+                json.dumps({"process": rank, "before_train_step": True, "buffered_updates": 64, **update_report}),
+                flush=True,
+            )
         else:
             raise AssertionError("Startup did not reach the first train_step boundary")
     jax.distributed.shutdown()
@@ -470,6 +555,17 @@ def test_sft_startup_rejects_a_collective_before_code_owned_distributed_init(tmp
     results = run_children(tmp_path, workdir=Path.cwd(), mode="early_gather")
     for code, _, error in results:
         assert code != 0 and "jax.distributed.initialize() must be called before any JAX calls" in error
+    assert not (tmp_path / "run/sft-result.json").exists()
+
+
+@pytest.mark.timeout(900)
+def test_four_process_masked_updates_preserve_frozen_bits_and_have_no_frozen_adam_slots(tmp_path):
+    write_fixture(tmp_path)
+    results = run_children(tmp_path, workdir=Path.cwd(), mode="masked_update")
+    for code, output, error in results:
+        assert code == 0, error[-8000:]
+        report = json.loads(output.strip().splitlines()[-1])
+        assert report["masked_updates"] == 2 and report["trained_changed"] == 24 and report["frozen_unchanged"] == 478
     assert not (tmp_path / "run/sft-result.json").exists()
 
 

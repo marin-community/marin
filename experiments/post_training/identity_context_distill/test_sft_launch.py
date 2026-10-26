@@ -12,6 +12,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -22,13 +23,33 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 from experiments.post_training.identity_context_distill import lr0_probe, sft_launch
-from experiments.post_training.identity_context_distill.test_lr0_probe import fixture
+from experiments.post_training.identity_context_distill.restricted_update import (
+    RestrictedAdamConfig,
+    base_runtime_receipt,
+    update_policy,
+)
+from experiments.post_training.identity_context_distill.test_lr0_probe import fixture as lr0_fixture
+from experiments.post_training.identity_context_distill.test_restricted_update import PATTERNS
 from experiments.post_training.identity_context_distill.test_runtime_recipe import inputs
+from experiments.weight_merging.identity_restricted import weight_delta_audit
 
 RUN_ROOT = "s3://marin-rno2a/fixture/sft"
 MIXTURE = "s3://marin-rno2a/fixture/mixture"
 LR0_SOURCE = {"path": "s3://marin-rno2a/lr0/source.json", "sha256": "a" * 64}
 SOURCE_OBJECTS = {"path": "s3://marin-rno2a/lr0/source-object-list.json", "sha256": "b" * 64, "objects": 45}
+
+
+def fixture(monkeypatch, **kwargs):
+    receipt = json.loads(lr0_fixture(monkeypatch, **kwargs))
+    optimizer = RestrictedAdamConfig(
+        learning_rate=2e-6,
+        lr_schedule="constant",
+        warmup=2,
+        weight_decay=0,
+        max_grad_norm=0.5,
+        trainable_param_patterns=PATTERNS,
+    )
+    return json.dumps(receipt | {"schema_version": 7, "update_policy": update_policy(optimizer)}).encode()
 
 
 def test_checked_loss_matches_unmasked_loss_on_real_positions():
@@ -114,10 +135,10 @@ def frozen(monkeypatch, data_bytes: bytes) -> bytes:
     return data_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes, data_bytes):
+def run_worker(monkeypatch, receipt_bytes, data_bytes, learning_rate):
     calls: dict = {"writer": 0}
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
-    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {receipt_sha})
+    monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {receipt_sha})
 
     def writer(action):
         calls["writer"] += 1
@@ -136,7 +157,16 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
     monkeypatch.setattr(sft_launch, "run_identity_sft", run)
     audits = sft_launch.SftAudits(lambda it, config: (it, {}), lambda batch, update: {}, lambda state, path: None)
     sft_launch.sft_worker(
-        RUN_ROOT, "t310-sft", receipt_bytes, receipt_sha, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, lambda: audits
+        RUN_ROOT,
+        "t310-sft",
+        receipt_bytes,
+        receipt_sha,
+        data_bytes,
+        LR0_SOURCE,
+        SOURCE_OBJECTS,
+        lambda: audits,
+        learning_rate=learning_rate,
+        trainable_param_patterns=PATTERNS,
     )
     return calls, audits
 
@@ -172,7 +202,7 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
         }
     )
     data_bytes = frozen(monkeypatch, data_config())
-    calls, audits = run_worker(monkeypatch, receipt_bytes, data_bytes)
+    calls, audits = run_worker(monkeypatch, receipt_bytes, data_bytes, 2e-6)
     config, kwargs = calls["config"], calls["kwargs"]
     assert config.data == sft_launch.frozen_data_config(data_bytes)
     assert config.data.train_weights == {"identity": 264.0, "preservation": 547.0}
@@ -203,6 +233,8 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
     # The result write is collective: the worker calls it on every rank, not behind a rank-0 guard.
     assert calls["writer"] == 1
     assert calls["result"] == (f"{RUN_ROOT}/sft-result.json", {"completed_updates": 16})
+    with pytest.raises(ValueError, match="update policy"):
+        run_worker(monkeypatch, receipt_bytes, data_bytes, 1e-5)
 
 
 def test_frozen_data_config_refuses_other_bytes_and_packed_components(monkeypatch):
@@ -230,7 +262,10 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
         per_device_parallelism=1,
         load_checkpoint=False,
     )
-    optimizer = AdamConfig(learning_rate=1e-2, warmup=0, weight_decay=0.0).build(3)
+    optimizer = optax.multi_transform(
+        {"trained": AdamConfig(learning_rate=1e-2, lr_schedule="constant", warmup=0, weight_decay=0.0).build(3)},
+        lambda params: jax.tree.map(lambda _: "trained", params),
+    )
     axes = (hax.Axis("batch", 1), hax.Axis("position", 2))
 
     def batch(value):
@@ -267,6 +302,9 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
         assert events == ["check-0-1", "step-1", "check-1-2", "step-2", "check-2-3", "step-3"]
         assert [u["update"] for u in updates] == [0, 1, 2] and [u["ids"] for u in updates] == [[1], [2], [3]]
         assert all(np.isfinite(u["loss"]) for u in updates) and int(final.step) == 3
+        np.testing.assert_array_equal(
+            [update["learning_rate"] for update in updates], np.full(3, 1e-2, dtype=np.float32)
+        )
         assert next(batches).tokens.array[0, 0] == 4
 
         events.clear()
@@ -287,7 +325,10 @@ def test_update_refuses_dropped_or_unmeasured_dispatch_before_next_step(missing)
         per_device_parallelism=1,
         load_checkpoint=False,
     )
-    optimizer = AdamConfig(learning_rate=1e-2, warmup=0, weight_decay=0.0).build(2)
+    optimizer = optax.multi_transform(
+        {"trained": AdamConfig(learning_rate=1e-2, warmup=0, weight_decay=0.0).build(2)},
+        lambda params: jax.tree.map(lambda _: "trained", params),
+    )
     axes = (hax.Axis("batch", 1), hax.Axis("position", 2))
     example = LmExample(hax.named(jnp.ones((1, 2), jnp.int32), axes), hax.ones(axes))
 
@@ -325,7 +366,7 @@ def remote_store(monkeypatch, files: dict[str, dict]):
 def passing_lr0(root: str, runtime: dict) -> dict[str, dict]:
     files = {
         f"{root}/precision-gate/gate.json": {"failures": []},
-        f"{root}/lr0-result.json": {"completed_updates": 1, "runtime_recipe_receipt": runtime},
+        f"{root}/lr0-result.json": {"completed_updates": 1, "runtime_recipe_receipt": base_runtime_receipt(runtime)},
         f"{root}/audits/source-tensor-hashes.json": {"tensors": {f"t{i}": {} for i in range(502)}},
     }
     files.update({f"{root}/precision-gate/ranks/{r}.json": {"stage": "updated", "process": r} for r in range(4)})
@@ -429,10 +470,21 @@ def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
     monkeypatch.setattr(
         sft_launch, "audit_trained_export", lambda state, path, **kwargs: calls.append(("export", kwargs))
     )
-    monkeypatch.setattr(sft_launch, "sft_worker", lambda *args: calls.append(("worker", args)))
-    sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
+    monkeypatch.setattr(sft_launch, "sft_worker", lambda *args, **kwargs: calls.append(("worker", args, kwargs)))
+    sft_launch.bound_sft_worker(
+        RUN_ROOT,
+        "job",
+        b"receipt",
+        "sha",
+        b"data",
+        LR0_SOURCE,
+        SOURCE_OBJECTS,
+        learning_rate=2e-6,
+        trainable_param_patterns=PATTERNS,
+    )
     assert calls[0] == "storage"
     worker_args = calls[1][1]
+    assert calls[1][2] == {"learning_rate": 2e-6, "trainable_param_patterns": PATTERNS}
     assert worker_args[:7] == (RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
     audits = worker_args[7]()
     assert calls[2] == ("frozen", sft_launch.MIXTURE_ROOT, sft_launch.INVENTORY_PATH)
@@ -475,7 +527,16 @@ def test_plan_records_the_recipe_and_a_bounded_ceiling(monkeypatch):
     receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
     _, args = inputs()
     data_bytes = frozen(monkeypatch, data_config())
-    config = sft_launch.sft_config(RUN_ROOT, "job", args["config_bytes"], args["generation_bytes"], data_bytes, runtime)
+    config = sft_launch.sft_config(
+        RUN_ROOT,
+        "job",
+        args["config_bytes"],
+        args["generation_bytes"],
+        data_bytes,
+        runtime,
+        learning_rate=2e-6,
+        trainable_param_patterns=PATTERNS,
+    )
     job_plan = sft_launch.plan("job", RUN_ROOT, 7200, "interactive", config, receipt_sha, runtime["xla_precision"])
     assert job_plan["runtime_receipt_sha256"] == receipt_sha
     assert job_plan["xla_precision"] == "default"
@@ -500,7 +561,7 @@ def test_worker_rejects_precision_mismatch_before_storage_or_dataset_reads(monke
         xla_precision="default",
     )
     digest = hashlib.sha256(receipt_bytes).hexdigest()
-    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
+    monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {digest})
     monkeypatch.setenv("XLA_FLAGS", "--xla_allow_excess_precision=false")
     monkeypatch.setattr(
         "experiments.post_training.identity_context_distill.runtime_recipe.xla_bridge.backends_are_initialized",
@@ -513,7 +574,7 @@ def test_worker_rejects_precision_mismatch_before_storage_or_dataset_reads(monke
     if entrypoint == "sft_worker":
         arguments.append(None)
     with pytest.raises(ValueError, match="XLA precision"):
-        getattr(sft_launch, entrypoint)(*arguments)
+        getattr(sft_launch, entrypoint)(*arguments, learning_rate=2e-6, trainable_param_patterns=PATTERNS)
     assert reads == []
 
 
@@ -522,12 +583,12 @@ def test_sft_refuses_unreviewed_or_changed_runtime_receipts(monkeypatch):
         monkeypatch, router_combine_fp32=True, fp32_activations=True, attention_implementation="torch_order"
     )
     digest = hashlib.sha256(receipt_bytes).hexdigest()
-    with pytest.raises(ValueError, match="reviewed schema-6"):
+    with pytest.raises(ValueError, match="reviewed schema-7"):
         sft_launch.sft_runtime_receipt(receipt_bytes, digest)
-    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
+    monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {digest})
     with pytest.raises(ValueError, match="differs from"):
         sft_launch.sft_runtime_receipt(receipt_bytes + b" ", digest)
-    assert sft_launch.sft_runtime_receipt(receipt_bytes, digest)["schema_version"] == 6
+    assert sft_launch.sft_runtime_receipt(receipt_bytes, digest)["schema_version"] == 7
 
 
 def test_submit_requires_the_precision_setting_before_any_job_access():
@@ -544,7 +605,7 @@ def test_submit_requires_the_precision_setting_before_any_job_access():
     ],
 )
 def test_sft_refuses_other_reviewed_arm_receipts(receipt_sha):
-    with pytest.raises(ValueError, match="reviewed schema-6"):
+    with pytest.raises(ValueError, match="reviewed schema-7"):
         sft_launch.sft_runtime_receipt(b"not read for an excluded receipt", receipt_sha)
 
 
@@ -558,7 +619,7 @@ def test_sft_refuses_other_arm_settings_even_with_an_allowed_digest(monkeypatch,
         xla_precision="no_excess_precision",
     )
     digest = hashlib.sha256(receipt_bytes).hexdigest()
-    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
+    monkeypatch.setattr(sft_launch, "RESTRICTED_UPDATE_RECEIPT_SHA256S", {digest})
     with pytest.raises(ValueError, match=r"must match arm \(a\)"):
         sft_launch.sft_runtime_receipt(receipt_bytes, digest)
 
@@ -583,3 +644,43 @@ def test_lr0_submit_keeps_route_policy_and_precision_through_shared_helper(monke
     assert result == "job-id"
     assert calls["entrypoint"] == (lr0_probe.lr0_worker, RUN_ROOT, "run", b"receipt", "digest", "report_g1b_l0")
     assert calls["submit"] == ("job", entrypoint, 7200, "production", "default")
+
+
+@pytest.mark.parametrize("outside_changed", [False, True])
+def test_weight_delta_binding_is_fatal_before_a_result_receipt(tmp_path, monkeypatch, outside_changed):
+    """Only the source-receipt digest is replaced for this synthetic 502-tensor metadata fixture."""
+    selected = set(weight_delta_audit.slice_names("18-23", "q,k,v,o"))
+    names = selected | {f"frozen.{index}" for index in range(478)}
+    source = {name: {"native_sha256": "a" * 64, "master_sha256": "b" * 64} for name in names}
+    source_bytes = json.dumps({"tensors": source}).encode()
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    monkeypatch.setattr(weight_delta_audit, "SOURCE_RECEIPT_SHA256", source_sha)
+    trained = {
+        "source_receipt_sha256": source_sha,
+        "completed_updates": 16,
+        "tensors": {
+            name: {"export_sha256": "a" * 64, "master_sha256": ("c" if name in selected else "b") * 64} for name in names
+        },
+    }
+    if outside_changed:
+        trained["tensors"]["frozen.0"]["master_sha256"] = "d" * 64
+    export = tmp_path / "hf"
+    export.mkdir()
+    (export / "trained-precision-audit.json").write_text(json.dumps(trained))
+    run = tmp_path / "run"
+    if outside_changed:
+        with pytest.raises(ValueError, match=r"frozen\.0: frozen tensor changed"):
+            sft_launch.write_weight_delta(str(run), str(export), source_bytes)
+        assert not run.exists()
+        return
+    binding = sft_launch.write_weight_delta(str(run), str(export), source_bytes)
+    contents = (run / "audits/weight-delta.json").read_bytes()
+    assert binding == {
+        "path": str(run / "audits/weight-delta.json"),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+        "mode": "receipts-only",
+    }
+    summary = json.loads(contents)
+    assert summary["frozen_equal"] == 478 and summary["slice_master_changed"] == 24
+    assert summary["slice_export_unchanged"] == sorted(selected)
+    assert not (run / "sft-result.json").exists()
