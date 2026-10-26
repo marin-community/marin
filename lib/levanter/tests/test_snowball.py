@@ -26,6 +26,7 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from safetensors.numpy import load_file
 
+from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
@@ -34,6 +35,7 @@ from levanter.models.snowball import (
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
+    _activation_spec,
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
@@ -298,6 +300,32 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_route_observer_is_output_identical():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        plain = hax.named_jit(lambda m, x: m.activations(x))(model, ids)
+        observed, routes = hax.named_jit(lambda m, x: m.activations_with_routes(x))(model, ids)
+
+        # Layer 0's routes, recomputed by hand from the block's own pieces.
+        tf = model.transformer
+        tokens = ids.array
+        hidden = tf.embed_gated_norm(tf.embed_norm(tf.token_embed.at[tokens].get(out_sharding=_activation_spec())))
+        block = tf.blocks[0]
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window)
+        x = hidden + block.attn(block.attn_gated_norm(block.rms_attn(hidden)), short_mask, disable_rope=False)
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
+        logits = jnp.einsum("bsd,de->bse", mlp_in, block.mlp.router).astype(jnp.float32) + block.mlp.router_bias
+        expected = jax.lax.top_k(logits, cfg.num_experts_per_token + 1)[1][..., :-1]
+
+    routes, expected = np.asarray(jax.device_get(routes)), np.asarray(jax.device_get(expected))
+    assert np.array_equal(np.asarray(jax.device_get(plain.array)), np.asarray(jax.device_get(observed.array)))
+    assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
+    assert ((routes >= 0) & (routes < cfg.num_experts)).all()
+    np.testing.assert_array_equal(routes[0], expected)
 
 
 @pytest.mark.parametrize(
