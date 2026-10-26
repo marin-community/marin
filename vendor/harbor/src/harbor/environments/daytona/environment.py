@@ -2006,7 +2006,7 @@ class DaytonaEnvironment(BaseEnvironment):
         return await self._poll_response(session_id, response.cmd_id)
 
     async def reap_command(self, command: str) -> None:
-        """Reuse Daytona's independent reap session for the owning command scope."""
+        """Confirm teardown without waiting behind the running command."""
         if not self._sandbox:
             raise RuntimeError("Cannot confirm teardown without a sandbox")
         reap_session = f"reap-{uuid4()}"

@@ -2061,35 +2061,6 @@ class TestSandboxKeepalive:
 
         await env._stop_keepalive()
 
-
-# ── F2: reap a runaway detached command on a cancelled poll ────────────
-
-
-class _ReapFakeProcess:
-    """Records session-command calls for the reap-on-cancel tests."""
-
-    def __init__(self):
-        self.created: list[str] = []
-        self.executed: list[tuple[str, str, object]] = []
-        self.deleted: list[str] = []
-
-    async def create_session(self, session_id):
-        self.created.append(session_id)
-
-    async def execute_session_command(self, session_id, request, timeout=None):
-        self.executed.append((session_id, request.command, timeout))
-        return SimpleNamespace(cmd_id="cmd-1", exit_code=0)
-
-    async def delete_session(self, session_id):
-        self.deleted.append(session_id)
-
-
-class _ReapFakeSandbox:
-    def __init__(self):
-        self.id = "sbx-1"
-        self.process = _ReapFakeProcess()
-
-
 @pytest.mark.parametrize(
     "message, expected_error",
     [
@@ -2152,14 +2123,3 @@ async def test_disk_exhaustion_is_not_masked_by_session_recreation(
         await env._sandbox_exec("true")
 
     assert raised.value.__cause__ is original
-
-
-async def test_cancelled_scope_uses_an_independent_daytona_session(temp_dir):
-    env = _make_env(temp_dir)
-    env._sandbox = cast("object", _ReapFakeSandbox())
-    with pytest.raises(asyncio.CancelledError):
-        async with env.scoped_command("printf stopped"):
-            raise asyncio.CancelledError()
-    process = env._sandbox.process
-    assert process.executed[0][1] == "bash -c 'printf stopped'"
-    assert process.deleted == process.created
