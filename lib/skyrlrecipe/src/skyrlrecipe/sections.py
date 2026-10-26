@@ -113,6 +113,8 @@ class Placement(Section):
     policy_strict_spread_pg: bool = field(False)
     """PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
     rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong."""
+    overlap_init: bool = field(False)
+    "Opt in to concurrent policy/engine startup on separately placed nodes."
     policy_per_gpu_bundles: bool = field(False)
     """PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
     Wrappers must preserve the compiled pool size and the assumptions of policy_strict_spread_pg."""

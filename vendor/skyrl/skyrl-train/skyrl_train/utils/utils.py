@@ -603,6 +603,16 @@ def validate_cfg(cfg: DictConfig):
         )
 
     # Validate placement
+    if cfg.trainer.placement.overlap_init:
+        conditions = {
+            "policy_strict_spread_pg=true and colocate_all=false": policy_strict_spread_eligible(cfg),
+            "the objective must not require a reference model": not use_ref_model,
+            "generator.run_engines_locally must be true": cfg.generator.run_engines_locally,
+            "distillation must be disabled": distillation_plan is None,
+        }
+        blockers = [reason for reason, satisfied in conditions.items() if not satisfied]
+        if blockers:
+            raise ValueError("Invalid trainer.placement.overlap_init: " + "; ".join(blockers))
     validate_expert_block_transport(cfg)
     if cfg.trainer.placement.colocate_all and cfg.trainer.rollout_buffer.max_staleness_steps != 0:
         # Colocated engines sleep during training, so no rollout may run ahead of the trained policy.
