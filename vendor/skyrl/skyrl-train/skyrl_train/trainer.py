@@ -324,6 +324,29 @@ def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> floa
     return flat_groups / len(group_rewards)
 
 
+def _training_schedule(cfg, dataset_size: int) -> tuple[int, int]:
+    steps_per_epoch = dataset_size // cfg.trainer.train_batch_size
+    if steps_per_epoch == 0:
+        raise ValueError(
+            f"the training dataset has {dataset_size} prompts, fewer than one batch of {cfg.trainer.train_batch_size}"
+        )
+    total_steps = steps_per_epoch * cfg.trainer.epochs
+    max_steps = cfg.trainer.get("max_steps")
+    if max_steps is not None and max_steps > 0:
+        total_steps = min(total_steps, max_steps)
+    return steps_per_epoch, total_steps
+
+
+def _kill_model_actors(models):
+    for model_name, model in zip(("policy_model", "critic_model", "ref_model"), models, strict=True):
+        if model is not None:
+            try:
+                logger.info(f"Killing {model_name} actors...")
+                model.kill_actors()
+            except Exception as error:
+                logger.warning(f"Error killing {model_name} actors: {error}")
+
+
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -350,7 +373,7 @@ class RayPPOTrainer:
         inference_engine_client: InferenceEngineClient,
         trajectory_runner: TrajectoryRunner,
         context: TrainingContext,
-        colocate_pg: Optional[PlacementGroup] = None,
+        models: tuple[PPORayActorGroup, Optional[PPORayActorGroup], Optional[PPORayActorGroup]],
         eval_dataset: Optional[PromptDataset] = None,
         eval_trajectory_runner: TrajectoryRunner | None = None,
         callbacks: Optional[List[TrainerCallback]] = None,
@@ -387,7 +410,6 @@ class RayPPOTrainer:
         self._configure_training_schedule()
 
         self.eval_dataloader = build_eval_dataloader(self.cfg, eval_dataset) if eval_dataset is not None else None
-        self.colocate_pg = colocate_pg
 
         self.resume_mode = ResumeMode(cfg.trainer.resume_mode)
 
@@ -428,10 +450,7 @@ class RayPPOTrainer:
         self._speculator_install_failures = 0
         self._speculator_checkpoint_poll_failures = 0
 
-        # initialized in `build_models`
-        self.policy_model: PPORayActorGroup = None
-        self.critic_model: Optional[PPORayActorGroup] = None
-        self.ref_model: Optional[PPORayActorGroup] = None
+        self.policy_model, self.critic_model, self.ref_model = models
         # used for checkpoint cleanup
         self._node_ids: Optional[List[str]] = None
 
@@ -464,17 +483,8 @@ class RayPPOTrainer:
 
     def _configure_training_schedule(self):
         """Count steps in batches of prompt groups; one pass over the dataset is one epoch."""
-        batch_size = self.cfg.trainer.train_batch_size
-        self.num_steps_per_epoch = len(self.train_dataset) // batch_size
-        if self.num_steps_per_epoch == 0:
-            raise ValueError(
-                f"the training dataset has {len(self.train_dataset)} prompts, fewer than one batch of {batch_size}"
-            )
-        self.total_training_steps = self.num_steps_per_epoch * self.cfg.trainer.epochs
-        self.available_training_steps = self.total_training_steps
-        max_steps = self.cfg.trainer.get("max_steps")
-        if max_steps is not None and max_steps > 0:
-            self.total_training_steps = min(self.total_training_steps, max_steps)
+        self.num_steps_per_epoch, self.total_training_steps = _training_schedule(self.cfg, len(self.train_dataset))
+        self.available_training_steps = self.num_steps_per_epoch * self.cfg.trainer.epochs
         logger.info(f"Steps per epoch: {self.num_steps_per_epoch}, total training steps: {self.total_training_steps}")
 
     def _create_trainer_state(self, epoch: int, *, active_step_duration: float | None = None) -> TrainerState:
@@ -578,17 +588,7 @@ class RayPPOTrainer:
         inference engine actors (vLLM / SGLang workers) that would otherwise
         keep running until the node dies.
         """
-        for model_name, model in [
-            ("policy_model", self.policy_model),
-            ("critic_model", self.critic_model),
-            ("ref_model", self.ref_model),
-        ]:
-            if model is not None:
-                try:
-                    logger.info(f"Killing {model_name} actors...")
-                    model.kill_actors()
-                except Exception as e:
-                    logger.warning(f"Error killing {model_name} actors: {e}")
+        _kill_model_actors((self.policy_model, self.critic_model, self.ref_model))
 
         if getattr(self, "_draft_trainer", None) is not None:
             try:
@@ -1810,7 +1810,19 @@ class RayPPOTrainer:
         for group in counts.values():
             record_event("consumed_staleness", group, attributes={"role": TRAINER_ROLE, "step": str(self.global_step)})
 
-    def build_models(self, PolicyWorker, CriticWorker, RefWorker, policy_pg: Optional[PlacementGroup] = None):
+    @classmethod
+    def build_models(
+        cls,
+        cfg: DictConfig,
+        tokenizer,
+        train_dataset,
+        PolicyWorker,
+        CriticWorker,
+        RefWorker,
+        *,
+        colocate_pg: PlacementGroup | None = None,
+        policy_pg: PlacementGroup | None = None,
+    ) -> tuple[PPORayActorGroup, PPORayActorGroup | None, PPORayActorGroup | None]:
         """
         Initialize the actors for training, and handle colocation logic
 
@@ -1819,7 +1831,7 @@ class RayPPOTrainer:
                 startup for the policy and colocated reference actors. When
                 absent, model actors reserve their placement group lazily.
         """
-        cfg = self.cfg
+        _, total_training_steps = _training_schedule(cfg, len(train_dataset))
         pg = None
 
         use_ref_model = reference_model_required(cfg.trainer.algorithm)
@@ -1848,7 +1860,7 @@ class RayPPOTrainer:
             assert num_policy_gpus == num_rollout_gpus, (
                 "num_policy_gpus and num_rollout_gpus must be the same when colocating all models"
             )
-            pg = self.colocate_pg
+            pg = colocate_pg
 
             policy_model = PPORayActorGroup(
                 cfg,
@@ -1914,7 +1926,7 @@ class RayPPOTrainer:
                 if policy_pg is None:
                     pg = placement_group(bundles, strategy="PACK")
                     get_ray_pg_ready_with_timeout(
-                        pg, timeout=int(self.cfg.trainer.distributed.placement_group_timeout_seconds)
+                        pg, timeout=int(cfg.trainer.distributed.placement_group_timeout_seconds)
                     )
                 else:
                     pg = policy_pg
@@ -1974,16 +1986,21 @@ class RayPPOTrainer:
             else:
                 critic_model = None
 
-        self.policy_model: PPORayActorGroup = policy_model
-        self.critic_model: Optional[PPORayActorGroup] = critic_model
-        self.ref_model: Optional[PPORayActorGroup] = ref_model
-        self._initialize_model_actors(cfg, policy_model, critic_model, ref_model)
-
+        try:
+            cls._initialize_model_actors(cfg, tokenizer, total_training_steps, policy_model, critic_model, ref_model)
+        except RuntimeError as error:
+            if isinstance(error.__cause__, ray.exceptions.GetTimeoutError):
+                _kill_model_actors((policy_model, critic_model, ref_model))
+            raise
         logger.info("init policy/ref/critic models done")
+        return policy_model, critic_model, ref_model
 
+    @classmethod
     def _initialize_model_actors(
-        self,
+        cls,
         cfg: DictConfig,
+        tokenizer,
+        total_training_steps: int,
         policy_model: PPORayActorGroup,
         critic_model: Optional[PPORayActorGroup],
         ref_model: Optional[PPORayActorGroup],
@@ -1998,7 +2015,7 @@ class RayPPOTrainer:
             refs.extend(
                 policy_model.async_init_model(
                     cfg.trainer.policy.model.path,
-                    num_training_steps=self.total_training_steps,
+                    num_training_steps=total_training_steps,
                 )
             )
             if cfg.trainer.critic.model.path:
@@ -2006,67 +2023,68 @@ class RayPPOTrainer:
                 refs.extend(
                     critic_model.async_init_model(
                         cfg.trainer.critic.model.path,
-                        num_training_steps=self.total_training_steps,
+                        num_training_steps=total_training_steps,
                     )
                 )
-            self._wait_for_setup_phase(
+            cls._wait_for_setup_phase(
                 refs,
                 deadline=initialization_deadline,
                 phase="policy/ref/critic model initialization",
             )
-            self._wait_for_setup_phase(
-                policy_model.async_run_ray_method("pass_through", "_set_pad_token_id", self.tokenizer.pad_token_id),
+            cls._wait_for_setup_phase(
+                policy_model.async_run_ray_method("pass_through", "_set_pad_token_id", tokenizer.pad_token_id),
                 deadline=initialization_deadline,
                 phase="policy model finalization",
             )
         else:
             if ref_model is not None:
-                self._wait_for_setup_phase(
+                cls._wait_for_setup_phase(
                     ref_model.async_init_model(cfg.trainer.ref.model.path),
                     deadline=initialization_deadline,
                     phase="reference model initialization",
                 )
-                self._wait_for_setup_phase(
+                cls._wait_for_setup_phase(
                     ref_model.offload_to_cpu(nonblocking=True),
                     deadline=initialization_deadline,
                     phase="reference model offload",
                 )
-            self._wait_for_setup_phase(
+            cls._wait_for_setup_phase(
                 policy_model.async_init_model(
                     cfg.trainer.policy.model.path,
-                    num_training_steps=self.total_training_steps,
+                    num_training_steps=total_training_steps,
                 ),
                 deadline=initialization_deadline,
                 phase="policy model initialization",
             )
-            self._wait_for_setup_phase(
-                policy_model.async_run_ray_method("pass_through", "_set_pad_token_id", self.tokenizer.pad_token_id),
+            cls._wait_for_setup_phase(
+                policy_model.async_run_ray_method("pass_through", "_set_pad_token_id", tokenizer.pad_token_id),
                 deadline=initialization_deadline,
                 phase="policy model finalization",
             )
-            self._wait_for_setup_phase(
+            cls._wait_for_setup_phase(
                 policy_model.offload_to_cpu(nonblocking=True),
                 deadline=initialization_deadline,
                 phase="policy model offload",
             )
             if cfg.trainer.critic.model.path:
                 assert critic_model is not None
-                self._wait_for_setup_phase(
+                cls._wait_for_setup_phase(
                     critic_model.async_init_model(
                         cfg.trainer.critic.model.path,
-                        num_training_steps=self.total_training_steps,
+                        num_training_steps=total_training_steps,
                     ),
                     deadline=initialization_deadline,
                     phase="critic model initialization",
                 )
-                self._wait_for_setup_phase(
+                cls._wait_for_setup_phase(
                     critic_model.offload_to_cpu(nonblocking=True),
                     deadline=initialization_deadline,
                     phase="critic model offload",
                 )
 
-    def _wait_for_setup_phase(self, refs, *, deadline: float, phase: str):
-        """Wait for one setup phase and terminate all actors if the shared deadline expires."""
+    @staticmethod
+    def _wait_for_setup_phase(refs, *, deadline: float, phase: str):
+        """Wait for one setup phase within the builder's shared deadline."""
         remaining_seconds = max(0.0, deadline - time.monotonic())
         try:
             return ray.get(refs, timeout=remaining_seconds)
@@ -2076,7 +2094,6 @@ class RayPPOTrainer:
                 "terminating model actors and failing the training job"
             )
             logger.error(message)
-            self._kill_ray_actors()
             raise RuntimeError(message) from error
 
     def init_weight_sync_state(self):
