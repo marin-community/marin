@@ -19,6 +19,7 @@ Plan or run one arm::
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
@@ -65,6 +66,15 @@ GRUG_RLVR_SFT_WEIGHTS = {
     "cw-rno2a": "s3://marin-rno2a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135/step-135",
 }
 """A copy of the weights in the region of each cluster, so that a run reads them locally."""
+
+
+ADOPTED_WEIGHTS_VERSION = "2026.10.27"
+
+
+def adopted_weights(model: str, url: str) -> ArtifactStep[LevanterCheckpoint]:
+    """The HF export at ``url`` (for example a trained checkpoint) as the policy's initial weights."""
+    digest = hashlib.sha256(url.encode()).hexdigest()[:12]
+    return ArtifactStep.adopt(f"models/{model}-weights-{digest}", ADOPTED_WEIGHTS_VERSION, url, kind=LevanterCheckpoint)
 
 
 def grug_rlvr_sft(cluster: str) -> ArtifactStep[LevanterCheckpoint]:
@@ -355,10 +365,13 @@ def build_run(
     export_every: int,
     request_window_tokens: int | None,
     cluster: str = CLUSTER,
+    weights: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
     if model == "grug":
         profile = replace(profile, step=grug_rlvr_sft(cluster))
+    if weights is not None:
+        profile = replace(profile, step=adopted_weights(model, weights))
     if export_every % CHECKPOINT_EVERY:
         raise click.BadParameter(f"must be a multiple of {CHECKPOINT_EVERY}", param_hint="--export-every")
     if not feed_root.startswith("s3://"):
@@ -444,6 +457,10 @@ def build_run(
     type=int,
     help="The tokens of a whole multi-turn trajectory, in place of the profile's; a long window can exhaust GPU memory.",
 )
+@click.option(
+    "--weights",
+    help="An HF export to start from in place of the profile's weights; with an empty feed, the run only serves it.",
+)
 @rl_build_options
 def main(
     model: str,
@@ -457,6 +474,7 @@ def main(
     seed: int,
     export_every: int,
     request_window_tokens: int | None,
+    weights: str | None,
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         model=model,
@@ -470,6 +488,7 @@ def main(
         export_every=export_every,
         request_window_tokens=request_window_tokens,
         cluster=cluster,
+        weights=weights,
     )
 
 
