@@ -1,0 +1,494 @@
+[
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 3,
+    "first_step": 5387,
+    "last_step": 5686,
+    "updates": 300,
+    "host_seconds": [
+      94.27549743652344,
+      94.27586364746094,
+      94.2759017944336,
+      94.27577209472656
+    ],
+    "seconds": 94.2759017944336,
+    "useful_flops_lower_bound": 34704813705781248,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08366356099783852,
+    "input_tokens_per_second": 1668362.7205493015,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396189696,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 0,
+    "first_step": 5387,
+    "last_step": 5686,
+    "updates": 300,
+    "host_seconds": [
+      94.27549743652344,
+      94.27586364746094,
+      94.2759017944336,
+      94.27577209472656
+    ],
+    "seconds": 94.2759017944336,
+    "useful_flops_lower_bound": 34704813705781248,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08366356099783852,
+    "input_tokens_per_second": 1668362.7205493015,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394343424,
+        "peak_bytes_in_use": 1396189696,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 1,
+    "first_step": 5387,
+    "last_step": 5686,
+    "updates": 300,
+    "host_seconds": [
+      94.27549743652344,
+      94.27586364746094,
+      94.2759017944336,
+      94.27577209472656
+    ],
+    "seconds": 94.2759017944336,
+    "useful_flops_lower_bound": 34704813705781248,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08366356099783852,
+    "input_tokens_per_second": 1668362.7205493015,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396189696,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 2,
+    "first_step": 5387,
+    "last_step": 5686,
+    "updates": 300,
+    "host_seconds": [
+      94.27549743652344,
+      94.27586364746094,
+      94.2759017944336,
+      94.27577209472656
+    ],
+    "seconds": 94.2759017944336,
+    "useful_flops_lower_bound": 34704813705781248,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08366356099783852,
+    "input_tokens_per_second": 1668362.7205493015,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394343424,
+        "peak_bytes_in_use": 1396189696,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395662848,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 2,
+    "first_step": 5687,
+    "last_step": 5986,
+    "updates": 300,
+    "host_seconds": [
+      94.31803131103516,
+      94.31822204589844,
+      94.31795501708984,
+      94.31816864013672
+    ],
+    "seconds": 94.31822204589844,
+    "useful_flops_lower_bound": 34686850493005824,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08358273662336915,
+    "input_tokens_per_second": 1667614.1321181725,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 0,
+    "first_step": 5687,
+    "last_step": 5986,
+    "updates": 300,
+    "host_seconds": [
+      94.31803131103516,
+      94.31822204589844,
+      94.31795501708984,
+      94.31816864013672
+    ],
+    "seconds": 94.31822204589844,
+    "useful_flops_lower_bound": 34686850493005824,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08358273662336915,
+    "input_tokens_per_second": 1667614.1321181725,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394343424,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 1,
+    "first_step": 5687,
+    "last_step": 5986,
+    "updates": 300,
+    "host_seconds": [
+      94.31803131103516,
+      94.31822204589844,
+      94.31795501708984,
+      94.31816864013672
+    ],
+    "seconds": 94.31822204589844,
+    "useful_flops_lower_bound": 34686850493005824,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08358273662336915,
+    "input_tokens_per_second": 1667614.1321181725,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394343424,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 3,
+    "first_step": 5687,
+    "last_step": 5986,
+    "updates": 300,
+    "host_seconds": [
+      94.31803131103516,
+      94.31822204589844,
+      94.31795501708984,
+      94.31816864013672
+    ],
+    "seconds": 94.31822204589844,
+    "useful_flops_lower_bound": 34686850493005824,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08358273662336915,
+    "input_tokens_per_second": 1667614.1321181725,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394343424,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816576,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 2,
+    "first_step": 5987,
+    "last_step": 6286,
+    "updates": 300,
+    "host_seconds": [
+      94.32379913330078,
+      94.32398223876953,
+      94.3237075805664,
+      94.32373046875
+    ],
+    "seconds": 94.32398223876953,
+    "useful_flops_lower_bound": 34701911781679104,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08361392240878189,
+    "input_tokens_per_second": 1667512.2939768264,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 0,
+    "first_step": 5987,
+    "last_step": 6286,
+    "updates": 300,
+    "host_seconds": [
+      94.32379913330078,
+      94.32398223876953,
+      94.3237075805664,
+      94.32373046875
+    ],
+    "seconds": 94.32398223876953,
+    "useful_flops_lower_bound": 34701911781679104,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08361392240878189,
+    "input_tokens_per_second": 1667512.2939768264,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 3,
+    "first_step": 5987,
+    "last_step": 6286,
+    "updates": 300,
+    "host_seconds": [
+      94.32379913330078,
+      94.32398223876953,
+      94.3237075805664,
+      94.32373046875
+    ],
+    "seconds": 94.32398223876953,
+    "useful_flops_lower_bound": 34701911781679104,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08361392240878189,
+    "input_tokens_per_second": 1667512.2939768264,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342400,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393815552,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  },
+  {
+    "stage": "useful_mfu_window",
+    "timing_protocol": 2,
+    "rank": 1,
+    "first_step": 5987,
+    "last_step": 6286,
+    "updates": 300,
+    "host_seconds": [
+      94.32379913330078,
+      94.32398223876953,
+      94.3237075805664,
+      94.32373046875
+    ],
+    "seconds": 94.32398223876953,
+    "useful_flops_lower_bound": 34701911781679104,
+    "physical_bf16_peak_flops_per_second": 4400000000000000.0,
+    "useful_mfu_lower_bound": 0.08361392240878189,
+    "input_tokens_per_second": 1667512.2939768264,
+    "memory_stats": [
+      {
+        "bytes_in_use": 1394342912,
+        "peak_bytes_in_use": 1396275712,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816064,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816064,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      },
+      {
+        "bytes_in_use": 1393816064,
+        "peak_bytes_in_use": 1395748864,
+        "bytes_limit": 33014407168
+      }
+    ]
+  }
+]

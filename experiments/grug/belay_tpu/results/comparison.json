@@ -1,0 +1,458 @@
+{
+  "candidate": "causal-sort-full-v2",
+  "seed": 0,
+  "matched_steps": 3634,
+  "controls": {
+    "full-local-v3": {
+      "label": "Original reproduction",
+      "mean_abs": 0.0004236343540722811,
+      "max_abs": 0.010535240173339844,
+      "mean_signed": -4.119691313395608e-05,
+      "last300_mean_signed": -8.02012284596761e-05,
+      "max_abs_100_step_mean": 0.0014417886734008787,
+      "candidate_final": 1.907509684562683,
+      "control_final": 1.908199667930603
+    },
+    "kda-owner-attention-full-v1": {
+      "label": "KDA + owner exchange + Pallas attention",
+      "mean_abs": 0.00045086960905386844,
+      "max_abs": 0.02851402759552002,
+      "mean_signed": 0.0002327845788093865,
+      "last300_mean_signed": 0.00011648178100585938,
+      "max_abs_100_step_mean": 0.00159531831741333,
+      "candidate_final": 1.907509684562683,
+      "control_final": 1.907457709312439
+    },
+    "scalar-sort-full-v1": {
+      "label": "Scalar-sort",
+      "mean_abs": 0.0004405969109060217,
+      "max_abs": 0.027849912643432617,
+      "mean_signed": 0.00018080076675331061,
+      "last300_mean_signed": 8.536974589029948e-05,
+      "max_abs_100_step_mean": 0.0014798760414123533,
+      "candidate_final": 1.907509684562683,
+      "control_final": 1.9079843759536743
+    }
+  },
+  "performance": {
+    "kda-owner-attention-full-v1": {
+      "ms_per_update": 345.20636664496527,
+      "mfu_percent": 7.614636107664055,
+      "window_mfu_percent": [
+        7.615502875296876,
+        7.61238264242282,
+        7.616022775980828
+      ]
+    },
+    "scalar-sort-full-v1": {
+      "ms_per_update": 326.2730238172743,
+      "mfu_percent": 8.056516412532083,
+      "window_mfu_percent": [
+        7.9790750360482985,
+        8.09413951907669,
+        8.097491105401362
+      ]
+    },
+    "causal-sort-full-v2": {
+      "ms_per_update": 314.3534511990017,
+      "mfu_percent": 8.362006671300467,
+      "window_mfu_percent": [
+        8.366356099783852,
+        8.358273662336915,
+        8.361392240878189
+      ]
+    }
+  },
+  "evaluation": {
+    "full-local-v3": {
+      "metrics": {
+        "eval/loss": {
+          "candidate": 2.5579416751861572,
+          "control": 2.5582950115203857,
+          "difference": -0.0003533363342285156
+        },
+        "eval/macro_loss": {
+          "candidate": 2.7079436779022217,
+          "control": 2.708706855773926,
+          "difference": -0.0007631778717041016
+        },
+        "eval/uncheatable_eval/wikipedia_english-hero-bpe-v16384/loss": {
+          "candidate": 2.565441846847534,
+          "control": 2.566214084625244,
+          "difference": -0.0007722377777099609
+        },
+        "eval/uncheatable_eval/github_python-hero-bpe-v16384/loss": {
+          "candidate": 1.1487226486206055,
+          "control": 1.148544192314148,
+          "difference": 0.00017845630645751953
+        },
+        "eval/uncheatable_eval/github_cpp-hero-bpe-v16384/loss": {
+          "candidate": 1.0781091451644897,
+          "control": 1.0784718990325928,
+          "difference": -0.00036275386810302734
+        },
+        "eval/uncheatable_eval/bbc_news-hero-bpe-v16384/loss": {
+          "candidate": 2.895969867706299,
+          "control": 2.8967089653015137,
+          "difference": -0.0007390975952148438
+        },
+        "eval/uncheatable_eval/arxiv_physics-hero-bpe-v16384/loss": {
+          "candidate": 2.734647274017334,
+          "control": 2.735167980194092,
+          "difference": -0.0005207061767578125
+        },
+        "eval/uncheatable_eval/arxiv_computer_science-hero-bpe-v16384/loss": {
+          "candidate": 2.755891799926758,
+          "control": 2.7556636333465576,
+          "difference": 0.0002281665802001953
+        },
+        "eval/uncheatable_eval/ao3_english-hero-bpe-v16384/loss": {
+          "candidate": 3.134862184524536,
+          "control": 3.135223865509033,
+          "difference": -0.0003616809844970703
+        },
+        "eval/paloma/4chan-hero-bpe-v16384/loss": {
+          "candidate": 2.3715243339538574,
+          "control": 2.3729422092437744,
+          "difference": -0.0014178752899169922
+        },
+        "eval/paloma/c4_100_domains-hero-bpe-v16384/loss": {
+          "candidate": 2.8728935718536377,
+          "control": 2.8731226921081543,
+          "difference": -0.00022912025451660156
+        },
+        "eval/paloma/c4_en-hero-bpe-v16384/loss": {
+          "candidate": 2.9948649406433105,
+          "control": 2.995426893234253,
+          "difference": -0.0005619525909423828
+        },
+        "eval/paloma/dolma-v1_5-hero-bpe-v16384/loss": {
+          "candidate": 2.576209783554077,
+          "control": 2.576549768447876,
+          "difference": -0.0003399848937988281
+        },
+        "eval/paloma/dolma_100_programing_languages-hero-bpe-v16384/loss": {
+          "candidate": 1.1679052114486694,
+          "control": 1.1688085794448853,
+          "difference": -0.0009033679962158203
+        },
+        "eval/paloma/dolma_100_subreddits-hero-bpe-v16384/loss": {
+          "candidate": 3.3600728511810303,
+          "control": 3.3603456020355225,
+          "difference": -0.0002727508544921875
+        },
+        "eval/paloma/falcon-refinedweb-hero-bpe-v16384/loss": {
+          "candidate": 3.039072275161743,
+          "control": 3.039210081100464,
+          "difference": -0.00013780593872070312
+        },
+        "eval/paloma/gab-hero-bpe-v16384/loss": {
+          "candidate": 3.595764636993408,
+          "control": 3.5983874797821045,
+          "difference": -0.002622842788696289
+        },
+        "eval/paloma/m2d2_s2orc_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6408088207244873,
+          "control": 2.640514612197876,
+          "difference": 0.0002942085266113281
+        },
+        "eval/paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6683237552642822,
+          "control": 2.6688385009765625,
+          "difference": -0.0005147457122802734
+        },
+        "eval/paloma/manosphere_meta_sep-hero-bpe-v16384/loss": {
+          "candidate": 3.2938997745513916,
+          "control": 3.293933153152466,
+          "difference": -3.337860107421875e-05
+        },
+        "eval/paloma/mc4-hero-bpe-v16384/loss": {
+          "candidate": 2.4674034118652344,
+          "control": 2.4671790599823,
+          "difference": 0.0002243518829345703
+        },
+        "eval/paloma/ptb-hero-bpe-v16384/loss": {
+          "candidate": 3.4653170108795166,
+          "control": 3.468296527862549,
+          "difference": -0.0029795169830322266
+        },
+        "eval/paloma/redpajama-hero-bpe-v16384/loss": {
+          "candidate": 2.2383620738983154,
+          "control": 2.238801956176758,
+          "difference": -0.0004398822784423828
+        },
+        "eval/paloma/twitterAAE_HELM_fixed-hero-bpe-v16384/loss": {
+          "candidate": 4.452601432800293,
+          "control": 4.457255840301514,
+          "difference": -0.004654407501220703
+        },
+        "eval/paloma/wikitext_103-hero-bpe-v16384/loss": {
+          "candidate": 2.764033317565918,
+          "control": 2.7646501064300537,
+          "difference": -0.0006167888641357422
+        }
+      },
+      "max_absolute_domain_difference": 0.004654407501220703
+    },
+    "kda-owner-attention-full-v1": {
+      "metrics": {
+        "eval/loss": {
+          "candidate": 2.5579416751861572,
+          "control": 2.5580620765686035,
+          "difference": -0.00012040138244628906
+        },
+        "eval/macro_loss": {
+          "candidate": 2.7079436779022217,
+          "control": 2.708125352859497,
+          "difference": -0.00018167495727539062
+        },
+        "eval/uncheatable_eval/wikipedia_english-hero-bpe-v16384/loss": {
+          "candidate": 2.565441846847534,
+          "control": 2.5656673908233643,
+          "difference": -0.00022554397583007812
+        },
+        "eval/uncheatable_eval/github_python-hero-bpe-v16384/loss": {
+          "candidate": 1.1487226486206055,
+          "control": 1.1488161087036133,
+          "difference": -9.34600830078125e-05
+        },
+        "eval/uncheatable_eval/github_cpp-hero-bpe-v16384/loss": {
+          "candidate": 1.0781091451644897,
+          "control": 1.0789082050323486,
+          "difference": -0.0007990598678588867
+        },
+        "eval/uncheatable_eval/bbc_news-hero-bpe-v16384/loss": {
+          "candidate": 2.895969867706299,
+          "control": 2.897106885910034,
+          "difference": -0.0011370182037353516
+        },
+        "eval/uncheatable_eval/arxiv_physics-hero-bpe-v16384/loss": {
+          "candidate": 2.734647274017334,
+          "control": 2.7355387210845947,
+          "difference": -0.0008914470672607422
+        },
+        "eval/uncheatable_eval/arxiv_computer_science-hero-bpe-v16384/loss": {
+          "candidate": 2.755891799926758,
+          "control": 2.756699323654175,
+          "difference": -0.0008075237274169922
+        },
+        "eval/uncheatable_eval/ao3_english-hero-bpe-v16384/loss": {
+          "candidate": 3.134862184524536,
+          "control": 3.1350369453430176,
+          "difference": -0.0001747608184814453
+        },
+        "eval/paloma/4chan-hero-bpe-v16384/loss": {
+          "candidate": 2.3715243339538574,
+          "control": 2.3743512630462646,
+          "difference": -0.0028269290924072266
+        },
+        "eval/paloma/c4_100_domains-hero-bpe-v16384/loss": {
+          "candidate": 2.8728935718536377,
+          "control": 2.8728697299957275,
+          "difference": 2.384185791015625e-05
+        },
+        "eval/paloma/c4_en-hero-bpe-v16384/loss": {
+          "candidate": 2.9948649406433105,
+          "control": 2.9952967166900635,
+          "difference": -0.0004317760467529297
+        },
+        "eval/paloma/dolma-v1_5-hero-bpe-v16384/loss": {
+          "candidate": 2.576209783554077,
+          "control": 2.5760436058044434,
+          "difference": 0.00016617774963378906
+        },
+        "eval/paloma/dolma_100_programing_languages-hero-bpe-v16384/loss": {
+          "candidate": 1.1679052114486694,
+          "control": 1.1686803102493286,
+          "difference": -0.0007750988006591797
+        },
+        "eval/paloma/dolma_100_subreddits-hero-bpe-v16384/loss": {
+          "candidate": 3.3600728511810303,
+          "control": 3.3600351810455322,
+          "difference": 3.7670135498046875e-05
+        },
+        "eval/paloma/falcon-refinedweb-hero-bpe-v16384/loss": {
+          "candidate": 3.039072275161743,
+          "control": 3.039375066757202,
+          "difference": -0.0003027915954589844
+        },
+        "eval/paloma/gab-hero-bpe-v16384/loss": {
+          "candidate": 3.595764636993408,
+          "control": 3.597196578979492,
+          "difference": -0.0014319419860839844
+        },
+        "eval/paloma/m2d2_s2orc_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6408088207244873,
+          "control": 2.640432357788086,
+          "difference": 0.0003764629364013672
+        },
+        "eval/paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6683237552642822,
+          "control": 2.6677396297454834,
+          "difference": 0.0005841255187988281
+        },
+        "eval/paloma/manosphere_meta_sep-hero-bpe-v16384/loss": {
+          "candidate": 3.2938997745513916,
+          "control": 3.2951087951660156,
+          "difference": -0.0012090206146240234
+        },
+        "eval/paloma/mc4-hero-bpe-v16384/loss": {
+          "candidate": 2.4674034118652344,
+          "control": 2.467667818069458,
+          "difference": -0.0002644062042236328
+        },
+        "eval/paloma/ptb-hero-bpe-v16384/loss": {
+          "candidate": 3.4653170108795166,
+          "control": 3.4584975242614746,
+          "difference": 0.006819486618041992
+        },
+        "eval/paloma/redpajama-hero-bpe-v16384/loss": {
+          "candidate": 2.2383620738983154,
+          "control": 2.2379679679870605,
+          "difference": 0.0003941059112548828
+        },
+        "eval/paloma/twitterAAE_HELM_fixed-hero-bpe-v16384/loss": {
+          "candidate": 4.452601432800293,
+          "control": 4.45336389541626,
+          "difference": -0.0007624626159667969
+        },
+        "eval/paloma/wikitext_103-hero-bpe-v16384/loss": {
+          "candidate": 2.764033317565918,
+          "control": 2.764479160308838,
+          "difference": -0.0004458427429199219
+        }
+      },
+      "max_absolute_domain_difference": 0.006819486618041992
+    },
+    "scalar-sort-full-v1": {
+      "metrics": {
+        "eval/loss": {
+          "candidate": 2.5579416751861572,
+          "control": 2.5581319332122803,
+          "difference": -0.00019025802612304688
+        },
+        "eval/macro_loss": {
+          "candidate": 2.7079436779022217,
+          "control": 2.708329200744629,
+          "difference": -0.00038552284240722656
+        },
+        "eval/uncheatable_eval/wikipedia_english-hero-bpe-v16384/loss": {
+          "candidate": 2.565441846847534,
+          "control": 2.566080331802368,
+          "difference": -0.0006384849548339844
+        },
+        "eval/uncheatable_eval/github_python-hero-bpe-v16384/loss": {
+          "candidate": 1.1487226486206055,
+          "control": 1.1486912965774536,
+          "difference": 3.135204315185547e-05
+        },
+        "eval/uncheatable_eval/github_cpp-hero-bpe-v16384/loss": {
+          "candidate": 1.0781091451644897,
+          "control": 1.0784838199615479,
+          "difference": -0.00037467479705810547
+        },
+        "eval/uncheatable_eval/bbc_news-hero-bpe-v16384/loss": {
+          "candidate": 2.895969867706299,
+          "control": 2.8954215049743652,
+          "difference": 0.0005483627319335938
+        },
+        "eval/uncheatable_eval/arxiv_physics-hero-bpe-v16384/loss": {
+          "candidate": 2.734647274017334,
+          "control": 2.735882520675659,
+          "difference": -0.0012352466583251953
+        },
+        "eval/uncheatable_eval/arxiv_computer_science-hero-bpe-v16384/loss": {
+          "candidate": 2.755891799926758,
+          "control": 2.7566232681274414,
+          "difference": -0.0007314682006835938
+        },
+        "eval/uncheatable_eval/ao3_english-hero-bpe-v16384/loss": {
+          "candidate": 3.134862184524536,
+          "control": 3.135002851486206,
+          "difference": -0.00014066696166992188
+        },
+        "eval/paloma/4chan-hero-bpe-v16384/loss": {
+          "candidate": 2.3715243339538574,
+          "control": 2.371974468231201,
+          "difference": -0.00045013427734375
+        },
+        "eval/paloma/c4_100_domains-hero-bpe-v16384/loss": {
+          "candidate": 2.8728935718536377,
+          "control": 2.87259840965271,
+          "difference": 0.0002951622009277344
+        },
+        "eval/paloma/c4_en-hero-bpe-v16384/loss": {
+          "candidate": 2.9948649406433105,
+          "control": 2.9948229789733887,
+          "difference": 4.1961669921875e-05
+        },
+        "eval/paloma/dolma-v1_5-hero-bpe-v16384/loss": {
+          "candidate": 2.576209783554077,
+          "control": 2.5759856700897217,
+          "difference": 0.00022411346435546875
+        },
+        "eval/paloma/dolma_100_programing_languages-hero-bpe-v16384/loss": {
+          "candidate": 1.1679052114486694,
+          "control": 1.1678425073623657,
+          "difference": 6.270408630371094e-05
+        },
+        "eval/paloma/dolma_100_subreddits-hero-bpe-v16384/loss": {
+          "candidate": 3.3600728511810303,
+          "control": 3.360813617706299,
+          "difference": -0.0007407665252685547
+        },
+        "eval/paloma/falcon-refinedweb-hero-bpe-v16384/loss": {
+          "candidate": 3.039072275161743,
+          "control": 3.03867506980896,
+          "difference": 0.0003972053527832031
+        },
+        "eval/paloma/gab-hero-bpe-v16384/loss": {
+          "candidate": 3.595764636993408,
+          "control": 3.595733404159546,
+          "difference": 3.123283386230469e-05
+        },
+        "eval/paloma/m2d2_s2orc_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6408088207244873,
+          "control": 2.640937328338623,
+          "difference": -0.0001285076141357422
+        },
+        "eval/paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384/loss": {
+          "candidate": 2.6683237552642822,
+          "control": 2.668074369430542,
+          "difference": 0.0002493858337402344
+        },
+        "eval/paloma/manosphere_meta_sep-hero-bpe-v16384/loss": {
+          "candidate": 3.2938997745513916,
+          "control": 3.295391798019409,
+          "difference": -0.0014920234680175781
+        },
+        "eval/paloma/mc4-hero-bpe-v16384/loss": {
+          "candidate": 2.4674034118652344,
+          "control": 2.4673426151275635,
+          "difference": 6.079673767089844e-05
+        },
+        "eval/paloma/ptb-hero-bpe-v16384/loss": {
+          "candidate": 3.4653170108795166,
+          "control": 3.4634969234466553,
+          "difference": 0.0018200874328613281
+        },
+        "eval/paloma/redpajama-hero-bpe-v16384/loss": {
+          "candidate": 2.2383620738983154,
+          "control": 2.238107442855835,
+          "difference": 0.00025463104248046875
+        },
+        "eval/paloma/twitterAAE_HELM_fixed-hero-bpe-v16384/loss": {
+          "candidate": 4.452601432800293,
+          "control": 4.459160804748535,
+          "difference": -0.0065593719482421875
+        },
+        "eval/paloma/wikitext_103-hero-bpe-v16384/loss": {
+          "candidate": 2.764033317565918,
+          "control": 2.7644264698028564,
+          "difference": -0.00039315223693847656
+        }
+      },
+      "max_absolute_domain_difference": 0.0065593719482421875
+    }
+  }
+}

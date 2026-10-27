@@ -705,6 +705,7 @@ def kda_fused(
     interpret: bool = False,
     save_chunk_states: bool = False,
     state_grads: StateGrads = StateGrads.XLA,
+    state_block_v: int = 32,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -773,6 +774,7 @@ def kda_fused(
         num_heads=heads,
         out_dtype=v.dtype,
         interpret=interpret,
+        block_v=state_block_v,
         save_states=save_chunk_states,
         grads=state_grads,
     )
