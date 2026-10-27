@@ -233,6 +233,7 @@ def training_config(
     lr: float,
     seed: int,
     export_every: int,
+    checkpoint_every: int,
     request_window_tokens: int,
 ) -> dict:
     """The SkyRL recipe: GRPO with the rollout-anchored clipped loss on the feed, at staleness 1."""
@@ -264,7 +265,7 @@ def training_config(
             "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
             "eval_interval": -1,
             "eval_before_train": False,
-            "ckpt_interval": CHECKPOINT_EVERY,
+            "ckpt_interval": checkpoint_every,
             # An HF export every export_every steps, which the loop's evaluation serves with vLLM.
             "hf_save_interval": export_every,
             "resume_mode": "latest",
@@ -355,12 +356,13 @@ def build_run(
     export_every: int,
     request_window_tokens: int | None,
     cluster: str = CLUSTER,
+    checkpoint_every: int = CHECKPOINT_EVERY,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
     if model == "grug":
         profile = replace(profile, step=grug_rlvr_sft(cluster))
-    if export_every % CHECKPOINT_EVERY:
-        raise click.BadParameter(f"must be a multiple of {CHECKPOINT_EVERY}", param_hint="--export-every")
+    if export_every % checkpoint_every:
+        raise click.BadParameter(f"must be a multiple of {checkpoint_every}", param_hint="--export-every")
     if not feed_root.startswith("s3://"):
         raise click.BadParameter(f"the feed must be an s3:// prefix, got {feed_root!r}", param_hint="--feed-root")
     if steps <= 0 or train_batch <= 0 or samples_per_prompt <= 0:
@@ -380,6 +382,7 @@ def build_run(
         lr=lr,
         seed=seed,
         export_every=export_every,
+        checkpoint_every=checkpoint_every,
         request_window_tokens=request_window_tokens or profile.request_window_tokens,
     )
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{model}-{arm}-seed{seed}"
@@ -444,6 +447,13 @@ def build_run(
     type=int,
     help="The tokens of a whole multi-turn trajectory, in place of the profile's; a long window can exhaust GPU memory.",
 )
+@click.option(
+    "--checkpoint-every",
+    type=int,
+    default=CHECKPOINT_EVERY,
+    show_default=True,
+    help="Steps between resume checkpoints (about 0.9 TB each for Grug); --export-every must be a multiple.",
+)
 @rl_build_options
 def main(
     model: str,
@@ -457,6 +467,7 @@ def main(
     seed: int,
     export_every: int,
     request_window_tokens: int | None,
+    checkpoint_every: int,
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         model=model,
@@ -470,6 +481,7 @@ def main(
         export_every=export_every,
         request_window_tokens=request_window_tokens,
         cluster=cluster,
+        checkpoint_every=checkpoint_every,
     )
 
 
