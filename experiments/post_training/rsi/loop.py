@@ -48,6 +48,8 @@ class LoopConfig:
     failures_per_analysis: int
     synthesized_share: float
     """The share of training tasks that come from synthesis while synthesized tasks are ready."""
+    synthesis_max_wait: float
+    """Seconds that training waits for a synthesized task to keep the share; 0 gives the share away at once."""
     seed: int
 
 
@@ -59,7 +61,7 @@ def rsi_loop(seed_tasks: AsyncIterable[TaskSpec], boxes: Boxes, config: LoopConf
     new_tasks = boxes.generate_tasks(ideas)
     tasks = mix(
         Source(seed_tasks, share=1 - config.synthesized_share),
-        Source(new_tasks, share=config.synthesized_share),
+        Source(new_tasks, share=config.synthesized_share, max_wait=config.synthesis_max_wait),
         seed=config.seed,
     )
     return rollouts.publish(boxes.train(tasks))

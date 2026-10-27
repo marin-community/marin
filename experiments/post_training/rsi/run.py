@@ -53,14 +53,6 @@ from experiments.post_training.rsi.feedback import (
     capability_of,
     generate_tasks,
 )
-from experiments.post_training.rsi.loop import Boxes, LoopConfig, rsi_loop
-from experiments.post_training.rsi.policy import MAX_MODEL_LEN, LivePolicy, Sampling
-from experiments.post_training.rsi.resume import (
-    known_ideas,
-    untrained_instances,
-)
-from experiments.post_training.rsi.live_eval import EvalSet, eval_policy, evaluator, policy_step
-from experiments.post_training.rsi.rollouts import POLICY_LIMITS, PolicyRunner, TaskRollouts, group_record, rollout_engine
 from experiments.post_training.rsi.gap import (
     DIAGNOSTIC_CAPABILITY_PREFIX,
     GAP_CAPABILITY_PREFIX,
@@ -70,6 +62,21 @@ from experiments.post_training.rsi.gap import (
     scan_types,
     training_indices,
     without_generators,
+)
+from experiments.post_training.rsi.live_eval import EvalSet, eval_policy, evaluator, policy_step
+from experiments.post_training.rsi.loop import Boxes, LoopConfig, rsi_loop
+from experiments.post_training.rsi.policy import MAX_MODEL_LEN, LivePolicy, Sampling
+from experiments.post_training.rsi.resume import (
+    known_ideas,
+    untrained_instances,
+)
+from experiments.post_training.rsi.rollouts import (
+    POLICY_LIMITS,
+    PolicyRunner,
+    TaskRollouts,
+    group_record,
+    read_tasks,
+    rollout_engine,
 )
 from experiments.post_training.rsi.seed import TRAIN_URL, VALIDATION_URL, TaskPool
 from experiments.post_training.rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
@@ -105,6 +112,13 @@ def feedback_options(function):
             click.option("--failures-per-analysis", type=int, default=64, show_default=True),
             click.option("--max-new-ideas", type=int, default=8, show_default=True),
             click.option("--synthesized-share", type=float, default=0.5, show_default=True),
+            click.option(
+                "--synthesis-max-wait",
+                type=float,
+                default=0.0,
+                show_default=True,
+                help="Seconds that training waits for synthesized tasks to keep their share.",
+            ),
             click.option("--tasks-per-idea", type=int, default=2, show_default=True),
             click.option("--instances-per-task", type=int, default=32, show_default=True),
             click.option("--probes-per-task", type=int, default=8, show_default=True),
@@ -150,6 +164,7 @@ class FeedbackOptions:
     failures_per_analysis: int
     max_new_ideas: int
     synthesized_share: float
+    synthesis_max_wait: float
     tasks_per_idea: int
     instances_per_task: int
     probes_per_task: int
@@ -170,14 +185,10 @@ def _remember_stratum(stream, strata: dict[str, str], *, written: Collection[str
             yield task.task
 
 
-async def _feedback_boxes(
-    stack: AsyncExitStack,
-    feedback: FeedbackOptions,
-    solver: Model,
-    trainer: Callable[[AsyncIterable[TaskSpec]], AsyncIterator[TaskRollouts]],
-    output: StoragePath,
-    trained_ids: Collection[str],
-) -> Boxes:
+async def synthesis_config(
+    stack: AsyncExitStack, feedback: FeedbackOptions, solver: Model, output: StoragePath
+) -> SynthesisConfig:
+    """The generate box's configuration: agentic Taskforge with ``solver`` as the solver of its gate."""
     source = endpoint_source(None, feedback.relay_job, feedback.pool)
     judge = await stack.enter_async_context(GlmClient(source, GLM_PROVIDER))
     web = await stack.enter_async_context(ParallelWeb(os.environ[PARALLEL_API_KEY_ENV]))
@@ -201,6 +212,27 @@ async def _feedback_boxes(
         command_timeout=COMMAND_TIMEOUT,
         max_concurrent_rollouts=8,
     )
+    return SynthesisConfig(
+        agentic=agentic,
+        tasks_per_idea=feedback.tasks_per_idea,
+        instances_per_task=feedback.instances_per_task,
+        probes_per_task=feedback.probes_per_task,
+        concurrency=feedback.sessions,
+        output=output,
+        held_out_idea_share=feedback.held_out_idea_share,
+    )
+
+
+async def _feedback_boxes(
+    stack: AsyncExitStack,
+    feedback: FeedbackOptions,
+    solver: Model,
+    trainer: Callable[[AsyncIterable[TaskSpec]], AsyncIterator[TaskRollouts]],
+    output: StoragePath,
+    trained_ids: Collection[str],
+) -> Boxes:
+    source = endpoint_source(None, feedback.relay_job, feedback.pool)
+    synthesis = await synthesis_config(stack, feedback, solver, output)
     analysis = AnalysisConfig(
         make_client=partial(GlmClient, source, GLM_PROVIDER),
         max_new_ideas=feedback.max_new_ideas,
@@ -210,16 +242,7 @@ async def _feedback_boxes(
         work_dir="/tmp/baby-rsi-zephyr",
         workers=16,
     )
-    synthesis = SynthesisConfig(
-        agentic=agentic,
-        tasks_per_idea=feedback.tasks_per_idea,
-        instances_per_task=feedback.instances_per_task,
-        probes_per_task=feedback.probes_per_task,
-        concurrency=feedback.sessions,
-        output=output,
-        held_out_idea_share=feedback.held_out_idea_share,
-    )
-    resumed = untrained_instances(output, trained_ids, feedback.instances_per_task, agentic.workspace_factory)
+    resumed = untrained_instances(output, trained_ids, feedback.instances_per_task, synthesis.agentic.workspace_factory)
 
     def generate(ideas: AsyncIterable[CapabilityIdea]) -> AsyncIterator[TaskSpec]:
         # A resumed run first gives back the instances of the tasks that it accepted and did not train on.
@@ -285,7 +308,9 @@ def skyrl_options(function):
             click.option("--lookahead-steps", type=int, default=3, show_default=True, help="Feed tasks ahead."),
             click.option("--seed", type=int, default=0, show_default=True),
             click.option(
-                "--exclude-generators", default="", help="Comma-separated Reasoning Gym task types dropped from the seed."
+                "--exclude-generators",
+                default="",
+                help="Comma-separated Reasoning Gym task types dropped from the seed.",
             ),
         ]
     ):
@@ -326,12 +351,19 @@ def skyrl_control(**arguments) -> None:
 
 @main.command("skyrl-oracle")
 @skyrl_options
-@click.option("--oracle-types", required=True, help="Comma-separated Reasoning Gym task types of the oracle's tasks.")
+@click.option("--oracle-types", default="", help="Comma-separated Reasoning Gym types whose fresh instances train.")
 @click.option("--oracle-tasks", type=int, default=1200, show_default=True, help="Fresh tasks made, shared by the types.")
+@click.option("--tasks-file", help="A JSONL file of synthesized tasks (presynthesize.py) that train instead.")
 @click.option("--synthesized-share", type=float, default=0.5, show_default=True)
-def skyrl_oracle(oracle_types: str, oracle_tasks: int, synthesized_share: float, **arguments) -> None:
-    """Feed seed tasks and fresh tasks of chosen types: an oracle synthesizer, or a placebo for another type."""
-    oracle = OracleOptions(oracle_types.split(","), oracle_tasks, synthesized_share)
+def skyrl_oracle(
+    oracle_types: str, oracle_tasks: int, tasks_file: str | None, synthesized_share: float, **arguments
+) -> None:
+    """Feed seed tasks and tasks that are ready from the start: fresh instances of chosen Reasoning Gym types (an
+    oracle synthesizer, or a placebo for another type), or a file of tasks that synthesis made before training."""
+    if bool(oracle_types) == (tasks_file is not None):
+        raise click.UsageError("give exactly one of --oracle-types and --tasks-file")
+    types = oracle_types.split(",") if oracle_types else []
+    oracle = OracleOptions(types, oracle_tasks, tasks_file, synthesized_share)
     asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=None, oracle=oracle))
 
 
@@ -348,6 +380,7 @@ def skyrl_rsi(**arguments) -> None:
 class OracleOptions:
     types: list[str]
     tasks: int
+    tasks_file: str | None
     share: float
 
 
@@ -379,6 +412,7 @@ async def _skyrl_run(
                 max_pass_rate=feedback.max_pass_rate,
                 failures_per_analysis=feedback.failures_per_analysis,
                 synthesized_share=feedback.synthesized_share,
+                synthesis_max_wait=feedback.synthesis_max_wait,
                 seed=options.seed,
             )
             stream = rsi_loop(seed_tasks, boxes, config)
@@ -388,12 +422,18 @@ async def _skyrl_run(
 async def _with_oracle_tasks(
     seed_tasks: AsyncIterable[TaskSpec], oracle: OracleOptions, written: Collection[str], seed: int
 ) -> AsyncIterator[TaskSpec]:
-    """The seed tasks mixed with fresh tasks of the oracle's types, which are ready from the start."""
-    types = await asyncio.to_thread(scan_types)
-    per_type = -(-oracle.tasks // len(oracle.types))
-    indices = {name: training_indices(types[name])[:per_type] for name in oracle.types}
-    fresh = await asyncio.to_thread(fresh_tasks, types, indices, GAP_CAPABILITY_PREFIX)
-    new_tasks = from_iterable(task for task in interleave(fresh) if task.id not in written)
+    """The seed tasks mixed with tasks that are ready from the start, the capabilities of the tasks in turn."""
+    if oracle.tasks_file is not None:
+        by_capability: dict[str, list[TaskSpec]] = {}
+        for task in await asyncio.to_thread(read_tasks, oracle.tasks_file):
+            by_capability.setdefault(capability_of(task) or "", []).append(task)
+        ready = by_capability
+    else:
+        types = await asyncio.to_thread(scan_types)
+        per_type = -(-oracle.tasks // len(oracle.types))
+        indices = {name: training_indices(types[name])[:per_type] for name in oracle.types}
+        ready = await asyncio.to_thread(fresh_tasks, types, indices, GAP_CAPABILITY_PREFIX)
+    new_tasks = from_iterable(task for task in interleave(ready) if task.id not in written)
     return mix(Source(seed_tasks, share=1 - oracle.share), Source(new_tasks, share=oracle.share), seed=seed)
 
 

@@ -290,5 +290,10 @@ def group_record(group: TaskRollouts, *, transcripts: bool) -> dict[str, Any]:
     return record
 
 
+def read_tasks(url: str) -> list[TaskSpec]:
+    """The tasks of a JSONL file of TaskSpecs."""
+    return [TaskSpec.model_validate_json(line) for line in StoragePath(url).read_text().splitlines() if line]
+
+
 def write_jsonl(path: StoragePath, records: Iterable[Mapping[str, Any]]) -> None:
     path.write_text("".join(json.dumps(record, default=str) + "\n" for record in records))

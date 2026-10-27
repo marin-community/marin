@@ -11,6 +11,7 @@ pytest.importorskip("taskforge")
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
+from itertools import pairwise
 
 from rolloutengine.models import GradedRollout, Rollout
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -118,7 +119,9 @@ async def run() -> list[TaskRollouts]:
         analyze_failed_runs=analyze_failed_runs,
         generate_tasks=generate_tasks,
     )
-    config = LoopConfig(max_pass_rate=0.25, failures_per_analysis=4, synthesized_share=0.5, seed=0)
+    config = LoopConfig(
+        max_pass_rate=0.25, failures_per_analysis=4, synthesized_share=0.5, synthesis_max_wait=0.0, seed=0
+    )
     return [group async for group in rsi_loop(seed, boxes, config)]
 
 
@@ -128,7 +131,7 @@ def test_the_loop_trains_on_tasks_made_from_its_evaluation_failures():
     assert len(groups) == TASKS_PER_STEP * STEPS
     # The first training group (step 1) starts an evaluation, and then every second step does.
     assert evaluated_steps[0] == 1
-    assert all(later >= earlier + EVAL_EVERY - 1 for earlier, later in zip(evaluated_steps, evaluated_steps[1:]))
+    assert all(later >= earlier + EVAL_EVERY - 1 for earlier, later in pairwise(evaluated_steps))
     ids = [group.task.id for group in groups]
     first_synthesized = next(index for index, task_id in enumerate(ids) if task_id.startswith("idea-"))
     assert first_synthesized >= TASKS_PER_STEP

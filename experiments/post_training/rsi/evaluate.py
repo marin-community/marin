@@ -40,6 +40,7 @@ from experiments.post_training.rsi.feedback import (
     held_out,
     training_ids,
 )
+from experiments.post_training.rsi.gap import HELDOUT_NAME_PREFIX
 from experiments.post_training.rsi.policy import (
     BASE_MODEL_NAME,
     MAX_MODEL_LEN,
@@ -53,10 +54,10 @@ from experiments.post_training.rsi.rollouts import (
     PolicyRunner,
     TaskRollouts,
     group_record,
+    read_tasks,
     rollout_engine,
     write_jsonl,
 )
-from experiments.post_training.rsi.gap import HELDOUT_NAME_PREFIX
 from experiments.post_training.rsi.seed import FULL_VALIDATION_URL, TRAIN_URL, VALIDATION_URL, TaskPool
 
 logger = logging.getLogger(__name__)
@@ -323,9 +324,7 @@ async def _evaluate(
 
 def read_gap_tasks(url: str | None) -> list[TaskSpec]:
     """The held-out gap tasks of a JSONL file, none without one."""
-    if url is None:
-        return []
-    return [TaskSpec.model_validate_json(line) for line in StoragePath(url).read_text().splitlines() if line]
+    return [] if url is None else read_tasks(url)
 
 
 def _download_weights(url: str) -> str:

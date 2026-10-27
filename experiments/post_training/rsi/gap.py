@@ -15,13 +15,13 @@ instances are the other entries that the seed does not use.
 
 import base64
 import copy
+import dataclasses
 import json
 import logging
 import os
 import random
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
-import dataclasses
 from dataclasses import dataclass
 
 import click

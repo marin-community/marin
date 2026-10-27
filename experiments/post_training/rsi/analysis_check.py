@@ -36,7 +36,7 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompt
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
 from experiments.post_training.rsi.evaluate import read_gap_tasks
-from experiments.post_training.rsi.feedback import FailedRun, PASS_REWARD, _execute
+from experiments.post_training.rsi.feedback import PASS_REWARD, FailedRun, _execute
 from experiments.post_training.rsi.run import ANALYSIS_POLICY
 from experiments.post_training.rsi.seed import FULL_VALIDATION_URL, VALIDATION_URL, TaskPool
 
@@ -126,11 +126,18 @@ def main(evaluation: str, gap_tasks: str, output_dir: str, relay_job: str, seed:
     by_type: dict[str, list[FailedRun]] = {}
     for failure in gap_failures:
         by_type.setdefault(failure[0].id.split("-gap-")[1].rsplit("-", 1)[0], []).append(failure)
-    gap_set = [failure for failures in by_type.values() for failure in rng.sample(failures, min(GAP_FAILURES_PER_TYPE, len(failures)))]
+    gap_set = [
+        failure
+        for failures in by_type.values()
+        for failure in rng.sample(failures, min(GAP_FAILURES_PER_TYPE, len(failures)))
+    ]
     mixed = failed_attempts(records, panel) + gap_set
     rng.shuffle(mixed)
     logger.info("Gap failures per type: %s; mixed failures: %d", {k: len(v) for k, v in by_type.items()}, len(mixed))
-    sets = {"gap": [gap_set], "mixed": [mixed[start : start + MIXED_BATCH] for start in range(0, len(mixed), MIXED_BATCH)]}
+    sets = {
+        "gap": [gap_set],
+        "mixed": [mixed[start : start + MIXED_BATCH] for start in range(0, len(mixed), MIXED_BATCH)],
+    }
     output = StoragePath(output_dir)
     for set_name, batches in sets.items():
         for rules_name, (rules, kind) in RULES.items():
