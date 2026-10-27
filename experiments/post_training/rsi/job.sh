@@ -17,7 +17,12 @@ assigned="${NVIDIA_VISIBLE_DEVICES:-}"
 if [ -d "$assigned" ]; then
   assigned=$(ls "$assigned" | paste -sd, -)
 fi
-if [ -z "$assigned" ] || [ "$assigned" = all ]; then
+# On a cluster whose device plugin hides the assignment (NVIDIA_VISIBLE_DEVICES=void, as on cw-rno2a), a task that
+# requested a whole node says so with RSI_WHOLE_NODE=1, and then every GPU of the node is its own.
+if [ "$assigned" = void ] && [ "${RSI_WHOLE_NODE:-}" = 1 ]; then
+  assigned=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)
+fi
+if [ -z "$assigned" ] || [ "$assigned" = all ] || [ "$assigned" = void ]; then
   echo "Cannot tell which GPUs this task owns: NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset}" >&2
   exit 1
 fi
