@@ -126,23 +126,29 @@ async def generator(client: GlmClient, idea: CapabilityIdea, count: int) -> list
     with tempfile.TemporaryDirectory() as directory:
         program = Path(directory) / "program.py"
         program.write_text(result.value.source)
-        run = await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, str(program), str(count), "0"],
-            capture_output=True,
-            text=True,
-            timeout=PROGRAM_TIMEOUT,
-            cwd=directory,
-        )
+        try:
+            run = await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, str(program), str(count), "0"],
+                capture_output=True,
+                text=True,
+                timeout=PROGRAM_TIMEOUT,
+                cwd=directory,
+            )
+            stdout, returncode, stderr = run.stdout, run.returncode, run.stderr
+        except subprocess.TimeoutExpired as expired:
+            # A program that hangs keeps the instances it printed before the timeout, like one that fails.
+            stdout = expired.stdout.decode() if isinstance(expired.stdout, bytes) else expired.stdout or ""
+            returncode, stderr = None, f"timed out after {PROGRAM_TIMEOUT} seconds"
     pairs = []
-    for line in run.stdout.splitlines():
+    for line in stdout.splitlines():
         try:
             record = json.loads(line)
             pairs.append((record["question"], record["entry"]))
         except (ValueError, KeyError, TypeError):
             continue
-    if run.returncode != 0:
-        logger.warning("The generator of %s exited %d: %s", idea.capability_id, run.returncode, run.stderr[-2000:])
+    if returncode != 0:
+        logger.warning("The generator of %s exited %s: %s", idea.capability_id, returncode, stderr[-2000:])
     return pairs
 
 
