@@ -30,13 +30,15 @@ remain separate.
 
 The default is one eligible prompt group at startup and after every 10 published
 policy steps, with 128 candidates and at most 32 positions per response. A policy
-step numbers a learner batch, not an optimizer microbatch. Change only the
-frequency; `0` disables probes:
+step numbers a learner batch, not an optimizer microbatch. Probes share
+`score_centering_top_k` with SC. Change the candidate count or frequency;
+interval `0` disables probes:
 
 ```yaml
 skyrl:
   trainer:
     algorithm:
+      score_centering_top_k: 128
       score_centering_probe:
         interval: 10
 ```
@@ -60,13 +62,17 @@ There is no automatic cadence controller.
 | `fresh_source_tokens`, `stale_source_tokens`, `unknown_source_tokens`, `long_response/{fresh,stale,unknown}_tokens` | Coverage by actual generating-policy stamp. Empty source subsets omit means. |
 | `hypothetical_loss_*`, `ordinary_loss_abs_mean` | Additive SC correction with actual advantages and absolute TIS/PPO loss on the same positions, as unweighted sample means. |
 | `unit_advantage_loss_*`, `zero_advantage_fraction` | Companion calculation for flat-reward groups. Unit advantages are never applied to training. |
-| `*_omitted_mass_mean`, `tail_floor_fraction` | Mass outside K128 and use of the 1e-6 tail floor. |
+| `unit_advantage_logit_correction_l1_mean` | L1 norm of the hypothetical output/logit-gradient correction with unit advantage, including the modeled tail. |
+| `logit_correction_l1_mean`, `ordinary_logit_gradient_l1_mean`, `logit_correction_l1_ratio` | Actual-advantage correction and ordinary TIS output-gradient L1 norms. The ratio divides their sums over the same sampled positions; a zero denominator omits it. |
+| `*_omitted_mass_mean`, `tail_floor_fraction` | Mass outside the configured head and use of the 1e-6 tail floor. |
 | `old_behavior_log_ratio_*`, `sampled_tis_clipped_fraction`, source-age means | Chosen-token mismatch, TIS truncation and generating-policy age within the sample. |
 
 Current and old trainer probabilities coincide at this snapshot. A stale probe
 also includes weight drift; it does not measure later current/old divergence.
-Scalar correction size does not establish parameter-gradient error or learning
-benefit. Small omitted masses are sensitive to FP32 subtraction, even just above
+The L1 calculation uses the captured head and modeled tail without another
+parameter backward pass. It measures sensitivity at this snapshot; it does not
+establish parameter-gradient error or learning benefit. Small omitted masses are
+sensitive to FP32 subtraction, even just above
 the tail floor. Inspect omitted mass as well as floor usage.
 
 Probes require regular PPO/TIS, local vLLM and Megatron with tensor parallelism

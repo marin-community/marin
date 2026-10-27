@@ -103,7 +103,9 @@ def hypothetical_score_probe(
     PPO clipping is inactive for either advantage sign at this snapshot, so
     scale one unit-advantage correction by the finalized advantages.
     Fresh old/behavior disagreement measures engine mismatch; stale sources
-    also contain weight drift. These scalars do not measure gradient changes.
+    also contain weight drift. The logit-gradient L1 metrics describe the
+    hypothetical correction, including the modeled tail. They do not measure
+    parameter gradients or learning benefit.
     """
     unit_correction = ppo_tis_score_centering_correction(
         head,
@@ -148,6 +150,19 @@ def hypothetical_score_probe(
     if torch.any(age[known] < 0):
         raise ValueError("score probe source version is ahead of the learner snapshot")
     ordinary = -advantages[valid] * delta.clamp(max=math.log(tis_cap)).exp()
+    p_log = head[valid].to(unit_advantage.dtype)
+    q_log = behavior_head[valid].to(unit_advantage.dtype)
+    p, q = p_log.exp(), q_log.exp()
+    p_tail = (1 - p.sum(-1)).clamp_min(TAIL_MASS_FLOOR)
+    q_tail = (1 - q.sum(-1)).clamp_min(TAIL_MASS_FLOOR)
+    # At current=old, PPO clipping is inactive and q*w = min(p, cap*q).
+    tail_scale = (tis_cap * q_tail / p_tail).clamp(max=1)
+    residual = q * (p_log - q_log).clamp(max=math.log(tis_cap)).exp() - tail_scale[:, None] * p
+    total = residual.sum(-1)
+    unit_logit_l1 = (residual - p * total[:, None]).abs().sum(-1)
+    unit_logit_l1 += (1 - p.sum(-1)).clamp_min(0) * total.abs()
+    logit_l1 = advantages[valid].abs() * unit_logit_l1
+    ordinary_logit_l1 = 2 * ordinary.abs() * (1 - sampled[valid].exp())
     metrics.update(
         {
             "hypothetical_loss_mean": float(values.mean()),
@@ -155,6 +170,9 @@ def hypothetical_score_probe(
             "unit_advantage_loss_mean": float(unit_advantage.mean()),
             "unit_advantage_loss_abs_mean": float(unit_advantage.abs().mean()),
             "ordinary_loss_abs_mean": float(ordinary.abs().mean()),
+            "unit_advantage_logit_correction_l1_mean": float(unit_logit_l1.mean()),
+            "logit_correction_l1_mean": float(logit_l1.mean()),
+            "ordinary_logit_gradient_l1_mean": float(ordinary_logit_l1.mean()),
             "current_omitted_mass_mean": float((1 - current_mass).clamp_min(0).mean()),
             "behavior_omitted_mass_mean": float((1 - behavior_mass).clamp_min(0).mean()),
             "old_behavior_log_ratio_mean": float(delta.mean()),
@@ -166,6 +184,8 @@ def hypothetical_score_probe(
             ),
         }
     )
+    if ordinary_logit_l1.sum() > 0:
+        metrics["logit_correction_l1_ratio"] = float(logit_l1.sum() / ordinary_logit_l1.sum())
     for name, selected in (("fresh", known & (age == 0)), ("stale", known & (age > 0)), ("unknown", ~known)):
         metrics[f"{name}_source_tokens"] = float(selected.sum())
         if selected.any():

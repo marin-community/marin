@@ -104,12 +104,13 @@ async def _ignore(groups: list[RolloutGroup]) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_count", [32, 128])
 @pytest.mark.parametrize(
     "interval,centering_enabled,expected_steps",
     [(0, False, []), (None, False, [1, 11, 21]), (3, False, [1, 4, 7, 10, 20]), (3, True, [])],
 )
 async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeated_steps(
-    tmp_path, monkeypatch, interval, centering_enabled, expected_steps
+    tmp_path, monkeypatch, candidate_count, interval, centering_enabled, expected_steps
 ):
     # The real buffer runs in process; its actor lifetime has no Ray service.
     monkeypatch.setattr(ray, "kill", lambda _actor: None)
@@ -123,6 +124,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
     config.trainer.policy.megatron_config.context_parallel_size = 5
     config.trainer.algorithm.off_policy_correction = "tis"
     config.trainer.algorithm.score_centering_enabled = centering_enabled
+    config.trainer.algorithm.score_centering_top_k = candidate_count
     if interval is not None:
         config.trainer.algorithm.score_centering_probe.interval = interval
     config.generator.n_samples_per_prompt = SAMPLES_PER_PROMPT
@@ -159,11 +161,11 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
         sampled = [request for request in requests if request.score_centering_probe_tokens]
         assert [request.batch_metadata.global_step for request in sampled] == expected_steps
         assert all(
-            request.score_centering_probe_tokens == 32 and request.sampling_params["logprobs"] == 128
+            request.score_centering_probe_tokens == 32 and request.sampling_params["logprobs"] == candidate_count
             for request in sampled
         )
         assert all(
-            request.sampling_params["logprobs"] == (128 if centering_enabled else 0)
+            request.sampling_params["logprobs"] == (candidate_count if centering_enabled else 0)
             for request in requests
             if not request.score_centering_probe_tokens
         )
@@ -172,14 +174,16 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
 
 
 @pytest.mark.parametrize("flat_rewards", [False, True])
+@pytest.mark.parametrize("candidate_count", [32, 128])
 def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
-    flat_rewards, megatron_wrapper, monkeypatch, single_rank_group
+    flat_rewards, candidate_count, megatron_wrapper, monkeypatch, single_rank_group
 ):
     config = get_default_config()
     config.trainer.strategy = "megatron"
     config.trainer.use_sample_packing = True
     config.trainer.policy.sequence_parallel_size = 1
     config.trainer.algorithm.off_policy_correction = "tis"
+    config.trainer.algorithm.score_centering_top_k = candidate_count
     config.trainer.algorithm.eps_clip_low = config.trainer.algorithm.eps_clip_high = 0.2
     positions = np.array([0, 1, 1024, 4095], dtype=np.int32)
     mask = np.zeros(4096, dtype=np.int64)
@@ -219,8 +223,8 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
         evidence = (
             {
                 "score_probe_positions": [positions, None],
-                "score_probe_indices": [np.tile(np.arange(128, dtype=np.int32), (4, 1)), None],
-                "score_probe_logprobs": [np.tile(behavior[:128].log().numpy(), (4, 1)), None],
+                "score_probe_indices": [np.tile(np.arange(candidate_count, dtype=np.int32), (4, 1)), None],
+                "score_probe_logprobs": [np.tile(behavior[:candidate_count].log().numpy(), (4, 1)), None],
             }
             if probe
             else {}
@@ -243,7 +247,7 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
             torch.testing.assert_close(
                 batch["score_probe_source_steps"][0], torch.tensor([7, 4, -1], dtype=torch.int32)
             )
-            assert batch["score_topk_indices"].shape == (2, 3, 128)
+            assert batch["score_topk_indices"].shape == (2, 3, candidate_count)
             assert (batch["score_topk_indices"][1] == -1).all()
             tokens, packed = mmw.preprocess_packed_seqs(batch["sequences"], batch["attention_mask"].bool())
             with torch.no_grad():
@@ -272,6 +276,23 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
             )
             assert metrics[prefix + "zero_advantage_fraction"] == pytest.approx(1 if flat_rewards else 1 / 3)
             assert metrics[prefix + "ordinary_loss_abs_mean"] == pytest.approx(0 if flat_rewards else 2.0, abs=1e-7)
+            reference_logits = current.log().requires_grad_()
+            reference_logp = reference_logits.log_softmax(-1)
+            # An independent dense expectation of the ordinary clipped loss's
+            # pre-update coefficient. The omitted q tail is proportional to p.
+            coefficient = torch.minimum(reference_logp.exp().detach(), 2 * behavior)
+            reference_correction = (coefficient * reference_logp).sum()
+            reference_gradient = torch.autograd.grad(reference_correction, reference_logits)[0]
+            unit_l1 = float(reference_gradient.abs().sum())
+            assert metrics[prefix + "unit_advantage_logit_correction_l1_mean"] == pytest.approx(unit_l1, abs=1e-7)
+            assert metrics[prefix + "logit_correction_l1_mean"] == pytest.approx(
+                0 if flat_rewards else unit_l1, abs=1e-7
+            )
+            assert metrics[prefix + "ordinary_logit_gradient_l1_mean"] == pytest.approx(
+                0 if flat_rewards else 2.0, abs=1e-7
+            )
+            if not flat_rewards:
+                assert metrics[prefix + "logit_correction_l1_ratio"] == pytest.approx(unit_l1 / 2, abs=1e-7)
             assert metrics[prefix + "sampled_tis_clipped_fraction"] == 1
             assert metrics[prefix + "old_behavior_log_ratio_abs_mean"] == pytest.approx(float(np.log(4)))
             assert metrics[prefix + "coverage"] == 0.75
@@ -281,8 +302,9 @@ def test_consumed_probe_keeps_alignment_source_context_and_optimizer_unchanged(
             for source in ("fresh", "stale", "unknown"):
                 assert metrics[prefix + source + "_source_tokens"] == 1
                 assert metrics[prefix + "long_response/" + source + "_tokens"] == 1
-            assert metrics[prefix + "current_omitted_mass_mean"] == pytest.approx(0.25 * 2 / 128, abs=1e-7)
-            assert metrics[prefix + "behavior_omitted_mass_mean"] == pytest.approx(0.75 * 2 / 128, abs=1e-7)
+            omitted = (130 - candidate_count) / 128
+            assert metrics[prefix + "current_omitted_mass_mean"] == pytest.approx(0.25 * omitted, abs=1e-7)
+            assert metrics[prefix + "behavior_omitted_mass_mean"] == pytest.approx(0.75 * omitted, abs=1e-7)
             assert not any(key.startswith("score_") for key in batch)
         weights = (old - batch["rollout_logprobs"]).exp().clamp(max=2.0)
         loss = ppo_policy_loss(
