@@ -4,12 +4,12 @@
     "moe_cplm"
   ],
   "base_sha": "358283f7da684d156d8bca095669cf8c023ef2f3",
-  "head_sha": "728f34e5528c9fa45663c5d0fc0187dc462e33de",
+  "head_sha": "bbb5db1ee2124d0b562c319ec981aa3fd3372531",
   "report_count": 2,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 19356,
+      "distance_score": 19362,
       "report_relpath": "belay_tpu/index.html",
       "status_counts": {
         "added": 66,
@@ -21,7 +21,7 @@
     },
     {
       "closest_variant": "base",
-      "distance_score": 2173,
+      "distance_score": 2181,
       "report_relpath": "moe_cplm/index.html",
       "status_counts": {
         "added": 5,
