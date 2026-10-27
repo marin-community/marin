@@ -37,7 +37,7 @@ from experiments.post_training.rsi.run import read_ideas
 logger = logging.getLogger(__name__)
 
 SYNTHESIZED_FILE = "synthesized.jsonl"
-POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.MEDIUM, max_tokens=16384)
+POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_tokens=32768)
 PROGRAM_TIMEOUT = 300.0
 TYPE_BY_CAPABILITY = {
     "gap.search.shortest-state-machine-sequence": "quantum_lock",
