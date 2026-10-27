@@ -320,7 +320,7 @@ def _blocked_inkling_math(
     block_size: int,
     query_block_batch_size: int | None = None,
 ) -> jax.Array:
-    """Bound score/bias storage by query blocks; rematerialize their backward."""
+    """Return Inkling attention for q/k/v under the supplied mask and relative bias."""
     batch, length, heads, _ = q.shape
 
     @jax.checkpoint

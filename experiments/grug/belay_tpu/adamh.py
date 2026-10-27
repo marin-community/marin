@@ -65,7 +65,7 @@ def scale_by_adamh(
         mu = otu.tree_cast(mu, mu_dtype)
 
         def _norm(x):
-            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts;
             # sum-of-squares in float32 reduces correctly.
             return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32))))
 

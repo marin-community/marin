@@ -76,7 +76,7 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate)
         if not hasattr(param, "ndim"):
             return update
         if param.ndim == 2:
-            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts;
             # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
             param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
             update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))

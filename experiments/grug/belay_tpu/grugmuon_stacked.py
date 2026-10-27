@@ -377,13 +377,9 @@ def _largest_divisor_at_most(n: int, limit: int) -> int:
 
 
 def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coefficient_type: CoefficientType):
-    """Muon directions of every 2D/3D/4D leaf, batching same-shaped matrices across leaves.
-
-    Each matrix is oriented wide (the transpose Newton-Schulz applies internally to tall matrices),
-    cast to bf16 (its first step), and grouped with every other matrix of the same wide shape: the 2D
-    and 3D leaves into one padded stack per shape (``_newtonschulz_padded_stack_sharded``), the 4D
-    expert leaves into one expert-sharded batch per shape. The per-matrix math is unchanged.
-    """
+    """Return Muon directions for 2D/3D/4D leaves, preserving the update tree and other leaves."""
+    # Orient matrices wide and group equal shapes. Padding the 2D/3D stacks and sharding
+    # the 4D expert batches must preserve each matrix's Newton-Schulz calculation.
     flat, treedef = jax.tree_util.tree_flatten(updates, is_leaf=lambda x: x is None)
     param_leaves = treedef.flatten_up_to(params)
     out = list(flat)

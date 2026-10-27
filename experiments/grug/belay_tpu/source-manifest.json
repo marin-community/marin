@@ -15,7 +15,7 @@
       "path": "experiments/grug/belay_tpu/adamh.py",
       "source_path": "experiments/grug/belay_tpu/adamh.py",
       "source_sha256": "a893d78277849080e8c6fbb3d29fc6124cdbc109185dfee9c108888cc9b9112b",
-      "consolidated_sha256": "a893d78277849080e8c6fbb3d29fc6124cdbc109185dfee9c108888cc9b9112b"
+      "consolidated_sha256": "046c5651806e87d0f0c1edb3af30099935272ffb082b74a89298166a20d4bf85"
     },
     {
       "path": "experiments/grug/belay_tpu/attention_kernel_check.py",
@@ -105,7 +105,7 @@
       "path": "experiments/grug/belay_tpu/grugmuon_stacked.py",
       "source_path": "experiments/grug/belay_tpu/grugmuon_stacked.py",
       "source_sha256": "fe4125c43b1916e077429d089381c14fca6006d3c1777ff48f648144842601d3",
-      "consolidated_sha256": "fe4125c43b1916e077429d089381c14fca6006d3c1777ff48f648144842601d3"
+      "consolidated_sha256": "5661efd8c78f8b2b5bae68d545302cf333d50d85821f373b86a9e32bde887d90"
     },
     {
       "path": "experiments/grug/belay_tpu/heuristic.py",
@@ -219,19 +219,19 @@
       "path": "experiments/grug/belay_tpu/model.py",
       "source_path": "experiments/grug/belay_tpu/model.py",
       "source_sha256": "a289a84c1d0bb9b95f25c7a60bab7b17ebae0f596026709145fd384c657afb24",
-      "consolidated_sha256": "31ad7df84114a4154b97ea8f2d48b540fd13da0cbafa72fb58ff8aa635c1642b"
+      "consolidated_sha256": "8c30a16c433f99d3accc5f422560af92b5e0386f4620a6765622e6c0d706170c"
     },
     {
       "path": "experiments/grug/belay_tpu/operator_check.py",
       "source_path": "experiments/grug/belay_tpu/operator_check.py",
       "source_sha256": "0c63def6c932b02a879ebb0eb66e123d0e94e7535c038aa0ca9b98608f3b27ee",
-      "consolidated_sha256": "bee0aa0da877c61dac5ebe25761c855d4f93334cb5d353bfcb8d6bea67cd1a38"
+      "consolidated_sha256": "feed32da612df9e41ae3915f77ea6480962759b002ae57ec16f559d6edd1e16f"
     },
     {
       "path": "experiments/grug/belay_tpu/optimizer.py",
       "source_path": "experiments/grug/belay_tpu/optimizer.py",
       "source_sha256": "1f23d8d17981681b5a15d930aac07e242d2880809d36dc3eb3428e3ec3cda430",
-      "consolidated_sha256": "1f23d8d17981681b5a15d930aac07e242d2880809d36dc3eb3428e3ec3cda430"
+      "consolidated_sha256": "64c2d7d48c6681fe0d8195fd090b931655b032fc4defcbc32a47fc576ecbfbc3"
     },
     {
       "path": "experiments/grug/belay_tpu/packed_kda_check.py",

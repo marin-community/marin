@@ -474,13 +474,7 @@ def _local_gather(table: jax.Array, ids: jax.Array) -> jax.Array:
 
 @jax.custom_vjp
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Look up tokens from a replicated table without a cross-rack collective.
-
-    The backward scatter-adds each shard's row cotangents in float32 and then sums over the batch axes.
-    Under the bf16 compute policy the table arrives in bf16, and the default gather transpose would
-    scatter-add every token's cotangent straight into a bf16 table: contended bf16 atomics that are
-    slow (~11 ms/step at d512) and round each frequent token's accumulated gradient at every add.
-    """
+    """Look up tokens from a replicated table, accumulating table gradients in float32."""
     token_ids = reshard(token_ids, P(_BATCH_AXES, None))
     return shard_map(
         _local_gather,
@@ -720,7 +714,7 @@ class GrugModelConfig:
     """QB treatment of the null experts on ``moe_null_layers``. None: free (bias 0, the router picks the split);
     a float ``f``: QB sends ``f`` of the slots to them on average (``2K f`` null and ``2K (1 - f)`` real slots per
     token), so the router decides which tokens use fewer real experts, not how many on average."""
-    # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
+    # LatentMoE (arXiv 2601.18089) with latent RMSNorm.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
     latent_out_full_layers: tuple[int, ...] = ()
@@ -1224,7 +1218,6 @@ def _proj_parts(cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, 
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
-    """Non-parametric RMS norm over the last dimension."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
@@ -1532,11 +1525,11 @@ class CausalSelfAttention(eqx.Module):
         head_dim = self.cfg.inferred_head_dim
         kv_in = x if kv_input is None else kv_input
 
-        def _project(inp: jax.Array, w: jax.Array | None, latent: LatentProj | None) -> jax.Array:
+        def _project(inputs: jax.Array, w: jax.Array | None, latent: LatentProj | None) -> jax.Array:
             if latent is not None:
-                return latent(self.cfg, inp)
+                return latent(self.cfg, inputs)
             assert w is not None
-            return _proj(self.cfg, inp, w)
+            return _proj(self.cfg, inputs, w)
 
         q_flat = _project(x, self.w_q, None)
         k_flat = _project(kv_in, self.w_k, None)
@@ -4581,17 +4574,7 @@ def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_inde
 
 @eqx.filter_custom_vjp
 def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key):
-    """``_attn_res_layer_passthrough`` with a backward shaped for the unrolled layer loop.
-
-    The history is passed through unchanged so each block's cotangent is threaded layer to layer and
-    accumulated eagerly. Otherwise JAX sums a block's per-gate cotangents with one ``add_any`` at the
-    end, which XLA fuses into a single late reduction that keeps every later gate's ``[B, S, D]`` input
-    gradient alive. The backward recomputes the layer from its inputs (nothing but the inputs is saved)
-    behind an optimization barrier with the incoming cotangents, and emits all of its cotangents through
-    a second barrier so the whole layer's backward, weight gradients included, finishes before the next
-    layer's starts. Without the barriers the unrolled loop's peak memory at d1024 is 3.6x the scanned
-    baseline's.
-    """
+    """Evaluate one AttnRes layer and pass its history through unchanged; save only layer inputs."""
     return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key)
 
 
@@ -4606,6 +4589,8 @@ def _attn_res_layer_remat_bwd(
     residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps, noise_key
 ):
     del residuals, perturbed
+    # Thread history cotangents eagerly between layers. The optimization barriers keep
+    # XLA from delaying their reduction and retaining every later gate's input gradient.
     # Router stats are logging-only and carry no cotangent, except the moe_compress / shadow loss and the
     # lm_head-only slice (lm_head_extra_dim).
     d_partial, d_blocks, d_block_logits, d_stats = grad_out
@@ -4959,9 +4944,7 @@ class _ScanArgs(NamedTuple):
 
 @jax.custom_vjp
 def _fused_projection(x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
-    """``x @ w`` for every ``w`` of ``weights`` as one GEMM over their concatenation. The backward feeds each
-    part's cotangent to its own GEMMs (``dx = sum_i d_i w_i^T``, ``dw_i = x^T d_i``) instead of differentiating
-    the split, whose transpose would materialize the concatenated ``[T, sum widths]`` cotangent. Same math."""
+    """Return ``x @ w`` for each weight, in the same order as ``weights``."""
     fused = jnp.einsum("td,de->te", x, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
     return tuple(jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1))
 
@@ -4971,6 +4954,7 @@ def _fused_projection_fwd(x: jax.Array, weights: tuple[jax.Array, ...]):
 
 
 def _fused_projection_bwd(residuals, d_parts: tuple[jax.Array, ...]):
+    # Separate products avoid materializing the concatenated [T, sum widths] cotangent.
     x, weights = residuals
     dx = functools.reduce(
         jnp.add,
@@ -5097,12 +5081,7 @@ def _scan_forward(
 
 @eqx.filter_custom_vjp
 def _scan_layers(diff, args: _ScanArgs):
-    """The ``scan_layers`` prefix: ``diff = (units_diff, queries, history)`` -> ``(history, per-unit stats)``.
-
-    A custom VJP saves only the final history and each layer's incoming partial. Completed blocks never
-    change, so the final history (masked to the blocks filled so far) is every layer's history input;
-    the backward is a reverse scan that rematerializes one layer at a time (``AttnResLayerBackward.RECOMPUTE``)
-    and threads the history's cotangents from layer to layer. Layer stats carry no cotangent."""
+    """Map ``(units_diff, queries, history)`` to final history and per-unit stats; stats have no cotangent."""
     units_diff, queries, history = diff
     history, (stats, _) = _scan_forward(units_diff, queries, history, args, save_partials=False)
     return history, stats
@@ -5111,6 +5090,8 @@ def _scan_layers(diff, args: _ScanArgs):
 @_scan_layers.def_fwd
 def _scan_layers_fwd(perturbed, diff, args: _ScanArgs):
     del perturbed
+    # Completed blocks never change. Final history plus each incoming partial suffices
+    # to reconstruct layer inputs while the backward rematerializes one layer at a time.
     units_diff, queries, history = diff
     history, (stats, partials) = _scan_forward(units_diff, queries, history, args, save_partials=True)
     sources = _to_memory_kind(history.sources, "pinned_host") if args.offload_partials else history.sources

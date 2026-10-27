@@ -518,7 +518,7 @@ def _newtonschulz_batched_syrk(
     eps: float,
     coefficient_type: CoefficientType,
 ) -> jax.Array:
-    """Run batched Newton-Schulz, using QuACK symmetric products on GPU."""
+    """Return Newton-Schulz directions for a batch of matrices, preserving shape and dtype."""
     if jax.default_backend() != "gpu":
         return jax.vmap(lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type))(X)
     quack_symmetric_gemm = import_module("levanter.grug._moe.quack_symmetric_cute").quack_symmetric_gemm

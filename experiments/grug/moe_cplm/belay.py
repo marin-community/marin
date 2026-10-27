@@ -22,6 +22,7 @@ def capped(x, cap=10.0):
 
 
 def local_head(hidden, head, qw, kw, gw, sink, tokens, labels, segments, *, tile=128, reference=False):
+    """Return per-token mixture NLL, vocabulary NLL, copy gate and effective copy mass, each shaped [B, S]."""
     batch, length, dim = hidden.shape
     x = hidden.reshape(-1, dim)
     if reference:

@@ -15,7 +15,8 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 
 
-def initialize_operator_check():
+def initialize_operator_check() -> tuple[Path, str, str]:
+    """Start online tracking; return the local output directory, operator TPU type and reference TPU type."""
     require_tpu_rounding()
     run_id = os.environ["BELAY_RUN_ID"]
     reference_topology = os.environ["BELAY_TPU"]

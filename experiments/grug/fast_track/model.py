@@ -858,7 +858,7 @@ class GrugModelConfig:
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_xla_scan_impl: str = "parallel"
-    """XLA scan implementation; see ``chunk_kda``."""
+    """KDA recurrence scan mode on XLA."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
     # attention over the residual-block history (the embedding, completed block sums and the running
     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
