@@ -32,6 +32,7 @@ from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
 from experiments.post_training.rsi.gap import GAP_CAPABILITY_PREFIX, entry_task, scan_types
+from experiments.post_training.rsi.label_check import label_correct
 from experiments.post_training.rsi.run import read_ideas
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,11 @@ def brief(idea: CapabilityIdea) -> str:
 
 
 def valid(name: str, question: str, entry: dict) -> bool:
-    """Whether the instance is whole and the dataset's scorer gives its own answer the full reward."""
+    """Whether the instance is whole, the dataset's scorer gives its own answer the full reward, and its answer is the
+    one recomputed from the problem where ``label_check`` can recompute it."""
     if not question.strip() or not isinstance(entry.get("answer"), str) or not isinstance(entry.get("metadata"), dict):
+        return False
+    if label_correct(name, question, entry) is False:
         return False
     try:
         if name == "quantum_lock" and not reaches_target(entry):
