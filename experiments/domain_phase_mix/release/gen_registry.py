@@ -30,7 +30,7 @@ BASELINE_ROWS = {
         "launch=='convex_additive' & variant=='cmp_u_cvx_cap06'",
         "launch=='convex_additive' & variant=='cmp_t9_cvx_cap08'",
     ),
-    "additive response": (
+    "additive form": (
         "launch=='convex_additive' & variant=='cmp_u_add_cap08'",
         "launch=='convex_additive' & variant=='cmp_t9_add_cap08'",
     ),
@@ -129,13 +129,14 @@ MV = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
 BENCHMARK_ROWS = [
     ("MARINER", MV),
     ("exponential benefit", MV + "_kappa1"),
+    ("benefit shifted by one epoch", MV + "_repeat_benefit"),
     ("per-bucket shapes", MV + "_per_bucket_shape"),
     ("per-bucket threshold", MV + "_per_bucket_threshold"),
     ("per-bucket rate", MV + "_per_bucket_rate"),
     ("per-bucket power", MV + "_per_bucket_power"),
     ("finer harm-threshold grid", MV + "_fine_threshold"),
     ("signed amplitudes", MV + "_signed_head"),
-    ("additive response", "weibull_softplus_unscaled"),
+    ("additive form", "weibull_softplus_unscaled"),
     ("fully convex objective", MV + "_raw_epoch_hinge"),
     ("fully convex objective, squared harm", MV + "_raw_epoch_harm"),
     ("fully convex objective, per-bucket threshold", MV + "_raw_epoch_hinge_per_bucket_threshold"),

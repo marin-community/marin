@@ -50,9 +50,10 @@ same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `
   model, swarm and objective, the RMSE, MAE, Spearman correlation, calibration, selection regret and basin metrics over
   five mixture-blocked folds of one fold assignment, which score every fit row but the proportional anchor. `model`
   keeps the observatory's registry name: MARINER is `weibull_softplus_unscaled@kappa_floor_link_flat15_nocap` and its
-  variants add a suffix (`_raw_epoch_hinge` is the fully convex objective, `_kappa1` the exponential benefit); the
-  additive response is `weibull_softplus_unscaled`; `_exposure` models read materialized epochs; `lightgbm_regmix` is
-  tuned RegMix. Each model comes from the observatory run that the paper's table reports (SURROGATE_BENCHMARK).
+  variants add a suffix (`_raw_epoch_hinge` is the fully convex objective, `_kappa1` the exponential benefit,
+  `_repeat_benefit` the benefit shifted by one epoch); the additive form is `weibull_softplus_unscaled`; `_exposure`
+  models read materialized epochs; `lightgbm_regmix` is tuned RegMix. Each model comes from the observatory run that
+  the paper's table reports (SURROGATE_BENCHMARK).
 """
 
 import json
@@ -174,6 +175,7 @@ MARINER_VARIANT = MARINER_SURROGATE + "{}"  # MARINER and its variants
 SURROGATE_BENCHMARK = {
     MARINER_VARIANT.format(""): "comparators_20260908",
     MARINER_VARIANT.format("_kappa1"): "comparators_20260908",
+    MARINER_VARIANT.format("_repeat_benefit"): "repeat_benefit_20261025",
     MARINER_VARIANT.format("_per_bucket_shape"): "shape_sharing_20260908",
     MARINER_VARIANT.format("_per_bucket_threshold"): "per_bucket_partial_20260908",
     MARINER_VARIANT.format("_per_bucket_rate"): "per_bucket_partial_20260908",

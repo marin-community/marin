@@ -268,7 +268,7 @@ def test_factorial_predictions_reproduce_the_predicted_effects(out):
 
 def test_surrogate_benchmark_holds_every_model_on_every_swarm(out):
     bench = out["fits_surrogate_benchmark"]
-    assert len(bench) == 28 * 6 and not bench.duplicated(["model", "swarm", "objective"]).any()
+    assert len(bench) == 29 * 6 and not bench.duplicated(["model", "swarm", "objective"]).any()
     assert set(bench.swarm) == set(heldout.SWARM.values()) and set(bench.objective) == {"obe_easy", "uncheatable"}
     # Epochs rescale weights invertibly, so the two linear models fit identically (the paper's two linear rows).
     linear = bench[bench.model.str.startswith("linear_")].pivot(index=["swarm", "objective"], columns="model")
