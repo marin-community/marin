@@ -1,0 +1,3434 @@
+[
+  {
+    "capability_id": "gap.algebra.solve-linear-equations",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setB",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "solve linear equations in one variable",
+      "outcome": "Solves a linear equation in one variable with integer coefficients, possibly with several terms and subtraction, and gives the integer value of the variable.",
+      "includes": [
+        "isolating the variable",
+        "combining several constant terms",
+        "negative and subtracted terms",
+        "large coefficients and products"
+      ],
+      "excludes": [],
+      "id": "gap.algebra.solve-linear-equations",
+      "evidence": [],
+      "example_tasks": [
+        "Find the value of m in the equation: 2596*m + 4004 = 11792",
+        "Solve for b: 30*b + 26 = 1436",
+        "Find the value of y in the equation: 7*y + 5 = 222",
+        "Determine the value of n that satisfies: 5*n + 166 = 381",
+        "Find the value of c in the equation: 6*c - 21 = 429",
+        "Find the value of v in the equation: 9750*v - 1144 = 203606",
+        "Find the value of j in the equation: 87*j + 91 = 3136",
+        "Determine the value of o that satisfies: 28*o - 49 = 707",
+        "Find the value of h in the equation: 46 - 39*h = -1436",
+        "Find the value of z in the equation: 46 - 96*z = -434",
+        "Find the value of v in the equation: 90 - 59*v = -5633",
+        "Find the value of o in the equation: 2686144*o = 225636096",
+        "Find the value of v in the equation: 43*v + 4358 = 4444",
+        "Solve for k: 22*k - 25 = 1537",
+        "Solve for b: 49470*b + 5917 = 4408747",
+        "Solve for d: 23*d - 158 = 1935",
+        "Determine the value of c that satisfies: 56*c - 73 = 5359",
+        "Determine the value of b that satisfies: 975*b = 52650",
+        "Find the value of h in the equation: 95*h = 7315",
+        "Solve for r: 72*r + 91 = 1315"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: 3 or 4 terms; subtraction and negative constants; coefficients and products in the thousands; the variable letter varies.",
+      "example_task_spec": {
+        "id": "example-simple_equations",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Find the value of m in the equation: 2596*m + 4004 = 11792"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:94100",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogInNpbXBsZV9lcXVhdGlvbnMiLCAiZW50cnkiOiB7InF1ZXN0aW9uIjogIkZpbmQgdGhlIHZhbHVlIG9mIG0gaW4gdGhlIGVxdWF0aW9uOiAyNTk2Km0gKyA0MDA0ID0gMTE3OTIiLCAiYW5zd2VyIjogIjMiLCAibWV0YWRhdGEiOiB7InNvdXJjZV9kYXRhc2V0IjogInNpbXBsZV9lcXVhdGlvbnMiLCAic291cmNlX2luZGV4IjogOTA0LCAiZXF1YXRpb24iOiAiMjU5NiptICsgNDAwNCA9IDExNzkyIiwgInZhcmlhYmxlIjogIm0iLCAiZGlmZmljdWx0eSI6IHsibWluX3Rlcm1zIjogMiwgIm1heF90ZXJtcyI6IDQsICJtaW5fdmFsdWUiOiAxLCAibWF4X3ZhbHVlIjogMTAwLCAib3BlcmF0b3JzX3dlaWdodHMiOiBbMC40LCAwLjQsIDAuMl19fX19"
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Find the value of m in the equation: 2596*m + 4004 = 11792",
+          "answer": "3",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 904,
+            "equation": "2596*m + 4004 = 11792",
+            "variable": "m",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Solve for b: 30*b + 26 = 1436",
+          "answer": "47",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 906,
+            "equation": "30*b + 26 = 1436",
+            "variable": "b",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of y in the equation: 7*y + 5 = 222",
+          "answer": "31",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 907,
+            "equation": "7*y + 5 = 222",
+            "variable": "y",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Determine the value of n that satisfies: 5*n + 166 = 381",
+          "answer": "43",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 908,
+            "equation": "5*n + 166 = 381",
+            "variable": "n",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of c in the equation: 6*c - 21 = 429",
+          "answer": "75",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 909,
+            "equation": "6*c - 21 = 429",
+            "variable": "c",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of v in the equation: 9750*v - 1144 = 203606",
+          "answer": "21",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 911,
+            "equation": "9750*v - 1144 = 203606",
+            "variable": "v",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of j in the equation: 87*j + 91 = 3136",
+          "answer": "35",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 912,
+            "equation": "87*j + 91 = 3136",
+            "variable": "j",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Determine the value of o that satisfies: 28*o - 49 = 707",
+          "answer": "27",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 913,
+            "equation": "28*o - 49 = 707",
+            "variable": "o",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of h in the equation: 46 - 39*h = -1436",
+          "answer": "38",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 914,
+            "equation": "46 - 39*h = -1436",
+            "variable": "h",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of z in the equation: 46 - 96*z = -434",
+          "answer": "5",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 916,
+            "equation": "46 - 96*z = -434",
+            "variable": "z",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of v in the equation: 90 - 59*v = -5633",
+          "answer": "97",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 917,
+            "equation": "90 - 59*v = -5633",
+            "variable": "v",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of o in the equation: 2686144*o = 225636096",
+          "answer": "84",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 918,
+            "equation": "2686144*o = 225636096",
+            "variable": "o",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of v in the equation: 43*v + 4358 = 4444",
+          "answer": "2",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 921,
+            "equation": "43*v + 4358 = 4444",
+            "variable": "v",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Solve for k: 22*k - 25 = 1537",
+          "answer": "71",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 922,
+            "equation": "22*k - 25 = 1537",
+            "variable": "k",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Solve for b: 49470*b + 5917 = 4408747",
+          "answer": "89",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 923,
+            "equation": "49470*b + 5917 = 4408747",
+            "variable": "b",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Solve for d: 23*d - 158 = 1935",
+          "answer": "91",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 926,
+            "equation": "23*d - 158 = 1935",
+            "variable": "d",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Determine the value of c that satisfies: 56*c - 73 = 5359",
+          "answer": "97",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 927,
+            "equation": "56*c - 73 = 5359",
+            "variable": "c",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Determine the value of b that satisfies: 975*b = 52650",
+          "answer": "54",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 931,
+            "equation": "975*b = 52650",
+            "variable": "b",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find the value of h in the equation: 95*h = 7315",
+          "answer": "77",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 932,
+            "equation": "95*h = 7315",
+            "variable": "h",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        },
+        {
+          "question": "Solve for r: 72*r + 91 = 1315",
+          "answer": "17",
+          "metadata": {
+            "source_dataset": "simple_equations",
+            "source_index": 933,
+            "equation": "72*r + 91 = 1315",
+            "variable": "r",
+            "difficulty": {
+              "min_terms": 2,
+              "max_terms": 4,
+              "min_value": 1,
+              "max_value": 100,
+              "operators_weights": [
+                0.4,
+                0.4,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the simple_equations dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"simple_equations\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "424c42eb722ebfe0dc3ce3a7212393bfb35eef23b3640b7d87f1c8a5435f29f2"
+  },
+  {
+    "capability_id": "gap.matrix.rotate-square-matrix",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setB",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "rotate a square matrix by multiples of 90 degrees",
+      "outcome": "Rotates a square matrix clockwise by an angle that is a multiple of 90 degrees, including angles of 360 degrees or more and 0, and writes the result in the input's exact format.",
+      "includes": [
+        "reducing the angle modulo 360",
+        "clockwise 90, 180 and 270 degree rotations",
+        "the identity rotation",
+        "rows as space-separated numbers, one per line"
+      ],
+      "excludes": [],
+      "id": "gap.matrix.rotate-square-matrix",
+      "evidence": [],
+      "example_tasks": [
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n9 6 4 3 7 5 8 6 3\n0 0 1 1 3 9 1 1 1\n5 0 2 5 9 6 3 8 2\n4 1 5 6 8 8 1 9 2\n7 0 4 8 1 6 2 9 4\n2 7 2 9 0 7 1 5 0\n1 1 6 3 1 4 8 4 7\n9 3 1 3 3 7 1 2 8\n4 2 5 2 6 1 6 1 5\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 180 degrees clockwise:\n9 8 2 8 8 8\n6 4 6 5 1 4\n5 4 6 8 7 5\n8 7 1 7 3 0\n4 0 0 5 2 0\n2 9 8 5 8 5\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 630 degrees clockwise:\n6 9\n2 3\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 90 degrees clockwise:\n4 7 1 1 3\n0 6 6 2 2\n1 2 6 0 2\n7 6 1 7 9\n7 0 6 5 4\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 90 degrees clockwise:\n1 1\n1 6\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 0 degrees clockwise:\n2 4 2 1 0 6 0 8 3\n4 3 0 5 6 4 9 5 3\n2 6 6 7 0 2 8 9 4\n0 3 0 2 1 9 5 7 3\n8 9 6 4 2 5 6 2 0\n0 4 0 2 6 4 7 1 0\n2 5 2 4 2 2 3 0 1\n1 4 3 9 2 7 5 5 8\n9 0 6 3 9 8 7 9 0\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n3 1 0 3\n6 1 2 2\n0 2 0 1\n5 0 9 8\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 270 degrees clockwise:\n2 5 0 5 4\n7 6 4 2 7\n7 2 5 2 8\n7 4 0 1 5\n4 6 9 7 8\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 900 degrees clockwise:\n5 7 3 3 0 5 4\n2 3 7 4 4 1 6\n6 5 3 9 4 4 9\n2 0 5 0 9 1 5\n0 1 3 1 1 9 4\n9 8 3 9 4 4 4\n1 5 2 1 8 3 8\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 270 degrees clockwise:\n5 7 7 9 0\n3 2 2 8 3\n7 8 0 0 5\n0 8 2 4 6\n4 2 8 4 7\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 630 degrees clockwise:\n6 7\n7 1\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n4 2 3 0 1 4\n3 6 1 7 6 3\n1 6 0 6 2 2\n7 3 4 0 1 0\n7 1 6 2 7 3\n4 0 5 9 4 1\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 540 degrees clockwise:\n9 6 7 5 1 0 2\n6 0 6 6 8 5 9\n6 1 1 8 7 6 7\n6 5 5 5 3 5 8\n6 7 5 7 2 4 5\n5 2 7 9 5 1 6\n8 5 9 4 4 0 5\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n1 5 2 7\n7 3 4 0\n7 2 7 4\n9 6 4 8\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 540 degrees clockwise:\n5 5 3 5 6 9 5\n1 8 2 7 0 3 3\n1 0 6 5 0 2 9\n7 5 4 8 7 8 2\n5 9 2 8 3 4 3\n1 1 9 5 9 1 8\n2 2 4 4 2 3 5\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n8 0 9\n8 3 2\n5 7 9\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n1 5 9\n3 6 7\n6 6 1\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 0 degrees clockwise:\n8 2 6 5 3 3 9 6 4 0\n5 7 1 6 7 8 9 5 0 3\n0 1 0 4 9 1 1 0 3 5\n8 9 6 2 9 0 7 7 7 7\n9 8 5 1 8 9 3 8 1 4\n4 2 0 0 8 8 8 8 3 1\n9 0 8 2 2 2 9 2 4 5\n8 9 0 2 7 5 0 3 8 0\n4 2 6 0 9 7 2 0 8 5\n5 3 0 5 1 8 0 0 9 8\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n1 9\n1 3\n",
+        "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n3 0 0 2 2\n1 9 2 4 1\n5 8 0 5 2\n8 6 3 1 9\n3 0 7 2 6\n"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: angles above 360 degrees (reduce modulo 360) and 0 degrees; 6x6 to 10x10 matrices; 270-degree rotations; exact row-per-line output.",
+      "example_task_spec": {
+        "id": "example-rotate_matrix",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n9 6 4 3 7 5 8 6 3\n0 0 1 1 3 9 1 1 1\n5 0 2 5 9 6 3 8 2\n4 1 5 6 8 8 1 9 2\n7 0 4 8 1 6 2 9 4\n2 7 2 9 0 7 1 5 0\n1 1 6 3 1 4 8 4 7\n9 3 1 3 3 7 1 2 8\n4 2 5 2 6 1 6 1 5\n"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:94405",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogInJvdGF0ZV9tYXRyaXgiLCAiZW50cnkiOiB7InF1ZXN0aW9uIjogIkdpdmVuIGEgc3F1YXJlIG1hdHJpeCwgeW91ciBqb2IgaXMgdG8gcm90YXRlIGl0IGNsb2Nrd2lzZS5cblxuWW91ciBvdXRwdXQgc2hvdWxkIGJlIGEgbWF0cml4IGluIHRoZSBzYW1lIGZvcm1hdCBhcyB0aGUgaW5wdXQuXG5cblJvdGF0ZSB0aGUgbWF0cml4IGJlbG93IGJ5IDgxMCBkZWdyZWVzIGNsb2Nrd2lzZTpcbjkgNiA0IDMgNyA1IDggNiAzXG4wIDAgMSAxIDMgOSAxIDEgMVxuNSAwIDIgNSA5IDYgMyA4IDJcbjQgMSA1IDYgOCA4IDEgOSAyXG43IDAgNCA4IDEgNiAyIDkgNFxuMiA3IDIgOSAwIDcgMSA1IDBcbjEgMSA2IDMgMSA0IDggNCA3XG45IDMgMSAzIDMgNyAxIDIgOFxuNCAyIDUgMiA2IDEgNiAxIDVcbiIsICJhbnN3ZXIiOiAiNCA5IDEgMiA3IDQgNSAwIDlcbjIgMyAxIDcgMCAxIDAgMCA2XG41IDEgNiAyIDQgNSAyIDEgNFxuMiAzIDMgOSA4IDYgNSAxIDNcbjYgMyAxIDAgMSA4IDkgMyA3XG4xIDcgNCA3IDYgOCA2IDkgNVxuNiAxIDggMSAyIDEgMyAxIDhcbjEgMiA0IDUgOSA5IDggMSA2XG41IDggNyAwIDQgMiAyIDEgMyIsICJtZXRhZGF0YSI6IHsic291cmNlX2RhdGFzZXQiOiAicm90YXRlX21hdHJpeCIsICJzb3VyY2VfaW5kZXgiOiA5MDcsICJtYXRyaXgiOiBbWzksIDYsIDQsIDMsIDcsIDUsIDgsIDYsIDNdLCBbMCwgMCwgMSwgMSwgMywgOSwgMSwgMSwgMV0sIFs1LCAwLCAyLCA1LCA5LCA2LCAzLCA4LCAyXSwgWzQsIDEsIDUsIDYsIDgsIDgsIDEsIDksIDJdLCBbNywgMCwgNCwgOCwgMSwgNiwgMiwgOSwgNF0sIFsyLCA3LCAyLCA5LCAwLCA3LCAxLCA1LCAwXSwgWzEsIDEsIDYsIDMsIDEsIDQsIDgsIDQsIDddLCBbOSwgMywgMSwgMywgMywgNywgMSwgMiwgOF0sIFs0LCAyLCA1LCAyLCA2LCAxLCA2LCAxLCA1XV0sICJudW1fcm90YXRpb25zIjogOSwgInNvbHV0aW9uIjogW1s0LCA5LCAxLCAyLCA3LCA0LCA1LCAwLCA5XSwgWzIsIDMsIDEsIDcsIDAsIDEsIDAsIDAsIDZdLCBbNSwgMSwgNiwgMiwgNCwgNSwgMiwgMSwgNF0sIFsyLCAzLCAzLCA5LCA4LCA2LCA1LCAxLCAzXSwgWzYsIDMsIDEsIDAsIDEsIDgsIDksIDMsIDddLCBbMSwgNywgNCwgNywgNiwgOCwgNiwgOSwgNV0sIFs2LCAxLCA4LCAxLCAyLCAxLCAzLCAxLCA4XSwgWzEsIDIsIDQsIDUsIDksIDksIDgsIDEsIDZdLCBbNSwgOCwgNywgMCwgNCwgMiwgMiwgMSwgM11dLCAibiI6IDksICJkaWZmaWN1bHR5IjogeyJuIjogWzIsIDEwXSwgIm51bV9yb3RhdGlvbnMiOiBbMCwgMTBdfX19fQ=="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n9 6 4 3 7 5 8 6 3\n0 0 1 1 3 9 1 1 1\n5 0 2 5 9 6 3 8 2\n4 1 5 6 8 8 1 9 2\n7 0 4 8 1 6 2 9 4\n2 7 2 9 0 7 1 5 0\n1 1 6 3 1 4 8 4 7\n9 3 1 3 3 7 1 2 8\n4 2 5 2 6 1 6 1 5\n",
+          "answer": "4 9 1 2 7 4 5 0 9\n2 3 1 7 0 1 0 0 6\n5 1 6 2 4 5 2 1 4\n2 3 3 9 8 6 5 1 3\n6 3 1 0 1 8 9 3 7\n1 7 4 7 6 8 6 9 5\n6 1 8 1 2 1 3 1 8\n1 2 4 5 9 9 8 1 6\n5 8 7 0 4 2 2 1 3",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 907,
+            "matrix": [
+              [
+                9,
+                6,
+                4,
+                3,
+                7,
+                5,
+                8,
+                6,
+                3
+              ],
+              [
+                0,
+                0,
+                1,
+                1,
+                3,
+                9,
+                1,
+                1,
+                1
+              ],
+              [
+                5,
+                0,
+                2,
+                5,
+                9,
+                6,
+                3,
+                8,
+                2
+              ],
+              [
+                4,
+                1,
+                5,
+                6,
+                8,
+                8,
+                1,
+                9,
+                2
+              ],
+              [
+                7,
+                0,
+                4,
+                8,
+                1,
+                6,
+                2,
+                9,
+                4
+              ],
+              [
+                2,
+                7,
+                2,
+                9,
+                0,
+                7,
+                1,
+                5,
+                0
+              ],
+              [
+                1,
+                1,
+                6,
+                3,
+                1,
+                4,
+                8,
+                4,
+                7
+              ],
+              [
+                9,
+                3,
+                1,
+                3,
+                3,
+                7,
+                1,
+                2,
+                8
+              ],
+              [
+                4,
+                2,
+                5,
+                2,
+                6,
+                1,
+                6,
+                1,
+                5
+              ]
+            ],
+            "num_rotations": 9,
+            "solution": [
+              [
+                4,
+                9,
+                1,
+                2,
+                7,
+                4,
+                5,
+                0,
+                9
+              ],
+              [
+                2,
+                3,
+                1,
+                7,
+                0,
+                1,
+                0,
+                0,
+                6
+              ],
+              [
+                5,
+                1,
+                6,
+                2,
+                4,
+                5,
+                2,
+                1,
+                4
+              ],
+              [
+                2,
+                3,
+                3,
+                9,
+                8,
+                6,
+                5,
+                1,
+                3
+              ],
+              [
+                6,
+                3,
+                1,
+                0,
+                1,
+                8,
+                9,
+                3,
+                7
+              ],
+              [
+                1,
+                7,
+                4,
+                7,
+                6,
+                8,
+                6,
+                9,
+                5
+              ],
+              [
+                6,
+                1,
+                8,
+                1,
+                2,
+                1,
+                3,
+                1,
+                8
+              ],
+              [
+                1,
+                2,
+                4,
+                5,
+                9,
+                9,
+                8,
+                1,
+                6
+              ],
+              [
+                5,
+                8,
+                7,
+                0,
+                4,
+                2,
+                2,
+                1,
+                3
+              ]
+            ],
+            "n": 9,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 180 degrees clockwise:\n9 8 2 8 8 8\n6 4 6 5 1 4\n5 4 6 8 7 5\n8 7 1 7 3 0\n4 0 0 5 2 0\n2 9 8 5 8 5\n",
+          "answer": "5 8 5 8 9 2\n0 2 5 0 0 4\n0 3 7 1 7 8\n5 7 8 6 4 5\n4 1 5 6 4 6\n8 8 8 2 8 9",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 908,
+            "matrix": [
+              [
+                9,
+                8,
+                2,
+                8,
+                8,
+                8
+              ],
+              [
+                6,
+                4,
+                6,
+                5,
+                1,
+                4
+              ],
+              [
+                5,
+                4,
+                6,
+                8,
+                7,
+                5
+              ],
+              [
+                8,
+                7,
+                1,
+                7,
+                3,
+                0
+              ],
+              [
+                4,
+                0,
+                0,
+                5,
+                2,
+                0
+              ],
+              [
+                2,
+                9,
+                8,
+                5,
+                8,
+                5
+              ]
+            ],
+            "num_rotations": 2,
+            "solution": [
+              [
+                5,
+                8,
+                5,
+                8,
+                9,
+                2
+              ],
+              [
+                0,
+                2,
+                5,
+                0,
+                0,
+                4
+              ],
+              [
+                0,
+                3,
+                7,
+                1,
+                7,
+                8
+              ],
+              [
+                5,
+                7,
+                8,
+                6,
+                4,
+                5
+              ],
+              [
+                4,
+                1,
+                5,
+                6,
+                4,
+                6
+              ],
+              [
+                8,
+                8,
+                8,
+                2,
+                8,
+                9
+              ]
+            ],
+            "n": 6,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 630 degrees clockwise:\n6 9\n2 3\n",
+          "answer": "9 3\n6 2",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 909,
+            "matrix": [
+              [
+                6,
+                9
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "num_rotations": 7,
+            "solution": [
+              [
+                9,
+                3
+              ],
+              [
+                6,
+                2
+              ]
+            ],
+            "n": 2,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 90 degrees clockwise:\n4 7 1 1 3\n0 6 6 2 2\n1 2 6 0 2\n7 6 1 7 9\n7 0 6 5 4\n",
+          "answer": "7 7 1 0 4\n0 6 2 6 7\n6 1 6 6 1\n5 7 0 2 1\n4 9 2 2 3",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 912,
+            "matrix": [
+              [
+                4,
+                7,
+                1,
+                1,
+                3
+              ],
+              [
+                0,
+                6,
+                6,
+                2,
+                2
+              ],
+              [
+                1,
+                2,
+                6,
+                0,
+                2
+              ],
+              [
+                7,
+                6,
+                1,
+                7,
+                9
+              ],
+              [
+                7,
+                0,
+                6,
+                5,
+                4
+              ]
+            ],
+            "num_rotations": 1,
+            "solution": [
+              [
+                7,
+                7,
+                1,
+                0,
+                4
+              ],
+              [
+                0,
+                6,
+                2,
+                6,
+                7
+              ],
+              [
+                6,
+                1,
+                6,
+                6,
+                1
+              ],
+              [
+                5,
+                7,
+                0,
+                2,
+                1
+              ],
+              [
+                4,
+                9,
+                2,
+                2,
+                3
+              ]
+            ],
+            "n": 5,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 90 degrees clockwise:\n1 1\n1 6\n",
+          "answer": "1 1\n6 1",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 913,
+            "matrix": [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                6
+              ]
+            ],
+            "num_rotations": 1,
+            "solution": [
+              [
+                1,
+                1
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "n": 2,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 0 degrees clockwise:\n2 4 2 1 0 6 0 8 3\n4 3 0 5 6 4 9 5 3\n2 6 6 7 0 2 8 9 4\n0 3 0 2 1 9 5 7 3\n8 9 6 4 2 5 6 2 0\n0 4 0 2 6 4 7 1 0\n2 5 2 4 2 2 3 0 1\n1 4 3 9 2 7 5 5 8\n9 0 6 3 9 8 7 9 0\n",
+          "answer": "2 4 2 1 0 6 0 8 3\n4 3 0 5 6 4 9 5 3\n2 6 6 7 0 2 8 9 4\n0 3 0 2 1 9 5 7 3\n8 9 6 4 2 5 6 2 0\n0 4 0 2 6 4 7 1 0\n2 5 2 4 2 2 3 0 1\n1 4 3 9 2 7 5 5 8\n9 0 6 3 9 8 7 9 0",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 914,
+            "matrix": [
+              [
+                2,
+                4,
+                2,
+                1,
+                0,
+                6,
+                0,
+                8,
+                3
+              ],
+              [
+                4,
+                3,
+                0,
+                5,
+                6,
+                4,
+                9,
+                5,
+                3
+              ],
+              [
+                2,
+                6,
+                6,
+                7,
+                0,
+                2,
+                8,
+                9,
+                4
+              ],
+              [
+                0,
+                3,
+                0,
+                2,
+                1,
+                9,
+                5,
+                7,
+                3
+              ],
+              [
+                8,
+                9,
+                6,
+                4,
+                2,
+                5,
+                6,
+                2,
+                0
+              ],
+              [
+                0,
+                4,
+                0,
+                2,
+                6,
+                4,
+                7,
+                1,
+                0
+              ],
+              [
+                2,
+                5,
+                2,
+                4,
+                2,
+                2,
+                3,
+                0,
+                1
+              ],
+              [
+                1,
+                4,
+                3,
+                9,
+                2,
+                7,
+                5,
+                5,
+                8
+              ],
+              [
+                9,
+                0,
+                6,
+                3,
+                9,
+                8,
+                7,
+                9,
+                0
+              ]
+            ],
+            "num_rotations": 0,
+            "solution": [
+              [
+                2,
+                4,
+                2,
+                1,
+                0,
+                6,
+                0,
+                8,
+                3
+              ],
+              [
+                4,
+                3,
+                0,
+                5,
+                6,
+                4,
+                9,
+                5,
+                3
+              ],
+              [
+                2,
+                6,
+                6,
+                7,
+                0,
+                2,
+                8,
+                9,
+                4
+              ],
+              [
+                0,
+                3,
+                0,
+                2,
+                1,
+                9,
+                5,
+                7,
+                3
+              ],
+              [
+                8,
+                9,
+                6,
+                4,
+                2,
+                5,
+                6,
+                2,
+                0
+              ],
+              [
+                0,
+                4,
+                0,
+                2,
+                6,
+                4,
+                7,
+                1,
+                0
+              ],
+              [
+                2,
+                5,
+                2,
+                4,
+                2,
+                2,
+                3,
+                0,
+                1
+              ],
+              [
+                1,
+                4,
+                3,
+                9,
+                2,
+                7,
+                5,
+                5,
+                8
+              ],
+              [
+                9,
+                0,
+                6,
+                3,
+                9,
+                8,
+                7,
+                9,
+                0
+              ]
+            ],
+            "n": 9,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n3 1 0 3\n6 1 2 2\n0 2 0 1\n5 0 9 8\n",
+          "answer": "3 1 0 3\n6 1 2 2\n0 2 0 1\n5 0 9 8",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 918,
+            "matrix": [
+              [
+                3,
+                1,
+                0,
+                3
+              ],
+              [
+                6,
+                1,
+                2,
+                2
+              ],
+              [
+                0,
+                2,
+                0,
+                1
+              ],
+              [
+                5,
+                0,
+                9,
+                8
+              ]
+            ],
+            "num_rotations": 4,
+            "solution": [
+              [
+                3,
+                1,
+                0,
+                3
+              ],
+              [
+                6,
+                1,
+                2,
+                2
+              ],
+              [
+                0,
+                2,
+                0,
+                1
+              ],
+              [
+                5,
+                0,
+                9,
+                8
+              ]
+            ],
+            "n": 4,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 270 degrees clockwise:\n2 5 0 5 4\n7 6 4 2 7\n7 2 5 2 8\n7 4 0 1 5\n4 6 9 7 8\n",
+          "answer": "4 7 8 5 8\n5 2 2 1 7\n0 4 5 0 9\n5 6 2 4 6\n2 7 7 7 4",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 921,
+            "matrix": [
+              [
+                2,
+                5,
+                0,
+                5,
+                4
+              ],
+              [
+                7,
+                6,
+                4,
+                2,
+                7
+              ],
+              [
+                7,
+                2,
+                5,
+                2,
+                8
+              ],
+              [
+                7,
+                4,
+                0,
+                1,
+                5
+              ],
+              [
+                4,
+                6,
+                9,
+                7,
+                8
+              ]
+            ],
+            "num_rotations": 3,
+            "solution": [
+              [
+                4,
+                7,
+                8,
+                5,
+                8
+              ],
+              [
+                5,
+                2,
+                2,
+                1,
+                7
+              ],
+              [
+                0,
+                4,
+                5,
+                0,
+                9
+              ],
+              [
+                5,
+                6,
+                2,
+                4,
+                6
+              ],
+              [
+                2,
+                7,
+                7,
+                7,
+                4
+              ]
+            ],
+            "n": 5,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 900 degrees clockwise:\n5 7 3 3 0 5 4\n2 3 7 4 4 1 6\n6 5 3 9 4 4 9\n2 0 5 0 9 1 5\n0 1 3 1 1 9 4\n9 8 3 9 4 4 4\n1 5 2 1 8 3 8\n",
+          "answer": "8 3 8 1 2 5 1\n4 4 4 9 3 8 9\n4 9 1 1 3 1 0\n5 1 9 0 5 0 2\n9 4 4 9 3 5 6\n6 1 4 4 7 3 2\n4 5 0 3 3 7 5",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 922,
+            "matrix": [
+              [
+                5,
+                7,
+                3,
+                3,
+                0,
+                5,
+                4
+              ],
+              [
+                2,
+                3,
+                7,
+                4,
+                4,
+                1,
+                6
+              ],
+              [
+                6,
+                5,
+                3,
+                9,
+                4,
+                4,
+                9
+              ],
+              [
+                2,
+                0,
+                5,
+                0,
+                9,
+                1,
+                5
+              ],
+              [
+                0,
+                1,
+                3,
+                1,
+                1,
+                9,
+                4
+              ],
+              [
+                9,
+                8,
+                3,
+                9,
+                4,
+                4,
+                4
+              ],
+              [
+                1,
+                5,
+                2,
+                1,
+                8,
+                3,
+                8
+              ]
+            ],
+            "num_rotations": 10,
+            "solution": [
+              [
+                8,
+                3,
+                8,
+                1,
+                2,
+                5,
+                1
+              ],
+              [
+                4,
+                4,
+                4,
+                9,
+                3,
+                8,
+                9
+              ],
+              [
+                4,
+                9,
+                1,
+                1,
+                3,
+                1,
+                0
+              ],
+              [
+                5,
+                1,
+                9,
+                0,
+                5,
+                0,
+                2
+              ],
+              [
+                9,
+                4,
+                4,
+                9,
+                3,
+                5,
+                6
+              ],
+              [
+                6,
+                1,
+                4,
+                4,
+                7,
+                3,
+                2
+              ],
+              [
+                4,
+                5,
+                0,
+                3,
+                3,
+                7,
+                5
+              ]
+            ],
+            "n": 7,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 270 degrees clockwise:\n5 7 7 9 0\n3 2 2 8 3\n7 8 0 0 5\n0 8 2 4 6\n4 2 8 4 7\n",
+          "answer": "0 3 5 6 7\n9 8 0 4 4\n7 2 0 2 8\n7 2 8 8 2\n5 3 7 0 4",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 923,
+            "matrix": [
+              [
+                5,
+                7,
+                7,
+                9,
+                0
+              ],
+              [
+                3,
+                2,
+                2,
+                8,
+                3
+              ],
+              [
+                7,
+                8,
+                0,
+                0,
+                5
+              ],
+              [
+                0,
+                8,
+                2,
+                4,
+                6
+              ],
+              [
+                4,
+                2,
+                8,
+                4,
+                7
+              ]
+            ],
+            "num_rotations": 3,
+            "solution": [
+              [
+                0,
+                3,
+                5,
+                6,
+                7
+              ],
+              [
+                9,
+                8,
+                0,
+                4,
+                4
+              ],
+              [
+                7,
+                2,
+                0,
+                2,
+                8
+              ],
+              [
+                7,
+                2,
+                8,
+                8,
+                2
+              ],
+              [
+                5,
+                3,
+                7,
+                0,
+                4
+              ]
+            ],
+            "n": 5,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 630 degrees clockwise:\n6 7\n7 1\n",
+          "answer": "7 1\n6 7",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 924,
+            "matrix": [
+              [
+                6,
+                7
+              ],
+              [
+                7,
+                1
+              ]
+            ],
+            "num_rotations": 7,
+            "solution": [
+              [
+                7,
+                1
+              ],
+              [
+                6,
+                7
+              ]
+            ],
+            "n": 2,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n4 2 3 0 1 4\n3 6 1 7 6 3\n1 6 0 6 2 2\n7 3 4 0 1 0\n7 1 6 2 7 3\n4 0 5 9 4 1\n",
+          "answer": "4 2 3 0 1 4\n3 6 1 7 6 3\n1 6 0 6 2 2\n7 3 4 0 1 0\n7 1 6 2 7 3\n4 0 5 9 4 1",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 927,
+            "matrix": [
+              [
+                4,
+                2,
+                3,
+                0,
+                1,
+                4
+              ],
+              [
+                3,
+                6,
+                1,
+                7,
+                6,
+                3
+              ],
+              [
+                1,
+                6,
+                0,
+                6,
+                2,
+                2
+              ],
+              [
+                7,
+                3,
+                4,
+                0,
+                1,
+                0
+              ],
+              [
+                7,
+                1,
+                6,
+                2,
+                7,
+                3
+              ],
+              [
+                4,
+                0,
+                5,
+                9,
+                4,
+                1
+              ]
+            ],
+            "num_rotations": 4,
+            "solution": [
+              [
+                4,
+                2,
+                3,
+                0,
+                1,
+                4
+              ],
+              [
+                3,
+                6,
+                1,
+                7,
+                6,
+                3
+              ],
+              [
+                1,
+                6,
+                0,
+                6,
+                2,
+                2
+              ],
+              [
+                7,
+                3,
+                4,
+                0,
+                1,
+                0
+              ],
+              [
+                7,
+                1,
+                6,
+                2,
+                7,
+                3
+              ],
+              [
+                4,
+                0,
+                5,
+                9,
+                4,
+                1
+              ]
+            ],
+            "n": 6,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 540 degrees clockwise:\n9 6 7 5 1 0 2\n6 0 6 6 8 5 9\n6 1 1 8 7 6 7\n6 5 5 5 3 5 8\n6 7 5 7 2 4 5\n5 2 7 9 5 1 6\n8 5 9 4 4 0 5\n",
+          "answer": "5 0 4 4 9 5 8\n6 1 5 9 7 2 5\n5 4 2 7 5 7 6\n8 5 3 5 5 5 6\n7 6 7 8 1 1 6\n9 5 8 6 6 0 6\n2 0 1 5 7 6 9",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 929,
+            "matrix": [
+              [
+                9,
+                6,
+                7,
+                5,
+                1,
+                0,
+                2
+              ],
+              [
+                6,
+                0,
+                6,
+                6,
+                8,
+                5,
+                9
+              ],
+              [
+                6,
+                1,
+                1,
+                8,
+                7,
+                6,
+                7
+              ],
+              [
+                6,
+                5,
+                5,
+                5,
+                3,
+                5,
+                8
+              ],
+              [
+                6,
+                7,
+                5,
+                7,
+                2,
+                4,
+                5
+              ],
+              [
+                5,
+                2,
+                7,
+                9,
+                5,
+                1,
+                6
+              ],
+              [
+                8,
+                5,
+                9,
+                4,
+                4,
+                0,
+                5
+              ]
+            ],
+            "num_rotations": 6,
+            "solution": [
+              [
+                5,
+                0,
+                4,
+                4,
+                9,
+                5,
+                8
+              ],
+              [
+                6,
+                1,
+                5,
+                9,
+                7,
+                2,
+                5
+              ],
+              [
+                5,
+                4,
+                2,
+                7,
+                5,
+                7,
+                6
+              ],
+              [
+                8,
+                5,
+                3,
+                5,
+                5,
+                5,
+                6
+              ],
+              [
+                7,
+                6,
+                7,
+                8,
+                1,
+                1,
+                6
+              ],
+              [
+                9,
+                5,
+                8,
+                6,
+                6,
+                0,
+                6
+              ],
+              [
+                2,
+                0,
+                1,
+                5,
+                7,
+                6,
+                9
+              ]
+            ],
+            "n": 7,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n1 5 2 7\n7 3 4 0\n7 2 7 4\n9 6 4 8\n",
+          "answer": "1 5 2 7\n7 3 4 0\n7 2 7 4\n9 6 4 8",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 931,
+            "matrix": [
+              [
+                1,
+                5,
+                2,
+                7
+              ],
+              [
+                7,
+                3,
+                4,
+                0
+              ],
+              [
+                7,
+                2,
+                7,
+                4
+              ],
+              [
+                9,
+                6,
+                4,
+                8
+              ]
+            ],
+            "num_rotations": 4,
+            "solution": [
+              [
+                1,
+                5,
+                2,
+                7
+              ],
+              [
+                7,
+                3,
+                4,
+                0
+              ],
+              [
+                7,
+                2,
+                7,
+                4
+              ],
+              [
+                9,
+                6,
+                4,
+                8
+              ]
+            ],
+            "n": 4,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 540 degrees clockwise:\n5 5 3 5 6 9 5\n1 8 2 7 0 3 3\n1 0 6 5 0 2 9\n7 5 4 8 7 8 2\n5 9 2 8 3 4 3\n1 1 9 5 9 1 8\n2 2 4 4 2 3 5\n",
+          "answer": "5 3 2 4 4 2 2\n8 1 9 5 9 1 1\n3 4 3 8 2 9 5\n2 8 7 8 4 5 7\n9 2 0 5 6 0 1\n3 3 0 7 2 8 1\n5 9 6 5 3 5 5",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 932,
+            "matrix": [
+              [
+                5,
+                5,
+                3,
+                5,
+                6,
+                9,
+                5
+              ],
+              [
+                1,
+                8,
+                2,
+                7,
+                0,
+                3,
+                3
+              ],
+              [
+                1,
+                0,
+                6,
+                5,
+                0,
+                2,
+                9
+              ],
+              [
+                7,
+                5,
+                4,
+                8,
+                7,
+                8,
+                2
+              ],
+              [
+                5,
+                9,
+                2,
+                8,
+                3,
+                4,
+                3
+              ],
+              [
+                1,
+                1,
+                9,
+                5,
+                9,
+                1,
+                8
+              ],
+              [
+                2,
+                2,
+                4,
+                4,
+                2,
+                3,
+                5
+              ]
+            ],
+            "num_rotations": 6,
+            "solution": [
+              [
+                5,
+                3,
+                2,
+                4,
+                4,
+                2,
+                2
+              ],
+              [
+                8,
+                1,
+                9,
+                5,
+                9,
+                1,
+                1
+              ],
+              [
+                3,
+                4,
+                3,
+                8,
+                2,
+                9,
+                5
+              ],
+              [
+                2,
+                8,
+                7,
+                8,
+                4,
+                5,
+                7
+              ],
+              [
+                9,
+                2,
+                0,
+                5,
+                6,
+                0,
+                1
+              ],
+              [
+                3,
+                3,
+                0,
+                7,
+                2,
+                8,
+                1
+              ],
+              [
+                5,
+                9,
+                6,
+                5,
+                3,
+                5,
+                5
+              ]
+            ],
+            "n": 7,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n8 0 9\n8 3 2\n5 7 9\n",
+          "answer": "8 0 9\n8 3 2\n5 7 9",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 933,
+            "matrix": [
+              [
+                8,
+                0,
+                9
+              ],
+              [
+                8,
+                3,
+                2
+              ],
+              [
+                5,
+                7,
+                9
+              ]
+            ],
+            "num_rotations": 4,
+            "solution": [
+              [
+                8,
+                0,
+                9
+              ],
+              [
+                8,
+                3,
+                2
+              ],
+              [
+                5,
+                7,
+                9
+              ]
+            ],
+            "n": 3,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n1 5 9\n3 6 7\n6 6 1\n",
+          "answer": "6 3 1\n6 6 5\n1 7 9",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 934,
+            "matrix": [
+              [
+                1,
+                5,
+                9
+              ],
+              [
+                3,
+                6,
+                7
+              ],
+              [
+                6,
+                6,
+                1
+              ]
+            ],
+            "num_rotations": 9,
+            "solution": [
+              [
+                6,
+                3,
+                1
+              ],
+              [
+                6,
+                6,
+                5
+              ],
+              [
+                1,
+                7,
+                9
+              ]
+            ],
+            "n": 3,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 0 degrees clockwise:\n8 2 6 5 3 3 9 6 4 0\n5 7 1 6 7 8 9 5 0 3\n0 1 0 4 9 1 1 0 3 5\n8 9 6 2 9 0 7 7 7 7\n9 8 5 1 8 9 3 8 1 4\n4 2 0 0 8 8 8 8 3 1\n9 0 8 2 2 2 9 2 4 5\n8 9 0 2 7 5 0 3 8 0\n4 2 6 0 9 7 2 0 8 5\n5 3 0 5 1 8 0 0 9 8\n",
+          "answer": "8 2 6 5 3 3 9 6 4 0\n5 7 1 6 7 8 9 5 0 3\n0 1 0 4 9 1 1 0 3 5\n8 9 6 2 9 0 7 7 7 7\n9 8 5 1 8 9 3 8 1 4\n4 2 0 0 8 8 8 8 3 1\n9 0 8 2 2 2 9 2 4 5\n8 9 0 2 7 5 0 3 8 0\n4 2 6 0 9 7 2 0 8 5\n5 3 0 5 1 8 0 0 9 8",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 936,
+            "matrix": [
+              [
+                8,
+                2,
+                6,
+                5,
+                3,
+                3,
+                9,
+                6,
+                4,
+                0
+              ],
+              [
+                5,
+                7,
+                1,
+                6,
+                7,
+                8,
+                9,
+                5,
+                0,
+                3
+              ],
+              [
+                0,
+                1,
+                0,
+                4,
+                9,
+                1,
+                1,
+                0,
+                3,
+                5
+              ],
+              [
+                8,
+                9,
+                6,
+                2,
+                9,
+                0,
+                7,
+                7,
+                7,
+                7
+              ],
+              [
+                9,
+                8,
+                5,
+                1,
+                8,
+                9,
+                3,
+                8,
+                1,
+                4
+              ],
+              [
+                4,
+                2,
+                0,
+                0,
+                8,
+                8,
+                8,
+                8,
+                3,
+                1
+              ],
+              [
+                9,
+                0,
+                8,
+                2,
+                2,
+                2,
+                9,
+                2,
+                4,
+                5
+              ],
+              [
+                8,
+                9,
+                0,
+                2,
+                7,
+                5,
+                0,
+                3,
+                8,
+                0
+              ],
+              [
+                4,
+                2,
+                6,
+                0,
+                9,
+                7,
+                2,
+                0,
+                8,
+                5
+              ],
+              [
+                5,
+                3,
+                0,
+                5,
+                1,
+                8,
+                0,
+                0,
+                9,
+                8
+              ]
+            ],
+            "num_rotations": 0,
+            "solution": [
+              [
+                8,
+                2,
+                6,
+                5,
+                3,
+                3,
+                9,
+                6,
+                4,
+                0
+              ],
+              [
+                5,
+                7,
+                1,
+                6,
+                7,
+                8,
+                9,
+                5,
+                0,
+                3
+              ],
+              [
+                0,
+                1,
+                0,
+                4,
+                9,
+                1,
+                1,
+                0,
+                3,
+                5
+              ],
+              [
+                8,
+                9,
+                6,
+                2,
+                9,
+                0,
+                7,
+                7,
+                7,
+                7
+              ],
+              [
+                9,
+                8,
+                5,
+                1,
+                8,
+                9,
+                3,
+                8,
+                1,
+                4
+              ],
+              [
+                4,
+                2,
+                0,
+                0,
+                8,
+                8,
+                8,
+                8,
+                3,
+                1
+              ],
+              [
+                9,
+                0,
+                8,
+                2,
+                2,
+                2,
+                9,
+                2,
+                4,
+                5
+              ],
+              [
+                8,
+                9,
+                0,
+                2,
+                7,
+                5,
+                0,
+                3,
+                8,
+                0
+              ],
+              [
+                4,
+                2,
+                6,
+                0,
+                9,
+                7,
+                2,
+                0,
+                8,
+                5
+              ],
+              [
+                5,
+                3,
+                0,
+                5,
+                1,
+                8,
+                0,
+                0,
+                9,
+                8
+              ]
+            ],
+            "n": 10,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 810 degrees clockwise:\n1 9\n1 3\n",
+          "answer": "1 1\n3 9",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 938,
+            "matrix": [
+              [
+                1,
+                9
+              ],
+              [
+                1,
+                3
+              ]
+            ],
+            "num_rotations": 9,
+            "solution": [
+              [
+                1,
+                1
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            "n": 2,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Given a square matrix, your job is to rotate it clockwise.\n\nYour output should be a matrix in the same format as the input.\n\nRotate the matrix below by 360 degrees clockwise:\n3 0 0 2 2\n1 9 2 4 1\n5 8 0 5 2\n8 6 3 1 9\n3 0 7 2 6\n",
+          "answer": "3 0 0 2 2\n1 9 2 4 1\n5 8 0 5 2\n8 6 3 1 9\n3 0 7 2 6",
+          "metadata": {
+            "source_dataset": "rotate_matrix",
+            "source_index": 939,
+            "matrix": [
+              [
+                3,
+                0,
+                0,
+                2,
+                2
+              ],
+              [
+                1,
+                9,
+                2,
+                4,
+                1
+              ],
+              [
+                5,
+                8,
+                0,
+                5,
+                2
+              ],
+              [
+                8,
+                6,
+                3,
+                1,
+                9
+              ],
+              [
+                3,
+                0,
+                7,
+                2,
+                6
+              ]
+            ],
+            "num_rotations": 4,
+            "solution": [
+              [
+                3,
+                0,
+                0,
+                2,
+                2
+              ],
+              [
+                1,
+                9,
+                2,
+                4,
+                1
+              ],
+              [
+                5,
+                8,
+                0,
+                5,
+                2
+              ],
+              [
+                8,
+                6,
+                3,
+                1,
+                9
+              ],
+              [
+                3,
+                0,
+                7,
+                2,
+                6
+              ]
+            ],
+            "n": 5,
+            "difficulty": {
+              "n": [
+                2,
+                10
+              ],
+              "num_rotations": [
+                0,
+                10
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the rotate_matrix dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"rotate_matrix\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "8abbe2958f99e40a4b1a2bcc8514ae1e14009279f7730528e98a6ff2bfd9641f"
+  },
+  {
+    "capability_id": "gap.arithmetic.exact-decimal-expressions",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setB",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "evaluate decimal expressions to a fixed precision",
+      "outcome": "Evaluates an arithmetic expression of decimal numbers with nested parentheses and the four operations, and reports it to a maximum of 12 significant digits, rounding half up.",
+      "includes": [
+        "operator precedence and nested parentheses",
+        "division with long decimal expansions",
+        "rounding to significant digits",
+        "half-up rounding"
+      ],
+      "excludes": [],
+      "id": "gap.arithmetic.exact-decimal-expressions",
+      "evidence": [],
+      "example_tasks": [
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(4.332-1.042-3.312-0.420) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(6.874*9.401+7.553) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(9.688+1.027*8.285+5.243*5.315) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((0.877*5.380)-4.270/7.831) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(5.382+4.332) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(1.524/8.737)/(((5.621/1.164)-5.568)*5.958) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((2.855-4.702)/5.624+2.767*2.394) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((2.255*8.084)+7.563) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n6.078+4.399+(8.622*0.818)-5.496+6.585 = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(0.508+0.774)-(3.542*((2.063+0.661)+8.078)) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((9.382+1.369*0.603)/6.185) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(4.349*(4.404+5.659*9.633)/(8.289/8.571)) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n3.019*(3.024-9.463) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(0.203*5.740+7.097) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n2.393*5.951 = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n4.052/(1.775*4.546) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n3.721+5.988+5.764-2.585*9.572 = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(((4.914*5.902)-3.238+8.684)/0.199) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(6.449*7.667)-2.136-(5.968/6.005) = ?",
+        "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n1.496/6.664 = ?"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: 5 or 6 terms; nested parentheses; division by small decimals; results whose 12th significant digit needs rounding.",
+      "example_task_spec": {
+        "id": "example-decimal_arithmetic",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(4.332-1.042-3.312-0.420) = ?"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:93834",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogImRlY2ltYWxfYXJpdGhtZXRpYyIsICJlbnRyeSI6IHsicXVlc3Rpb24iOiAiUGxlYXNlIHNvbHZlIHRoaXMgcHJvYmxlbSB0byBhIG1heGltdW0gb2YgMTIgc2lnbmlmaWNhbnQgZGlnaXRzLCByb3VuZGluZyB1cCBmcm9tIHRoZSBoYWxmLiBPbmx5IHJlcGx5IHdpdGggdGhlIGZpbmFsIHZhbHVlLlxuKDQuMzMyLTEuMDQyLTMuMzEyLTAuNDIwKSA9ID8iLCAiYW5zd2VyIjogIi0wLjQ0MiIsICJtZXRhZGF0YSI6IHsic291cmNlX2RhdGFzZXQiOiAiZGVjaW1hbF9hcml0aG1ldGljIiwgInNvdXJjZV9pbmRleCI6IDkwMiwgImRlY2ltYWxfcGxhY2VzIjogMywgIm51bV90ZXJtcyI6IDQsICJkaWZmaWN1bHR5IjogeyJkZWNpbWFsX3BsYWNlcyI6IFszLCAzXSwgIm51bV90ZXJtcyI6IFsyLCA2XX19fX0="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(4.332-1.042-3.312-0.420) = ?",
+          "answer": "-0.442",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 902,
+            "decimal_places": 3,
+            "num_terms": 4,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(6.874*9.401+7.553) = ?",
+          "answer": "72.175474",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 904,
+            "decimal_places": 3,
+            "num_terms": 3,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(9.688+1.027*8.285+5.243*5.315) = ?",
+          "answer": "46.063240",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 906,
+            "decimal_places": 3,
+            "num_terms": 5,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((0.877*5.380)-4.270/7.831) = ?",
+          "answer": "4.17299119653",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 907,
+            "decimal_places": 3,
+            "num_terms": 4,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(5.382+4.332) = ?",
+          "answer": "9.714",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 908,
+            "decimal_places": 3,
+            "num_terms": 2,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(1.524/8.737)/(((5.621/1.164)-5.568)*5.958) = ?",
+          "answer": "-0.0396186715577",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 909,
+            "decimal_places": 3,
+            "num_terms": 6,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((2.855-4.702)/5.624+2.767*2.394) = ?",
+          "answer": "6.29578405974",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 911,
+            "decimal_places": 3,
+            "num_terms": 5,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((2.255*8.084)+7.563) = ?",
+          "answer": "25.792420",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 912,
+            "decimal_places": 3,
+            "num_terms": 3,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n6.078+4.399+(8.622*0.818)-5.496+6.585 = ?",
+          "answer": "18.618796",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 913,
+            "decimal_places": 3,
+            "num_terms": 6,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(0.508+0.774)-(3.542*((2.063+0.661)+8.078)) = ?",
+          "answer": "-36.978684",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 918,
+            "decimal_places": 3,
+            "num_terms": 6,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n((9.382+1.369*0.603)/6.185) = ?",
+          "answer": "1.65036491512",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 919,
+            "decimal_places": 3,
+            "num_terms": 4,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(4.349*(4.404+5.659*9.633)/(8.289/8.571)) = ?",
+          "answer": "264.947893872",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 921,
+            "decimal_places": 3,
+            "num_terms": 6,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n3.019*(3.024-9.463) = ?",
+          "answer": "-19.439341",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 922,
+            "decimal_places": 3,
+            "num_terms": 3,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(0.203*5.740+7.097) = ?",
+          "answer": "8.26222",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 923,
+            "decimal_places": 3,
+            "num_terms": 3,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n2.393*5.951 = ?",
+          "answer": "14.240743",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 924,
+            "decimal_places": 3,
+            "num_terms": 2,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n4.052/(1.775*4.546) = ?",
+          "answer": "0.502159459175",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 926,
+            "decimal_places": 3,
+            "num_terms": 3,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n3.721+5.988+5.764-2.585*9.572 = ?",
+          "answer": "-9.270620",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 927,
+            "decimal_places": 3,
+            "num_terms": 5,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(((4.914*5.902)-3.238+8.684)/0.199) = ?",
+          "answer": "173.107678392",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 928,
+            "decimal_places": 3,
+            "num_terms": 5,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n(6.449*7.667)-2.136-(5.968/6.005) = ?",
+          "answer": "46.3146445321",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 931,
+            "decimal_places": 3,
+            "num_terms": 5,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        },
+        {
+          "question": "Please solve this problem to a maximum of 12 significant digits, rounding up from the half. Only reply with the final value.\n1.496/6.664 = ?",
+          "answer": "0.224489795918",
+          "metadata": {
+            "source_dataset": "decimal_arithmetic",
+            "source_index": 932,
+            "decimal_places": 3,
+            "num_terms": 2,
+            "difficulty": {
+              "decimal_places": [
+                3,
+                3
+              ],
+              "num_terms": [
+                2,
+                6
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the decimal_arithmetic dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"decimal_arithmetic\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "46734f6dae97abcc31e68b2d7b3e3307fcaf2ce191f9ef2b9a9786ea9943ba7c"
+  }
+]

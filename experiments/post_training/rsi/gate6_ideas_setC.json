@@ -1,0 +1,1529 @@
+[
+  {
+    "capability_id": "gap.strings.reverse-spelling",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setC",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "spell words backward exactly",
+      "outcome": "Writes a word with its letters in reverse order, keeping each letter's case where it is (a leading capital ends up last), with no extra characters.",
+      "includes": [
+        "reversing letter order",
+        "keeping case per letter",
+        "long and unusual words",
+        "no spaces or punctuation added"
+      ],
+      "excludes": [],
+      "id": "gap.strings.reverse-spelling",
+      "evidence": [],
+      "example_tasks": [
+        "Spell this word backward (example: sun -> nus): fritt",
+        "Spell this word backward (example: sun -> nus): thunderer",
+        "Spell this word backward (example: sun -> nus): prebetray",
+        "Spell this word backward (example: sun -> nus): rugose",
+        "Spell this word backward (example: sun -> nus): pantoon",
+        "Spell this word backward (example: sun -> nus): rumbooze",
+        "Spell this word backward (example: sun -> nus): adorable",
+        "Spell this word backward (example: sun -> nus): froom",
+        "Spell this word backward (example: sun -> nus): adaptively",
+        "Spell this word backward (example: sun -> nus): hylactic",
+        "Spell this word backward (example: sun -> nus): unscamped",
+        "Spell this word backward (example: sun -> nus): trackman",
+        "Spell this word backward (example: sun -> nus): nacry",
+        "Spell this word backward (example: sun -> nus): tupelo",
+        "Spell this word backward (example: sun -> nus): foxily",
+        "Spell this word backward (example: sun -> nus): polydymite",
+        "Spell this word backward (example: sun -> nus): schisma",
+        "Spell this word backward (example: sun -> nus): Diandria",
+        "Spell this word backward (example: sun -> nus): tomkin",
+        "Spell this word backward (example: sun -> nus): raffinase"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: 8 to 10 letters; capitalized words, whose capital moves to the end; rare words that cannot be recalled; repeated letters.",
+      "example_task_spec": {
+        "id": "example-spell_backward",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Spell this word backward (example: sun -> nus): fritt"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:93896",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogInNwZWxsX2JhY2t3YXJkIiwgImVudHJ5IjogeyJxdWVzdGlvbiI6ICJTcGVsbCB0aGlzIHdvcmQgYmFja3dhcmQgKGV4YW1wbGU6IHN1biAtPiBudXMpOiBmcml0dCIsICJhbnN3ZXIiOiAidHRpcmYiLCAibWV0YWRhdGEiOiB7InNvdXJjZV9kYXRhc2V0IjogInNwZWxsX2JhY2t3YXJkIiwgInNvdXJjZV9pbmRleCI6IDkwMiwgIndvcmQiOiAiZnJpdHQiLCAid29yZF9sZW4iOiA1LCAiZGlmZmljdWx0eSI6IHsid29yZF9sZW4iOiBbMywgMTBdfX19fQ=="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Spell this word backward (example: sun -> nus): fritt",
+          "answer": "ttirf",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 902,
+            "word": "fritt",
+            "word_len": 5,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): thunderer",
+          "answer": "rerednuht",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 903,
+            "word": "thunderer",
+            "word_len": 9,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): prebetray",
+          "answer": "yarteberp",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 904,
+            "word": "prebetray",
+            "word_len": 9,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): rugose",
+          "answer": "esogur",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 906,
+            "word": "rugose",
+            "word_len": 6,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): pantoon",
+          "answer": "nootnap",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 907,
+            "word": "pantoon",
+            "word_len": 7,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): rumbooze",
+          "answer": "ezoobmur",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 908,
+            "word": "rumbooze",
+            "word_len": 8,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): adorable",
+          "answer": "elbaroda",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 912,
+            "word": "adorable",
+            "word_len": 8,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): froom",
+          "answer": "moorf",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 913,
+            "word": "froom",
+            "word_len": 5,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): adaptively",
+          "answer": "ylevitpada",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 914,
+            "word": "adaptively",
+            "word_len": 10,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): hylactic",
+          "answer": "citcalyh",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 916,
+            "word": "hylactic",
+            "word_len": 8,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): unscamped",
+          "answer": "depmacsnu",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 917,
+            "word": "unscamped",
+            "word_len": 9,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): trackman",
+          "answer": "namkcart",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 918,
+            "word": "trackman",
+            "word_len": 8,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): nacry",
+          "answer": "yrcan",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 919,
+            "word": "nacry",
+            "word_len": 5,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): tupelo",
+          "answer": "oleput",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 922,
+            "word": "tupelo",
+            "word_len": 6,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): foxily",
+          "answer": "ylixof",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 923,
+            "word": "foxily",
+            "word_len": 6,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): polydymite",
+          "answer": "etimydylop",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 929,
+            "word": "polydymite",
+            "word_len": 10,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): schisma",
+          "answer": "amsihcs",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 931,
+            "word": "schisma",
+            "word_len": 7,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): Diandria",
+          "answer": "airdnaiD",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 932,
+            "word": "Diandria",
+            "word_len": 8,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): tomkin",
+          "answer": "nikmot",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 933,
+            "word": "tomkin",
+            "word_len": 6,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        },
+        {
+          "question": "Spell this word backward (example: sun -> nus): raffinase",
+          "answer": "esaniffar",
+          "metadata": {
+            "source_dataset": "spell_backward",
+            "source_index": 936,
+            "word": "raffinase",
+            "word_len": 9,
+            "difficulty": {
+              "word_len": [
+                3,
+                10
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the spell_backward dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"spell_backward\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "7a6b652b009f94e9175677b0c4baa92b4199da40f75ec9ac9eb6483dd6cc9a06"
+  },
+  {
+    "capability_id": "gap.induction.causal-detector",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setC",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "infer causes from detector experiments",
+      "outcome": "From experiments in which sets of objects turn a detector light on or leave it off, infers which objects cause activation and predicts the light for a new set: on, off, or undetermined when the evidence does not decide it.",
+      "includes": [
+        "objects that are sufficient causes",
+        "objects shown not to be causes",
+        "sets whose outcome the evidence cannot decide",
+        "the exact answers on, off and undetermined"
+      ],
+      "excludes": [],
+      "id": "gap.induction.causal-detector",
+      "evidence": [],
+      "example_tasks": [
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nred rubber cylinder, red metal cube \u2192 on\nred metal cube \u2192 off\nred rubber cylinder \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue rubber cylinder, purple rubber cube \u2192 off\n\nNew test case:\nred metal cube, red rubber cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ncyan rubber cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ngreen metal sphere, yellow metal cube, cyan rubber cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ngreen metal sphere, yellow metal cube, gray metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\ngray rubber sphere\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\nblue rubber sphere, gray rubber cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\nblue rubber sphere, gray rubber cube, gray rubber sphere\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\nred rubber cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\npurple metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\nred metal cylinder, purple rubber cylinder, purple metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\nbrown metal cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\ngray rubber sphere\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\nbrown metal cylinder, gray rubber sphere\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\nblue metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\nred metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\ngreen metal cube, cyan rubber sphere, red metal cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber cylinder \u2192 on\ngreen rubber cylinder, blue metal cylinder \u2192 on\nblue metal cylinder \u2192 off\nblue rubber cube, blue metal cube \u2192 on\nbrown rubber cube \u2192 off\nblue metal cube \u2192 off\n\nNew test case:\ngreen rubber cylinder\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber cylinder \u2192 on\ngreen rubber cylinder, blue metal cylinder \u2192 on\nblue metal cylinder \u2192 off\nblue rubber cube, blue metal cube \u2192 on\nbrown rubber cube \u2192 off\nblue metal cube \u2192 off\n\nNew test case:\nblue metal cylinder, blue rubber cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber sphere \u2192 on\ngreen rubber sphere, red rubber sphere \u2192 on\nred rubber sphere \u2192 off\nbrown metal cube, gray metal sphere, cyan rubber cube \u2192 off\ncyan rubber cube \u2192 off\npurple metal cylinder \u2192 on\n\nNew test case:\ncyan rubber cube\n\nWhat is the detector light status?",
+        "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber sphere \u2192 on\ngreen rubber sphere, red rubber sphere \u2192 on\nred rubber sphere \u2192 off\nbrown metal cube, gray metal sphere, cyan rubber cube \u2192 off\ncyan rubber cube \u2192 off\npurple metal cylinder \u2192 on\n\nNew test case:\nbrown metal cube, gray metal sphere, cyan rubber cube, red rubber sphere\n\nWhat is the detector light status?"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: new sets mixing a known cause with untested objects; objects seen only together with a cause (undetermined); several experiments to combine.",
+      "example_task_spec": {
+        "id": "example-acre",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nred rubber cylinder, red metal cube \u2192 on\nred metal cube \u2192 off\nred rubber cylinder \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue rubber cylinder, purple rubber cube \u2192 off\n\nNew test case:\nred metal cube, red rubber cylinder\n\nWhat is the detector light status?"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:95577",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogImFjcmUiLCAiZW50cnkiOiB7InF1ZXN0aW9uIjogIllvdSBhcmUgYSByZXNlYXJjaGVyIHN0dWR5aW5nIGNhdXNhbCByZWxhdGlvbnNoaXBzIHVzaW5nIEJsaWNrZXQgZXhwZXJpbWVudHMuIEluIHRoZXNlIGV4cGVyaW1lbnRzLCBjZXJ0YWluIG9iamVjdHMgKGNhbGxlZCAnYmxpY2tldHMnKSBoYXZlIHRoZSBoaWRkZW4gcHJvcGVydHkgb2YgYWN0aXZhdGluZyBhIGRldGVjdG9yLCBjYXVzaW5nIGl0cyBsaWdodCB0byB0dXJuIG9uLlxuXG5FYWNoIGV4YW1wbGUgc2hvd3MgdGhlIHJlc3VsdHMgb2YgcGxhY2luZyBkaWZmZXJlbnQgY29tYmluYXRpb25zIG9mIG9iamVjdHMgb24gdGhlIGRldGVjdG9yLiBFYWNoIG9iamVjdCBpcyBkZXNjcmliZWQgYnkgY29sb3IsIG1hdGVyaWFsIGFuZCBzaGFwZS4gWW91ciB0YXNrIGlzIHRvIGRldGVybWluZSB3aGV0aGVyIGEgbmV3IGNvbWJpbmF0aW9uIG9mIG9iamVjdHMgd2lsbCBjYXVzZSB0aGUgZGV0ZWN0b3IgdG8gYWN0aXZhdGUuXG5cbkFmdGVyIG9ic2VydmluZyB0aGUgcHJldmlvdXMgZXhhbXBsZXMsIHJlc3BvbmQgd2l0aDpcbi0gXCJvblwiIGlmIHlvdSBjYW4gZGV0ZXJtaW5lIHRoZSBkZXRlY3RvciBsaWdodCB3aWxsIHR1cm4gb25cbi0gXCJvZmZcIiBpZiB5b3UgY2FuIGRldGVybWluZSB0aGUgZGV0ZWN0b3IgbGlnaHQgd2lsbCBzdGF5IG9mZlxuLSBcInVuZGV0ZXJtaW5lZFwiIGlmIHRoZXJlIGlzIGluc3VmZmljaWVudCBldmlkZW5jZSB0byByZWFjaCBhIGNvbmNsdXNpb25cblxuRG8gbm90IHVzZSBxdW90YXRpb24gbWFya3MgaW4geW91ciBhbnN3ZXIuXG5cblByZXZpb3VzIGV4cGVyaW1lbnRhbCByZXN1bHRzOlxucmVkIHJ1YmJlciBjeWxpbmRlciwgcmVkIG1ldGFsIGN1YmUgXHUyMTkyIG9uXG5yZWQgbWV0YWwgY3ViZSBcdTIxOTIgb2ZmXG5yZWQgcnViYmVyIGN5bGluZGVyIFx1MjE5MiBvblxuYmx1ZSBtZXRhbCBjdWJlLCBjeWFuIHJ1YmJlciBjdWJlIFx1MjE5MiBvblxuYmx1ZSBtZXRhbCBjdWJlLCBjeWFuIHJ1YmJlciBjdWJlIFx1MjE5MiBvblxuYmx1ZSBydWJiZXIgY3lsaW5kZXIsIHB1cnBsZSBydWJiZXIgY3ViZSBcdTIxOTIgb2ZmXG5cbk5ldyB0ZXN0IGNhc2U6XG5yZWQgbWV0YWwgY3ViZSwgcmVkIHJ1YmJlciBjeWxpbmRlclxuXG5XaGF0IGlzIHRoZSBkZXRlY3RvciBsaWdodCBzdGF0dXM/IiwgImFuc3dlciI6ICJvbiIsICJtZXRhZGF0YSI6IHsic291cmNlX2RhdGFzZXQiOiAiYWNyZSIsICJzb3VyY2VfaW5kZXgiOiA5MTl9fX0="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nred rubber cylinder, red metal cube \u2192 on\nred metal cube \u2192 off\nred rubber cylinder \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue metal cube, cyan rubber cube \u2192 on\nblue rubber cylinder, purple rubber cube \u2192 off\n\nNew test case:\nred metal cube, red rubber cylinder\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 919
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ncyan rubber cylinder\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 921
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ngreen metal sphere, yellow metal cube, cyan rubber cylinder\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 922
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngray metal cube, purple metal sphere \u2192 on\npurple metal sphere \u2192 off\ngray metal cube \u2192 on\ncyan rubber cylinder \u2192 off\ngreen metal sphere, yellow metal cube \u2192 off\nblue metal sphere, green metal sphere, yellow metal cube \u2192 on\n\nNew test case:\ngreen metal sphere, yellow metal cube, gray metal cube\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 923
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\ngray rubber sphere\n\nWhat is the detector light status?",
+          "answer": "undetermined",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 924
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\nblue rubber sphere, gray rubber cube\n\nWhat is the detector light status?",
+          "answer": "undetermined",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 926
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue rubber sphere \u2192 off\nyellow rubber cylinder, blue rubber sphere \u2192 on\nyellow rubber cylinder \u2192 on\nyellow rubber cube \u2192 off\ngray rubber sphere, gray rubber cube, yellow metal cube \u2192 on\nyellow metal cube \u2192 off\n\nNew test case:\nblue rubber sphere, gray rubber cube, gray rubber sphere\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 927
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\nred rubber cylinder\n\nWhat is the detector light status?",
+          "answer": "undetermined",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 928
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\npurple metal cube\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 929
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\npurple metal cube, brown rubber sphere \u2192 on\nbrown rubber sphere \u2192 off\npurple metal cube \u2192 on\nred metal cylinder, purple rubber cylinder \u2192 off\nred rubber cylinder, red metal cube, red metal cylinder, purple rubber cylinder \u2192 on\npurple rubber cylinder \u2192 off\n\nNew test case:\nred metal cylinder, purple rubber cylinder, purple metal cube\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 931
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\nbrown metal cylinder\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 932
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\ngray rubber sphere\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 933
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ncyan rubber cylinder \u2192 on\nbrown metal cylinder \u2192 off\ncyan rubber cylinder, brown metal cylinder \u2192 on\nred rubber cube, green metal cube, gray rubber sphere \u2192 off\npurple metal sphere \u2192 on\npurple metal sphere, gray rubber sphere, red rubber cube, green metal cube \u2192 on\n\nNew test case:\nbrown metal cylinder, gray rubber sphere\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 934
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\nblue metal cube\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 936
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\nred metal cube\n\nWhat is the detector light status?",
+          "answer": "undetermined",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 937
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\nblue metal cube, brown metal cylinder \u2192 on\nblue metal cube \u2192 on\nbrown metal cylinder \u2192 off\ngreen metal cube, cyan rubber sphere \u2192 off\nred rubber sphere, red metal cube, green metal cube, cyan rubber sphere \u2192 on\ngreen metal cube, cyan rubber sphere \u2192 off\n\nNew test case:\ngreen metal cube, cyan rubber sphere, red metal cube\n\nWhat is the detector light status?",
+          "answer": "undetermined",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 938
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber cylinder \u2192 on\ngreen rubber cylinder, blue metal cylinder \u2192 on\nblue metal cylinder \u2192 off\nblue rubber cube, blue metal cube \u2192 on\nbrown rubber cube \u2192 off\nblue metal cube \u2192 off\n\nNew test case:\ngreen rubber cylinder\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 941
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber cylinder \u2192 on\ngreen rubber cylinder, blue metal cylinder \u2192 on\nblue metal cylinder \u2192 off\nblue rubber cube, blue metal cube \u2192 on\nbrown rubber cube \u2192 off\nblue metal cube \u2192 off\n\nNew test case:\nblue metal cylinder, blue rubber cube\n\nWhat is the detector light status?",
+          "answer": "on",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 942
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber sphere \u2192 on\ngreen rubber sphere, red rubber sphere \u2192 on\nred rubber sphere \u2192 off\nbrown metal cube, gray metal sphere, cyan rubber cube \u2192 off\ncyan rubber cube \u2192 off\npurple metal cylinder \u2192 on\n\nNew test case:\ncyan rubber cube\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 944
+          }
+        },
+        {
+          "question": "You are a researcher studying causal relationships using Blicket experiments. In these experiments, certain objects (called 'blickets') have the hidden property of activating a detector, causing its light to turn on.\n\nEach example shows the results of placing different combinations of objects on the detector. Each object is described by color, material and shape. Your task is to determine whether a new combination of objects will cause the detector to activate.\n\nAfter observing the previous examples, respond with:\n- \"on\" if you can determine the detector light will turn on\n- \"off\" if you can determine the detector light will stay off\n- \"undetermined\" if there is insufficient evidence to reach a conclusion\n\nDo not use quotation marks in your answer.\n\nPrevious experimental results:\ngreen rubber sphere \u2192 on\ngreen rubber sphere, red rubber sphere \u2192 on\nred rubber sphere \u2192 off\nbrown metal cube, gray metal sphere, cyan rubber cube \u2192 off\ncyan rubber cube \u2192 off\npurple metal cylinder \u2192 on\n\nNew test case:\nbrown metal cube, gray metal sphere, cyan rubber cube, red rubber sphere\n\nWhat is the detector light status?",
+          "answer": "off",
+          "metadata": {
+            "source_dataset": "acre",
+            "source_index": 947
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the acre dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"acre\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "c823de1a0ec7ad0e3695306a27273b78dc35e7147f305786eb8de639d598d337"
+  },
+  {
+    "capability_id": "gap.arithmetic.countdown-expression",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate6-setC",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "reach a target number with all given numbers",
+      "outcome": "Finds an arithmetic expression that uses every given number exactly once with +, -, * and / and equals a target, and writes it in the requested format.",
+      "includes": [
+        "search over operations and orderings",
+        "using every number exactly once",
+        "intermediate products and divisions",
+        "expression syntax without an equals sign"
+      ],
+      "excludes": [],
+      "id": "gap.arithmetic.countdown-expression",
+      "evidence": [],
+      "example_tasks": [
+        "Using all the numbers 18, 27, 93, 13, create an expression that equals 624.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 169 using all of these numbers: 47, 84, 46, 97, 11.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 138 using all of these numbers: 3, 75, 58, 92, 30, 49.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 146 using all of these numbers: 51, 14, 17, 51, 92.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 13, 87, 2, 30, 88, create an expression that equals 162.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 81, 62, 1, 56, 14, create an expression that equals 185.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 457 using all of these numbers: 7, 54, 63, 98, 100, 12.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 236 using all of these numbers: 91, 86, 83, 28, 86, 90.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 110 using all of these numbers: 99, 97, 75, 41, 52.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 188 using all of these numbers: 33, 23, 52, 70, 82, 26.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 1, 49, 19, 30, create an expression that equals 901.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 92, 7, 85, 98, create an expression that equals 461.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 6, 18, 77, 17, create an expression that equals 972.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 179 using all of these numbers: 69, 95, 14, 29.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 708 using all of these numbers: 36, 47, 39, 23, 58.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 579 using all of these numbers: 69, 39, 79, 65, 58, 6.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 737 using all of these numbers: 21, 1, 41, 12, 37.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Using all the numbers 93, 6, 20, 36, 74, 12, create an expression that equals 527.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Find a way to make 758 using all of these numbers: 47, 72, 29, 93, 60.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+        "Calculate 447 using all of these numbers: 4, 92, 20, 17, 19.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: 5 or 6 numbers; three-digit targets; solutions that need multiplication and division; every number must be used.",
+      "example_task_spec": {
+        "id": "example-countdown",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Using all the numbers 18, 27, 93, 13, create an expression that equals 624.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:93831",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogImNvdW50ZG93biIsICJlbnRyeSI6IHsicXVlc3Rpb24iOiAiVXNpbmcgYWxsIHRoZSBudW1iZXJzIDE4LCAyNywgOTMsIDEzLCBjcmVhdGUgYW4gZXhwcmVzc2lvbiB0aGF0IGVxdWFscyA2MjQuXG5Zb3UgY2FuIG9ubHkgdXNlIGVhY2ggbnVtYmVyIG9uY2UuXG5cbkZpbmFsIGFuc3dlciBmb3JtYXQgaW5zdHJ1Y3Rpb25zOlxuMS4gUHJvdmlkZSB5b3VyIHNvbHV0aW9uIGFzIGEgYXJpdGhtZXRpYyBleHByZXNzaW9uIChubyAnPScgc2lnbikuXG4yLiBEbyBub3QgaW5jbHVkZSB0aGUgdGFyZ2V0IG51bWJlciBpbiB0aGUgZXhwcmVzc2lvbi5cbjMuIFVzZSAnKicgZm9yIG11bHRpcGxpY2F0aW9uLlxuNC4gVXNlICcvJyBmb3IgZGl2aXNpb24uXG41LiBEbyBub3QgaW5jbHVkZSBhbnkgb3RoZXIgdGV4dCBvciBmb3JtYXR0aW5nLlxuIiwgImFuc3dlciI6ICIxMyooOTMgLSAyNyAtIDE4KSIsICJtZXRhZGF0YSI6IHsic291cmNlX2RhdGFzZXQiOiAiY291bnRkb3duIiwgInNvdXJjZV9pbmRleCI6IDkwMiwgIm51bWJlcnMiOiBbMTgsIDI3LCA5MywgMTNdLCAidGFyZ2V0IjogNjI0LCAiZXhwcmVzc2lvbiI6ICIxMyooOTMgLSAyNyAtIDE4KSIsICJkaWZmaWN1bHR5IjogeyJudW1iZXJzIjogWzQsIDZdLCAidGFyZ2V0IjogWzEwMCwgOTk5XSwgInZhbHVlIjogWzEsIDEwMF19fX19"
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Using all the numbers 18, 27, 93, 13, create an expression that equals 624.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "13*(93 - 27 - 18)",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 902,
+            "numbers": [
+              18,
+              27,
+              93,
+              13
+            ],
+            "target": 624,
+            "expression": "13*(93 - 27 - 18)",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 169 using all of these numbers: 47, 84, 46, 97, 11.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "97 - 11 + 46 - 47 + 84",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 904,
+            "numbers": [
+              47,
+              84,
+              46,
+              97,
+              11
+            ],
+            "target": 169,
+            "expression": "97 - 11 + 46 - 47 + 84",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 138 using all of these numbers: 3, 75, 58, 92, 30, 49.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "58*3 + 75 - 49 + 30 - 92",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 906,
+            "numbers": [
+              3,
+              75,
+              58,
+              92,
+              30,
+              49
+            ],
+            "target": 138,
+            "expression": "58*3 + 75 - 49 + 30 - 92",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 146 using all of these numbers: 51, 14, 17, 51, 92.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "17*14 - 92 + 51 - 51",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 908,
+            "numbers": [
+              51,
+              14,
+              17,
+              51,
+              92
+            ],
+            "target": 146,
+            "expression": "17*14 - 92 + 51 - 51",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 13, 87, 2, 30, 88, create an expression that equals 162.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "2*(88 + 30) + 13 - 87",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 909,
+            "numbers": [
+              13,
+              87,
+              2,
+              30,
+              88
+            ],
+            "target": 162,
+            "expression": "2*(88 + 30) + 13 - 87",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 81, 62, 1, 56, 14, create an expression that equals 185.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "1*(62 + 81 - 14) + 56",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 913,
+            "numbers": [
+              81,
+              62,
+              1,
+              56,
+              14
+            ],
+            "target": 185,
+            "expression": "1*(62 + 81 - 14) + 56",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 457 using all of these numbers: 7, 54, 63, 98, 100, 12.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "98*7 - 12 - 100 - 54 - 63",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 917,
+            "numbers": [
+              7,
+              54,
+              63,
+              98,
+              100,
+              12
+            ],
+            "target": 457,
+            "expression": "98*7 - 12 - 100 - 54 - 63",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 236 using all of these numbers: 91, 86, 83, 28, 86, 90.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "83*86/86 + 90 + 91 - 28",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 921,
+            "numbers": [
+              91,
+              86,
+              83,
+              28,
+              86,
+              90
+            ],
+            "target": 236,
+            "expression": "83*86/86 + 90 + 91 - 28",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 110 using all of these numbers: 99, 97, 75, 41, 52.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "97 + 41 - 75 + 99 - 52",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 922,
+            "numbers": [
+              99,
+              97,
+              75,
+              41,
+              52
+            ],
+            "target": 110,
+            "expression": "97 + 41 - 75 + 99 - 52",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 188 using all of these numbers: 33, 23, 52, 70, 82, 26.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "82 + 52 + 70 - 26 - 23 + 33",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 924,
+            "numbers": [
+              33,
+              23,
+              52,
+              70,
+              82,
+              26
+            ],
+            "target": 188,
+            "expression": "82 + 52 + 70 - 26 - 23 + 33",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 1, 49, 19, 30, create an expression that equals 901.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "49*19/1 - 30",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 926,
+            "numbers": [
+              1,
+              49,
+              19,
+              30
+            ],
+            "target": 901,
+            "expression": "49*19/1 - 30",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 92, 7, 85, 98, create an expression that equals 461.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "92*7 - 98 - 85",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 927,
+            "numbers": [
+              92,
+              7,
+              85,
+              98
+            ],
+            "target": 461,
+            "expression": "92*7 - 98 - 85",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 6, 18, 77, 17, create an expression that equals 972.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "18*(77 - 17 - 6)",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 928,
+            "numbers": [
+              6,
+              18,
+              77,
+              17
+            ],
+            "target": 972,
+            "expression": "18*(77 - 17 - 6)",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 179 using all of these numbers: 69, 95, 14, 29.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "69 + 95 + 29 - 14",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 929,
+            "numbers": [
+              69,
+              95,
+              14,
+              29
+            ],
+            "target": 179,
+            "expression": "69 + 95 + 29 - 14",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 708 using all of these numbers: 36, 47, 39, 23, 58.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "36*(58 - 39) - 23 + 47",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 931,
+            "numbers": [
+              36,
+              47,
+              39,
+              23,
+              58
+            ],
+            "target": 708,
+            "expression": "36*(58 - 39) - 23 + 47",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 579 using all of these numbers: 69, 39, 79, 65, 58, 6.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "6*(58 + 69) - 65 - 39 - 79",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 933,
+            "numbers": [
+              69,
+              39,
+              79,
+              65,
+              58,
+              6
+            ],
+            "target": 579,
+            "expression": "6*(58 + 69) - 65 - 39 - 79",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 737 using all of these numbers: 21, 1, 41, 12, 37.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "12*1*(21 + 37) + 41",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 934,
+            "numbers": [
+              21,
+              1,
+              41,
+              12,
+              37
+            ],
+            "target": 737,
+            "expression": "12*1*(21 + 37) + 41",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Using all the numbers 93, 6, 20, 36, 74, 12, create an expression that equals 527.\nYou can only use each number once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "20*6*36/12 + 74 + 93",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 936,
+            "numbers": [
+              93,
+              6,
+              20,
+              36,
+              74,
+              12
+            ],
+            "target": 527,
+            "expression": "20*6*36/12 + 74 + 93",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Find a way to make 758 using all of these numbers: 47, 72, 29, 93, 60.\nEach number can only be used once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "29*(72 - 47) + 93 - 60",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 937,
+            "numbers": [
+              47,
+              72,
+              29,
+              93,
+              60
+            ],
+            "target": 758,
+            "expression": "29*(72 - 47) + 93 - 60",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate 447 using all of these numbers: 4, 92, 20, 17, 19.\nEach number may be used at most once.\n\nFinal answer format instructions:\n1. Provide your solution as a arithmetic expression (no '=' sign).\n2. Do not include the target number in the expression.\n3. Use '*' for multiplication.\n4. Use '/' for division.\n5. Do not include any other text or formatting.\n",
+          "answer": "4*(19 + 92) - 17 + 20",
+          "metadata": {
+            "source_dataset": "countdown",
+            "source_index": 938,
+            "numbers": [
+              4,
+              92,
+              20,
+              17,
+              19
+            ],
+            "target": 447,
+            "expression": "4*(19 + 92) - 17 + 20",
+            "difficulty": {
+              "numbers": [
+                4,
+                6
+              ],
+              "target": [
+                100,
+                999
+              ],
+              "value": [
+                1,
+                100
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the countdown dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"countdown\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "3b948bb1da4b86ea60eb84214adbbc0498388e8ec31ff380569505a022304a85"
+  }
+]

@@ -43,6 +43,12 @@ TYPE_BY_CAPABILITY = {
     "gap.search.shortest-state-machine-sequence": "quantum_lock",
     "gap.strings.exact-lexicographic-sorting": "word_sorting",
     "gap.calculus.antiderivatives-by-substitution-and-parts": "intermediate_integration",
+    "gap.algebra.solve-linear-equations": "simple_equations",
+    "gap.matrix.rotate-square-matrix": "rotate_matrix",
+    "gap.arithmetic.exact-decimal-expressions": "decimal_arithmetic",
+    "gap.strings.reverse-spelling": "spell_backward",
+    "gap.induction.causal-detector": "acre",
+    "gap.arithmetic.countdown-expression": "countdown",
 }
 
 
