@@ -105,6 +105,8 @@ class AdmissionRejection(StrEnum):
     MISSING_ROLLOUT_LOGPROBS = "missing_rollout_logprobs"
     MISSING_BEHAVIOR_TOPK = "missing_behavior_topk"
     DUPLICATE_UID = "duplicate_uid"
+    SKIPPED = "skipped"
+    """A feed row omitted from training after its lease was released."""
 
 
 # Rejections that mean the harness broke the run's structural contract; they fail training.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import dataclasses
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
@@ -41,7 +42,15 @@ from skyrl_train.rollouts.buffer import (
     RolloutGroup,
     RolloutTask,
 )
-from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
+from skyrl_train.rollouts.loader import (
+    FeedPromptLoader,
+    PromptGroupDataset,
+    PromptLoader,
+    PromptLoaderState,
+    PromptOrder,
+    PromptSource,
+    SeededPasses,
+)
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
 from skyrl_train.rollouts.workers import RolloutWorkers
@@ -131,12 +140,13 @@ class TrainingContext:
 
     A uid is live from dispatch until the buffer reports that its group left: trained, rejected, discarded by
     dynamic sampling, or returned for regeneration. The loader offers only uids that are not live, and a lease
-    waits for one to free up rather than generate a copy the batch would reject.
+    waits for one to free up rather than generate a copy the batch would reject. With ``prompt_wait``, a lease
+    that finds no prompt also asks the loader to refresh every ``prompt_wait`` seconds, for a dataset that grows.
     """
 
     def __init__(
         self,
-        loader: PromptLoader,
+        loader: PromptSource,
         config: RolloutBufferConfig,
         buffer: ActorHandle,
         content_policy: RolloutContentPolicy,
@@ -145,8 +155,10 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        prompt_wait: float | None = None,
     ):
         self.loader = loader
+        self._prompt_wait = prompt_wait
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
@@ -202,8 +214,14 @@ class TrainingContext:
             ),
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
+        loader: PromptSource
+        if config.data.feed.root is not None:
+            loader, prompt_wait = FeedPromptLoader(dataset), float(config.data.feed.poll_seconds)
+        else:
+            loader = PromptLoader(dataset, prompt_order_from_config(config, dataset), batch_size=batch_size)
+            prompt_wait = None
         return cls(
-            PromptLoader(dataset, prompt_order_from_config(config, dataset), batch_size=batch_size),
+            loader,
             buffer_config,
             start_rollout_buffer(buffer_config),
             RolloutContentPolicy(admission, selection),
@@ -211,6 +229,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            prompt_wait=prompt_wait,
         )
 
     def start(self) -> None:
@@ -384,9 +403,7 @@ class TrainingContext:
                 with self._wait("slot"):
                     lease = await self._buffer.acquire_lease.remote()
                 with self._wait("prompt"):
-                    async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
-                        self._live_uids[prompt["uid"]] += 1
+                    prompt = await self._next_prompt()
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
@@ -397,6 +414,22 @@ class TrainingContext:
                 running.add_done_callback(self._running.discard)
         except Exception as error:
             self._fail(error)
+
+    async def _next_prompt(self) -> dict:
+        """Wait for a prompt whose uid is not live, and mark it live."""
+        while True:
+            async with self._uids_released:
+                if self._prompt_wait is None:
+                    prompt = await self._uids_released.wait_for(lambda: self.loader.next_prompt(self._live_uids))
+                else:
+                    prompt = self.loader.next_prompt(self._live_uids)
+                    if prompt is None:
+                        with contextlib.suppress(TimeoutError):
+                            await asyncio.wait_for(self._uids_released.wait(), self._prompt_wait)
+                if prompt is not None:
+                    self._live_uids[prompt["uid"]] += 1
+                    return prompt
+            await self.loader.refresh()
 
     async def _release(self, admission: Admission) -> None:
         """Free the uids of groups that left the buffer, queue prompts to regenerate, and wake dispatch."""
