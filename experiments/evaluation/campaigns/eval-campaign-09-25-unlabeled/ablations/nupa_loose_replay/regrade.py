@@ -108,8 +108,19 @@ def regrade(cell: dict) -> dict:
         )
         / BENCHMARK_SIZE
     )
-    if abs(prior_score - cell["tracker_score"]) > 0.000500001:
-        raise ValueError(f"{cell['model']}: stored trial mean {prior_score} differs from tracker score")
+    if prior_trials is None:
+        result_table = ReadView(raw_source).scan("evalchemy_results", columns=["document"])
+        if result_table is None or result_table.num_rows != 1:
+            raise ValueError(f"{cell['model']}: expected one stored Evalchemy result")
+        source_score = json.loads(result_table.column("document")[0].as_py())["results"]["NUPA5K-Loose"]["exact_match"]
+        if abs(prior_score - source_score) > 1e-12:
+            raise ValueError(
+                f"{cell['model']}: stored trial mean {prior_score} differs from source aggregate {source_score}"
+            )
+    else:
+        source_score = prior_score
+        if abs(prior_score - cell["tracker_score"]) > 0.000500001:
+            raise ValueError(f"{cell['model']}: prior replay mean {prior_score} differs from tracker score")
 
     trials = []
     metric_totals = {
@@ -157,6 +168,7 @@ def regrade(cell: dict) -> dict:
         "source": cell["source"],
         "raw_source": raw_source,
         "tracker_score": cell["tracker_score"],
+        "source_aggregate_score": source_score,
         "prior_trial_mean": prior_score,
         "corrected_score": aggregates["exact_match"],
         "corrected_metrics": aggregates,
