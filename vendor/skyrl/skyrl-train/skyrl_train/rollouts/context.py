@@ -49,7 +49,6 @@ from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_r
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import (
-    SCORE_CENTERING_TOPK,
     SCORE_CENTERING_PROBE_TOKENS,
     rollout_logprobs_required,
     score_centering_probe_unavailable_reason,
@@ -65,6 +64,7 @@ class RolloutRequestSpec:
 
     samples_per_prompt: int
     sampling_params: dict
+    score_centering_top_k: int
     probe_interval: int = 0
 
     @classmethod
@@ -75,15 +75,16 @@ class RolloutRequestSpec:
             logger.info("Periodic score-centering probes unavailable: {}", reason)
         sampling = get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params)
         if config.trainer.algorithm.get("score_centering_enabled", False):
-            sampling["logprobs"] = SCORE_CENTERING_TOPK
+            sampling["logprobs"] = config.trainer.algorithm.score_centering_top_k
         return cls(
             samples_per_prompt=config.generator.n_samples_per_prompt,
             sampling_params=sampling,
+            score_centering_top_k=config.trainer.algorithm.score_centering_top_k,
             probe_interval=int(probe.interval) if reason is None else 0,
         )
 
     def request(self, prompt: dict, policy_step: int, *, probe: bool = False) -> TrajectoryRequestBatch:
-        sampling = {**self.sampling_params, "logprobs": SCORE_CENTERING_TOPK} if probe else self.sampling_params
+        sampling = {**self.sampling_params, "logprobs": self.score_centering_top_k} if probe else self.sampling_params
         request, _ = prepare_trajectory_request([prompt], self.samples_per_prompt, sampling, "train", policy_step)
         if probe:
             request = dataclasses.replace(request, score_centering_probe_tokens=SCORE_CENTERING_PROBE_TOKENS)

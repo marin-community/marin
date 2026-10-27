@@ -221,9 +221,10 @@ trainer:
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
-    # Add PPO/TIS score centering using the qualified 128-candidate behavior head.
+    # Add PPO/TIS score centering. Candidate capture is independent of sampling top_k.
     score_centering_enabled: false
-    # One K128 hypothetical probe, at most 32 positions per response, per interval of published policy steps.
+    score_centering_top_k: 128
+    # One hypothetical probe, at most 32 positions per response, per interval of published policy steps.
     # Unsupported objectives/backends report probe availability and keep their normal requests.
     score_centering_probe:
       interval: 10

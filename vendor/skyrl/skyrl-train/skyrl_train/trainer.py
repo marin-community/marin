@@ -74,7 +74,6 @@ from skyrl_train.objective.correction import compute_correction
 from skyrl_train.objective.score_centering import collate_score_centering
 from skyrl_train.objective.score_centering_probe import collate_score_probe, hypothetical_score_probe
 from skyrl_train.config.objective_spec import (
-    SCORE_CENTERING_TOPK,
     off_policy_correction,
     score_centering_probe_unavailable_reason,
     score_centering_tis_cap,
@@ -2248,7 +2247,7 @@ class RayPPOTrainer:
                     trajectory_batch,
                     response_ids,
                     response_masks_tensor,
-                    SCORE_CENTERING_TOPK,
+                    self.cfg.trainer.algorithm.score_centering_top_k,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
             score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}
@@ -2285,7 +2284,7 @@ class RayPPOTrainer:
                 probe_tensors = collate_score_probe(
                     trajectory_batch,
                     response_ids,
-                    SCORE_CENTERING_TOPK,
+                    self.cfg.trainer.algorithm.score_centering_top_k,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
             if probe_tensors:

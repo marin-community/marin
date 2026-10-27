@@ -15,12 +15,12 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("topk,probe_tokens", [(0, 0), (128, 0), (128, 32)])
+@pytest.mark.parametrize("topk,probe_tokens", [(0, 0), (32, 0), (128, 0), (32, 32), (128, 32)])
 async def test_training_task_retains_heads_and_capture_costs(topk, probe_tokens):
     length = 40 if probe_tokens else 4
     response = list(range(11, 11 + length))
-    ids = np.tile(np.arange(128, dtype=np.int32), (length, 1))
-    scores = np.full((length, 128), -np.log(128), dtype=np.float32)
+    ids = np.tile(np.arange(topk or 1, dtype=np.int32), (length, 1))
+    scores = np.full(ids.shape, -np.log(128), dtype=np.float32)
 
     class Tokenizer:
         eos_token_id = 99
@@ -87,8 +87,10 @@ async def test_training_task_retains_heads_and_capture_costs(topk, probe_tokens)
             np.testing.assert_array_equal(batch["behavior_topk_logprobs"][0], scores)
         assert metrics["score_centering_capture/requests"] == 1
         assert metrics["score_centering_capture/captured_tokens"] == length
-        assert metrics["score_centering_capture/captured_head_bytes"] == length * 1024
-        assert metrics["score_centering_capture/exported_head_bytes"] == (32 * 1028 if probe_tokens else length * 1024)
+        assert metrics["score_centering_capture/captured_head_bytes"] == length * topk * 8
+        assert metrics["score_centering_capture/exported_head_bytes"] == (
+            32 * (topk * 8 + 4) if probe_tokens else length * topk * 8
+        )
         assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
         assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
     else:

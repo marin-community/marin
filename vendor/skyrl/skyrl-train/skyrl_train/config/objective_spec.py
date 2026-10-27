@@ -26,7 +26,6 @@ from marinskyrl.runtime_options import (
     ftpo_requested,
 )
 
-SCORE_CENTERING_TOPK = 128
 SCORE_CENTERING_PROBE_TOKENS = 32
 
 
@@ -368,6 +367,9 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     correction = off_policy_correction(algorithm)
     plan = compile_distillation_plan_from_config(cfg)
     topk = plan is not None and plan.objective is not DistillationObjectiveKind.SAMPLED_REVERSE_KL
+    candidates = algorithm.score_centering_top_k
+    if isinstance(candidates, bool) or not isinstance(candidates, int) or candidates <= 0:
+        raise ValueError("score_centering_top_k must be a positive integer")
     probe = algorithm.get("score_centering_probe")
     if probe is not None:
         interval = probe.interval
@@ -384,8 +386,8 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
             )
         if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
             raise ValueError("score centering requires local vLLM behavior top-K capture")
-        if cfg.generator.sampling_params.logprobs not in (None, 0, SCORE_CENTERING_TOPK):
-            raise ValueError("score centering captures 128 candidates; sampling_params.logprobs must be 0, null or 128")
+        if cfg.generator.sampling_params.logprobs not in (None, 0, candidates):
+            raise ValueError(f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}")
     policy_trains = not (topk and plan.reward_mode is DistillationRewardMode.REPLACE)
     if correction.rules:
         if not policy_trains:

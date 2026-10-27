@@ -112,6 +112,7 @@ skyrl:
       policy_loss_type: regular
       off_policy_correction: tis
       score_centering_enabled: true
+      score_centering_top_k: 128
     policy:
       sequence_parallel_size: 1
       megatron_config:
@@ -122,14 +123,24 @@ skyrl:
     run_engines_locally: true
 ```
 
-The flag selects K128 capture and trainer rescoring automatically. The `tis`
+`score_centering_top_k` sets the positive candidate count for capture and trainer
+rescoring. It is independent of sampling's `top_k`, which changes the generated
+distribution. The default is 128; 32 is a cheaper approximation. The [Grug cost
+study][sc-cost-study] measured matched trainer time of 16.779 seconds at K128,
+14.799 at K32 and 14.752 with ordinary TIS. K32 cuts numeric head sizes by 75%.
+The hardest sampled long prefix retained only 24.2% of behavior mass at K32 and
+40.2% at K128, so the conservative default remains 128. Neither count guarantees
+an accurate correction on a broad distribution. Live-cycle estimates have wide
+intervals from differing response lengths; no learning benefit is established.
+
+The `tis`
 preset caps importance weights at two; a custom correction must contain exactly
 one token truncation rule. SC rejects distillation, auxiliary FTPO, other policy
 losses, remote inference and probability-changing sampling
 filters. Temperature-only sampling is supported. Disabling the flag returns to
 ordinary training; set the probe interval to zero for a control without heads.
 
-The head contains the sampler's natural top 128 token IDs and their
+The head contains the sampler's natural top K token IDs and their
 probabilities normalized over the full vocabulary. Megatron scores those IDs at
 the same causal positions before and during optimization. Outside the head, old and behavior probabilities are
 modeled as proportional to the current policy, preserving measured omitted mass.
@@ -227,3 +238,5 @@ finiteness check. Editable dependencies carry that source in the workspace bundl
 [snowball-report]: https://github.com/yonromai/marin/blob/14dae4c5e21179fd1b664e97ae6104b21837d6cd/docs/reports/score-centering-tim.md
 
 [cp-qualification]: https://wandb.ai/marin-community/score-centering-cp-packing/artifacts/qualification/packed-cp5-qualification-01a16b97/v0
+
+[sc-cost-study]: https://github.com/marin-community/marin-logbooks/issues/13
