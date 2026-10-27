@@ -75,8 +75,10 @@ establish parameter-gradient error or learning benefit. Small omitted masses are
 sensitive to FP32 subtraction, even just above
 the tail floor. Inspect omitted mass as well as floor usage.
 
-Probes require regular PPO/TIS, local vLLM and Megatron with tensor parallelism
-one and sequence parallelism disabled. CP=1 supports padded or packed rows;
+Probes require regular PPO/TIS with full-distribution, temperature-only sampling,
+local vLLM and Megatron with tensor parallelism one and sequence parallelism
+disabled. Behavior-logprob training rejects probability-changing sampling filters
+at launch. CP=1 supports padded or packed rows;
 CP>1 requires packing. Data, pipeline and expert parallelism retain their
 ordinary layout constraints. Other configurations report probe
 unavailability. Probes are unavailable when SC is enabled.
@@ -139,11 +141,11 @@ The hardest sampled long prefix retained only 24.2% of behavior mass at K32 and
 an accurate correction on a broad distribution. Live-cycle estimates have wide
 intervals from differing response lengths; no learning benefit is established.
 
-The `tis`
-preset caps importance weights at two; a custom correction must contain exactly
-one token truncation rule. SC rejects distillation, auxiliary FTPO, other policy
-losses, remote inference and probability-changing sampling
-filters. Temperature-only sampling is supported. Disabling the flag returns to
+The `tis` preset caps importance weights at two; a custom correction must contain
+exactly one token truncation rule. SC rejects distillation, auxiliary FTPO, other
+policy losses and remote inference. Behavior-logprob training, including ordinary
+TIS, requires full-distribution, temperature-only sampling; probability-changing
+filters are rejected at launch. Disabling the flag returns to
 ordinary training; set the probe interval to zero for a control without heads.
 
 The head contains the sampler's natural top K token IDs and their
@@ -233,8 +235,8 @@ The [dated Snowball report][snowball-report] retains cost measurements and full
 experimental records. Those measurements qualify their pinned source, not later
 code changes. That report's async probes sampled no responses of at least 2,048
 tokens; the CP5 qualification above includes live observations from longer
-responses. No Snowball learning benefit is established. Continuous capture without SC, training-time microbatch
-diagnostics and variable head/position sizes were retired from the runtime;
+responses. No Snowball learning benefit is established. Continuous capture without SC and training-time microbatch
+diagnostics were retired from the runtime;
 matched research controls remain at the report's immutable revisions.
 
 The scalar-grader repair [#10394](https://github.com/marin-community/marin/pull/10394)
