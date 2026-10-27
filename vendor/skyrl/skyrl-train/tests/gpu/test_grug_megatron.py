@@ -638,7 +638,7 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
         ray.shutdown()
 
 
-def _idle_pinned_host_bytes(worker) -> int:
+def _idle_pinned_host_bytes(_worker) -> int:
     """Pinned host memory that PyTorch's caching allocator holds but no tensor uses."""
     stats = torch.cuda.host_memory_stats()
     return stats["allocated_bytes.current"] - stats["active_bytes.current"]
