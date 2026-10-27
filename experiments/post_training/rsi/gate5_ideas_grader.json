@@ -1,0 +1,774 @@
+[
+  {
+    "capability_id": "gap.search.shortest-state-machine-sequence",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate5-grader",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "find the shortest action sequence in a state machine",
+      "outcome": "Plans the shortest sequence of actions that drives a small machine from its start state to a target, when each action's effect depends on a toggling mode, by searching the reachable states breadth first instead of guessing, and reports exactly the sequence in the requested notation.",
+      "includes": [
+        "breadth-first search over (value, mode) states",
+        "tracking a mode that every action toggles",
+        "actions whose effect depends on the mode",
+        "proving a sequence is shortest before answering",
+        "writing the sequence in the requested separator notation"
+      ],
+      "excludes": [],
+      "id": "gap.search.shortest-state-machine-sequence",
+      "evidence": [],
+      "example_tasks": [
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 9\nButtons:\nA: Subtract 1 (when any)\nB: Multiply 2 (when any)\nC: Add 2 (when red)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Add 2 (when red)\nB: Add 1 (when any)\nC: Add 1 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 20\nButtons:\nA: Multiply 2 (when any)\nB: Add 3 (when any)\nC: Add 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Add 1 (when any)\nB: Add 2 (when green)\nC: Multiply 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 11\nButtons:\nA: Add 1 (when any)\nB: Add 1 (when red)\nC: Multiply 2 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 37\nButtons:\nA: Multiply 3 (when red)\nB: Add 3 (when any)\nC: Add 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 13\nButtons:\nA: Multiply 2 (when any)\nB: Add 2 (when any)\nC: Add 1 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Multiply 2 (when green)\nB: Add 2 (when any)\nC: Subtract 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Add 2 (when red)\nB: Add 3 (when any)\nC: Multiply 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 16\nButtons:\nA: Multiply 2 (when any)\nB: Subtract 2 (when red)\nC: Add 2 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Subtract 2 (when green)\nB: Add 1 (when any)\nC: Add 2 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 17\nButtons:\nA: Multiply 2 (when any)\nB: Add 3 (when any)\nC: Add 2 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 29\nButtons:\nA: Subtract 2 (when red)\nB: Multiply 2 (when any)\nC: Add 3 (when red)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 20\nButtons:\nA: Add 2 (when any)\nB: Multiply 3 (when green)\nC: Multiply 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Add 2 (when any)\nB: Subtract 1 (when any)\nC: Multiply 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 28\nButtons:\nA: Subtract 3 (when any)\nB: Subtract 2 (when any)\nC: Add 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Subtract 2 (when any)\nB: Subtract 3 (when any)\nC: Add 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Subtract 2 (when green)\nB: Subtract 3 (when any)\nC: Add 2 (when any)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Multiply 2 (when any)\nB: Subtract 1 (when any)\nC: Add 1 (when green)",
+        "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 42\nButtons:\nA: Multiply 3 (when any)\nB: Add 3 (when any)\nC: Add 2 (when any)"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: solutions of 6 to 15 presses; buttons that act only in one light state; multiplication; targets far from the start.",
+      "example_task_spec": {
+        "id": "example-quantum_lock",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Multiply 2 (when any)\nB: Subtract 2 (when red)\nC: Add 3 (when green)"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:97105",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogInF1YW50dW1fbG9jayIsICJlbnRyeSI6IHsicXVlc3Rpb24iOiAiSW4gZnJvbnQgb2YgeW91IGFyZSBzb21lIGJ1dHRvbnMsIGEgbGlnaHQsIGFuZCBhIG51bWJlci4gVGhlIGxpZ2h0IHdpbGwgdG9nZ2xlIGJldHdlZW4gcmVkIGFuZCBncmVlbiB3aGVuZXZlciB5b3UgcHJlc3MgYSBidXR0b24uIEVhY2ggYnV0dG9uIHBlcmZvcm1zIGEgbWF0aGVtYXRpY2FsIG9wZXJhdGlvbiB0byB0aGUgbnVtYmVyLCBidXQgdGhlIG9wZXJhdGlvbiBtYXkgZGVwZW5kIG9uIHRoZSBzdGF0ZSBvZiB0aGUgbGlnaHQuXG5Zb3UgbXVzdCBwcmVzcyB0aGUgc2hvcnRlc3QgY29ycmVjdCBzZXF1ZW5jZSBvZiBidXR0b25zIHRvIHJlYWNoIHRoZSB0YXJnZXQgdmFsdWUuIFlvdXIgYW5zd2VyIHNob3VsZCBiZSBhIHNlcXVlbmNlIG9mIGJ1dHRvbnMgc2VwYXJhdGVkIGJ5ICdcdTIxOTInLCBmb3IgZXhhbXBsZTogQSBcdTIxOTIgQiBcdTIxOTIgQ1xuXG5TdGFydDogMCAocmVkKVxuVGFyZ2V0OiAyMlxuQnV0dG9uczpcbkE6IE11bHRpcGx5IDIgKHdoZW4gYW55KVxuQjogU3VidHJhY3QgMiAod2hlbiByZWQpXG5DOiBBZGQgMyAod2hlbiBncmVlbikiLCAiYW5zd2VyIjogIkEgXHUyMTkyIEMgXHUyMTkyIEIgXHUyMTkyIEMgXHUyMTkyIEEgXHUyMTkyIEMgXHUyMTkyIEEiLCAibWV0YWRhdGEiOiB7InNvdXJjZV9kYXRhc2V0IjogInF1YW50dW1fbG9jayIsICJzb3VyY2VfaW5kZXgiOiA5MzMsICJzb2x1dGlvbl9wYXRoIjogWyJBIiwgIkMiLCAiQiIsICJDIiwgIkEiLCAiQyIsICJBIl0sICJ0YXJnZXRfdmFsdWUiOiAyMiwgImJ1dHRvbnMiOiBbeyJuYW1lIjogIkEiLCAidHlwZSI6ICJtdWx0aXBseSIsICJ2YWx1ZSI6IDIsICJhY3RpdmVfc3RhdGUiOiAiYW55In0sIHsibmFtZSI6ICJCIiwgInR5cGUiOiAic3VidHJhY3QiLCAidmFsdWUiOiAyLCAiYWN0aXZlX3N0YXRlIjogInJlZCJ9LCB7Im5hbWUiOiAiQyIsICJ0eXBlIjogImFkZCIsICJ2YWx1ZSI6IDMsICJhY3RpdmVfc3RhdGUiOiAiZ3JlZW4ifV0sICJpbml0aWFsX3N0YXRlIjogInJlZCIsICJpbml0aWFsX3ZhbHVlIjogMCwgImRpZmZpY3VsdHkiOiB7ImRpZmZpY3VsdHkiOiA2fX19fQ=="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 22\nButtons:\nA: Multiply 2 (when any)\nB: Subtract 2 (when red)\nC: Add 3 (when green)",
+          "answer": "A \u2192 C \u2192 B \u2192 C \u2192 A \u2192 C \u2192 A",
+          "metadata": {
+            "source_dataset": "quantum_lock",
+            "source_index": 933,
+            "solution_path": [
+              "A",
+              "C",
+              "B",
+              "C",
+              "A",
+              "C",
+              "A"
+            ],
+            "target_value": 22,
+            "buttons": [
+              {
+                "name": "A",
+                "type": "multiply",
+                "value": 2,
+                "active_state": "any"
+              },
+              {
+                "name": "B",
+                "type": "subtract",
+                "value": 2,
+                "active_state": "red"
+              },
+              {
+                "name": "C",
+                "type": "add",
+                "value": 3,
+                "active_state": "green"
+              }
+            ],
+            "initial_state": "red",
+            "initial_value": 0,
+            "difficulty": {
+              "difficulty": 6
+            }
+          }
+        },
+        {
+          "question": "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 8\nButtons:\nA: Multiply 2 (when any)\nB: Subtract 1 (when any)\nC: Add 2 (when any)",
+          "answer": "C \u2192 A \u2192 A",
+          "metadata": {
+            "source_dataset": "quantum_lock",
+            "source_index": 934,
+            "solution_path": [
+              "C",
+              "A",
+              "A"
+            ],
+            "target_value": 8,
+            "buttons": [
+              {
+                "name": "A",
+                "type": "multiply",
+                "value": 2,
+                "active_state": "any"
+              },
+              {
+                "name": "B",
+                "type": "subtract",
+                "value": 1,
+                "active_state": "any"
+              },
+              {
+                "name": "C",
+                "type": "add",
+                "value": 2,
+                "active_state": "any"
+              }
+            ],
+            "initial_state": "red",
+            "initial_value": 0,
+            "difficulty": {
+              "difficulty": 1
+            }
+          }
+        },
+        {
+          "question": "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 16\nButtons:\nA: Add 3 (when any)\nB: Add 2 (when any)\nC: Subtract 3 (when red)",
+          "answer": "A \u2192 A \u2192 A \u2192 A \u2192 B \u2192 B",
+          "metadata": {
+            "source_dataset": "quantum_lock",
+            "source_index": 936,
+            "solution_path": [
+              "A",
+              "A",
+              "A",
+              "A",
+              "B",
+              "B"
+            ],
+            "target_value": 16,
+            "buttons": [
+              {
+                "name": "A",
+                "type": "add",
+                "value": 3,
+                "active_state": "any"
+              },
+              {
+                "name": "B",
+                "type": "add",
+                "value": 2,
+                "active_state": "any"
+              },
+              {
+                "name": "C",
+                "type": "subtract",
+                "value": 3,
+                "active_state": "red"
+              }
+            ],
+            "initial_state": "red",
+            "initial_value": 0,
+            "difficulty": {
+              "difficulty": 6
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the quantum_lock dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"quantum_lock\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "ed22ba2b46c222ca181dee4208c5fcd9a3898f7079659f35a895fc53cb2f59cd"
+  },
+  {
+    "capability_id": "gap.strings.exact-lexicographic-sorting",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate5-grader",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "sort words exactly by character codes",
+      "outcome": "Sorts a list of words in ascending or descending order by ASCII/Unicode code points, not by dictionary order: capital letters before lowercase, character by character, prefixes first, and returns exactly the requested delimited list with the original spelling and case.",
+      "includes": [
+        "code-point order versus case-insensitive order",
+        "comparing words character by character",
+        "prefix and equal-prefix cases",
+        "descending versus ascending order",
+        "exact comma-separated output with no extra words"
+      ],
+      "excludes": [],
+      "id": "gap.strings.exact-lexicographic-sorting",
+      "evidence": [],
+      "example_tasks": [
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: writing, wonders, Indies, specifically, granted, generation\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: humor, successful, minutes, laughing, displayed, claim\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: readiness, remains, stroke\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: man, random, banks, know, fallen, moral, mission, fitted, Under, notified\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: solving, version, pleiad, secure, meantime, astounding, License, STRICT\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: far, due, been, flag, irresolvable, PROJECT, province, Heat, forces, reach\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: planet, organization, calling, severed, 200, telephote, week, compilation\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: discusses, another, experiments, published, committed, unprotected\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Company, reporters, thing, methods\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: famous, which, information, writing, usually\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: explaining, expend, coach, tap, rub, advertising, France, wires, absolute\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: down, user, astronomical\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: artificial, very, question, reception, catarrh, crossing, help, close\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: include, locomotion, accepting, for, last, Refund, payments\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Two, globe, whatsoever\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: reconciled, known, wealthy, case, provided\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: heroes, show, call, only, Slavs, hope\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Smith, suspended, See, wrap, Come, THIS, course, notifies, departments\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in descending order (using ASCII/Unicode ordering) and return them as a comma-separated list: derived, Time, 000, possession, hit, remove, Vanilla, wires, sells, fairer\n",
+        "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Rhine, favorably, weary, Europe, replacement, Pressed, lover\n"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: words that differ only in case or start with capitals, so code-point order differs from dictionary order; punctuation and digits; descending order; 6 to 10 words.",
+      "example_task_spec": {
+        "id": "example-word_sorting",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Grand, distributed, Indies, upon, idea, year, child, keeping, laughing\n"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:96718",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogIndvcmRfc29ydGluZyIsICJlbnRyeSI6IHsicXVlc3Rpb24iOiAiWW91ciB0YXNrIGlzIHRvIHNvcnQgd29yZHMgaW4gYXNjZW5kaW5nIG9yIGRlc2NlbmRpbmcgb3JkZXIgdXNpbmcgQVNDSUkvVW5pY29kZSBvcmRlcmluZy5cblxuWW91ciBvdXRwdXQgc2hvdWxkIGJlIGEgY29tbWEtc2VwYXJhdGVkIGxpc3Qgb2Ygd29yZHMsIGUuZy4gd29yZF8xLCB3b3JkXzIsIHdvcmRfM1xuXG5Ob3csIHNvcnQgdGhlc2Ugd29yZHMgaW4gYXNjZW5kaW5nIG9yZGVyICh1c2luZyBBU0NJSS9Vbmljb2RlIG9yZGVyaW5nKSBhbmQgcmV0dXJuIHRoZW0gYXMgYSBjb21tYS1zZXBhcmF0ZWQgbGlzdDogR3JhbmQsIGRpc3RyaWJ1dGVkLCBJbmRpZXMsIHVwb24sIGlkZWEsIHllYXIsIGNoaWxkLCBrZWVwaW5nLCBsYXVnaGluZ1xuIiwgImFuc3dlciI6ICJHcmFuZCwgSW5kaWVzLCBjaGlsZCwgZGlzdHJpYnV0ZWQsIGlkZWEsIGtlZXBpbmcsIGxhdWdoaW5nLCB1cG9uLCB5ZWFyIiwgIm1ldGFkYXRhIjogeyJzb3VyY2VfZGF0YXNldCI6ICJ3b3JkX3NvcnRpbmciLCAic291cmNlX2luZGV4IjogOTI5LCAib3JpZ2luYWxfd29yZHMiOiBbIkdyYW5kIiwgImRpc3RyaWJ1dGVkIiwgIkluZGllcyIsICJ1cG9uIiwgImlkZWEiLCAieWVhciIsICJjaGlsZCIsICJrZWVwaW5nIiwgImxhdWdoaW5nIl0sICJzb3J0ZWRfd29yZHMiOiBbIkdyYW5kIiwgIkluZGllcyIsICJjaGlsZCIsICJkaXN0cmlidXRlZCIsICJpZGVhIiwgImtlZXBpbmciLCAibGF1Z2hpbmciLCAidXBvbiIsICJ5ZWFyIl0sICJ0cmFuc2Zvcm1lZF93b3JkcyI6IFsiR3JhbmQiLCAiZGlzdHJpYnV0ZWQiLCAiSW5kaWVzIiwgInVwb24iLCAiaWRlYSIsICJ5ZWFyIiwgImNoaWxkIiwgImtlZXBpbmciLCAibGF1Z2hpbmciXSwgImRpcmVjdGlvbiI6ICJhc2NlbmRpbmciLCAibnVtX3dvcmRzIjogOSwgIndvcmRfbGVuZ3RoIjogMTEsICJkaWZmaWN1bHR5IjogeyJudW1fd29yZHMiOiBbMywgMTBdLCAid29yZF9sZW5ndGgiOiBbMywgMTJdfX19fQ=="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: Grand, distributed, Indies, upon, idea, year, child, keeping, laughing\n",
+          "answer": "Grand, Indies, child, distributed, idea, keeping, laughing, upon, year",
+          "metadata": {
+            "source_dataset": "word_sorting",
+            "source_index": 929,
+            "original_words": [
+              "Grand",
+              "distributed",
+              "Indies",
+              "upon",
+              "idea",
+              "year",
+              "child",
+              "keeping",
+              "laughing"
+            ],
+            "sorted_words": [
+              "Grand",
+              "Indies",
+              "child",
+              "distributed",
+              "idea",
+              "keeping",
+              "laughing",
+              "upon",
+              "year"
+            ],
+            "transformed_words": [
+              "Grand",
+              "distributed",
+              "Indies",
+              "upon",
+              "idea",
+              "year",
+              "child",
+              "keeping",
+              "laughing"
+            ],
+            "direction": "ascending",
+            "num_words": 9,
+            "word_length": 11,
+            "difficulty": {
+              "num_words": [
+                3,
+                10
+              ],
+              "word_length": [
+                3,
+                12
+              ]
+            }
+          }
+        },
+        {
+          "question": "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: ask, scientists, pardon, government\n",
+          "answer": "ask, government, pardon, scientists",
+          "metadata": {
+            "source_dataset": "word_sorting",
+            "source_index": 932,
+            "original_words": [
+              "ask",
+              "scientists",
+              "pardon",
+              "government"
+            ],
+            "sorted_words": [
+              "ask",
+              "government",
+              "pardon",
+              "scientists"
+            ],
+            "transformed_words": [
+              "ask",
+              "scientists",
+              "pardon",
+              "government"
+            ],
+            "direction": "ascending",
+            "num_words": 4,
+            "word_length": 10,
+            "difficulty": {
+              "num_words": [
+                3,
+                10
+              ],
+              "word_length": [
+                3,
+                12
+              ]
+            }
+          }
+        },
+        {
+          "question": "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: gain, Professor, a\u00ebrial, paper, crowding, permission, knob, old, keep, With\n",
+          "answer": "Professor, With, a\u00ebrial, crowding, gain, keep, knob, old, paper, permission",
+          "metadata": {
+            "source_dataset": "word_sorting",
+            "source_index": 934,
+            "original_words": [
+              "gain",
+              "Professor",
+              "a\u00ebrial",
+              "paper",
+              "crowding",
+              "permission",
+              "knob",
+              "old",
+              "keep",
+              "With"
+            ],
+            "sorted_words": [
+              "Professor",
+              "With",
+              "a\u00ebrial",
+              "crowding",
+              "gain",
+              "keep",
+              "knob",
+              "old",
+              "paper",
+              "permission"
+            ],
+            "transformed_words": [
+              "gain",
+              "Professor",
+              "a\u00ebrial",
+              "paper",
+              "crowding",
+              "permission",
+              "knob",
+              "old",
+              "keep",
+              "With"
+            ],
+            "direction": "ascending",
+            "num_words": 10,
+            "word_length": 10,
+            "difficulty": {
+              "num_words": [
+                3,
+                10
+              ],
+              "word_length": [
+                3,
+                12
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the word_sorting dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"word_sorting\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "4169224f861339dfea37f5ae56ec31cfba074773588b2c6384144d679b9a838a"
+  },
+  {
+    "capability_id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate5-grader",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "compute antiderivatives by substitution and by parts",
+      "outcome": "Computes indefinite integrals that need a substitution (including of a composite inner function) or integration by parts, simplifies the result, includes the constant of integration, and writes the antiderivative in the requested symbolic syntax.",
+      "includes": [
+        "u-substitution with a linear or composite inner function",
+        "integration by parts, repeated when needed",
+        "powers of sine and cosine with a matching derivative factor",
+        "checking the result by differentiating",
+        "symbolic syntax with ** and explicit *"
+      ],
+      "excludes": [],
+      "id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+      "evidence": [],
+      "example_tasks": [
+        "Calculate the antiderivative: \u222b 2*exp(x)*cos(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b -12*sqrt(6*x + 4) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b -3*(5*x - 7)**2 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Evaluate the indefinite integral: \u222b -3*(9*x + 8)**2 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b -3*x**3*cos(3*x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b 18*exp(6 - 6*x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b 4*sin(4*x + 5)**2*cos(4*x + 5) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b -exp(x)*sin(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b 2*exp(x)*sin(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b -2*sin(2*x - 8)**2*cos(2*x - 8) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Evaluate the indefinite integral: \u222b -3*(2*x + 1)**3 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b exp(x + 7) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b 2*atan(2*x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Evaluate the indefinite integral: \u222b 12*sin(4*x + 4)*cos(4*x + 4) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b -12*sqrt(6*x - 8) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Evaluate the indefinite integral: \u222b -3*exp(x)*cos(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Calculate the antiderivative: \u222b 2*x**3*cos(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b 18*sin(6*x - 3)*cos(6*x - 3) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Evaluate the indefinite integral: \u222b -(5*x - 8)**3 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+        "Find the indefinite integral: \u222b 2*(5*x + 8)**3 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n"
+      ],
+      "task_form": "Build tasks of the same form as the example_tasks: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply in the format that the message asks for. Keep the answer format and the conventions of the examples exactly.",
+      "instance_distribution": "Write the build program as a generator whose parameters span the whole range of the example_tasks, including their hardest instances; an instance should be as likely to be hard as in the examples.",
+      "hard_parts": "Hard parts: substitution with a composite inner function, integration by parts, powers of trigonometric functions; the answer written with ** and plain function names, as the examples ask.",
+      "example_task_spec": {
+        "id": "example-intermediate_integration",
+        "context": {
+          "events": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": "Calculate the antiderivative: \u222b 3*(2*x - 4)**4 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n"
+            }
+          ]
+        },
+        "environment_requirements": {
+          "capabilities": [],
+          "command_semantics": null,
+          "docker_image": null,
+          "docker_build": null,
+          "working_directory": null,
+          "setup_commands": [],
+          "environment_variables": {},
+          "tool_providers": {},
+          "packages_lock": null,
+          "package_spec": null
+        },
+        "final_tools": [],
+        "interaction_tools": [],
+        "tool_bindings": {},
+        "output_paths": [],
+        "answer_type": "text",
+        "answer_format": {
+          "kind": "plain_text"
+        },
+        "grader": {
+          "kind": "script",
+          "argv": [
+            "python3",
+            "/tests/grade.py"
+          ],
+          "cwd": "/",
+          "env": {},
+          "environment": {
+            "capabilities": [],
+            "command_semantics": "linux_process",
+            "docker_image": null,
+            "docker_build": null,
+            "working_directory": null,
+            "setup_commands": [],
+            "environment_variables": {},
+            "tool_providers": {},
+            "packages_lock": "s3://marin-us-east-02a/marin/images/env-fddd4cc017baebcf/2026.10.08/requirements.lock",
+            "package_spec": null
+          },
+          "collect": [],
+          "artifacts": [],
+          "answer_path": "/app/answer.txt",
+          "conversation_path": "/tests/conversation.json",
+          "reward": {
+            "kind": "stdout"
+          },
+          "timeout": 60.0
+        },
+        "source": {
+          "dataset": "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl",
+          "revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+          "row": "reasoning_gym-0.1.25-py3-none-any.whl:97383",
+          "importer_revision": "1"
+        },
+        "schema_version": "0.28",
+        "resources": {
+          "all": [],
+          "worker": [],
+          "oracle": [],
+          "verifier": [
+            {
+              "path": "grade.py",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "IiIiU2NvcmUgYSBSZWFzb25pbmcgR3ltIHJlcGx5IGFzIHRoZSBzZWVkIHRhc2tzIGRvOiB0aGUgdGV4dCBhZnRlciB0aGUgbGFzdCBBbnN3ZXI6IG1hcmtlciwgb3IgdGhlIHdob2xlIHN0cmlwcGVkIHJlcGx5LApzY29yZWQgYnkgdGhlIGRhdGFzZXQncyBvd24gc2NvcmVyIGFnYWluc3QgdGhlIGluc3RhbmNlJ3MgZW50cnkgaW4gL3Rlc3RzL2NvbmZpZy5qc29uLiIiIgoKaW1wb3J0IGNvbnRleHRsaWIKaW1wb3J0IGpzb24KaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCmltcG9ydCByZWFzb25pbmdfZ3ltCgpDT05GSUcgPSBQYXRoKCIvdGVzdHMvY29uZmlnLmpzb24iKQpBTlNXRVIgPSBQYXRoKCIvYXBwL2Fuc3dlci50eHQiKQoKCmRlZiBtYWluKCkgLT4gTm9uZToKICAgIGNvbmZpZyA9IGpzb24ubG9hZHMoQ09ORklHLnJlYWRfdGV4dCgpKQogICAgcmVwbHkgPSBBTlNXRVIucmVhZF90ZXh0KGVycm9ycz0icmVwbGFjZSIpCiAgICBfLCBtYXJrZXIsIGFmdGVyID0gcmVwbHkucnBhcnRpdGlvbigiQW5zd2VyOiIpCiAgICBjYW5kaWRhdGUgPSBhZnRlci5zdHJpcCgpIGlmIG1hcmtlciBlbHNlIHJlcGx5LnN0cmlwKCkKICAgIHdpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoc3lzLnN0ZGVycik6CiAgICAgICAgcmV3YXJkID0gZmxvYXQocmVhc29uaW5nX2d5bS5nZXRfc2NvcmVfYW5zd2VyX2ZuKGNvbmZpZ1sidGFzayJdKShjYW5kaWRhdGUsIGNvbmZpZ1siZW50cnkiXSkpCiAgICBwcmludChyZXdhcmQpCgoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIG1haW4oKQo="
+              }
+            },
+            {
+              "path": "config.json",
+              "source": {
+                "kind": "inline_file",
+                "content_base64": "eyJ0YXNrIjogImludGVybWVkaWF0ZV9pbnRlZ3JhdGlvbiIsICJlbnRyeSI6IHsicXVlc3Rpb24iOiAiQ2FsY3VsYXRlIHRoZSBhbnRpZGVyaXZhdGl2ZTogXHUyMjJiIDMqKDIqeCAtIDQpKio0IGR4XG5XaGVuIHBlcmZvcm1pbmcgY2FsY3VsYXRpb25zLCBwbGVhc2UgZm9sbG93IHRoZXNlIGd1aWRlbGluZXM6XG5Vc2Ugc2FtZSB2YXJpYWJsZSBzeW1ib2xzIGFzIGdpdmVuIGluIHRoZSBxdWVzdGlvblxuMS4gVXNlICoqIGluc3RlYWQgb2YgXiB0byByZXByZXNlbnQgZXhwb25lbnRzLiBGb3IgZXhhbXBsZSwgd3JpdGUgNypYKioyIGluc3RlYWQgb2YgNypYXjIuXG4yLiBBbHdheXMgaW5jbHVkZSB0aGUgKiBzeW1ib2wgZm9yIGFsbCBtdWx0aXBsaWNhdGlvbiBvcGVyYXRpb25zIGluIHlvdXIgcmVhc29uaW5nIHN0ZXBzLiBGb3IgZXhhbXBsZSwgd3JpdGUgYC0zKlgqKjMqc2luKFgpIC0gOSpYKioyKmNvcyhYKSArIDE4Klgqc2luKFgpICsgMTgqY29zKFgpICsgQ2AgaW5zdGVhZCBvZiBgLTN4M3Npbih4KSAtIDl4MmNvcyh4KSArIDE4eHNpbih4KSArIDE4Y29zKHgpICsgQ2AuXG4zLiBVc2UgYGV4cCh4KWAgb3IgYEUqKih4KWAgZm9yIHRoZSBleHBvbmVudGlhbCBmdW5jdGlvbiAoaS5lLiB1c2UgY2FwaXRhbCBFIGZvciBFdWxlcidzIG51bWJlcikuXG4iLCAiYW5zd2VyIjogIjQ4KngqKjUvNSAtIDk2KngqKjQgKyAzODQqeCoqMyAtIDc2OCp4KioyICsgNzY4KnggKyBDIiwgIm1ldGFkYXRhIjogeyJzb3VyY2VfZGF0YXNldCI6ICJpbnRlcm1lZGlhdGVfaW50ZWdyYXRpb24iLCAic291cmNlX2luZGV4IjogOTM2LCAiaW50ZWdyYW5kIjogIjMqKDIqeCAtIDQpKio0IiwgInByb2JsZW1fdHlwZSI6ICJsaW5lYXIiLCAidmFyaWFibGUiOiAieCIsICJkaWZmaWN1bHR5IjogeyJwcm9ibGVtX3R5cGVfd2VpZ2h0cyI6IFswLjEyNSwgMC4xMjUsIDAuMTI1LCAwLjEyNSwgMC4xMjUsIDAuMTI1LCAwLjEyNSwgMC4xMjVdfX19fQ=="
+              }
+            }
+          ]
+        },
+        "tags": []
+      },
+      "example_entries": [
+        {
+          "question": "Calculate the antiderivative: \u222b 3*(2*x - 4)**4 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+          "answer": "48*x**5/5 - 96*x**4 + 384*x**3 - 768*x**2 + 768*x + C",
+          "metadata": {
+            "source_dataset": "intermediate_integration",
+            "source_index": 936,
+            "integrand": "3*(2*x - 4)**4",
+            "problem_type": "linear",
+            "variable": "x",
+            "difficulty": {
+              "problem_type_weights": [
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125
+              ]
+            }
+          }
+        },
+        {
+          "question": "Calculate the antiderivative: \u222b -(7*x + 10)**3 dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+          "answer": "-343*x**4/4 - 490*x**3 - 1050*x**2 - 1000*x + C",
+          "metadata": {
+            "source_dataset": "intermediate_integration",
+            "source_index": 937,
+            "integrand": "-(7*x + 10)**3",
+            "problem_type": "linear",
+            "variable": "x",
+            "difficulty": {
+              "problem_type_weights": [
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125
+              ]
+            }
+          }
+        },
+        {
+          "question": "Evaluate the indefinite integral: \u222b -2*x**3*exp(x) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+          "answer": "(-2*x**3 + 6*x**2 - 12*x + 12)*exp(x) + C",
+          "metadata": {
+            "source_dataset": "intermediate_integration",
+            "source_index": 938,
+            "integrand": "-2*x**3*exp(x)",
+            "problem_type": "polynomial_exp_trig",
+            "variable": "x",
+            "difficulty": {
+              "problem_type_weights": [
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125,
+                0.125
+              ]
+            }
+          }
+        }
+      ],
+      "grader_rule": "Grade every task with exactly the grader of example_task_spec: a script grader that runs /tests/grade.py, copied unchanged, which scores the text after the reply's last 'Answer:' with the intermediate_integration dataset's own scorer, against the entry in /tests/config.json. Write each instance's config.json as {\"task\": \"intermediate_integration\", \"entry\": ...} with an entry in the same form as example_entries (the same metadata fields, which the scorer reads). Do not write another grader or change the answer format."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "b355342d7717ae36de842ee260baf82051c8d3244e1f6ff3eed0e1e3c09ce9ed"
+  }
+]
