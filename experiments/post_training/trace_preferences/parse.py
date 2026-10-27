@@ -38,6 +38,9 @@ STATUS_REPEATED_OPENER = "repeated_opener"
 STATUS_UNCLOSED_PARAMETER = "unclosed_parameter"
 STATUS_UNKNOWN_FUNCTION = "unknown_function"
 STATUS_UNDECLARED_PARAMETER = "undeclared_parameter"
+# Format-checkable but the served schema needed to judge function/parameter
+# declarations was not available in that turn's prefix. NOT a pass, NOT malformed.
+STATUS_SCHEMA_UNAVAILABLE = "schema_unavailable"
 
 
 class NativeTokenizer:
@@ -118,9 +121,13 @@ def function_block_status(text: str, served_tools: list[dict] | None) -> str:
     """One status for one native function block.
 
     CHECKS (literal text): one ``<function=`` opener; ``</function>`` present; every
-    ``<parameter=NAME>`` closed; the function served in that prompt; every
-    parameter declared for it.  NOT checked: execution, success, parameter values,
-    framing, environment state, action quality.
+    ``<parameter=NAME>`` closed; (only if a served schema is available) the function
+    served in that prompt; (only if available) every parameter declared for it.
+    NOT checked: execution, success, parameter values, framing, environment state,
+    action quality.
+
+    When ``served_tools`` is ``None`` the schema-dependent checks cannot run. That is
+    reported as ``STATUS_SCHEMA_UNAVAILABLE`` -- it is NOT silently treated as valid.
     """
     openers = OPENER.findall(text)
     if len(openers) > 1:
@@ -135,16 +142,18 @@ def function_block_status(text: str, served_tools: list[dict] | None) -> str:
     if body.count(PARAM_CLOSER) != len(param_names):
         return STATUS_UNCLOSED_PARAMETER
 
-    if served_tools is not None:
-        declared: dict[str, set[str]] = {}
-        for tool in served_tools:
-            fn = tool.get("function", tool)
-            if fn.get("name"):
-                declared[fn["name"]] = set(((fn.get("parameters") or {}).get("properties")) or {})
-        if openers[0] not in declared:
-            return STATUS_UNKNOWN_FUNCTION
-        if any(name not in declared[openers[0]] for name in param_names):
-            return STATUS_UNDECLARED_PARAMETER
+    if served_tools is None:
+        return STATUS_SCHEMA_UNAVAILABLE
+
+    declared: dict[str, set[str]] = {}
+    for tool in served_tools:
+        fn = tool.get("function", tool)
+        if fn.get("name"):
+            declared[fn["name"]] = set(((fn.get("parameters") or {}).get("properties")) or {})
+    if openers[0] not in declared:
+        return STATUS_UNKNOWN_FUNCTION
+    if any(name not in declared[openers[0]] for name in param_names):
+        return STATUS_UNDECLARED_PARAMETER
     return STATUS_VALID
 
 
