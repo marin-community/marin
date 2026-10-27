@@ -391,6 +391,13 @@ def restore_offloaded_optimizer_state(optimizer) -> None:
         # Bucket tensors replace state after HDO's load hooks. Rebind moments,
         # restore FP32 masters and place state on the native optimizers' devices.
         inner._sync_hdo_state_to_sub_optimizers()
+        # The sync copies each loaded master into the FP32 param but keeps the loaded tensor in the state: a second
+        # FP32 copy of every GPU-resident param (about 16 GiB per Grug rank) that a fresh run does not hold, and that
+        # OOMs the first step after a resume. HDO adds master_param back, aliased, when it saves a checkpoint.
+        for state in inner.state.values():
+            state.pop("master_param", None)
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def preprocess_packed_seqs(
