@@ -12,8 +12,11 @@ import random
 import subprocess
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
+from contextlib import ExitStack
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, replace
+from enum import Enum, StrEnum, auto
+from functools import cache
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Protocol
@@ -22,7 +25,10 @@ import click
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from iris.rpc import job_pb2
+from iris.cli.connect import connect_controller, rpc_client
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName, is_job_finished
+from iris.rpc import controller_pb2, job_pb2
 from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
@@ -42,16 +48,18 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
+    _role_plan_config_values,
     artifact_identity,
+    skyrl_cpu_command,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from taskcompendium.models import TaskSpec, grades_with_judge
 
-PRESET_REVISION = "2026.10.26"
+PRESET_REVISION = "2026.10.27"
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
@@ -98,12 +106,16 @@ class Gap(StrEnum):
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
-    HARBOR_ON_DAYTONA = "harbor-on-daytona"
 
 
 class EvalHarness(StrEnum):
     PANEL = "panel"
-    HARBOR = "harbor"
+
+
+class _ArtifactLookup(Enum):
+    SELECTION = auto()
+    INITIALIZER = auto()
+    RESUME = auto()
 
 
 @dataclass(frozen=True)
@@ -116,6 +128,8 @@ class Evaluation:
     every: int | None
     at_start: bool
     gates: bool
+    local_only: bool = False
+    post_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +152,9 @@ class Recipe:
     staleness: int
     estimator: Mapping[str, object]
     optimizer: Mapping[str, object]
+    max_turns: int = 1
+    engine_init_kwargs: Mapping[str, object] = field(default_factory=dict)
+    megatron_overrides: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -232,7 +249,7 @@ class PanelEvaluator:
         selection = inputs.default_selection if source == "default" else inputs.selection
         if evaluation.sample is not None:
             selection = sampled_tasks_step(
-                selection, filename, evaluation.sample, inputs.seed, local_only=evaluation.name == "speed-512x4"
+                selection, filename, evaluation.sample, inputs.seed, local_only=evaluation.local_only
             )
         inputs.validation_data = (ArtifactDataSource(selection, relative_path=f"{filename}.parquet"),)
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
@@ -248,7 +265,7 @@ class PanelEvaluator:
 
     def scores(self, evaluation: Evaluation, run_output: str) -> pa.Table:
         root = StoragePath(run_output)
-        launch = yaml.safe_load(_read_text(root / "resolved-launch.yaml"))
+        launch = yaml.safe_load(_read_text(root / "resolved-launch.yaml"))["config"]
         manifest = {}
         for source in launch["inputs"]["validation_data"]:
             manifest.update(_manifest(StoragePath(source["uri"])))
@@ -268,10 +285,14 @@ class PanelEvaluator:
                     metadata = manifest.get(item, {})
                     if evaluation.tasks.split(":")[1] != "train" and not metadata:
                         raise ValueError(f"panel task {item} is absent from its task manifest")
-                    value = row["score"]
-                    score = float(sum(value) if isinstance(value, list) else value)
-                    if not math.isfinite(score):
-                        raise ValueError(f"nonfinite evaluation score for {item}")
+                    scored = not row.get("exception_type") and not row.get("error_treatment")
+                    verdict = row.get("verification")
+                    score = 0.0
+                    if verdict and verdict["status"] == "verified":
+                        value, lower, upper = (float(verdict[key]) for key in ("score", "score_min", "score_max"))
+                        if not all(math.isfinite(number) for number in (value, lower, upper)) or upper <= lower:
+                            raise ValueError(f"invalid verifier score or bounds for {item}")
+                        score = min(1.0, max(0.0, (value - lower) / (upper - lower)))
                     rows.append(
                         {
                             "evaluation": evaluation.name,
@@ -282,7 +303,7 @@ class PanelEvaluator:
                             "family": metadata.get("family"),
                             "aaii_category": metadata.get("aaii_category"),
                             "score": score,
-                            "scored": not row.get("exception_type") and not row.get("error_treatment"),
+                            "scored": scored,
                         }
                     )
                     attempts[step, item] += 1
@@ -293,10 +314,10 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
     """Aggregate answer scores separately for each evaluation and weight step."""
     sessions = defaultdict(list)
     for row in scores.to_pylist():
-        sessions[row["evaluation"], row["step"]].append(row)
+        sessions[row["evaluation"]].append(row)
     result = {}
-    for (evaluation, _step), rows in sessions.items():
-        if len({row["step"] for row in scores.to_pylist() if row["evaluation"] == evaluation}) != 1:
+    for evaluation, rows in sessions.items():
+        if len({row["step"] for row in rows}) != 1:
             raise ValueError(f"select one weight step before aggregating {evaluation}")
         prefix = evaluation
         scored = [row for row in rows if row["scored"]]
@@ -351,7 +372,9 @@ EVALUATIONS = MappingProxyType(
     {
         "panel-100": Evaluation("panel-100", EvalHarness.PANEL, "default:validation", None, 1, None, False, True),
         "panel-910": Evaluation("panel-910", EvalHarness.PANEL, "default:full_validation", None, 1, None, False, True),
-        "speed-512x4": Evaluation("speed-512x4", EvalHarness.PANEL, "default:train", 512, 4, None, False, False),
+        "speed-512x4": Evaluation(
+            "speed-512x4", EvalHarness.PANEL, "default:train", 512, 4, None, False, False, local_only=True
+        ),
         "screen-256x4": Evaluation("screen-256x4", EvalHarness.PANEL, "tasks:train", 256, 4, None, False, True),
     }
 )
@@ -395,7 +418,9 @@ _OPTIMIZER = MappingProxyType(
         "num_warmup_steps": 0,
     }
 )
-_LEARNING = Recipe(Loop.SYNC, P40, 24576, 8192, None, 0, _ESTIMATOR, _OPTIMIZER)
+_LEARNING = Recipe(
+    Loop.SYNC, P40, 24576, 8192, None, 0, _ESTIMATOR, _OPTIMIZER, engine_init_kwargs={"moe_backend": "triton"}
+)
 _GAPS = (
     Gap.AAII_COVERAGE,
     Gap.REUSED_DEV_PANEL,
@@ -458,6 +483,18 @@ _SPEED_REPORTS = (
     Metric("startup/init_weight_sync_state", False),
     Metric("startup/load_checkpoints", False),
 )
+_LEARNING_MEDIUM = Preset(
+    Focus.LEARNING,
+    Duration.MEDIUM,
+    _LEARNING,
+    25,
+    range(21, 26),
+    (EVALUATIONS["panel-910"],),
+    None,
+    (Metric("panel-910/family_mean", True),),
+    (*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
+    _GAPS,
+)
 PRESETS = MappingProxyType(
     {
         preset.name: preset
@@ -465,7 +502,7 @@ PRESETS = MappingProxyType(
             Preset(
                 Focus.SPEED,
                 Duration.SHORT,
-                replace(_LEARNING, loop=Loop.GENERATE_ONLY, layout=E8, max_new_tokens=4096, fixed_reply_tokens=4096),
+                replace(_LEARNING, loop=Loop.GENERATE_ONLY, layout=E8, fixed_reply_tokens=4096),
                 0,
                 range(1),
                 (EVALUATIONS["speed-512x4"],),
@@ -502,7 +539,6 @@ PRESETS = MappingProxyType(
                 Duration.MEDIUM,
                 replace(
                     _LEARNING,
-                    max_new_tokens=4096,
                     fixed_reply_tokens=4096,
                     estimator={**_ESTIMATOR, "rloo_n_filter_zero_reward_groups": False},
                 ),
@@ -517,30 +553,8 @@ PRESETS = MappingProxyType(
                 _SPEED_REPORTS,
                 (*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY, Gap.NO_ASYNC_SPEED_GATE),
             ),
-            Preset(
-                Focus.LEARNING,
-                Duration.MEDIUM,
-                _LEARNING,
-                25,
-                range(21, 26),
-                (EVALUATIONS["panel-910"],),
-                None,
-                (Metric("panel-910/family_mean", True),),
-                (*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
-                _GAPS,
-            ),
-            Preset(
-                Focus.DATA,
-                Duration.MEDIUM,
-                _LEARNING,
-                25,
-                range(21, 26),
-                (EVALUATIONS["panel-910"],),
-                None,
-                (Metric("panel-910/family_mean", True),),
-                (*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
-                _GAPS,
-            ),
+            _LEARNING_MEDIUM,
+            replace(_LEARNING_MEDIUM, focus=Focus.DATA),
             Preset(
                 Focus.TRAIN,
                 Duration.LONG,
@@ -553,10 +567,35 @@ PRESETS = MappingProxyType(
                     staleness=2,
                     estimator={**_ESTIMATOR, "group_advantage_min_size": 4, "off_policy_correction": "tis"},
                     optimizer={**_OPTIMIZER, "lr": 4e-6},
+                    max_turns=999999,
+                    engine_init_kwargs={
+                        "moe_backend": "triton",
+                        "enable_return_routed_experts": True,
+                        "enable_auto_tools": True,
+                        "tool_parser": "hermes",
+                        "logprobs_mode": "processed_logprobs",
+                        "generation_config": "vllm",
+                        "validate_rollout_logprob_sampling": True,
+                    },
+                    megatron_overrides={
+                        "logprob_chunk_size": 256,
+                        "ddp_config": {
+                            "overlap_grad_reduce": False,
+                            "overlap_param_gather": False,
+                            "grad_reduce_in_fp32": False,
+                        },
+                        "transformer_config_kwargs": {
+                            "recompute_granularity": "full",
+                            "recompute_method": "uniform",
+                            "recompute_modules": ["core_attn"],
+                            "recompute_num_layers": 1,
+                        },
+                        "optimizer_checkpoint_sharding_type": "dp_reshardable",
+                    },
                 ),
                 100,
                 range(1, 101),
-                (replace(_PANEL, every=10, at_start=True), EVALUATIONS["panel-910"]),
+                (replace(_PANEL, every=10, at_start=True), replace(EVALUATIONS["panel-910"], post_run=True)),
                 10,
                 (),
                 (),
@@ -575,7 +614,7 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, local_on
     generator = random.Random(seed)
     rows = []
     seen = 0
-    fs, key = filesystem_for(f"{selection}/{filename}.parquet")
+    fs, key = filesystem_for(prefix_join(selection, f"{filename}.parquet"))
     with fs.open(key, "rb") as stream:
         source = pq.ParquetFile(stream)
         schema = source.schema_arrow
@@ -592,14 +631,14 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, local_on
                         rows[index] = row
     if len(rows) != count:
         raise ValueError(f"selection has only {len(rows)} eligible tasks; {count} are required")
-    fs, key = filesystem_for(f"{output}/{filename}.parquet")
+    fs, key = filesystem_for(prefix_join(output, f"{filename}.parquet"))
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
     for name in (MANIFEST_FILENAME, "summary.json"):
-        source_fs, source_key = filesystem_for(f"{selection}/{name}")
+        source_fs, source_key = filesystem_for(prefix_join(selection, name))
         if source_fs.exists(source_key):
-            fs, key = filesystem_for(f"{output}/{name}")
+            fs, key = filesystem_for(prefix_join(output, name))
             with source_fs.open(source_key, "rb") as source, fs.open(key, "wb") as target:
                 target.write(source.read())
 
@@ -609,7 +648,7 @@ def sampled_tasks_step(
 ) -> ArtifactStep:
     identity = fingerprint_hash(json.dumps((selection.name, selection.version, filename, count, seed, local_only)))
     return apply(
-        user_owned_name(f"datasets/snowball-rl/sample-{identity}"),
+        f"datasets/snowball-rl/sample-{identity}",
         _write_sample,
         version=PRESET_REVISION,
         selection=selection,
@@ -628,10 +667,7 @@ _BATCH_SETTINGS = {
 }
 _COMPARISON_KEYS = {
     "trainer.max_steps",
-    "trainer.eval_interval",
-    "trainer.eval_before_train",
     "trainer.seed",
-    "trainer.ckpt_interval",
     "trainer.logger",
     "trainer.project_name",
 }
@@ -640,10 +676,6 @@ _DERIVED_KEYS = {
     "trainer.max_prompt_length",
     "generator.max_turns",
     "generator.engine_init_kwargs.max_model_len",
-    "trainer.hf_save_interval",
-    "trainer.eval_interval",
-    "trainer.eval_before_train",
-    "trainer.ckpt_interval",
     "generator.sampling_params.max_generate_length",
     "generator.trajectory_reward_shaping.overlong.l_max",
     "generator.trajectory_reward_shaping.overlong.l_cache",
@@ -652,53 +684,69 @@ _DERIVED_KEYS = {
 
 def _apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
     key = setting.key
-    refused = (
-        key in _DERIVED_KEYS
-        or key == "entrypoint"
-        or key == "trainer.resume_mode"
-        or key.startswith(
-            (
-                "trainer.placement",
-                "trainer.callbacks",
-                "trainer.eval_",
-                "generator.eval_",
-                "generator.retention",
-                "generator.run_engines_locally",
-                "trainer.max_ckpts_to_keep",
-                "generator.inference_engine_",
-                "generator.num_inference_engines",
-            )
-        )
-    )
-    refused |= key in ("trainer", "generator", "data", "context_budget")
-    if key.startswith("data."):
-        refused |= not (
-            preset.focus in (Focus.LEARNING, Focus.TRAIN) and (key == "data.shuffle" or key.startswith("data.sampling."))
-        )
-    if preset.focus != Focus.TRAIN:
-        refused |= (
-            key in _COMPARISON_KEYS
-            or key.startswith(("context_budget.", "generator.eval_"))
-            or any(part in key.split(".") for part in ("max_generate_length", "ignore_eos", "min_tokens"))
-        )
-    if preset.focus == Focus.SPEED:
-        refused |= key in ("generator.sampling_params", "generator.sampling_params.logprobs", "trainer.training_metrics")
-    refused |= key in _BATCH_SETTINGS and preset.focus not in (Focus.LEARNING, Focus.TRAIN)
-    if preset.recipe.loop == Loop.GENERATE_ONLY:
-        refused |= not key.startswith("generator.") or key.startswith(("generator.sampling_params.", "generator.eval_"))
-    refused |= preset.recipe.loop == Loop.GENERATE_ONLY and key == "generator.sampling_params"
-    if refused:
-        raise click.BadParameter(f"{key} is owned by the preset, context budget, layout or evaluation")
-    base = yaml.safe_load(
-        (Path(__file__).parents[2] / "vendor/skyrl/skyrl-train/skyrl_train/config/ppo_base_config.yaml").read_text()
-    )
-    current = base
-    for part in key.split("."):
-        if not isinstance(current, dict) or part not in current:
-            if not setting.allows_new_key:
-                raise click.BadParameter(f"unknown setting {key}; prefix with + to add it")
+    if isinstance(setting.value, dict):
+        updated = deepcopy(config)
+        for name, value in setting.value.items():
+            _apply_setting(updated, Setting(f"{key}.{name}", value, setting.allows_new_key), preset)
+        config.clear()
+        config.update(updated)
+        return
+    fix = None
+    if key == "entrypoint":
+        fix = "choose the preset's loop in Recipe"
+    elif key == "trainer.resume_mode":
+        fix = "use --resume-from for checkpoint continuity"
+    elif key.startswith("extra_env.NCCL_"):
+        fix = "choose network transport in Layout"
+    elif key.startswith(("trainer.placement", "generator.inference_engine_", "generator.num_inference_engines")) or (
+        key in _role_plan_config_values(preset.recipe.layout.role_plan) and key not in _BATCH_SETTINGS
+    ):
+        fix = "choose role geometry with --layout or Layout.role_plan"
+    elif key.startswith(("generator.retention", "trainer.max_ckpts_to_keep")):
+        fix = "set checkpoint retention in the preset"
+    elif key == "generator.run_engines_locally":
+        fix = "choose the preset's Layout"
+    elif key.startswith(("trainer.callbacks", "trainer.eval_", "generator.eval_")):
+        fix = "choose evaluations with --eval on train-long or the preset's evaluations"
+    elif key in ("trainer.ckpt_interval", "trainer.hf_save_interval"):
+        fix = "set checkpoint frequency in the preset"
+    elif key in _DERIVED_KEYS:
+        fix = "set the recipe's context budget instead of a derived key"
+    elif key.startswith("data.") and not (
+        preset.focus in (Focus.LEARNING, Focus.TRAIN) and (key == "data.shuffle" or key.startswith("data.sampling."))
+    ):
+        fix = "select curated data with --tasks on a data or train-long preset"
+    elif preset.focus != Focus.TRAIN and (
+        key in _COMPARISON_KEYS
+        or key.startswith("context_budget.")
+        or any(part in key.split(".") for part in ("max_generate_length", "ignore_eos", "min_tokens"))
+    ):
+        fix = "change the preset and recalibrate its control to keep runs comparable"
+    elif preset.focus == Focus.SPEED and key in (
+        "generator.sampling_params.logprobs",
+        "trainer.training_metrics",
+        "generator.apply_overlong_filtering",
+    ):
+        fix = "keep mismatch metrics and fixed-length training masks enabled in speed presets"
+    elif key in _BATCH_SETTINGS and preset.focus not in (Focus.LEARNING, Focus.TRAIN):
+        fix = "change batch shape only in learning-medium or train-long"
+    elif preset.recipe.loop == Loop.GENERATE_ONLY and (
+        not key.startswith("generator.") or key.startswith("generator.sampling_params.")
+    ):
+        fix = "use generator performance keys; generate-only sampling belongs to the evaluation"
+    if fix:
+        raise click.BadParameter(f"{key} is owned by the preset: {fix}")
+    for candidate in (config, _composed_defaults()):
+        current = candidate
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                break
+            current = current[part]
+        else:
             break
-        current = current[part]
+    else:
+        if not setting.allows_new_key:
+            raise click.BadParameter(f"unknown setting {key}; prefix with + to add it")
     node = config
     parts = key.split(".")
     for part in parts[:-1]:
@@ -708,20 +756,39 @@ def _apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
     node[parts[-1]] = setting.value
 
 
+@cache
+def _composed_defaults() -> dict:
+    script = """
+import json, sys
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+with initialize_config_dir(version_base=None, config_dir=sys.argv[1]):
+    config = compose(config_name="ppo_base_config")
+print(json.dumps(OmegaConf.to_container(config, resolve=False, enum_to_str=True)))
+"""
+    directory = Path(__file__).parents[2] / "vendor/skyrl/skyrl-train/skyrl_train/config"
+    completed = subprocess.run(
+        skyrl_cpu_command("python", "-c", script, str(directory)),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=180,
+    )
+    return json.loads(completed.stdout)
+
+
 def training_config(
     preset: Preset, settings: tuple[Setting, ...] = (), evaluations: tuple[Evaluation, ...] = ()
 ) -> dict:
     recipe = preset.recipe
     plan = recipe.layout.role_plan
-    evaluations = evaluations or tuple(
-        evaluation for evaluation in preset.evaluations if preset.focus != Focus.TRAIN or evaluation.name != "panel-910"
-    )
     config = {
-        "entrypoint": "generate" if plan.generate_only else "taskcompendium",
         "context_budget": {
             "request_window_tokens": recipe.request_window_tokens,
-            "max_new_tokens_per_turn": recipe.max_new_tokens,
-            "max_turns": 999999 if recipe.layout.name == "l112" else 1,
+            "max_new_tokens_per_turn": (
+                recipe.fixed_reply_tokens if recipe.fixed_reply_tokens is not None else recipe.max_new_tokens
+            ),
+            "max_turns": recipe.max_turns,
         },
         "environment": {
             "task_sessions": {
@@ -741,10 +808,9 @@ def training_config(
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
             "eval_batch_size": 256,
-            "eval_interval": preset.updates if evaluations else -1,
+            "eval_interval": max(1, preset.updates) if evaluations else -1,
             "eval_before_train": False,
             "resume_mode": "latest" if preset.focus == Focus.TRAIN else "none",
-            "max_ckpts_to_keep": 5 if preset.checkpoint_every else 2,
             "seed": SEED,
             "logger": ["console", "files", "wandb"],
             "project_name": "snowball-rl",
@@ -782,7 +848,7 @@ def training_config(
             "enable_http_endpoint": False,
             "chat_template": None,
             "apply_overlong_filtering": False,
-            "engine_init_kwargs": {"moe_backend": "triton"},
+            "engine_init_kwargs": dict(recipe.engine_init_kwargs),
             "sampling_params": {
                 "temperature": 1.0,
                 "top_p": 1.0,
@@ -799,26 +865,7 @@ def training_config(
     geometry = recipe.layout.megatron or P40.megatron
     config["trainer"]["policy"]["megatron_config"] = asdict(geometry)
     config["trainer"]["ref"] = {"megatron_config": asdict(geometry)}
-    if recipe.layout.name == "l112":
-        config["generator"]["engine_init_kwargs"].update(
-            enable_return_routed_experts=True,
-            enable_auto_tools=True,
-            tool_parser="hermes",
-            logprobs_mode="processed_logprobs",
-            generation_config="vllm",
-            validate_rollout_logprob_sampling=True,
-        )
-        config["trainer"]["policy"]["megatron_config"].update(
-            logprob_chunk_size=256,
-            ddp_config={"overlap_grad_reduce": False, "overlap_param_gather": False, "grad_reduce_in_fp32": False},
-            transformer_config_kwargs={
-                "recompute_granularity": "full",
-                "recompute_method": "uniform",
-                "recompute_modules": ["core_attn"],
-                "recompute_num_layers": 1,
-            },
-            optimizer_checkpoint_sharding_type="dp_reshardable",
-        )
+    config["trainer"]["policy"]["megatron_config"].update(recipe.megatron_overrides)
     if recipe.layout.sockets:
         config["extra_env"].update(NCCL_NET="Socket", NCCL_IB_DISABLE="1", NCCL_SOCKET_FAMILY="AF_INET")
     for setting in settings:
@@ -837,7 +884,7 @@ def _default_selection() -> ArtifactStep[Artifact]:
     return ArtifactStep.adopt(
         f"{SELECTION_PREFIX}/snowball-100k",
         DEFAULT_SELECTION_VERSION,
-        f"{SELECTION_ROOT}/snowball-100k/{DEFAULT_SELECTION_VERSION}",
+        str(StoragePath(SELECTION_ROOT) / "snowball-100k" / DEFAULT_SELECTION_VERSION),
     )
 
 
@@ -850,23 +897,77 @@ def _record(step: ArtifactStep) -> ArtifactRecord:
     return ArtifactRecord.model_validate_json(_read_text(StoragePath(step.path()) / RECORD_FILENAME))
 
 
-def _named_artifact(value: str, *, selection: bool = False, resume: bool = False) -> ArtifactStep:
+def _launch_result(run_output: str) -> dict:
+    terminal = prefix_join(run_output, "terminal.json")
+    fs, key = filesystem_for(terminal)
+    if fs.exists(key):
+        return {**json.loads(_read_text(terminal)), "receipt_uri": terminal}
+    resolved = prefix_join(run_output, "resolved-launch.yaml")
+    fs, key = filesystem_for(resolved)
+    if not fs.exists(key):
+        return {}
+    config = yaml.safe_load(_read_text(resolved))["config"]
+    attempt = prefix_join(config["artifacts"]["attempts_root"], f"{config['run']['attempt_id']}.json")
+    fs, key = filesystem_for(attempt)
+    if fs.exists(key):
+        return {**json.loads(_read_text(attempt)), "receipt_uri": attempt}
+    name = config["iris"]["job_name"]
+    info = get_job_info()
+    with ExitStack() as stack:
+        if info is not None and info.controller_address:
+            address, credentials = info.controller_address, info.credentials
+        else:
+            endpoint = stack.enter_context(
+                connect_controller(config_file=Path(__file__).parents[2] / IRIS_HUB_CLUSTER_CONFIG)
+            )
+            address, credentials = endpoint.url, endpoint.credentials
+        client = stack.enter_context(rpc_client(address, credentials))
+        response = client.list_jobs(
+            controller_pb2.Controller.ListJobsRequest(
+                query=controller_pb2.Controller.JobQuery(name_filter=name, limit=500)
+            )
+        )
+        jobs = response.jobs
+    matches = [job for job in jobs if str(JobName.from_wire(job.job_id)).rsplit("/", 1)[-1] == name]
+    if len(matches) != 1:
+        raise click.BadParameter(f"cannot identify the Iris job {name}; its state must be known before resume")
+    job = matches[0]
+    state = "running"
+    if is_job_finished(job.state):
+        state = "succeeded" if job.state == job_pb2.JOB_STATE_SUCCEEDED else "failed"
+    return {
+        "config": config,
+        "receipt_uri": resolved,
+        "result": {
+            "state": state,
+            "iris_job_id": str(JobName.from_wire(job.job_id)),
+            "iris_job_state": job_pb2.JobState.Name(job.state),
+            "model": None,
+        },
+    }
+
+
+def _named_artifact(value: str, lookup: _ArtifactLookup) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator:
+        if lookup != _ArtifactLookup.RESUME:
+            raise click.BadParameter("use NAME@VERSION for task selections and initializer models")
         name, version = value, PRESET_REVISION
     if is_mutable_version(version):
         raise click.BadParameter("use an immutable artifact version instead of dev")
-    if selection:
-        return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, f"{SELECTION_ROOT}/{name}/{version}")
+    if lookup == _ArtifactLookup.SELECTION:
+        return ArtifactStep.adopt(
+            f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version)
+        )
     for layout in (P40, L112):
-        root = f"{_artifact_prefix(layout.cluster)}/{name}/{version}"
-        if resume:
-            fs, key = filesystem_for(f"{root}/terminal.json")
+        root = str(StoragePath(_artifact_prefix(layout.cluster)) / name / version)
+        if lookup == _ArtifactLookup.RESUME:
+            fs, key = filesystem_for(prefix_join(root, "resolved-launch.yaml"))
             if fs.exists(key):
                 return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
-        fs, key = filesystem_for(f"{root}/{RECORD_FILENAME}")
+        fs, key = filesystem_for(prefix_join(root, RECORD_FILENAME))
         if fs.exists(key):
-            record = ArtifactRecord.model_validate_json(_read_text(f"{root}/{RECORD_FILENAME}"))
+            record = ArtifactRecord.model_validate_json(_read_text(prefix_join(root, RECORD_FILENAME)))
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
@@ -931,25 +1032,6 @@ def _callbacks(preset: Preset, evaluations: tuple[Evaluation, ...], expected_tas
     return callbacks
 
 
-def _resume_step(step: ArtifactStep[SkyRLRun], earlier: ArtifactStep[SkyRLRun]) -> ArtifactStep[SkyRLRun]:
-    build = step.build_config
-
-    def configure(ctx: StepContext):
-        config = build(ctx)
-        checkpoint_root = (
-            f"<resume:{earlier.name}@{earlier.version}>" if ctx.is_fingerprint else ctx.resolved(earlier).checkpoint_root
-        )
-        launch = yaml.safe_load(config.launch_config_yaml)
-        launch["artifacts"]["checkpoint_root"] = checkpoint_root
-        return replace(
-            config,
-            launch_config_yaml=yaml.safe_dump(launch, sort_keys=False),
-            output=replace(config.output, checkpoint_root=checkpoint_root),
-        )
-
-    return replace(step, build_config=configure, deps=(*step.deps, earlier))
-
-
 def _resume_metadata(
     source: str,
     source_name: str,
@@ -957,11 +1039,16 @@ def _resume_metadata(
     model_identity: str,
     tokenizer: str,
     tokenizer_revision: str,
-    output: str,
-) -> SkyRLRun:
-    terminal = json.loads(_read_text(f"{source}/terminal.json"))
+) -> str:
+    terminal = _launch_result(source)
+    if not terminal:
+        raise click.BadParameter(f"no launch metadata at {source}")
     config = terminal["config"]
     result = terminal["result"]
+    if result["state"] not in ("succeeded", "failed"):
+        raise click.BadParameter(
+            f"source Iris job {result['iris_job_id']} is {result['state']}; wait for a terminal state"
+        )
     if (
         "/checkpoints/snowball-rl/train-long-" not in f"/{source_name}"
         or not config["run"]["export_hf"]
@@ -976,30 +1063,19 @@ def _resume_metadata(
     ):
         raise click.BadParameter("resume source uses another model or tokenizer; use its matching --init artifact")
     root = config["artifacts"]["checkpoint_root"]
-    marker = f"{root}/latest_ckpt_global_step.txt"
+    marker = prefix_join(root, "latest_ckpt_global_step.txt")
     fs, key = filesystem_for(marker)
     missing = f"no checkpoint remains at {root}; temporary checkpoints expire after 14 days"
     if not fs.exists(key):
         raise click.BadParameter(missing)
     step = int(_read_text(marker).strip())
-    checkpoint_fs, checkpoint_key = filesystem_for(f"{root}/global_step_{step}")
+    checkpoint_fs, checkpoint_key = filesystem_for(prefix_join(root, f"global_step_{step}"))
     if not checkpoint_fs.exists(checkpoint_key):
         raise click.BadParameter(missing)
-    export = result.get("model")
-    return SkyRLRun(
-        path=output,
-        hf_model_uri=export["policy_export_uri"] if export else None,
-        global_step=step,
-        tokenizer_uri=tokenizer,
-        tokenizer_revision=tokenizer_revision,
-        checkpoint_root=root,
-        draft_checkpoint_root=None,
-        terminal_manifest_uri=f"{source}/terminal.json",
-        iris_job_id=result["iris_job_id"],
-    )
+    return root
 
 
-def _resume_input(source: ArtifactStep[SkyRLRun], model: SkyRLModelSource) -> ArtifactStep[SkyRLRun]:
+def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSource) -> str:
     if isinstance(model, ArtifactHfModel):
         tokenizer, revision = model.tokenizer_uri, model.tokenizer_revision
     else:
@@ -1013,20 +1089,17 @@ def _resume_input(source: ArtifactStep[SkyRLRun], model: SkyRLModelSource) -> Ar
         tokenizer=tokenizer,
         tokenizer_revision=revision,
     )
-    _resume_metadata(**inputs, output="<resume-input>")
-    identity = fingerprint_hash(json.dumps((source.name, source.version)))
-    return apply(
-        user_owned_name(f"inputs/snowball-rl/resume-{identity}"),
-        _resume_metadata,
-        version=source.version,
-        artifact_type=SkyRLRun,
-        output=OUT,
-        **inputs,
-    )
+    return _resume_metadata(**inputs)
 
 
 def _run_step(
-    name: str, preset: Preset, config: dict, model: SkyRLModelSource, inputs: RunInputs, required: set[str]
+    name: str,
+    preset: Preset,
+    config: dict,
+    model: SkyRLModelSource,
+    inputs: RunInputs,
+    required: set[str],
+    checkpoint_root: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     layout = preset.recipe.layout
     plan = layout.role_plan
@@ -1070,24 +1143,49 @@ def _run_step(
         for callback in launch["skyrl"]["trainer"].get("callbacks", []):
             if callback["type"] == "best_checkpoint":
                 callback["initial_model_uri"] = launch["inputs"]["model"]["uri"]
-        return replace(resolved, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
+        output = resolved.output
+        if checkpoint_root is not None:
+            launch["artifacts"]["checkpoint_root"] = checkpoint_root
+            output = replace(output, checkpoint_root=checkpoint_root)
+        return replace(resolved, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False), output=output)
 
     return replace(step, build_config=configure)
 
 
 def _post_evaluation(
-    run: ArtifactStep[SkyRLRun], evaluation: Evaluation, selection: ArtifactStep, parent: Layout
+    run: ArtifactStep[SkyRLRun], evaluation: Evaluation, selection: ArtifactStep, parent: Preset, parent_config: dict
 ) -> ArtifactStep[SkyRLRun]:
-    layout = replace(E8, cluster=parent.cluster, sockets=parent.sockets)
+    parent_layout = parent.recipe.layout
+    engine = E8.role_plan
+    plan = replace(
+        parent_layout.role_plan,
+        generate_only=True,
+        num_inference_engines=engine.num_inference_engines,
+        inference_engine_tensor_parallel_size=engine.inference_engine_tensor_parallel_size,
+        inference_engine_pipeline_parallel_size=engine.inference_engine_pipeline_parallel_size,
+        inference_engine_data_parallel_size=engine.inference_engine_data_parallel_size,
+        inference_engine_expert_parallel_size=engine.inference_engine_expert_parallel_size,
+    )
+    layout = replace(parent_layout, name=E8.name, role_plan=plan)
     preset = replace(
-        PRESETS["data-short"],
-        recipe=replace(_LEARNING, loop=Loop.GENERATE_ONLY, layout=layout),
+        parent,
+        focus=Focus.DATA,
+        duration=Duration.SHORT,
+        updates=0,
+        checkpoint_every=None,
+        recipe=replace(parent.recipe, loop=Loop.GENERATE_ONLY, layout=layout),
         evaluations=(evaluation,),
     )
-    config = training_config(preset)
-    inputs = RunInputs(selection, selection, SEED)
+    config = deepcopy(parent_config)
+    config["trainer"].update(
+        callbacks=[], eval_interval=1, eval_before_train=False, resume_mode="none", ckpt_interval=0, hf_save_interval=-1
+    )
+    inputs = RunInputs(selection, selection, config["trainer"]["seed"])
     evaluator = EVALUATORS[evaluation.harness]
     evaluator.configure(evaluation, config, inputs)
+    config["trajectory_runner"]["max_concurrent_tasks"] = (
+        _summary(selection)["full_validation_rows"] * evaluation.answers
+    )
     return _run_step(
         f"{run.name}/eval/{evaluation.name}", preset, config, SkyRLPolicyModel(run), inputs, set(evaluator.required_env)
     )
@@ -1149,12 +1247,10 @@ def build_run(
     for name in evaluations:
         if name not in EVALUATIONS:
             raise click.BadParameter(f"unknown evaluation {name}; choose from {', '.join(EVALUATIONS)}")
-        selected[name] = EVALUATIONS[name]
+        selected.setdefault(name, EVALUATIONS[name])
     if init is not None:
         selected = {name: replace(evaluation, at_start=True) for name, evaluation in selected.items()}
-    post = tuple(
-        evaluation for evaluation in selected.values() if preset.focus == Focus.TRAIN and evaluation.name == "panel-910"
-    )
+    post = tuple(evaluation for evaluation in selected.values() if evaluation.post_run)
     in_run = tuple(evaluation for evaluation in selected.values() if evaluation not in post)
     if sum(evaluation.harness == EvalHarness.PANEL for evaluation in in_run) > 1:
         raise click.BadParameter("one in-run TaskSpec panel is supported; panel-910 runs on the final export")
@@ -1168,11 +1264,14 @@ def build_run(
     config = training_config(preset, settings, in_run)
     preset = replace(preset, updates=config["trainer"]["max_steps"])
     model = _model_input(init)
-    if resume_from is not None:
-        resume_from = _resume_input(resume_from, model)
+    checkpoint_root = _resume_checkpoint_root(resume_from, model) if resume_from is not None else None
     inputs = RunInputs(selection, default, config["trainer"]["seed"])
     for evaluation in in_run:
         EVALUATORS[evaluation.harness].configure(evaluation, config, inputs)
+        if preset.recipe.loop == Loop.GENERATE_ONLY:
+            source = default if evaluation.tasks.startswith("default:") else selection
+            count = evaluation.sample or _summary(source)[evaluation.tasks.split(":")[1] + "_rows"]
+            config["trajectory_runner"]["max_concurrent_tasks"] = count * evaluation.answers
     if not preset.recipe.layout.role_plan.generate_only:
         expected_tasks = _summary(default)["validation_rows"]
         config["trainer"]["callbacks"] = _callbacks(preset, in_run, expected_tasks)
@@ -1184,7 +1283,7 @@ def build_run(
         "settings": sorted({setting.key: setting.value for setting in settings}.items()),
         "evaluations": sorted(selected),
     }
-    inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True))
+    inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
     runs = []
     post_runs = []
     for replicate in range(replicates):
@@ -1195,12 +1294,10 @@ def build_run(
             name = f"checkpoints/snowball-rl/control/{preset.name}-{provenance.base_commit}-r{replicate}"
         else:
             name = user_owned_name(name)
-        run = _run_step(name, preset, config, model, inputs, required)
-        if resume_from is not None:
-            run = _resume_step(run, resume_from)
+        run = _run_step(name, preset, config, model, inputs, required, checkpoint_root)
         runs.append(run)
         for evaluation in post:
-            post_runs.append(_post_evaluation(run, evaluation, default, preset.recipe.layout))
+            post_runs.append(_post_evaluation(run, evaluation, default, preset, config))
     return SnowballRun(tuple(runs), tuple(post_runs))
 
 
@@ -1209,11 +1306,10 @@ def _print_status(run: SnowballRun, preset: Preset) -> None:
     planned = []
     for step in (*run.runs, *run.post_run_evaluations):
         execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = f"{_artifact_prefix(execution.cluster)}/{step.name}/{step.version}"
+        path = str(StoragePath(_artifact_prefix(execution.cluster)) / step.name / step.version)
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
-        fs, key = filesystem_for(f"{path}/terminal.json")
-        result = json.loads(_read_text(f"{path}/terminal.json"))["result"] if fs.exists(key) else {}
+        result = _launch_result(path).get("result", {})
         status_fs, status_key = filesystem_for(get_status_path(path))
         state = result.get("state")
         if state is None:
@@ -1296,21 +1392,28 @@ def main(
     run = build_run(
         preset,
         settings=tuple(parse_setting(setting) for setting in settings),
-        tasks=_named_artifact(tasks_name, selection=True) if tasks_name else None,
-        init=_named_artifact(init_name) if init_name else None,
-        resume_from=_named_artifact(resume_name, resume=True) if resume_name else None,
+        tasks=_named_artifact(tasks_name, _ArtifactLookup.SELECTION) if tasks_name else None,
+        init=_named_artifact(init_name, _ArtifactLookup.INITIALIZER) if init_name else None,
+        resume_from=_named_artifact(resume_name, _ArtifactLookup.RESUME) if resume_name else None,
         layout=layout,
         evaluations=evaluations,
         replicates=replicates,
         control=control,
     )
-    if resume_name:
-        click.echo(
-            "Resume uses the earlier checkpoint root and optimizer state. Temporary checkpoints expire after 14 days. "
-            "Verify checkpoint compatibility for changes to vendor/skyrl or lib/marin/src/marin/rl."
+    if resume_name and (Path(__file__).parents[2] / ".git").exists():
+        source_tree = resume_name.partition("train-long-")[2].partition("-in-")[0]
+        changes = subprocess.run(
+            ["git", "diff", "--name-only", source_tree, "--", "vendor/skyrl", "lib/marin/src/marin/rl"],
+            cwd=Path(__file__).parents[2],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    effective = replace(preset, recipe=replace(preset.recipe, layout=layout)) if layout else preset
-    _print_status(run, effective)
+        if changes.returncode == 0 and changes.stdout.strip():
+            click.echo(
+                "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
+            )
+    _print_status(run, preset)
     return (*run.runs, *run.post_run_evaluations, *((run.gate,) if run.gate else ()))
 
 

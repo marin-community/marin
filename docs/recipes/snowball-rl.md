@@ -27,8 +27,7 @@ East means `cw-us-east-02a`; Reno means `cw-rno2a`. The 40-H100 layout has 32
 policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and 8192
 reply tokens. The 112-H100 layout has 64 policy GPUs and 48 engine GPUs, 512×16,
 a 65,536-token window and 32,768 reply tokens. Both use staleness 2 for train-long;
-medium runs use staleness 0. East uses sockets because Step 0's InfiniBand trainer
-initialization failed; Reno uses InfiniBand.
+medium runs use staleness 0. East uses sockets; Reno uses InfiniBand.
 
 ## Change one input
 
@@ -51,16 +50,17 @@ selection must name the same heldout input as the default selection.
 
 `--init NAME@VERSION` on learning-medium or train-long selects another model
 artifact or a completed train-long export. It also evaluates the initial weights.
-Gated runs have no HF export. `--resume-from RUN` on train-long continues the
+Only train-long exports HF weights. `--resume-from RUN` on train-long continues the
 earlier train-long checkpoint root and optimizer state under a new run identity.
 The same command retries its own latest checkpoint. Temporary checkpoints expire
 after 14 days. Check checkpoint compatibility before resuming across changes to
 SkyRL or Marin's RL runtime; see [checkpoint handling](../references/rl-launching.md).
+Repeat the original `--init` when continuing a run with custom initial weights.
 
-Use `--replicates N` for 1–5 copies of a gated preset, sharing a seed. Controls use
+Use `--replicates N` for 1–5 copies of a short or medium preset, sharing a seed. Controls use
 `--control --replicates N` from a clean checkout and fixed default inputs, with the
 commit in their shared artifact names. Data-medium uses learning-medium's control.
-Calibration and verdict generation are supplied by the gate extension.
+Calibration and comparison verdicts are pending.
 
 ## Tasks and evaluation
 
@@ -74,8 +74,7 @@ task IDs, family, AAII category, agentic flag and grader kind.
 `PanelEvaluator` reads the run's own evaluation dumps, joins metadata by TaskSpec
 ID and keeps attempts and weight steps separate. The equal-family mean first
 averages each task's scored answers, then tasks within a family, then families.
-It reports scored coverage separately. Difficulty bands join Snowball's own
-pass-rate artifact in the gate report.
+It reports scored coverage separately.
 
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
 update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates,
