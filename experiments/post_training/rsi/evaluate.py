@@ -31,6 +31,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from taskcompendium.models import TaskSpec
 from taskforge.agentic.instances import task_instances
+from transformers import AutoTokenizer
 
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import workspace_factory
 from experiments.post_training.rsi.feedback import (
@@ -43,8 +44,10 @@ from experiments.post_training.rsi.feedback import (
 from experiments.post_training.rsi.gap import HELDOUT_NAME_PREFIX
 from experiments.post_training.rsi.policy import (
     BASE_MODEL_NAME,
+    LIVE_MODEL,
     MAX_MODEL_LEN,
     OBJECT_STORE_SCHEMES,
+    LivePolicy,
     Sampling,
     VllmPolicy,
 )
@@ -226,6 +229,75 @@ async def _baseline(
     write_evaluation(output, options.model, {BASE_MODEL_NAME: evaluation})
 
 
+@main.command()
+@policy_options
+@click.option("--output-dir", required=True)
+@click.option("--feed-root", required=True, help="The feed root of a running SkyRL job, which serves its live policy.")
+@click.option("--name", default=LIVE_MODEL, show_default=True, help="The policy's name in the output files.")
+@click.option("--probes", "probe_roots", multiple=True, help="An rsi output directory with held-out probes.")
+@click.option("--instances-per-task", type=int, default=32, show_default=True, help="As the rsi run made them.")
+@click.option("--pool-tasks", type=int, default=910, show_default=True, help="Held-out validation pool tasks.")
+@click.option("--gap-tasks", "gap_tasks_file", help="A JSONL file of held-out gap tasks (`gap.py heldout`).")
+@click.option("--samples", type=int, default=8, show_default=True)
+@click.option("--seed", type=int, default=0, show_default=True)
+def live(
+    output_dir: str,
+    feed_root: str,
+    name: str,
+    probe_roots: tuple[str, ...],
+    instances_per_task: int,
+    pool_tasks: int,
+    gap_tasks_file: str | None,
+    samples: int,
+    seed: int,
+    **options,
+) -> None:
+    """Evaluate the live policy of a SkyRL job, served by its own engine with the weights that Megatron syncs to it,
+    on the tasks of ``evaluate``. A job whose feed stays empty serves its initial weights without training.
+
+    The Grug weights loaded into vLLM from their HF export degenerate into random tokens far more often than the
+    same weights synced from Megatron, so Grug is evaluated this way.
+    """
+    asyncio.run(
+        _live(
+            PolicyOptions(**options),
+            StoragePath(output_dir),
+            StoragePath(feed_root),
+            name,
+            probe_roots,
+            instances_per_task,
+            pool_tasks,
+            gap_tasks_file,
+            samples,
+            seed,
+        )
+    )
+
+
+async def _live(
+    options: PolicyOptions,
+    output: StoragePath,
+    feed_root: StoragePath,
+    name: str,
+    probe_roots: Sequence[str],
+    instances_per_task: int,
+    pool_tasks: int,
+    gap_tasks_file: str | None,
+    samples: int,
+    seed: int,
+) -> None:
+    tasks, labels = await evaluation_tasks(pool_tasks, probe_roots, instances_per_task, gap_tasks_file, seed)
+    policy = LivePolicy(
+        feed_root,
+        AutoTokenizer.from_pretrained(options.model),
+        Sampling(temperature=1.0, top_p=1.0, max_tokens=options.max_tokens),
+        options.max_model_len,
+        {"enable_thinking": options.thinking},
+    )
+    runner = PolicyRunner(rollout_engine(options.grader_slots), policy, POLICY_LIMITS, options.concurrency)
+    write_evaluation(output, options.model, {name: await eval_policy(runner, tasks, labels, samples)})
+
+
 def write_evaluation(output: StoragePath, model: str, evaluations: Mapping[str, Evaluation]) -> None:
     summary = {"model": model, **{name: evaluation.summary() for name, evaluation in evaluations.items()}}
     logger.info("Summary: %s", json.dumps(summary, indent=1))
@@ -296,17 +368,7 @@ async def _evaluate(
     samples: int,
     seed: int,
 ) -> None:
-    validation = TaskPool.read(FULL_VALIDATION_URL).sample(pool_tasks, seed)
-    tasks = [task.task for task in validation]
-    labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
-    for probe, unseen in await read_probes(probe_roots, instances_per_task):
-        tasks.append(probe)
-        # The probes of a held-out idea measure transfer: the policy never trained on any task of its family.
-        labels[probe.id] = f"{'probe-heldout' if unseen else 'probe'}:{capability_of(probe)}"
-    for gap_task in read_gap_tasks(gap_tasks_file):
-        tasks.append(gap_task)
-        labels[gap_task.id] = f"gap:{capability_of(gap_task).removeprefix(HELDOUT_NAME_PREFIX)}"
-    logger.info("Evaluation tasks: %s", Counter(label.split(":")[0] for label in labels.values()))
+    tasks, labels = await evaluation_tasks(pool_tasks, probe_roots, instances_per_task, gap_tasks_file, seed)
     results = {}
     # A second evaluation of the base weights measures how often a task that the base never passes passes by chance
     # on new samples. One policy at a time, so that the graders of all policies see the same load.
@@ -320,6 +382,24 @@ async def _evaluate(
         with serve(options, url) as server:
             results[name] = await eval_policy(Served(options, server).runner, tasks, labels, samples)
     write_evaluation(output, options.model, results)
+
+
+async def evaluation_tasks(
+    pool_tasks: int, probe_roots: Sequence[str], instances_per_task: int, gap_tasks_file: str | None, seed: int
+) -> tuple[list[TaskSpec], dict[str, str]]:
+    """The held-out pool sample, the probes and the gap tasks, with the label of each."""
+    validation = TaskPool.read(FULL_VALIDATION_URL).sample(pool_tasks, seed)
+    tasks = [task.task for task in validation]
+    labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
+    for probe, unseen in await read_probes(probe_roots, instances_per_task):
+        tasks.append(probe)
+        # The probes of a held-out idea measure transfer: the policy never trained on any task of its family.
+        labels[probe.id] = f"{'probe-heldout' if unseen else 'probe'}:{capability_of(probe)}"
+    for gap_task in read_gap_tasks(gap_tasks_file):
+        tasks.append(gap_task)
+        labels[gap_task.id] = f"gap:{capability_of(gap_task).removeprefix(HELDOUT_NAME_PREFIX)}"
+    logger.info("Evaluation tasks: %s", Counter(label.split(":")[0] for label in labels.values()))
+    return tasks, labels
 
 
 def read_gap_tasks(url: str | None) -> list[TaskSpec]:
