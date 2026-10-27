@@ -105,7 +105,8 @@ async def analyze_failed_runs(
             logger.exception("Analysis %d failed", analysis)
             continue
         logger.info("Analysis %d of %d failed runs: %d ideas", analysis, len(batch), len(ideas))
-        for idea in ideas:
+        # Synthesis takes the ideas in order, so the ones that explain the most failed tasks come first.
+        for idea in sorted(ideas, key=cited_failures, reverse=True):
             if idea.capability_id not in seen:
                 seen.add(idea.capability_id)
                 logger.info("Idea %s: %s", idea.capability_id, idea.capability.get("outcome"))
@@ -192,6 +193,11 @@ async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: Synthesis
         runner.cancel()
         with suppress(asyncio.CancelledError):
             await runner
+
+
+def cited_failures(idea: CapabilityIdea) -> int:
+    """The failed tasks that an idea's evidence cites; the evidence names attempts as ``<task id>_<attempt>``."""
+    return len({str(attempt).rsplit("_", 1)[0] for attempt in idea.capability.get("evidence") or ()})
 
 
 def held_out_idea(idea: CapabilityIdea, share: float) -> bool:
