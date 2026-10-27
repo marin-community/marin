@@ -81,11 +81,11 @@ The hardest sampled long prefix retained only 24.2% of behavior mass at K32 and
 an accurate correction on a broad distribution. Live-cycle estimates have wide
 intervals from differing response lengths; no learning benefit is established.
 
-The `tis`
-preset caps importance weights at two; a custom correction must contain exactly
-one token truncation rule. SC rejects distillation, auxiliary FTPO, other policy
-losses, remote inference and probability-changing sampling
-filters. Temperature-only sampling is supported. Disabling the flag returns to
+The `tis` preset caps importance weights at two; a custom correction must contain
+exactly one token truncation rule. SC rejects distillation, auxiliary FTPO, other
+policy losses and remote inference. Behavior-logprob training, including ordinary
+TIS, requires full-distribution, temperature-only sampling; probability-changing
+filters are rejected at launch. Disabling the flag returns to
 ordinary training without candidate-head capture.
 
 The head contains the sampler's natural top K token IDs and their
