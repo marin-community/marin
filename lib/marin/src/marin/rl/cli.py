@@ -32,6 +32,8 @@ _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
 _COORDINATOR_DISK = "64GB"
 _COORDINATOR_ENV_VARS = (
+    # Where the run's outputs and checkpoints go; set it to write to another region's bucket.
+    "MARIN_PREFIX",
     "DAYTONA_API_KEY",
     "DAYTONA_RL_API_KEY",
     "DAYTONA_EVAL_API_KEY",
