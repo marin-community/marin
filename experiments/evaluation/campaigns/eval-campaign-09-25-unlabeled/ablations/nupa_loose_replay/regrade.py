@@ -68,7 +68,7 @@ def result_uri(output_prefix: str, model: str) -> str:
     return prefix_join(output_prefix, f"results/nupa/{model.replace('/', '--')}.json")
 
 
-def replay_input(cell: dict) -> tuple[str, dict[int, dict] | None]:
+def replay_input(cell: dict) -> tuple[str, dict[str, dict] | None]:
     """Resolve a tracker cell to raw samples and its current per-trial grades."""
     source = cell["source"]
     if not source.endswith(".json"):
@@ -77,9 +77,9 @@ def replay_input(cell: dict) -> tuple[str, dict[int, dict] | None]:
     prior = read_json(source)
     if prior["model"] != cell["model"] or prior["benchmark"] != BENCHMARK:
         raise ValueError(f"{cell['model']}: replay source identity does not match tracker")
-    trials = {int(trial["doc_id"]): trial for trial in prior["trials"]}
-    if set(trials) != set(range(BENCHMARK_SIZE)):
-        raise ValueError(f"{cell['model']}: replay source has incomplete NUPA document IDs")
+    trials = {str(trial["doc_id"]): trial for trial in prior["trials"]}
+    if len(trials) != BENCHMARK_SIZE:
+        raise ValueError(f"{cell['model']}: replay source has duplicate or incomplete NUPA document IDs")
     prior_score = sum(bool(trial["corrected_correct"]) for trial in trials.values()) / BENCHMARK_SIZE
     if abs(prior_score - cell["tracker_score"]) > 0.000500001:
         raise ValueError(f"{cell['model']}: replay trial mean {prior_score} differs from tracker score")
@@ -92,14 +92,15 @@ def regrade(cell: dict) -> dict:
     if table is None or table.num_rows != BENCHMARK_SIZE:
         raise ValueError(f"{cell['model']}: expected {BENCHMARK_SIZE} stored trials")
     rows = table.to_pylist(maps_as_pydicts="strict")
-    rows.sort(key=lambda row: int(row["doc_id"]))
-    if [int(row["doc_id"]) for row in rows] != list(range(BENCHMARK_SIZE)):
-        raise ValueError(f"{cell['model']}: incomplete NUPA document IDs")
+    rows.sort(key=lambda row: str(row["doc_id"]))
+    document_ids = {str(row["doc_id"]) for row in rows}
+    if len(document_ids) != BENCHMARK_SIZE or (prior_trials is not None and document_ids != set(prior_trials)):
+        raise ValueError(f"{cell['model']}: duplicate or mismatched NUPA document IDs")
 
     prior_score = (
         sum(
             (
-                bool(prior_trials[int(row["doc_id"])]["corrected_correct"])
+                bool(prior_trials[str(row["doc_id"])]["corrected_correct"])
                 if prior_trials is not None
                 else float(row["metrics"]["exact_match"])
             )
@@ -131,7 +132,7 @@ def regrade(cell: dict) -> dict:
         }
         for metric, value in corrected.items():
             metric_totals[metric] += value
-        prior_trial = prior_trials[int(row["doc_id"])] if prior_trials is not None else None
+        prior_trial = prior_trials[str(row["doc_id"])] if prior_trials is not None else None
         prior_correct = (
             bool(prior_trial["corrected_correct"]) if prior_trial is not None else bool(row["metrics"]["exact_match"])
         )
@@ -139,7 +140,7 @@ def regrade(cell: dict) -> dict:
         changed_trials += prior_correct != corrected_correct
         trials.append(
             {
-                "doc_id": int(row["doc_id"]),
+                "doc_id": row["doc_id"],
                 "answer_format": doc["answer_format"],
                 "reference_answer": doc["answer"],
                 "prior_extracted": prior_trial["corrected_extracted"] if prior_trial is not None else row["extracted"],
