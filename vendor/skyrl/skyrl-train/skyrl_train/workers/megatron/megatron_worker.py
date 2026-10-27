@@ -221,6 +221,7 @@ class MegatronWorker:
                     rollout_routed_experts=micro.routed_experts_tensor(),
                     probe_row_indices=micro.get("probe_row_indices"),
                     score_topk_indices=micro.get("score_topk_indices"),
+                    score_probe_positions=micro.get("score_probe_positions"),
                 )
             )
 

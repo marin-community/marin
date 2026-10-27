@@ -26,6 +26,9 @@ from marinskyrl.runtime_options import (
     ftpo_requested,
 )
 
+SCORE_CENTERING_PROBE_TOKENS = 32
+
+
 class KLEstimator(StrEnum):
     K1 = "k1"
     ABS = "abs"
@@ -188,6 +191,33 @@ def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
     )
 
 
+def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
+    """Explain why periodic hypothetical probes cannot run in this configuration."""
+    algorithm = cfg.trainer.algorithm
+    probe = algorithm.get("score_centering_probe")
+    if probe is None or not probe.interval:
+        return "disabled (score_centering_probe.interval=0)"
+    if algorithm.get("score_centering_enabled", False):
+        return "score centering is enabled"
+    if (
+        algorithm.policy_loss_type != PolicyLossType.REGULAR
+        or compile_distillation_plan_from_config(cfg) is not None
+        or ftpo_requested(algorithm)
+    ):
+        return "requires regular PPO without distillation or auxiliary FTPO"
+    try:
+        score_centering_tis_cap(algorithm)
+    except ValueError as error:
+        return str(error)
+    if not _score_centering_megatron_supported(cfg):
+        return "requires Megatron TP=1 without sequence parallelism; CP>1 requires sample packing"
+    if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+        return "requires local vLLM"
+    if cfg.generator.sampling_params.logprobs not in (None, 0):
+        return "requires ordinary sampled-token logprobs"
+    return None
+
+
 @dataclass(frozen=True)
 class TopKLossParams:
     objective: DistillationObjectiveKind
@@ -340,6 +370,11 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     candidates = algorithm.score_centering_top_k
     if isinstance(candidates, bool) or not isinstance(candidates, int) or candidates <= 0:
         raise ValueError("score_centering_top_k must be a positive integer")
+    probe = algorithm.get("score_centering_probe")
+    if probe is not None:
+        interval = probe.interval
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
+            raise ValueError("score_centering_probe.interval must be a nonnegative integer")
     if algorithm.get("score_centering_enabled", False):
         score_centering_tis_cap(algorithm)
         if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
@@ -352,9 +387,7 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
         if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
             raise ValueError("score centering requires local vLLM behavior top-K capture")
         if cfg.generator.sampling_params.logprobs not in (None, 0, candidates):
-            raise ValueError(
-                f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}"
-            )
+            raise ValueError(f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}")
     policy_trains = not (topk and plan.reward_mode is DistillationRewardMode.REPLACE)
     if correction.rules:
         if not policy_trains:

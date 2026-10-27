@@ -45,6 +45,7 @@ class TaskRequestBatch:
     sampling_params: dict[str, Any] | None = None
     trajectory_ids: tuple[TrajectoryID, ...] | None = None
     batch_metadata: BatchMetadata | None = None
+    score_centering_probe_tokens: int = 0
 
     @property
     def metadata(self) -> tuple[TrajectoryMetadata, ...]:
@@ -131,6 +132,9 @@ class TrajectoryBatch(TypedDict):
     rollout_logprobs: Optional[List[np.ndarray]]
     student_topk_indices: Optional[List[np.ndarray]]
     behavior_topk_logprobs: Optional[List[np.ndarray]]
+    score_probe_positions: NotRequired[List[np.ndarray | None]]
+    score_probe_indices: NotRequired[List[np.ndarray | None]]
+    score_probe_logprobs: NotRequired[List[np.ndarray | None]]
     rollout_routed_experts: Optional[List[np.ndarray]]
     rollout_policy_steps: Optional[List[np.ndarray]]
     teacher_evidence: Optional[TeacherEvidenceBatch]

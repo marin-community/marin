@@ -214,14 +214,18 @@ def test_pipeline_two_row_outputs_construct_before_collection(monkeypatch, megat
 
 
 @pytest.mark.parametrize("dtype,index_dtype", [(torch.float32, torch.int64), (torch.bfloat16, torch.int32)])
+@pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("packing", [False, True])
 def test_selected_response_reuses_sampled_normalizer_without_full_float_logits(
-    dtype, index_dtype, packing, megatron_wrapper
+    dtype, index_dtype, compact, packing, megatron_wrapper
 ):
     attention_mask = torch.tensor([[0, 1, 1, 1, 1, 1, 1], [0, 0, 1, 1, 1, 0, 0]])
     sequences = torch.tensor([[0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 1, 2, 0, 0]])
     selected_ids = torch.tensor([[[1, 3], [2, 4], [0, 5]], [[6, 1], [-1, -1], [-1, -1]]])
     sampled_ids = torch.tensor([[3, 4, 5], [2, 0, 0]])
+    candidate_positions = torch.tensor([[0, 2], [0, 1]]) if compact else None
+    if compact:
+        selected_ids = selected_ids.gather(1, candidate_positions.unsqueeze(-1).expand(-1, -1, 2))
     selected_ids = selected_ids.to(index_dtype)
     torch.manual_seed(91)
     base_logits = torch.randn((2, 6, 7), dtype=dtype, requires_grad=True)
@@ -248,12 +252,12 @@ def test_selected_response_reuses_sampled_normalizer_without_full_float_logits(
 
     with torch.autograd.graph.saved_tensors_hooks(save, lambda tensor: tensor):
         response = megatron_wrapper._response_logprobs(
-            logits, sequences, attention_mask, 3, packed_params, selected_ids
+            logits, sequences, attention_mask, 3, packed_params, selected_ids, candidate_positions
         )
     selected = response.selected_logprobs
 
     valid = selected_ids >= 0
-    score_positions = compact_positions
+    score_positions = compact_positions.gather(1, candidate_positions) if compact else compact_positions
     expected = normalized[torch.arange(2)[:, None, None], score_positions[:, :, None], selected_ids.clamp_min(0)]
     torch.testing.assert_close(selected[valid], expected[valid], atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(
