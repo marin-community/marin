@@ -12,6 +12,7 @@ same time with an ``asyncio`` task group or a Zephyr map.
 
 import inspect
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,9 +81,18 @@ class AgentResult:
     """The failed operation and its cause, when the session failed. The tasks that it accepted before stay valid."""
 
 
-async def generate_tasks(idea: CapabilityIdea, n: int, config: AgenticConfig) -> AgentResult:
-    """Make up to ``n`` different tasks for ``idea``. A session that makes fewer gives a report that says why."""
-    tools = TaskforgeTools(idea, n, config)
+async def generate_tasks(
+    idea: CapabilityIdea,
+    n: int,
+    config: AgenticConfig,
+    on_accept: Callable[[AcceptedTask], Awaitable[None]] | None = None,
+) -> AgentResult:
+    """Make up to ``n`` different tasks for ``idea``. A session that makes fewer gives a report that says why.
+
+    ``on_accept`` is awaited with each task when the gate accepts it, so that a caller can use it before the session
+    ends.
+    """
+    tools = TaskforgeTools(idea, n, config, on_accept)
     harness = ShellHarness(
         command_timeout=config.command_timeout, output_limit_bytes=SHELL_OUTPUT_BYTES, tools={AGENT_TOOLS: tools}
     )

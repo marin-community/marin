@@ -297,10 +297,17 @@ class TaskforgeTools:
     the tools used.
     """
 
-    def __init__(self, idea: CapabilityIdea, n: int, config: AgenticConfig):
+    def __init__(
+        self,
+        idea: CapabilityIdea,
+        n: int,
+        config: AgenticConfig,
+        on_accept: Callable[[AcceptedTask], Awaitable[None]] | None = None,
+    ):
         self.idea = idea
         self.n = n
         self.config = config
+        self.on_accept = on_accept
         self.solver_engine = RolloutEngine(
             {config.solver_factory.backend: config.solver_factory},
             {SOLVER_HARNESS: ShellHarness(command_timeout=config.command_timeout)},
@@ -547,6 +554,8 @@ class ToolSession:
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
         accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review, program, snapshot)
         self.tools.accepted.append(accepted)
+        if self.tools.on_accept is not None:
+            await self.tools.on_accept(accepted)
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)

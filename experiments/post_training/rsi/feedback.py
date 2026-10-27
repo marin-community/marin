@@ -138,24 +138,34 @@ class SynthesisConfig:
 
 
 async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: SynthesisConfig) -> AsyncIterator[TaskSpec]:
-    """The training tasks that agentic Taskforge sessions make for ``ideas``, as each session ends."""
+    """The training tasks that agentic Taskforge sessions make for ``ideas``, as the gate accepts each one."""
     made: asyncio.Queue[TaskSpec | None] = asyncio.Queue()
     slots = asyncio.Semaphore(config.concurrency)
 
     async def session(idea: CapabilityIdea) -> None:
-        try:
-            async with slots:
-                result = await agentic.generate_tasks(idea, config.tasks_per_idea, config.agentic)
-            logger.info("%s: %d tasks accepted, failure %s", idea.capability_id, len(result.tasks), result.failure)
-            instances = [await _instances(accepted, config) for accepted in result.tasks]
-            unseen = held_out_idea(idea, config.held_out_idea_share)
-            write_session(config.output, result, [probes for _, probes in instances], held_out=unseen)
-            if unseen:
-                logger.info("%s is held out: its tasks are only probes", idea.capability_id)
-                return
-            for accepted, (training, _) in zip(result.tasks, instances, strict=True):
+        unseen = held_out_idea(idea, config.held_out_idea_share)
+        # Each accepted task's instances, in the order of acceptance; its training instances go to training as soon as
+        # they exist, not when the session ends.
+        instances: list[asyncio.Task[tuple[list[TaskSpec], list[TaskSpec]]]] = []
+
+        async def stream(accepted: AcceptedTask) -> tuple[list[TaskSpec], list[TaskSpec]]:
+            training, probes = await _instances(accepted, config)
+            if not unseen:
                 for task in (accepted.task, *training):
                     made.put_nowait(synthesized(task, idea))
+            return training, probes
+
+        async def on_accept(accepted: AcceptedTask) -> None:
+            instances.append(asyncio.create_task(stream(accepted)))
+
+        try:
+            async with slots:
+                result = await agentic.generate_tasks(idea, config.tasks_per_idea, config.agentic, on_accept)
+            logger.info("%s: %d tasks accepted, failure %s", idea.capability_id, len(result.tasks), result.failure)
+            made_instances = await asyncio.gather(*instances)
+            write_session(config.output, result, [probes for _, probes in made_instances], held_out=unseen)
+            if unseen:
+                logger.info("%s is held out: its tasks are only probes", idea.capability_id)
         except Exception:
             # One idea whose session fails, for example at a model outage, does not stop the loop.
             logger.exception("The synthesis session of %s failed", idea.capability_id)
