@@ -148,15 +148,21 @@ def bincount_upper_quantile(
 
     Runs inside a ``shard_map``. Clip-to-edge bins build each expert's local histogram;
     integer reductions pool counts globally. Beta is interpolated in the crossing
-    bin. The experimental two-stage method counts only a selected fine block at
-    the tuned TPU v4 shape; other shapes retain the reference histogram.
+    bin. The two-stage method requires a tuned TPU v4 shape; an explicit request
+    for an unsupported shape raises ValueError.
     """
+    if histogram_method not in ("reference", "two-stage"):
+        raise ValueError(f"Unknown histogram method: {histogram_method!r}")
     bin_width = (hi - lo) / n_bins
     idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
     device_kind = jax.local_devices()[0].device_kind
     tile = _HISTOGRAM_MATMUL_TILES.get((device_kind, s_local.shape[0], num_experts, n_bins))
     target_rank = jnp.broadcast_to(jnp.asarray(target_rank, jnp.float32), (num_experts,))
-    if histogram_method == "two-stage" and tile == (64, 64):
+    if histogram_method == "two-stage":
+        if tile != (64, 64):
+            raise ValueError(
+                f"Two-stage histogram is not tuned for {(device_kind, s_local.shape[0], num_experts, n_bins)}"
+            )
         crossing, ct, height = two_stage_histogram_crossing(
             idx, target_rank, batch_axes=batch_axes, n_bins=n_bins, group_size=tile[0]
         )

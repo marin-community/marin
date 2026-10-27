@@ -72,7 +72,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
+from experiments.grug.moe.kda import KdaScanImpl, chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
 
@@ -857,7 +857,7 @@ class GrugModelConfig:
     """Form the erase gate ``2 sigmoid(z)`` (``kda_erase_gate``) inside the fused kernels from its bf16 logits."""
     kda_state_grads: StateGrads = StateGrads.XLA
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
-    kda_xla_scan_impl: str = "parallel"
+    kda_xla_scan_impl: KdaScanImpl = KdaScanImpl.PARALLEL
     """KDA recurrence scan mode on XLA."""
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a per-token softmax
     # attention over the residual-block history (the embedding, completed block sums and the running
@@ -887,8 +887,6 @@ class GrugModelConfig:
     attn_res_remat_attention: bool = False
     """Recompute attention in AttnRes backward to keep its residuals out of MLP backward.
     Costs an extra forward; needed for d1280 memory."""
-    attn_res_remat_attention_save_all: bool = False
-    """Save intermediates when attention checkpointing is enabled (diagnostic)."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     kda_value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     """``value_embeds`` for the KDA layers: each gets its own ``[V, N*h]`` table mixed into its delta-rule values,
@@ -1793,7 +1791,7 @@ class GrugModelConfig:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
-        if self.kda_xla_scan_impl not in ("parallel", "parallel_stacked", "parallel_stacked_split"):
+        if not self.kda_xla_scan_impl.is_parallel:
             raise ValueError(f"Unknown KDA XLA scan: {self.kda_xla_scan_impl!r}")
         if self.kda_onchip_decay_gate and (
             self.kda_decay_per_head
@@ -6585,8 +6583,7 @@ def _attn_res_layer(
     attn_in = h
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
-        policy = jax.checkpoint_policies.everything_saveable if cfg.attn_res_remat_attention_save_all else None
-        attn_branch = eqx.filter_checkpoint(attn_branch, policy=policy)
+        attn_branch = eqx.filter_checkpoint(attn_branch)
     physical = layer_index % cfg.num_layers
     kda_ablation = (physical in cfg.kda_no_decay_layers, physical in cfg.kda_no_beta_layers)
     v_stream = None

@@ -17,6 +17,20 @@ from experiments.grug.fast_track import qb_balancing
 from experiments.grug.fast_track.qb_balancing import factorized_expert_histogram, local_expert_histogram, qb_beta_hist
 
 
+def test_explicit_two_stage_rejects_untuned_input():
+    with pytest.raises(ValueError):
+        qb_balancing.bincount_upper_quantile(
+            jnp.zeros((8, 3)),
+            num_experts=3,
+            n_bins=31,
+            lo=jnp.asarray(-1.0),
+            hi=jnp.asarray(1.0),
+            target_rank=2,
+            batch_axes=("batch",),
+            histogram_method="two-stage",
+        )
+
+
 @pytest.mark.parametrize("bins", [31, 10000])
 @pytest.mark.parametrize("concentrated", [False, True])
 def test_grouped_histogram_counts(bins, concentrated):

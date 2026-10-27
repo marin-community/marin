@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
+from experiments.grug.moe.kda import KdaScanImpl, chunk_kda, kda_fused, recurrent_kda
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
 from experiments.grug.moe.kda_state_pallas import StateGrads
 
@@ -47,14 +47,15 @@ def test_chunk_kda_matches_recurrent(length, chunk_size):
 
 
 @pytest.mark.parametrize(("length", "chunk_size"), [(64, 64), (256, 64), (512, 128), (200, 64)])
-def test_parallel_scan_matches_sequential(length, chunk_size):
+@pytest.mark.parametrize("scan_impl", [impl for impl in KdaScanImpl if impl.is_parallel])
+def test_parallel_scan_matches_sequential(length, chunk_size, scan_impl):
     """The log-depth ``scan_impl='parallel'`` recurrence equals the serial one (fp32).
 
     Both are exact reassociations of the same linear inter-chunk recurrence, so in
     fp32 they agree to ~1e-6; this guards the associative-scan derivation."""
     q, k, v, g, beta = _inputs(2, 3, length, 32, 32, seed=length)
     kw = dict(chunk_size=chunk_size, matmul_dtype=jnp.float32)
-    out_par, st_par = chunk_kda(q, k, v, g, beta, scan_impl="parallel", **kw)
+    out_par, st_par = chunk_kda(q, k, v, g, beta, scan_impl=scan_impl, **kw)
     out_seq, st_seq = chunk_kda(q, k, v, g, beta, scan_impl="sequential", **kw)
     np.testing.assert_allclose(np.asarray(out_par), np.asarray(out_seq), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(st_par), np.asarray(st_seq), rtol=1e-5, atol=1e-5)

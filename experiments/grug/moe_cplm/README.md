@@ -24,6 +24,14 @@ projection. The QB histogram uses exact integer matrix counts at the local
 calculation. KDA state passes, projection gathers, column-sharded bigram lookup
 and Muon TPU fallback preserve the measured execution path.
 
+The legacy launcher binds those operators through process-local patches in
+`fast_track` and `moe`, including the trainer's model class. These internal
+interfaces remain a coupling limitation: changes to the bound implementations
+require another TPU calibration before reusing the historical performance
+claim. Run this launcher in a fresh process. The separate
+[Ckpt 1 variant](../belay_tpu/README.md) carries its own model and optimizer
+snapshot and does not use these CPLM bindings.
+
 The logical optimizer batch is fixed at 16×8192; gradient accumulation is 1.
 The MuonH/Adam recipe and learning-rate schedule remain 10980 updates, seed 0.
 The [tokenizer SHA256 identities](tokenizer_identity.json) and

@@ -32,6 +32,7 @@ References: Kimi Linear tech report (arXiv 2510.26692), Gated Delta Networks
 (arXiv 2406.06484), and flash-linear-attention ``fla/ops/kda/naive.py``.
 """
 
+from enum import StrEnum
 from functools import partial
 from typing import NamedTuple
 
@@ -58,6 +59,19 @@ _SUB_TILED_WARPS = dict(num_warps=4, bwd_num_warps=4, tail_num_warps=4)
 # Cap the (single-sided) deflation exponent exp(-cumdecay) so extreme per-channel decay
 # cannot overflow; see DEFLATE_EXP_CAP for when the chunked form stays exact.
 _DEFLATE_EXP_CAP = DEFLATE_EXP_CAP
+
+
+class KdaScanImpl(StrEnum):
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    PARALLEL_STACKED = "parallel_stacked"
+    PARALLEL_STACKED_SPLIT = "parallel_stacked_split"
+    PALLAS = "pallas"
+    PALLAS_INTERPRET = "pallas_interpret"
+
+    @property
+    def is_parallel(self) -> bool:
+        return self in (self.PARALLEL, self.PARALLEL_STACKED, self.PARALLEL_STACKED_SPLIT)
 
 
 def _l2norm(x: jax.Array, eps: float = _L2NORM_EPS) -> jax.Array:
@@ -224,7 +238,7 @@ def chunk_kda(
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype | None = jnp.bfloat16,
     scan_unroll: int = 1,
-    scan_impl: str = "parallel",
+    scan_impl: KdaScanImpl | str = KdaScanImpl.PARALLEL,
     prep_impl: str = "xla",
     segment_ids: Int[Array, "... L"] | None = None,
     erase: Float[Array, "... L Dk"] | None = None,
@@ -265,6 +279,7 @@ def chunk_kda(
     ``"parallel_stacked"`` retains the reference pairwise composition order but
     replaces padded scan interleaving with stack/reshape, tuned for TPU v4.
     """
+    scan_impl = KdaScanImpl(scan_impl)
     mm_dtype = matmul_dtype
 
     def mm(spec: str, a: jax.Array, b: jax.Array) -> jax.Array:
@@ -323,7 +338,7 @@ def chunk_kda(
     else:
         state = initial_state.astype(jnp.float32)
 
-    if scan_impl == "sequential":
+    if scan_impl == KdaScanImpl.SEQUENTIAL:
         if prep_impl != "xla":
             raise ValueError("scan_impl='sequential' only supports prep_impl='xla'")
         if segment_ids is not None:
@@ -342,7 +357,7 @@ def chunk_kda(
             mm,
             scan_unroll,
         )
-    elif scan_impl in ("parallel", "parallel_stacked", "parallel_stacked_split", "pallas", "pallas_interpret"):
+    else:
         if prep_impl == "xla":
             prep = _chunk_prep_xla(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks)
         elif prep_impl in ("pallas", "pallas_interpret"):
@@ -361,15 +376,10 @@ def chunk_kda(
             )
         else:
             raise ValueError(f"prep_impl must be 'xla', 'pallas' or 'pallas_interpret', got {prep_impl!r}")
-        if scan_impl in ("parallel", "parallel_stacked", "parallel_stacked_split"):
+        if scan_impl.is_parallel:
             out, state = _parallel_chunk_recurrence(prep, state, mm, lead, dk, dv, scan_impl=scan_impl)
         else:
-            out, state = _pallas_chunk_recurrence(prep, state, interpret=scan_impl == "pallas_interpret")
-    else:
-        raise ValueError(
-            "scan_impl must be 'sequential', 'parallel', 'parallel_stacked', 'parallel_stacked_split', 'pallas' or "
-            f"'pallas_interpret', got {scan_impl!r}"
-        )
+            out, state = _pallas_chunk_recurrence(prep, state, interpret=scan_impl == KdaScanImpl.PALLAS_INTERPRET)
 
     out = out.reshape(*lead, n_chunks * c, dv)
     if pad:
@@ -643,8 +653,8 @@ def _parallel_chunk_recurrence(prep: ChunkPrep, state, mm, lead, dk, dv, *, scan
     c_mat = c_mat.at[..., 0, :, :].set(c0)
 
     _, s_incl = (
-        _stacked_affine_scan((m_mat, c_mat), split_vjp=scan_impl == "parallel_stacked_split")
-        if scan_impl in ("parallel_stacked", "parallel_stacked_split")
+        _stacked_affine_scan((m_mat, c_mat), split_vjp=scan_impl == KdaScanImpl.PARALLEL_STACKED_SPLIT)
+        if scan_impl in (KdaScanImpl.PARALLEL_STACKED, KdaScanImpl.PARALLEL_STACKED_SPLIT)
         else lax.associative_scan(_compose_affine, (m_mat, c_mat), axis=-3)
     )  # S_0..S_{n-1}
 
