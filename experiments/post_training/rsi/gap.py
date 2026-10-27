@@ -23,6 +23,7 @@ import random
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import click
 import pyarrow.parquet as pq
@@ -159,6 +160,30 @@ def fresh_task(template: str, row: Mapping, name: str, global_index: int, capabi
     task["source"]["row"] = f"{GENERATOR_ARCHIVE}:{global_index}"
     task["tags"] = [SYNTHESIZED_TAG, capability]
     return host_graded(TaskSpec.model_validate(task))
+
+
+GATE5_GRADE = Path(__file__).with_name("gate5_grade.py")
+
+
+def entry_task(template: str, name: str, task_id: str, question: str, entry: Mapping, capability: str) -> TaskSpec:
+    """A task of type ``name`` with an entry that is not from the generated population, graded as the seed tasks are
+    (the text after the last ``Answer:``, by the dataset's own scorer) but against the entry itself, which
+    ``gate5_grade.py`` reads instead of regenerating it."""
+    task = json.loads(template)
+    config = {"task": name, "entry": dict(entry)}
+    task["resources"]["verifier"] = [
+        {"path": "grade.py", "source": {"kind": "inline_file", "content_base64": _b64(GATE5_GRADE.read_text())}},
+        {"path": CONFIG_PATH, "source": {"kind": "inline_file", "content_base64": _b64(json.dumps(config))}},
+    ]
+    task["grader"]["env"] = {}
+    task["context"]["events"][0]["content"] = question
+    task["id"] = task_id
+    task["tags"] = [SYNTHESIZED_TAG, capability]
+    return host_graded(TaskSpec.model_validate(task))
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
 
 
 def interleave(tasks: Mapping[str, Sequence[TaskSpec]]) -> Iterator[TaskSpec]:
