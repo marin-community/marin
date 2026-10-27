@@ -27,11 +27,11 @@ def _lookup_bits(logits, selected):
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(2,))
-def _selected_logits(logits, selected, experts):
+def _selected_logits(logits, selected, _experts):
     return _lookup_bits(logits, selected)
 
 
-def _selected_forward(logits, selected, experts):
+def _selected_forward(logits, selected, _experts):
     return _lookup_bits(logits, selected), selected
 
 

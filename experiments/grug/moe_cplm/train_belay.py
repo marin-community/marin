@@ -31,7 +31,7 @@ from levanter.distributed import DistributedConfig
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.fast_track import model, qb_balancing, train
 from experiments.grug.fast_track.column_sharded_embedding import column_sharded_embedding
@@ -136,7 +136,7 @@ def build_config(
         ema_blend_sweep=[],
         ema_group_sweep=False,
         save_checkpoints=not calibration,
-        completion_marker_path=checkpoint_path + "/final_eval_done.json",
+        completion_marker_path=prefix_join(checkpoint_path, "final_eval_done.json"),
     )
     inner = outer["trainer"]
     inner.update(
@@ -290,7 +290,7 @@ def main(argv=None):
     run_name = f"{args.run_name}-{attempt}"
     args.output = args.output / attempt
     args.output.mkdir(parents=True, exist_ok=True)
-    artifact_root = args.artifact_root.rstrip("/") + "/" + attempt
+    artifact_root = prefix_join(args.artifact_root, attempt)
     identities = json.loads(Path(__file__).with_name("tokenizer_identity.json").read_text())
     for name, expected in identities.items():
         if hashlib.sha256((Path(args.tokenizer) / name).read_bytes()).hexdigest() != expected:
@@ -298,7 +298,7 @@ def main(argv=None):
     config = build_config(
         data_path=args.data_config,
         output=args.output,
-        checkpoint_path=args.checkpoint_path + "/" + attempt,
+        checkpoint_path=prefix_join(args.checkpoint_path, attempt),
         run_name=run_name,
         wandb_entity=args.wandb_entity,
         wandb_project=args.wandb_project,
@@ -314,7 +314,9 @@ def main(argv=None):
         if len(jax.devices()) != 16 or any(d.device_kind != "TPU v4" for d in jax.devices()):
             raise ValueError("This baseline requires TPU v4-32 (16 physical chips)")
         if jax.process_index() == 0:
-            handler = MetricsFileHandler(args.output / "native-metrics.jsonl", artifact_root + "/native-metrics.jsonl")
+            handler = MetricsFileHandler(
+                args.output / "native-metrics.jsonl", prefix_join(artifact_root, "native-metrics.jsonl")
+            )
             handlers.append(handler)
             handler.setFormatter(logging.Formatter("%(message)s"))
             logging.getLogger("levanter.json_logger").addHandler(handler)
@@ -439,7 +441,7 @@ def main(argv=None):
             handler.upload()
         if jax.process_index() == 0:
             for path in args.output.glob("*.json"):
-                StoragePath(artifact_root + "/" + path.name).write_bytes(path.read_bytes())
+                (StoragePath(artifact_root) / path.name).write_bytes(path.read_bytes())
 
 
 if __name__ == "__main__":

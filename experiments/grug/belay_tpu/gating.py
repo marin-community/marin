@@ -67,7 +67,7 @@ def _entropy_balanced(logits: Float[Array, "... E"], weight: float) -> Float[Arr
     return logits
 
 
-def _entropy_balanced_fwd(logits, weight):
+def _entropy_balanced_fwd(logits, _weight):
     return logits, logits
 
 

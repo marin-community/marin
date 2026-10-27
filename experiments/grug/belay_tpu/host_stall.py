@@ -56,7 +56,7 @@ class HostStallSampler:
         self._thread.start()
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *_exc) -> None:
         self._stop.set()
         self._thread.join()
 

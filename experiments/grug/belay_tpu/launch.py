@@ -24,7 +24,6 @@ from enum import StrEnum
 from typing import Any
 
 import click
-import fsspec
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -43,7 +42,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -760,7 +759,7 @@ SHARED_EXECUTABLE_TTL_DAYS = 7
 
 
 def _path_exists(path: str) -> bool:
-    return fsspec.core.url_to_fs(path)[0].exists(path)
+    return StoragePath(path).exists()
 
 
 def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung, watch_interval: int) -> str:

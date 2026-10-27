@@ -21,7 +21,7 @@
       "path": "experiments/grug/belay_tpu/attention_kernel_check.py",
       "source_path": "experiments/grug/belay_tpu/attention_kernel_check.py",
       "source_sha256": "e4ae09f6c1138c4878cebbad02e41cd84a276d47eb00714798ba7fb6b3d7e23f",
-      "consolidated_sha256": "e4ae09f6c1138c4878cebbad02e41cd84a276d47eb00714798ba7fb6b3d7e23f"
+      "consolidated_sha256": "49608da385b52d519ef4a11e7b3e9a229190b274a826ab1722458857e6b4f330"
     },
     {
       "path": "experiments/grug/belay_tpu/attention_rows_probe.py",
@@ -51,7 +51,7 @@
       "path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_preflight.py",
       "source_path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_preflight.py",
       "source_sha256": "fcb5878750c9cc751eda57e44e075e4b268787229f9c5e14b98439664ed0c8f9",
-      "consolidated_sha256": "fcb5878750c9cc751eda57e44e075e4b268787229f9c5e14b98439664ed0c8f9"
+      "consolidated_sha256": "79b065254956eadad7b79c62ecc2b9a7f76a788f28869eef18ba0e3aa1eda6ee"
     },
     {
       "path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_update_check.py",
@@ -99,7 +99,7 @@
       "path": "experiments/grug/belay_tpu/gating.py",
       "source_path": "experiments/grug/belay_tpu/gating.py",
       "source_sha256": "a3c86fc64ffe4f3d3e2641c0cc841619575e9b3d54a9749ff739dc544e341444",
-      "consolidated_sha256": "a3c86fc64ffe4f3d3e2641c0cc841619575e9b3d54a9749ff739dc544e341444"
+      "consolidated_sha256": "7f0639ba02cc994df4e14955f30896580215edd5ce920653dbbf1d09aa566366"
     },
     {
       "path": "experiments/grug/belay_tpu/grugmuon_stacked.py",
@@ -117,7 +117,7 @@
       "path": "experiments/grug/belay_tpu/host_stall.py",
       "source_path": "experiments/grug/belay_tpu/host_stall.py",
       "source_sha256": "7d4eae7921908cb4e09b4e29404bd9a95dc1d47c6bfae742e766827b8f995571",
-      "consolidated_sha256": "7d4eae7921908cb4e09b4e29404bd9a95dc1d47c6bfae742e766827b8f995571"
+      "consolidated_sha256": "447b80cfcb51f979396cc7dcd489da2635828dcfd286a67a21f86b5940bd907b"
     },
     {
       "path": "experiments/grug/belay_tpu/inkling_fused.py",
@@ -183,7 +183,7 @@
       "path": "experiments/grug/belay_tpu/kernel_check.py",
       "source_path": "experiments/grug/belay_tpu/kernel_check.py",
       "source_sha256": "fde42908f72654ae407a760ce1ee7f5b7244fc0218cd441656743d6f94912c99",
-      "consolidated_sha256": "fde42908f72654ae407a760ce1ee7f5b7244fc0218cd441656743d6f94912c99"
+      "consolidated_sha256": "ed3321ad1aab84ff1955e1864a36b8382d908e0c797fd207b6ef88c24bdc112f"
     },
     {
       "path": "experiments/grug/belay_tpu/key_offset.py",
@@ -195,7 +195,7 @@
       "path": "experiments/grug/belay_tpu/launch.py",
       "source_path": "experiments/grug/belay_tpu/launch.py",
       "source_sha256": "a37e9f9f12f6599c9d63b2a93a06ae0e3f8bbf5036c1557f2446d95921a318cd",
-      "consolidated_sha256": "a37e9f9f12f6599c9d63b2a93a06ae0e3f8bbf5036c1557f2446d95921a318cd"
+      "consolidated_sha256": "234dca3c1e763a89011b3e611b598dc3984b66cf4af1bd689eead043a6132407"
     },
     {
       "path": "experiments/grug/belay_tpu/library_kernels.py",
@@ -219,13 +219,13 @@
       "path": "experiments/grug/belay_tpu/model.py",
       "source_path": "experiments/grug/belay_tpu/model.py",
       "source_sha256": "a289a84c1d0bb9b95f25c7a60bab7b17ebae0f596026709145fd384c657afb24",
-      "consolidated_sha256": "244e0f7da1827d0d8eb8f8696adf7866481f7648ef63a31870a4aca609d037ec"
+      "consolidated_sha256": "31ad7df84114a4154b97ea8f2d48b540fd13da0cbafa72fb58ff8aa635c1642b"
     },
     {
       "path": "experiments/grug/belay_tpu/operator_check.py",
       "source_path": "experiments/grug/belay_tpu/operator_check.py",
       "source_sha256": "0c63def6c932b02a879ebb0eb66e123d0e94e7535c038aa0ca9b98608f3b27ee",
-      "consolidated_sha256": "0c63def6c932b02a879ebb0eb66e123d0e94e7535c038aa0ca9b98608f3b27ee"
+      "consolidated_sha256": "bee0aa0da877c61dac5ebe25761c855d4f93334cb5d353bfcb8d6bea67cd1a38"
     },
     {
       "path": "experiments/grug/belay_tpu/optimizer.py",
@@ -267,7 +267,7 @@
       "path": "experiments/grug/belay_tpu/routing_tpu.py",
       "source_path": "experiments/grug/belay_tpu/routing_tpu.py",
       "source_sha256": "887c52538f39d5ad512105167b8b7720e1cb32a2658a988d61bb05e1e856218f",
-      "consolidated_sha256": "887c52538f39d5ad512105167b8b7720e1cb32a2658a988d61bb05e1e856218f"
+      "consolidated_sha256": "95b897b6ddd8347556c9389478578322c2ff47719e20f5b9bd569ca2a3586a5e"
     },
     {
       "path": "experiments/grug/belay_tpu/row_partitioned_gmm.py",
@@ -280,12 +280,6 @@
       "source_path": "experiments/grug/belay_tpu/run_diagnostic_phase.py",
       "source_sha256": "4af1963e23276736516d8a92d5917f8788ed11a0ea240721136b4fac63835303",
       "consolidated_sha256": "4af1963e23276736516d8a92d5917f8788ed11a0ea240721136b4fac63835303"
-    },
-    {
-      "path": "experiments/grug/belay_tpu/sparse_attention.py",
-      "source_path": "experiments/grug/belay_tpu/sparse_attention.py",
-      "source_sha256": "ec099e842c9d5d239bc83ff8050ce977c3591149e6e779cadb85b0d627bd8923",
-      "consolidated_sha256": "ec099e842c9d5d239bc83ff8050ce977c3591149e6e779cadb85b0d627bd8923"
     },
     {
       "path": "experiments/grug/belay_tpu/streaming_combine.py",
@@ -322,12 +316,6 @@
       "source_path": "experiments/grug/belay_tpu/test_expert_owner_sum.py",
       "source_sha256": "291a4380ff6a741fde558c20420c09e65e32b895d49c96731bd92bebeebdf104",
       "consolidated_sha256": "291a4380ff6a741fde558c20420c09e65e32b895d49c96731bd92bebeebdf104"
-    },
-    {
-      "path": "experiments/grug/belay_tpu/test_host_stall.py",
-      "source_path": "experiments/grug/belay_tpu/test_host_stall.py",
-      "source_sha256": "9c123ecf3078002022351c837fa0845fdd991a2a0ad895ad7e609cd7470dd483",
-      "consolidated_sha256": "9c123ecf3078002022351c837fa0845fdd991a2a0ad895ad7e609cd7470dd483"
     },
     {
       "path": "experiments/grug/belay_tpu/test_kda_chunk_prep.py",

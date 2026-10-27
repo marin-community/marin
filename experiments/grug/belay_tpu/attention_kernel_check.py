@@ -18,6 +18,7 @@ import levanter.tracker as tracker
 import numpy as np
 from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention._inkling_relpos import dense_rel_bias
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 from experiments.grug.belay_tpu.inkling_fused import fused_attention_local
@@ -71,7 +72,7 @@ def main():
     run_id = os.environ["BELAY_RUN_ID"]
     config = build_config(
         run_id,
-        f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}",
+        str(StoragePath(DATA_ROOT) / "kaiyuew/belay-ckpt1-20261025" / run_id),
         verified_tokenizer(),
         os.environ["BELAY_TPU"],
         0,

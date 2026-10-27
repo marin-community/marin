@@ -10,6 +10,7 @@ from pathlib import Path
 import jax
 import levanter.tracker as tracker
 from levanter.tracker.wandb import WandbConfig
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 
@@ -20,7 +21,11 @@ def initialize_operator_check():
     reference_topology = os.environ["BELAY_TPU"]
     operator_topology = os.environ.get("BELAY_OPERATOR_TPU", reference_topology)
     config = build_config(
-        run_id, f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}", verified_tokenizer(), reference_topology, 0
+        run_id,
+        str(StoragePath(DATA_ROOT) / "kaiyuew/belay-ckpt1-20261025" / run_id),
+        verified_tokenizer(),
+        reference_topology,
+        0,
     )
     config.trainer.trainer.tracker = [
         (

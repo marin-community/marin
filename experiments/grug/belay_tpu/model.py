@@ -79,9 +79,6 @@ from experiments.grug.belay_tpu.router_metrics import (
     summarize_router_metrics,
 )
 from experiments.grug.belay_tpu.routing_tpu import unrolled_router_logits
-from experiments.grug.belay_tpu.sparse_attention import (
-    mla_sparse_attention,
-)
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -1694,10 +1691,7 @@ class CausalSelfAttention(eqx.Module):
             qh, kh, vh = _fox_augment(qh, kh, kernel_v, fox_key_bias)
             return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
 
-        if self.cfg.mla and (0):
-            attn_out = mla_sparse_attention(self, x, q, k, kernel_v, rel_bias, sconv_segment_ids, rms_norm, _proj)
-        else:
-            attn_out = _attend(q, k)[..., :head_dim]
+        attn_out = _attend(q, k)[..., :head_dim]
         if self.cfg.attn_xsa:
             # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
             # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.

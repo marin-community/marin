@@ -20,6 +20,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.activation import ActivationFunctionEnum
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     DATA_ROOT,
@@ -191,7 +192,7 @@ def main():
     stats = json.loads(fs.cat(f"{DATA_ROOT}/datakit/hero_tok/v16384_shuf/train/.stats.json"))
     emit("worker_gcs_access_pass", train_stats=stats, tokenizer_sha256=TOKENIZER_HASHES)
     run_id = os.environ["BELAY_RUN_ID"]
-    output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
+    output_root = str(StoragePath(DATA_ROOT) / "kaiyuew/belay-ckpt1-20261025" / run_id)
     tpu = os.environ.get("BELAY_TPU", "v4-32")
     chips = {"v4-32": 16, "v4-64": 32}[tpu]
     config = build_config(run_id, output_root, str(tokenizer), tpu, 0)

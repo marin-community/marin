@@ -10,7 +10,6 @@ from levanter.grug._moe.local import _moe_mlp_local
 
 def test_scatter_gated_and_ungated_routes():
     rng = np.random.default_rng(42)
-    cases = []
     for gated in (False, True):
         for dtype in (jnp.float32, jnp.bfloat16):
             for routing in ("mixed", "concentrated", "all-masked"):
@@ -56,7 +55,6 @@ def test_scatter_gated_and_ungated_routes():
                 vg = jax.jit(jax.grad(lambda *a: jnp.sum(actual(*a)[0] * cotangent), argnums=(0, 1, 2, 3)))(*arrays)
                 ref = jax.jit(reference)(*arrays)
                 vr = jax.jit(jax.grad(lambda *a: jnp.sum(reference(*a) * cotangent), argnums=(0, 1, 2, 3)))(*arrays)
-                errors = []
                 for expected, observed in zip((ref, *vr), (got, *vg), strict=True):
                     a, b = map(lambda z: np.asarray(z, dtype=np.float32), (expected, observed))
                     np.testing.assert_allclose(
@@ -65,15 +63,4 @@ def test_scatter_gated_and_ungated_routes():
                         rtol=0.03 if dtype == jnp.bfloat16 else 2e-4,
                         atol=2e-4 if dtype == jnp.bfloat16 else 2e-6,
                     )
-                    errors.append(float(np.max(np.abs(a - b))))
                 assert int(drops) == 0
-                cases.append(
-                    dict(
-                        gated=gated,
-                        dtype=str(dtype),
-                        routing=routing,
-                        output_and_vjp_max_abs=errors,
-                        drops=int(drops),
-                        passed=True,
-                    )
-                )
