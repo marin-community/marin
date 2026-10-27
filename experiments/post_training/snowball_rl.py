@@ -196,6 +196,16 @@ def parse_setting(text: str) -> Setting:
     return Setting(key.lstrip("+"), yaml.safe_load(value), key.startswith("+"))
 
 
+def _setting_leaves(setting: Setting) -> tuple[Setting, ...]:
+    if isinstance(setting.value, Mapping):
+        return tuple(
+            leaf
+            for key, value in setting.value.items()
+            for leaf in _setting_leaves(Setting(f"{setting.key}.{key}", value, setting.allows_new_key))
+        )
+    return (setting,)
+
+
 EVAL_SCORE_SCHEMA = pa.schema(
     [
         ("evaluation", pa.string()),
@@ -277,7 +287,9 @@ class PanelEvaluator:
             for path in _paths(session / "*.jsonl"):
                 if PurePosixPath(str(path)).name == "aggregated_results.jsonl":
                     continue
-                for line in _read_text(path).splitlines():
+                for line in _read_text(path).split("\n"):
+                    if not line.strip():
+                        continue
                     row = json.loads(line)
                     item = row.get("task_id")
                     if not item:
@@ -818,8 +830,8 @@ def training_config(
             "training_metrics": True,
             "rollout_spans": True,
             "policy_train_spans": True,
-            "algorithm": dict(recipe.estimator),
-            "policy": {"optimizer_config": dict(recipe.optimizer)},
+            "algorithm": deepcopy(dict(recipe.estimator)),
+            "policy": {"optimizer_config": deepcopy(dict(recipe.optimizer))},
             "rollout_buffer": {
                 "max_staleness_steps": recipe.staleness,
                 "batch_policy": "full_batch",
@@ -848,7 +860,7 @@ def training_config(
             "enable_http_endpoint": False,
             "chat_template": None,
             "apply_overlong_filtering": False,
-            "engine_init_kwargs": dict(recipe.engine_init_kwargs),
+            "engine_init_kwargs": deepcopy(dict(recipe.engine_init_kwargs)),
             "sampling_params": {
                 "temperature": 1.0,
                 "top_p": 1.0,
@@ -865,7 +877,7 @@ def training_config(
     geometry = recipe.layout.megatron or P40.megatron
     config["trainer"]["policy"]["megatron_config"] = asdict(geometry)
     config["trainer"]["ref"] = {"megatron_config": asdict(geometry)}
-    config["trainer"]["policy"]["megatron_config"].update(recipe.megatron_overrides)
+    config["trainer"]["policy"]["megatron_config"].update(deepcopy(dict(recipe.megatron_overrides)))
     if recipe.layout.sockets:
         config["extra_env"].update(NCCL_NET="Socket", NCCL_IB_DISABLE="1", NCCL_SOCKET_FAMILY="AF_INET")
     for setting in settings:
@@ -1204,6 +1216,7 @@ def build_run(
     control: bool = False,
 ) -> SnowballRun:
     """Construct the complete Snowball experiment and its terminal evaluation dependencies."""
+    settings = tuple(leaf for setting in settings for leaf in _setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
     if preset.focus == Focus.DATA:

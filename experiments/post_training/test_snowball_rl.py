@@ -77,8 +77,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             map(
                 snowball.parse_setting,
                 (
-                    "trainer.train_batch_size=64",
-                    "trainer.policy_mini_batch_size=64",
+                    "trainer={train_batch_size: 64, policy_mini_batch_size: 64}",
                     "generator.n_samples_per_prompt=8",
                     "trainer.policy.megatron_config.logprob_chunk_size=512",
                 ),
@@ -159,6 +158,36 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     assert len({step.name for step in repeated.runs}) == 3
     changed = snowball.build_run(preset, settings=(snowball.parse_setting("trainer.policy.optimizer_config.lr=2e-6"),))
     assert changed.runs[0].name != baseline.runs[0].name
+    mapped = []
+    for rate in (2e-6, 3e-6):
+        mapped.append(
+            snowball.build_run(
+                preset,
+                settings=tuple(
+                    map(
+                        snowball.parse_setting,
+                        (
+                            f"trainer.policy.optimizer_config={{lr: {rate:.8f}}}",
+                            "trainer.policy.optimizer_config={weight_decay: 0.1}",
+                        ),
+                    )
+                ),
+            ).runs[0]
+        )
+    assert mapped[0].name != mapped[1].name
+    dotted = snowball.build_run(
+        preset,
+        settings=tuple(
+            map(
+                snowball.parse_setting,
+                (
+                    "trainer.policy.optimizer_config.lr=0.000002",
+                    "trainer.policy.optimizer_config.weight_decay=0.1",
+                ),
+            )
+        ),
+    ).runs[0]
+    assert mapped[0].name == dotted.name
     provenance = replace(provenance, tree_hash="tree-two")
     assert snowball.build_run(preset).runs[0].name != baseline.runs[0].name
     data = snowball.PRESETS["data-short"]
@@ -168,6 +197,11 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     assert snowball.build_run(preset, init=initializer).runs[0].name != snowball.build_run(preset).runs[0].name
     long = snowball.PRESETS["train-long"]
     assert snowball.build_run(long, layout=snowball.P40).runs[0].name != snowball.build_run(long).runs[0].name
+    original = snowball.build_run(long).runs[0]
+    snowball.build_run(
+        long, settings=(snowball.parse_setting("trainer.policy.megatron_config.ddp_config.overlap_grad_reduce=true"),)
+    )
+    assert snowball.build_run(long).runs[0].fingerprint() == original.fingerprint()
     dated = snowball.parse_setting("+extra_env.EXPERIMENT_DATE=2026-10-27")
     assert snowball.build_run(long, settings=(dated,)).runs[0].name != snowball.build_run(long).runs[0].name
 
@@ -193,6 +227,7 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
             "score_max": 1.0,
         }
     answers[0]["score"] = 0.8
+    answers[0]["output_response"] = "first\u2028second\u2029third\u0085fourth"
     answers[0]["verification"].update(score=5.0, score_min=1.0, score_max=5.0)
     answers[3]["verification"] = {"status": "error", "score": None, "score_min": 0.0, "score_max": 1.0}
     selection = tmp_path / "selection"
@@ -219,7 +254,9 @@ def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
     for session in ("global_step_25_evals", "eval_only"):
         directory = tmp_path / "exports" / "dumped_evals" / session
         directory.mkdir(parents=True)
-        (directory / "structure-closure.jsonl").write_text("\n".join(map(json.dumps, answers)))
+        (directory / "structure-closure.jsonl").write_text(
+            "\n".join(json.dumps(answer, ensure_ascii=False) for answer in answers) + "\n"
+        )
         (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
     evaluator = snowball.EVALUATORS[snowball.EvalHarness.PANEL]
     scores = evaluator.scores(snowball.EVALUATIONS["panel-100"], str(tmp_path))
