@@ -1280,6 +1280,15 @@ def test_iris_serve_multihost_allocates_one_slice_and_ray_ports(monkeypatch):
     assert services[0].iris.worker_resources.device.variant == "v4-32"
 
 
+@pytest.mark.parametrize("broker_args", [("--instances", "2"), ("--broker",)])
+def test_iris_serve_rejects_brokered_multihost_before_submission(monkeypatch, broker_args):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", *broker_args, "--no-wait")
+    assert result.exit_code != 0
+    assert "one instance and no broker" in result.output
+    client.submit.assert_not_called()
+    assert services == []
+
+
 def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
     result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--dry-run")
     assert result.exit_code == 0, result.output

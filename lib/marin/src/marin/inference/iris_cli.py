@@ -529,6 +529,8 @@ def main(
     )
 
     brokered = broker or instances > 1
+    if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
+        raise click.ClickException("multi-host TPU serving requires one instance and no broker")
     broker_config = (
         BrokerConfig(
             worker=InferenceWorkerConfig(
