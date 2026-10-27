@@ -25,7 +25,7 @@ import math
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Collection, Dict, List, Optional, Type
 
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
@@ -428,10 +428,21 @@ class HFModelSaveCallback(TrainerCallback):
     Args:
         save_steps: Request an HF export every N steps. Set to -1 or 0 to disable.
         save_on_train_end: Whether to request a final HF export when training ends.
+        save_at_steps: Request an HF export at exactly these steps, replacing the
+            interval. Set when the run's checkpoint schedule lists explicit
+            ``checkpoint_steps``: an export needs a completed checkpoint marker,
+            so the export steps must be the schedule's weight steps — an interval
+            would also fire between them, where no marker exists.
     """
 
-    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True):
+    def __init__(
+        self,
+        save_steps: int = -1,
+        save_on_train_end: bool = True,
+        save_at_steps: Collection[int] = (),
+    ):
         self.save_steps = save_steps
+        self.save_at_steps = frozenset(save_at_steps)
         self.save_on_train_end = save_on_train_end
 
     def on_step_end(
@@ -440,7 +451,9 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (self.save_steps > 0 and state.global_step % self.save_steps == 0) or (
+            state.global_step in self.save_at_steps
+        ):
             control.should_save_hf_model = True
         return control
 
@@ -450,7 +463,7 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and (self.save_steps > 0 or self.save_at_steps):
             control.should_save_hf_model = True
         return control
 
@@ -1022,7 +1035,14 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
 
     # HF model save callback
     if interval_hf_export_enabled(cfg):
-        callbacks.append(HFModelSaveCallback(save_steps=int(cfg.trainer.hf_save_interval)))
+        schedule = CheckpointSchedule.from_config(cfg)
+        if schedule.weight_steps:
+            # Explicit checkpoint steps are the export steps: every export reads a
+            # completed checkpoint marker, which only the schedule's weight steps
+            # have. An interval would also fire between them and crash the run.
+            callbacks.append(HFModelSaveCallback(save_steps=-1, save_at_steps=schedule.weight_steps))
+        else:
+            callbacks.append(HFModelSaveCallback(save_steps=int(cfg.trainer.hf_save_interval)))
 
     # Reference model update callback
     update_ref_every_epoch = getattr(cfg.trainer, "update_ref_every_epoch", False)
