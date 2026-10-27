@@ -18,7 +18,13 @@ from cloud.iris.launch_config import load_launch_config
 
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"profile": config.runtime.profile, "strategy": config.skyrl.trainer.strategy}
+    {"profile": config.runtime.profile, "strategy": config.skyrl.trainer.strategy,
+     "colocate_policy_ref": config.skyrl.trainer.placement.colocate_policy_ref,
+     "policy_gpus": (config.skyrl.trainer.placement.policy_num_nodes
+                     * config.skyrl.trainer.placement.policy_num_gpus_per_node),
+     "reference_gpus": (config.skyrl.trainer.placement.ref_num_nodes
+                        * config.skyrl.trainer.placement.ref_num_gpus_per_node),
+     "allocated_gpus": config.iris.allocation.num_nodes * config.iris.allocation.gpus_per_node}
     for config in configs
 ]))
 """
@@ -48,41 +54,13 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
         [*bootstrap, "python", "-c", COMPOSE_LAUNCHES, *paths], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == [{"profile": "megatron", "strategy": "megatron"}] * len(arms)
-
-
-@pytest.mark.timeout(180)
-def test_snowball_curriculum_smoke_composes_separate_reference_allocation(tmp_path, monkeypatch):
-    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
-    step = launch.build_arms(
-        specs=(launch.ARMS["naive"],), scale="snowball-smoke", policy=launch.SNOWBALL_POLICY, version="2026.10.15"
-    )["naive"].rl
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    path = tmp_path / "reference.yaml"
-    path.write_text(config.launch_config_yaml)
-    command = launcher_command_for_test(str(path))
-    result = subprocess.run(
-        [
-            *command[: command.index("marinskyrl")],
-            "python",
-            "-c",
-            """
-import json, sys
-from cloud.iris.launch_config import load_launch_config
-config = load_launch_config(sys.argv[1])
-placement = config.skyrl.trainer.placement
-assert not placement.colocate_policy_ref
-print(json.dumps({
-    "policy_gpus": placement.policy_num_nodes * placement.policy_num_gpus_per_node,
-    "reference_gpus": placement.ref_num_nodes * placement.ref_num_gpus_per_node,
-    "allocated_gpus": config.iris.allocation.num_nodes * config.iris.allocation.gpus_per_node,
-}))
-""",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=170,
-    )
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"policy_gpus": 32, "reference_gpus": 16, "allocated_gpus": 56}
+    rows = json.loads(result.stdout)
+    assert [{key: row[key] for key in ("profile", "strategy")} for row in rows] == [
+        {"profile": "megatron", "strategy": "megatron"}
+    ] * len(arms)
+    if preset.label == "snowball-smoke":
+        assert all(
+            not row["colocate_policy_ref"]
+            and (row["policy_gpus"], row["reference_gpus"], row["allocated_gpus"]) == (32, 16, 56)
+            for row in rows
+        )

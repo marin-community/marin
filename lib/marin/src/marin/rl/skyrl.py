@@ -147,35 +147,12 @@ class SkyRLTopology:
             "inference_engine_data_parallel_size",
             "inference_engine_expert_parallel_size",
         )
-        if not plan.generate_only:
-            positive_fields += (
-                "policy_num_nodes",
-                "policy_num_gpus_per_node",
-                "train_batch_size",
-                "policy_mini_batch_size",
-                "micro_train_batch_size_per_gpu",
-                "n_samples_per_prompt",
-            )
         for field_name in positive_fields:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
-        if not plan.generate_only and plan.policy_num_nodes > self.num_nodes:
-            raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
-        if not plan.generate_only and plan.policy_num_gpus_per_node > self.gpus_per_node:
-            raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
-        if not plan.generate_only and plan.colocate_all and not plan.colocate_policy_ref:
-            raise ValueError("colocate_all requires a shared policy/reference footprint")
-        if not plan.generate_only and plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
-            raise ValueError("SkyRL reference_num_nodes must be positive")
-
         tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
         engine_gpus = tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
-        if not plan.generate_only and plan.colocate_all and self.gpus_per_node % tensor_pipeline_gpus:
-            raise ValueError(
-                "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
-                f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
-            )
         if (plan.generate_only or not plan.colocate_all) and engine_gpus > self.gpus_per_node:
             raise ValueError(
                 "each SkyRL inference engine must fit on one node, but "
@@ -193,6 +170,30 @@ class SkyRLTopology:
             if rollout_gpus > self.num_nodes * self.gpus_per_node:
                 raise ValueError("SkyRL inference engines exceed the allocated topology")
             return
+        for field_name in (
+            "policy_num_nodes",
+            "policy_num_gpus_per_node",
+            "train_batch_size",
+            "policy_mini_batch_size",
+            "micro_train_batch_size_per_gpu",
+            "n_samples_per_prompt",
+        ):
+            if getattr(plan, field_name) <= 0:
+                raise ValueError(f"SkyRL role plan {field_name} must be positive")
+        if plan.policy_num_nodes > self.num_nodes:
+            raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
+        if plan.policy_num_gpus_per_node > self.gpus_per_node:
+            raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
+        if plan.colocate_all and not plan.colocate_policy_ref:
+            raise ValueError("colocate_all requires a shared policy/reference footprint")
+        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
+            raise ValueError("SkyRL reference_num_nodes must be positive")
+
+        if plan.colocate_all and self.gpus_per_node % tensor_pipeline_gpus:
+            raise ValueError(
+                "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
+                f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
+            )
         policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
         if plan.colocate_all and policy_gpus != rollout_gpus:
             raise ValueError(
