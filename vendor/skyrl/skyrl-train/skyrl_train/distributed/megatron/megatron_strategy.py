@@ -492,8 +492,8 @@ class MegatronStrategy(DistributedStrategy):
             if model_weights_from_optimizer:
                 restore_model_weights_from_optimizer(optimizer, model)
             load_megatron_grads_to_gpu(model)
-            # Restoring a CPU-offloaded optimizer rebuilds its pinned host copies, and PyTorch keeps
-            # the replaced pinned blocks cached; without this release the next save runs out of host memory.
+            # Restoring a CPU-offloaded optimizer rebuilds its pinned host copies, and PyTorch keeps the
+            # replaced blocks cached for reuse that never comes, so the next save would need that much more host memory.
             torch.cuda.synchronize()
             torch.accelerator.memory.empty_host_cache()
             self.log("Loaded optimizer state dict.")
