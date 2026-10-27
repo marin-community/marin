@@ -252,6 +252,11 @@ def write_evaluation(output: StoragePath, model: str, evaluations: Mapping[str, 
 @click.option("--probes", "probe_roots", multiple=True, help="An rsi output directory with held-out probes.")
 @click.option("--instances-per-task", type=int, default=32, show_default=True, help="As the rsi run made them.")
 @click.option("--pool-tasks", type=int, default=910, show_default=True, help="Held-out validation pool tasks.")
+@click.option(
+    "--pool-slice",
+    type=(int, int),
+    help="START END: only these tasks of the pool sample, so that jobs of one evaluation can run separately.",
+)
 @click.option("--gap-tasks", "gap_tasks_file", help="A JSONL file of held-out gap tasks (`gap.py heldout`).")
 @click.option("--samples", type=int, default=8, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
@@ -262,6 +267,7 @@ def evaluate(
     probe_roots: tuple[str, ...],
     instances_per_task: int,
     pool_tasks: int,
+    pool_slice: tuple[int, int] | None,
     gap_tasks_file: str | None,
     samples: int,
     seed: int,
@@ -277,6 +283,7 @@ def evaluate(
             probe_roots,
             instances_per_task,
             pool_tasks,
+            pool_slice,
             gap_tasks_file,
             samples,
             seed,
@@ -292,11 +299,14 @@ async def _evaluate(
     probe_roots: Sequence[str],
     instances_per_task: int,
     pool_tasks: int,
+    pool_slice: tuple[int, int] | None,
     gap_tasks_file: str | None,
     samples: int,
     seed: int,
 ) -> None:
     validation = TaskPool.read(FULL_VALIDATION_URL).sample(pool_tasks, seed)
+    if pool_slice is not None:
+        validation = validation[slice(*pool_slice)]
     tasks = [task.task for task in validation]
     labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
     for probe, unseen in await read_probes(probe_roots, instances_per_task):
