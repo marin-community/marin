@@ -94,6 +94,12 @@ LR_SWEEP = (5e-7, 1e-6, 2e-6, 4e-6)
 # Snowball learner geometry from the OPD recipe: 4 nodes, PP2 x EP8.
 GPUS_PER_NODE = 8
 POLICY_NODES = 4
+# M4's pre-registered batch is 8 prompts/step; 4 policy nodes give DP=16 under
+# PP2 x EP8, which the runner rejected and would idle half. Standing decision
+# (2026-10-27): relax the runtime constraint, never the pre-registered design —
+# so M4 drops to 2 policy nodes (DP=8, nothing idle) while M1 keeps 4 to match
+# the completed sweep arm.
+M4_POLICY_NODES = 2
 M4_ROLLOUT_ENGINES = 2
 
 
@@ -156,7 +162,7 @@ def role_plan(run: RunPlan) -> SkyRLRolePlan:
         prompts = run.sequences_per_step // SAMPLES_PER_PROMPT
         return SkyRLRolePlan(
             colocate_all=False,
-            policy_num_nodes=POLICY_NODES,
+            policy_num_nodes=M4_POLICY_NODES,
             policy_num_gpus_per_node=GPUS_PER_NODE,
             num_inference_engines=M4_ROLLOUT_ENGINES,
             inference_engine_tensor_parallel_size=1,
@@ -187,7 +193,10 @@ def role_plan(run: RunPlan) -> SkyRLRolePlan:
 def topology(run: RunPlan) -> SkyRLTopology:
     """M4 adds two rollout nodes and one pinned node per teacher it routes to."""
     plan = role_plan(run)
-    nodes = POLICY_NODES if run.method is Method.M1 else POLICY_NODES + M4_ROLLOUT_ENGINES + len(run.tasks)
+    if run.method is Method.M1:
+        nodes = POLICY_NODES
+    else:
+        nodes = M4_POLICY_NODES + M4_ROLLOUT_ENGINES + len(run.tasks)
     return SkyRLTopology(num_nodes=nodes, gpus_per_node=GPUS_PER_NODE, gpu_variant="H100", role_plan=plan)
 
 

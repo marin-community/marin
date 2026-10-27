@@ -31,8 +31,12 @@ from experiments.post_training.phase1a.launch import (
 from experiments.post_training.phase1a.matrix import (
     CHECKPOINT_STEPS,
     EXPORT_CHECKPOINT_STEPS,
+    GPUS_PER_NODE,
     LR_SWEEP,
+    M4_POLICY_NODES,
+    M4_ROLLOUT_ENGINES,
     PHASE1A_CONDITIONS,
+    POLICY_NODES,
     SAMPLES_PER_PROMPT,
     STEPS,
     TEACHER_ROUTES,
@@ -44,6 +48,7 @@ from experiments.post_training.phase1a.matrix import (
     phase0c_lr_sweep,
     phase1a_runs,
     role_plan,
+    topology,
 )
 
 TEACHERS = {
@@ -87,6 +92,24 @@ def test_both_arms_consume_the_same_sequences_per_step(condition):
     assert m1.policy_mini_batch_size == m1.train_batch_size and m4.policy_mini_batch_size == m4.train_batch_size
     expected = {Condition.XR: 64, Condition.X_PRIME: 64, Condition.R_PRIME: 64}.get(condition, 32)
     assert m4.train_batch_size * SAMPLES_PER_PROMPT == expected
+
+
+def test_m4_matches_its_data_with_policy_nodes_not_batch_width():
+    # Standing decision 2026-10-27: the pre-registered 8 prompts/step are not
+    # negotiable, so a geometry whose data parallel size exceeds the batch is
+    # fixed on the node count — M4 runs 2 policy nodes (DP=8 under PP2 x EP8)
+    # while M1 keeps the 4 the completed sweep arm used.
+    m4 = role_plan(RunPlan(Method.M4, Condition.X, 0, 1e-6))
+    assert m4.policy_num_nodes == M4_POLICY_NODES == 2
+    assert m4.train_batch_size == 8
+    assert m4.policy_num_nodes * GPUS_PER_NODE // 2 == m4.train_batch_size
+    assert role_plan(RunPlan(Method.M1, Condition.X, 0, 1e-6)).policy_num_nodes == POLICY_NODES == 4
+
+
+def test_topology_counts_policy_nodes_per_method():
+    theta = RunPlan(Method.M4, Condition.X, 0, 1e-6)
+    assert topology(theta).num_nodes == M4_POLICY_NODES + M4_ROLLOUT_ENGINES + len(theta.tasks)
+    assert topology(RunPlan(Method.M1, Condition.X, 0, 1e-6)).num_nodes == POLICY_NODES
 
 
 def _samples(task: Task, task_ids: list[str], per_prompt: int) -> list[dict]:
