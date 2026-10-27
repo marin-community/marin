@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 import requests
 from marin.inference.types import OpenAIEndpoint
@@ -138,3 +140,49 @@ def test_a_client_error_raises_without_retry(monkeypatch):
     with pytest.raises(requests.HTTPError):
         sample_token_ids(endpoint, {"model": "b"})
     assert len(attempts) == 1
+
+
+def _probe_row(probe_id: str) -> dict:
+    return {"probe_id": probe_id, "source": "aime_2024", "messages": [{"role": "user", "content": "add two and five"}]}
+
+
+def test_a_killed_pass_restarts_from_the_raw_file(monkeypatch, tmp_path):
+    # Regression: two passes were lost whole (a 504, then a job timeout) because
+    # the raw file landed only after the last completion. Now the file is
+    # rewritten as completions land and a restart samples only what is missing.
+    endpoint = OpenAIEndpoint(base_url="http://endpoint/v1", model="b")
+    raw_path = str(tmp_path / "P_X.jsonl")
+    rows = [_probe_row(f"p-{index}") for index in range(3)]
+    prompt_ids = [[1], [2], [3]]
+    done = {
+        "p-0": {"probe_id": "p-0", "prompt_ids": [1], "response_ids": [10, 11]},
+        "p-1": {"probe_id": "p-1", "prompt_ids": [2], "response_ids": [20]},
+    }
+    raw_path_file = tmp_path / "P_X.jsonl"
+    raw_path_file.write_text("".join(json.dumps(done[probe]) + "\n" for probe in ("p-0", "p-1")))
+
+    sampled_ids = iter([[30], [31]])
+
+    def fake_sample(_endpoint, _body):
+        return next(sampled_ids)
+
+    monkeypatch.setattr(continuations, "sample_token_ids", fake_sample)
+    responses = continuations._sampled_responses(endpoint, rows, prompt_ids, stop_id=9, raw_path=raw_path)
+    assert responses == [[10, 11], [20], [30]]
+
+    # The raw file holds all three probes, so a third pass samples nothing.
+    stored = {row["probe_id"]: row for row in continuations.read_jsonl(raw_path)}
+    assert sorted(stored) == ["p-0", "p-1", "p-2"]
+    sampled_ids2 = iter([])
+    monkeypatch.setattr(continuations, "sample_token_ids", lambda _e, _b: next(sampled_ids2))
+    assert continuations._sampled_responses(endpoint, rows, prompt_ids, stop_id=9, raw_path=raw_path) == responses
+
+
+def test_a_raw_file_with_a_different_prompt_is_rejected(monkeypatch, tmp_path):
+    endpoint = OpenAIEndpoint(base_url="http://endpoint/v1", model="b")
+    raw_path = str(tmp_path / "P_X.jsonl")
+    rows = [_probe_row("p-0")]
+    raw_path_file = tmp_path / "P_X.jsonl"
+    raw_path_file.write_text(json.dumps({"probe_id": "p-0", "prompt_ids": [99], "response_ids": [1]}) + "\n")
+    with pytest.raises(ValueError, match="different prompt"):
+        continuations._sampled_responses(endpoint, rows, [[1]], stop_id=9, raw_path=raw_path)

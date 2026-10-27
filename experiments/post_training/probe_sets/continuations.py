@@ -20,13 +20,12 @@ Run as a small CPU job; serving dispatches its own 8-GPU job::
 from __future__ import annotations
 
 import argparse
-import functools
 import hashlib
 import json
 import logging
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from typing import Any
 
@@ -56,6 +55,10 @@ REQUEST_TIMEOUT = 7200
 TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 ENDPOINT_ATTEMPTS = 6
 BACKOFF_SECONDS = 4
+# The raw file is rewritten every this many new completions: a killed pass (job
+# timeout, endpoint loss) loses at most that many rows, and a restart samples
+# only the probes still missing.
+RAW_WRITE_EVERY = 100
 # Every render passes the shared template explicitly, so the export's own template is not needed.
 TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
 
@@ -145,33 +148,54 @@ def sample_token_ids(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int
 def _sampled_responses(
     endpoint: OpenAIEndpoint, rows: list[dict[str, Any]], prompt_ids: list[list[int]], stop_id: int, raw_path: str
 ) -> list[list[int]]:
-    """Each probe's sampled ids, written to ``raw_path`` before tagging; a raw file already there is reused.
+    """Each probe's sampled ids, checkpointed to ``raw_path`` as they land.
 
-    The sampled ids are the expensive part, and reusing them keeps a tagging failure
-    from costing a second sampling pass (the seeds would reproduce it anyway).
+    A raw file already there is reused: the sampled ids are the expensive part,
+    and a restart after a killed pass samples only the probes still missing (the
+    seeds reproduce the rest). Rewrites happen every ``RAW_WRITE_EVERY`` new
+    completions and once at the end.
     """
     filesystem, path = fsspec.core.url_to_fs(raw_path)
+    sampled: dict[str, dict[str, Any]] = {}
     if filesystem.exists(path):
         stored = {row["probe_id"]: row for row in read_jsonl(raw_path)}
-        logger.info("reusing %d sampled replies from %s", len(stored), raw_path)
-        for row, ids in zip(rows, prompt_ids, strict=True):
-            if stored[row["probe_id"]]["prompt_ids"] != ids:
+        logger.info("reusing %d sampled replies from %s", len(stored), path)
+        sampled.update(stored)
+    todo = []
+    for row, ids in zip(rows, prompt_ids, strict=True):
+        if row["probe_id"] in sampled:
+            if sampled[row["probe_id"]]["prompt_ids"] != ids:
                 raise ValueError(f"{raw_path} holds a different prompt for {row['probe_id']}")
-        return [stored[row["probe_id"]]["response_ids"] for row in rows]
-    bodies = [
-        request_body(endpoint.model, ids, request_seed(MASTER_SEED, row["probe_id"], 0), SNOWBALL_DECODE, stop_id)
-        for row, ids in zip(rows, prompt_ids, strict=True)
-    ]
-    with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-        responses = list(pool.map(functools.partial(sample_token_ids, endpoint), bodies))
-    write_jsonl(
-        raw_path,
-        [
-            {"probe_id": row["probe_id"], "prompt_ids": ids, "response_ids": response}
-            for row, ids, response in zip(rows, prompt_ids, responses, strict=True)
-        ],
-    )
-    return responses
+            continue
+        todo.append((row, ids))
+    if todo:
+        bodies = [
+            request_body(endpoint.model, ids, request_seed(MASTER_SEED, row["probe_id"], 0), SNOWBALL_DECODE, stop_id)
+            for row, ids in todo
+        ]
+        with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
+            futures = {
+                pool.submit(sample_token_ids, endpoint, body): (row, ids)
+                for (row, ids), body in zip(todo, bodies, strict=True)
+            }
+            pending_write = 0
+            for future in as_completed(futures):
+                row, ids = futures[future]
+                sampled[row["probe_id"]] = {
+                    "probe_id": row["probe_id"],
+                    "prompt_ids": ids,
+                    "response_ids": future.result(),
+                }
+                pending_write += 1
+                if pending_write >= RAW_WRITE_EVERY:
+                    pending_write = 0
+                    _write_raw(path, rows, sampled)
+        _write_raw(path, rows, sampled)
+    return [sampled[row["probe_id"]]["response_ids"] for row in rows]
+
+
+def _write_raw(path: str, rows: list[dict[str, Any]], sampled: dict[str, dict[str, Any]]) -> None:
+    write_jsonl(path, [sampled[row["probe_id"]] for row in rows if row["probe_id"] in sampled])
 
 
 def read_jsonl(path: str) -> list[dict[str, Any]]:
