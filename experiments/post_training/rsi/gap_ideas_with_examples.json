@@ -1,0 +1,83 @@
+[
+  {
+    "capability_id": "gap.search.shortest-state-machine-sequence",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate4-fixed-ideas-with-example-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "find the shortest action sequence in a state machine",
+      "outcome": "Plans the shortest sequence of actions that drives a small machine from its start state to a target, when each action's effect depends on a toggling mode, by searching the reachable states breadth first instead of guessing, and reports exactly the sequence in the requested notation.",
+      "includes": [
+        "breadth-first search over (value, mode) states",
+        "tracking a mode that every action toggles",
+        "actions whose effect depends on the mode",
+        "proving a sequence is shortest before answering",
+        "writing the sequence in the requested separator notation"
+      ],
+      "excludes": [],
+      "id": "gap.search.shortest-state-machine-sequence",
+      "evidence": [],
+      "example_task": "In front of you are some buttons, a light, and a number. The light will toggle between red and green whenever you press a button. Each button performs a mathematical operation to the number, but the operation may depend on the state of the light.\nYou must press the shortest correct sequence of buttons to reach the target value. Your answer should be a sequence of buttons separated by '\u2192', for example: A \u2192 B \u2192 C\n\nStart: 0 (red)\nTarget: 37\nButtons:\nA: Multiply 2 (when any)\nB: Add 3 (when any)\nC: Subtract 2 (when green)",
+      "task_form": "Build tasks of the same form as example_task: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply, ending with the answer in the format that the message asks for. Vary the instances (values, sizes, difficulty) but keep this form and the kind of wording, which does not explain the rule."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "36c618504f788a73272f9907a1abe549c321f4b7cc776b7bd15df8cef63dbbb6"
+  },
+  {
+    "capability_id": "gap.strings.exact-lexicographic-sorting",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate4-fixed-ideas-with-example-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "sort words exactly by character codes",
+      "outcome": "Sorts a list of words in ascending or descending order by ASCII/Unicode code points, not by dictionary order: capital letters before lowercase, character by character, prefixes first, and returns exactly the requested delimited list with the original spelling and case.",
+      "includes": [
+        "code-point order versus case-insensitive order",
+        "comparing words character by character",
+        "prefix and equal-prefix cases",
+        "descending versus ascending order",
+        "exact comma-separated output with no extra words"
+      ],
+      "excludes": [],
+      "id": "gap.strings.exact-lexicographic-sorting",
+      "evidence": [],
+      "example_task": "Your task is to sort words in ascending or descending order using ASCII/Unicode ordering.\n\nYour output should be a comma-separated list of words, e.g. word_1, word_2, word_3\n\nNow, sort these words in ascending order (using ASCII/Unicode ordering) and return them as a comma-separated list: lifted, our, mental, doctrine, banks, etheric\n",
+      "task_form": "Build tasks of the same form as example_task: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply, ending with the answer in the format that the message asks for. Vary the instances (values, sizes, difficulty) but keep this form and the kind of wording, which does not explain the rule."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "e62c6b6e9922938cf7593f6456b4941178a03123d02a9aec49bd1fc02ead473e"
+  },
+  {
+    "capability_id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+    "subject_id": "gap",
+    "subject_name": "Hand-written capability gaps of gate 3",
+    "catalog_version": "gate4-fixed-ideas-with-example-1",
+    "capability": {
+      "kind": "capability",
+      "parent_id": "gap",
+      "prerequisites": [],
+      "name": "compute antiderivatives by substitution and by parts",
+      "outcome": "Computes indefinite integrals that need a substitution (including of a composite inner function) or integration by parts, simplifies the result, includes the constant of integration, and writes the antiderivative in the requested symbolic syntax.",
+      "includes": [
+        "u-substitution with a linear or composite inner function",
+        "integration by parts, repeated when needed",
+        "powers of sine and cosine with a matching derivative factor",
+        "checking the result by differentiating",
+        "symbolic syntax with ** and explicit *"
+      ],
+      "excludes": [],
+      "id": "gap.calculus.antiderivatives-by-substitution-and-parts",
+      "evidence": [],
+      "example_task": "Find the indefinite integral: \u222b 5*sqrt(-5*x - 1) dx\nWhen performing calculations, please follow these guidelines:\nUse same variable symbols as given in the question\n1. Use ** instead of ^ to represent exponents. For example, write 7*X**2 instead of 7*X^2.\n2. Always include the * symbol for all multiplication operations in your reasoning steps. For example, write `-3*X**3*sin(X) - 9*X**2*cos(X) + 18*X*sin(X) + 18*cos(X) + C` instead of `-3x3sin(x) - 9x2cos(x) + 18xsin(x) + 18cos(x) + C`.\n3. Use `exp(x)` or `E**(x)` for the exponential function (i.e. use capital E for Euler's number).\n",
+      "task_form": "Build tasks of the same form as example_task: one user message that states the whole problem inline, with no files, tools or shell; the policy answers in its reply, ending with the answer in the format that the message asks for. Vary the instances (values, sizes, difficulty) but keep this form and the kind of wording, which does not explain the rule."
+    },
+    "prerequisite_edges": [],
+    "capability_hash": "8192ceb11ad3d3c95bb3be6901af9b955ee1da95eeca66b2653615871181dc6b"
+  }
+]

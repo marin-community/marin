@@ -16,7 +16,7 @@ import logging
 import os
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Mapping
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 import click
@@ -125,6 +125,13 @@ def feedback_options(function):
             click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time."),
             click.option("--agent-turns", type=int, default=300, show_default=True),
             click.option(
+                "--solver-band",
+                type=(float, float),
+                default=GATE.solver_band,
+                show_default=True,
+                help="The lowest and the highest pass rate of the live policy that the gate accepts.",
+            ),
+            click.option(
                 "--ideas-file",
                 help="A JSON list of capability ideas that replace the failed-run analysis, to test synthesis alone.",
             ),
@@ -170,6 +177,7 @@ class FeedbackOptions:
     probes_per_task: int
     sessions: int
     agent_turns: int
+    solver_band: tuple[float, float]
     ideas_file: str | None
     eval_every: int
     eval_samples: int
@@ -203,7 +211,7 @@ async def synthesis_config(
         web=web,
         agent_limits=agent_limits(feedback.agent_turns),
         solver_limits=SOLVER_LIMITS,
-        gate=GATE,
+        gate=replace(GATE, solver_band=feedback.solver_band),
         budget=ToolBudget(
             solver_rollouts=SOLVER_ROLLOUTS_PER_TASK * feedback.tasks_per_idea,
             judge_calls=6 * feedback.tasks_per_idea + 2,
