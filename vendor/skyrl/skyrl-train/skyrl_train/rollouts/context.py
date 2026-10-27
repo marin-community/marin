@@ -49,7 +49,6 @@ from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_r
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import (
-    SCORE_CENTERING_TOPK,
     rollout_logprobs_required,
 )
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
@@ -68,7 +67,7 @@ class RolloutRequestSpec:
     def from_config(cls, config: DictConfig) -> RolloutRequestSpec:
         sampling = get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params)
         if config.trainer.algorithm.get("score_centering_enabled", False):
-            sampling["logprobs"] = SCORE_CENTERING_TOPK
+            sampling["logprobs"] = config.trainer.algorithm.score_centering_top_k
         return cls(
             samples_per_prompt=config.generator.n_samples_per_prompt,
             sampling_params=sampling,

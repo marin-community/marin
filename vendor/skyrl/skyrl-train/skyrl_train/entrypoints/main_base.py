@@ -32,7 +32,6 @@ from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     validate_rollout_launch,
 )
-from skyrl_train.config.objective_spec import SCORE_CENTERING_TOPK
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
     parse_speculative_decoding_config,
@@ -183,7 +182,7 @@ def create_ray_wrapped_inference_engines_from_config(
 
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
     if cfg.trainer.algorithm.get("score_centering_enabled", False):
-        requested_logprobs.append(SCORE_CENTERING_TOPK)
+        requested_logprobs.append(cfg.trainer.algorithm.score_centering_top_k)
     for callback in cfg.trainer.get("callbacks") or []:
         if callback.get("type") == "evaluation":
             requested_logprobs.extend(

@@ -72,7 +72,7 @@ from marinskyrl.distillation import (
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.objective.score_centering import collate_score_centering
-from skyrl_train.config.objective_spec import SCORE_CENTERING_TOPK, off_policy_correction
+from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
     boundary_route_metrics,
@@ -2237,7 +2237,7 @@ class RayPPOTrainer:
                     trajectory_batch,
                     response_ids,
                     response_masks_tensor,
-                    SCORE_CENTERING_TOPK,
+                    self.cfg.trainer.algorithm.score_centering_top_k,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
             score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}

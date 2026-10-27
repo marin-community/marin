@@ -13,10 +13,10 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("topk", [0, 128])
+@pytest.mark.parametrize("topk", [0, 32, 128])
 async def test_training_task_retains_heads_and_capture_costs(topk):
-    ids = np.tile(np.arange(128, dtype=np.int32), (4, 1))
-    scores = np.full((4, 128), -np.log(128), dtype=np.float32)
+    ids = np.tile(np.arange(topk or 1, dtype=np.int32), (4, 1))
+    scores = np.full(ids.shape, -np.log(128), dtype=np.float32)
 
     class Tokenizer:
         eos_token_id = 99
@@ -67,8 +67,8 @@ async def test_training_task_retains_heads_and_capture_costs(topk):
         np.testing.assert_array_equal(batch["behavior_topk_logprobs"][0], scores)
         assert metrics["score_centering_capture/requests"] == 1
         assert metrics["score_centering_capture/captured_tokens"] == 4
-        assert metrics["score_centering_capture/captured_head_bytes"] == 4096
-        assert metrics["score_centering_capture/exported_head_bytes"] == 4096
+        assert metrics["score_centering_capture/captured_head_bytes"] == 4 * topk * 8
+        assert metrics["score_centering_capture/exported_head_bytes"] == 4 * topk * 8
         assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
         assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
     else:
