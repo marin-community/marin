@@ -1,11 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+import requests
+from marin.inference.types import OpenAIEndpoint
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.chat_template import GRUG_TOKENS
-from experiments.post_training.probe_sets.continuations import continuation_row, render_prompt_ids, request_body
+from experiments.post_training.probe_sets import continuations
+from experiments.post_training.probe_sets.continuations import (
+    continuation_row,
+    render_prompt_ids,
+    request_body,
+    sample_token_ids,
+)
 from experiments.post_training.stage0.protocol_gate import Decode
 
 PROBE = {"probe_id": "p-0", "source": "aime_2024", "messages": [{"role": "user", "content": "add two and five"}]}
@@ -83,3 +92,49 @@ def test_the_request_samples_token_ids_and_stops_only_on_the_turn_close():
     body = request_body("b", [1, 2], seed=3, decode=Decode(repetition_penalty=1.05), stop_id=9)
     assert body["prompt"] == [1, 2] and body["return_token_ids"] and body["ignore_eos"]
     assert body["stop_token_ids"] == [9] and body["repetition_penalty"] == 1.05 and not body["skip_special_tokens"]
+
+
+class _Response:
+    def __init__(self, status, payload=None):
+        self.status_code = status
+        self._payload = payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}", response=self)
+
+    def json(self):
+        return self._payload
+
+
+def test_a_transient_endpoint_failure_is_retried(monkeypatch):
+    # Regression: one 504 from the shared vLLM endpoint killed a finished-almost
+    # generation pass. Seeded bodies reproduce the sample, so retry.
+    endpoint = OpenAIEndpoint(base_url="http://endpoint/v1", model="b")
+    attempts = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        attempts.append(url)
+        if len(attempts) < 3:
+            return _Response(504)
+        return _Response(200, {"choices": [{"token_ids": [5, 6]}]})
+
+    monkeypatch.setattr(continuations.requests, "post", fake_post)
+    monkeypatch.setattr(continuations.time, "sleep", lambda _seconds: None)
+    assert sample_token_ids(endpoint, {"model": "b"}) == [5, 6]
+    assert len(attempts) == 3
+
+
+def test_a_client_error_raises_without_retry(monkeypatch):
+    endpoint = OpenAIEndpoint(base_url="http://endpoint/v1", model="b")
+    attempts = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        attempts.append(url)
+        return _Response(400)
+
+    monkeypatch.setattr(continuations.requests, "post", fake_post)
+    monkeypatch.setattr(continuations.time, "sleep", lambda _seconds: None)
+    with pytest.raises(requests.HTTPError):
+        sample_token_ids(endpoint, {"model": "b"})
+    assert len(attempts) == 1

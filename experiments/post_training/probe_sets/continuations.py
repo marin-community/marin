@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 MASTER_SEED = 20261024
 CONCURRENT_REQUESTS = 64
 REQUEST_TIMEOUT = 7200
+# A shared vLLM endpoint occasionally answers a completion with a transient
+# status or drops the connection; a hours-long sampling pass retries instead of
+# dying. Seeded bodies reproduce the same sample on retry.
+TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+ENDPOINT_ATTEMPTS = 6
+BACKOFF_SECONDS = 4
 # Every render passes the shared template explicitly, so the export's own template is not needed.
 TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
 
@@ -117,8 +123,19 @@ def request_body(model: str, prompt_ids: list[int], seed: int, decode: Decode, s
 
 def sample_token_ids(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int]:
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
-    response = requests.post(endpoint.url("completions"), json=body, headers=headers, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
+    for attempt in range(ENDPOINT_ATTEMPTS):
+        try:
+            response = requests.post(endpoint.url("completions"), json=body, headers=headers, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            break
+        except (requests.ConnectionError, requests.HTTPError, requests.Timeout) as error:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            transient = status is None or status in TRANSIENT_STATUS_CODES
+            if attempt == ENDPOINT_ATTEMPTS - 1 or not transient:
+                raise
+            delay = BACKOFF_SECONDS * 2**attempt
+            logger.warning("transient endpoint failure (%s); attempt %d, retrying in %ds", error, attempt + 1, delay)
+            time.sleep(delay)
     choice = response.json()["choices"][0]
     if choice.get("token_ids") is None:
         raise ValueError("the server did not return the sampled token ids (return_token_ids)")
