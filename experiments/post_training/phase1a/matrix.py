@@ -79,6 +79,13 @@ WEIGHT_DECAY = 0.0
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_STEPS = (10, 20, 30, 40, 50, 75, 100)
 OPTIMIZER_CHECKPOINT_STEPS = (10, 50, 100)
+# Scored checkpoints (decision 2026-10-26): every other checkpoint, ending at the
+# last one. HF exports are requested exactly here — an export converts a saved
+# checkpoint, so requesting one anywhere else would fail the trainer, and one at
+# every checkpoint would convert steps nobody scores.
+EXPORT_CHECKPOINT_STEPS = tuple(
+    step for index, step in enumerate(CHECKPOINT_STEPS) if index % 2 == 0 or index == len(CHECKPOINT_STEPS) - 1
+)
 SEEDS = (0, 1, 2)
 PHASE1A_CONDITIONS = (Condition.X, Condition.R, Condition.XR, Condition.X_PRIME, Condition.R_PRIME)
 # Phase 0c sweeps {0.5, 1, 2, 4} x 1e-6 over M1 and M4 on theta_X (control C10).
@@ -236,6 +243,7 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
         seed=run.seed,
         checkpoint_steps=list(CHECKPOINT_STEPS),
         optimizer_checkpoint_steps=list(OPTIMIZER_CHECKPOINT_STEPS),
+        hf_export_steps=list(EXPORT_CHECKPOINT_STEPS),
         ckpt_interval=CHECKPOINT_STEPS[0],
         resume_mode="latest",
         micro_forward_batch_size_per_gpu=1,

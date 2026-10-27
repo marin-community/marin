@@ -130,6 +130,33 @@ def test_hf_exports_fire_at_explicit_checkpoint_steps_not_the_interval():
     assert callback.on_train_end(_state(100), _control()).should_save_hf_model
 
 
+def test_hf_exports_follow_the_scored_step_list_when_the_launcher_sets_one():
+    # The launcher derives hf_export_steps from the checkpoints it scores; the
+    # interval must not fire between them.
+    cfg = schedule_config(
+        checkpoint_steps=[10, 20, 30, 40, 50, 75, 100],
+        optimizer_checkpoint_steps=[10, 50, 100],
+        hf_export_steps=[10, 30, 50, 100],
+        ckpt_interval=10,
+        export_hf_artifact=True,
+    )
+    callback = _hf_save_callback(cfg)
+    fired = [step for step in range(1, 101) if callback.on_step_end(_state(step), _control()).should_save_hf_model]
+    assert fired == [10, 30, 50, 100]
+
+
+def test_hf_export_steps_outside_the_checkpoint_schedule_are_rejected():
+    cfg = schedule_config(
+        checkpoint_steps=[10, 20, 30, 40, 50, 75, 100],
+        optimizer_checkpoint_steps=[10, 50, 100],
+        hf_export_steps=[10, 30, 60, 100],
+        ckpt_interval=10,
+        export_hf_artifact=True,
+    )
+    with pytest.raises(ValueError, match="hf_export_steps \\[60\\]"):
+        _hf_save_callback(cfg)
+
+
 def test_hf_exports_keep_the_interval_when_no_steps_are_listed():
     cfg = schedule_config(ckpt_interval=10, export_hf_artifact=True)
     callback = _hf_save_callback(cfg)

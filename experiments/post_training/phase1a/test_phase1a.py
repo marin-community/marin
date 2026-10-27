@@ -29,6 +29,8 @@ from experiments.post_training.phase1a.launch import (
     teacher_model,
 )
 from experiments.post_training.phase1a.matrix import (
+    CHECKPOINT_STEPS,
+    EXPORT_CHECKPOINT_STEPS,
     LR_SWEEP,
     PHASE1A_CONDITIONS,
     SAMPLES_PER_PROMPT,
@@ -67,6 +69,14 @@ def test_lr_sweep_selection_can_restrict_to_one_learning_rate():
     assert len(selected_runs("lr-sweep", 5e-7, ("m1",), (), ())) == 1
     with pytest.raises(click.UsageError, match="not in the lr-sweep grid"):
         selected_runs("lr-sweep", 3e-6, (), (), ())
+
+
+def test_export_steps_are_the_scored_checkpoints_derived_from_the_schedule():
+    # Scoring decision 2026-10-26: every other checkpoint, ending at the last one.
+    # The HF export schedule is derived from CHECKPOINT_STEPS in the launcher, so
+    # exports and scored checkpoints cannot drift apart.
+    assert EXPORT_CHECKPOINT_STEPS == (10, 30, 50, 100)
+    assert set(EXPORT_CHECKPOINT_STEPS) <= set(CHECKPOINT_STEPS)
 
 
 @pytest.mark.parametrize("condition", [*PHASE1A_CONDITIONS, Condition.PROCEDURE_NULL])
