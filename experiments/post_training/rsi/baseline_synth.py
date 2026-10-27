@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 SYNTHESIZED_FILE = "synthesized.jsonl"
 POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_tokens=32768)
 PROGRAM_TIMEOUT = 300.0
+GENERATOR_ATTEMPTS = 3
 TYPE_BY_CAPABILITY = {
     "gap.search.shortest-state-machine-sequence": "quantum_lock",
     "gap.strings.exact-lexicographic-sorting": "word_sorting",
@@ -120,6 +121,22 @@ async def direct(client: GlmClient, idea: CapabilityIdea, count: int, concurrenc
 
 
 async def generator(client: GlmClient, idea: CapabilityIdea, count: int) -> list[tuple[str, dict]]:
+    """The instances of the first of ``GENERATOR_ATTEMPTS`` GLM-written programs that prints any."""
+    for attempt in range(GENERATOR_ATTEMPTS):
+        pairs = await _generate_once(client, idea, count)
+        if pairs:
+            return pairs
+        logger.warning("Generator %d of %s printed no instances", attempt + 1, idea.capability_id)
+    return []
+
+
+def program_source(text: str) -> str:
+    """The program in GLM's reply, without the Markdown code fence that it sometimes adds."""
+    fenced = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
+    return fenced.group(1) if fenced else text
+
+
+async def _generate_once(client: GlmClient, idea: CapabilityIdea, count: int) -> list[tuple[str, dict]]:
     request = (
         "Write a Python program that generates new tasks of the capability below, of the same kind and form as the "
         "examples. Run as `python program.py N SEED`, it prints N lines, each a JSON object with the keys question "
@@ -129,7 +146,7 @@ async def generator(client: GlmClient, idea: CapabilityIdea, count: int) -> list
     result = await client.complete_structured([{"role": "user", "content": request}], Program, POLICY)
     with tempfile.TemporaryDirectory() as directory:
         program = Path(directory) / "program.py"
-        program.write_text(result.value.source)
+        program.write_text(program_source(result.value.source))
         try:
             run = await asyncio.to_thread(
                 subprocess.run,
