@@ -62,7 +62,7 @@ SNOWBALL_V0_1 = ArtifactStep.adopt(
 CLUSTER = "cw-us-east-02a"
 GRUG_RLVR_SFT_WEIGHTS = {
     "cw-us-east-02a": "s3://marin-us-east-02a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
-    "cw-rno2a": "s3://marin-rno2a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
+    "cw-rno2a": "s3://marin-rno2a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135/step-135",
 }
 """A copy of the weights in the region of each cluster, so that a run reads them locally."""
 
