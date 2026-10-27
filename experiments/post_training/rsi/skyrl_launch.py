@@ -58,14 +58,27 @@ SNOWBALL_V0_1 = ArtifactStep.adopt(
 )
 # Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23: the SFT of Grug-67B-A2B-Datakit-SFT-262K on GLM 5.3 RLVR conversations. Same
 # architecture, chat template and tokenizer as Snowball; its pad token falls back to EOS, which is Snowball's.
-GRUG_RLVR_SFT = ArtifactStep.adopt(
-    "models/grug-67b-a2b-glm53-rlvr-sft",
-    "2026.09.23",
-    "s3://marin-us-east-02a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
-    kind=LevanterCheckpoint,
-)
-# The feed, the Snowball weights and the loop's other jobs are in US-EAST-02A.
+# The feed, the Snowball weights and the loop's other jobs are in US-EAST-02A; a run can also train on cw-rno2a.
 CLUSTER = "cw-us-east-02a"
+GRUG_RLVR_SFT_WEIGHTS = {
+    "cw-us-east-02a": "s3://marin-us-east-02a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
+    "cw-rno2a": "s3://marin-rno2a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135",
+}
+"""A copy of the weights in the region of each cluster, so that a run reads them locally."""
+
+
+def grug_rlvr_sft(cluster: str) -> ArtifactStep[LevanterCheckpoint]:
+    suffix = "" if cluster == CLUSTER else f"-{cluster.removeprefix('cw-')}"
+    return ArtifactStep.adopt(
+        f"models/grug-67b-a2b-glm53-rlvr-sft{suffix}",
+        "2026.09.23",
+        GRUG_RLVR_SFT_WEIGHTS[cluster],
+        kind=LevanterCheckpoint,
+    )
+
+
+GRUG_RLVR_SFT = grug_rlvr_sft("cw-us-east-02a")
+CLUSTERS = tuple(GRUG_RLVR_SFT_WEIGHTS)
 GPU_VARIANT = "H100"
 # Whole nodes only: a privileged task sees every GPU of its node, and SkyRL does not remap CUDA_VISIBLE_DEVICES.
 GPUS_PER_NODE = 8
@@ -341,8 +354,11 @@ def build_run(
     seed: int,
     export_every: int,
     request_window_tokens: int | None,
+    cluster: str = CLUSTER,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
+    if model == "grug":
+        profile = replace(profile, step=grug_rlvr_sft(cluster))
     if export_every % CHECKPOINT_EVERY:
         raise click.BadParameter(f"must be a multiple of {CHECKPOINT_EVERY}", param_hint="--export-every")
     if not feed_root.startswith("s3://"):
@@ -391,14 +407,14 @@ def build_run(
             seed=seed,
         ),
         IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+            cluster=cluster,
+            cluster_config=f"lib/iris/config/{cluster}.yaml",
             cpu=TASK_CPUS,
             memory=profile.host_memory,
             disk=profile.disk,
             priority="interactive",
             max_retries=2,
-            target_cluster=CLUSTER,
+            target_cluster=cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=72,
             wandb_entity=None,
@@ -412,6 +428,7 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--model", type=click.Choice(tuple(PROFILES)), required=True)
+@click.option("--cluster", type=click.Choice(CLUSTERS), default=CLUSTER, show_default=True)
 @click.option("--arm", type=click.Choice(ARMS), required=True, help="Names the run; the feed decides the arm.")
 @click.option("--feed-root", required=True, help="The s3:// prefix of the task feed that the loop writes.")
 @click.option("--steps", type=int, default=150, show_default=True)
@@ -430,6 +447,7 @@ def build_run(
 @rl_build_options
 def main(
     model: str,
+    cluster: str,
     arm: str,
     feed_root: str,
     steps: int,
@@ -451,6 +469,7 @@ def main(
         seed=seed,
         export_every=export_every,
         request_window_tokens=request_window_tokens,
+        cluster=cluster,
     )
 
 

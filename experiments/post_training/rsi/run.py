@@ -125,6 +125,13 @@ def feedback_options(function):
             click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time."),
             click.option("--agent-turns", type=int, default=300, show_default=True),
             click.option(
+                "--agent-reasoning-effort",
+                type=click.Choice(["low", "medium", "high"]),
+                default="low",
+                show_default=True,
+                help="The reasoning effort of the Taskforge agent's model.",
+            ),
+            click.option(
                 "--solver-band",
                 type=(float, float),
                 default=GATE.solver_band,
@@ -177,6 +184,7 @@ class FeedbackOptions:
     probes_per_task: int
     sessions: int
     agent_turns: int
+    agent_reasoning_effort: str
     solver_band: tuple[float, float]
     ideas_file: str | None
     eval_every: int
@@ -202,7 +210,9 @@ async def synthesis_config(
     web = await stack.enter_async_context(ParallelWeb(os.environ[PARALLEL_API_KEY_ENV]))
     endpoint = source.current()
     agentic = AgenticConfig(
-        agent_model=chat_model(endpoint, model=GLM_MODEL, reasoning_effort="low", cache_key=None),
+        agent_model=chat_model(
+            endpoint, model=GLM_MODEL, reasoning_effort=feedback.agent_reasoning_effort, cache_key=None
+        ),
         workspace_factory=workspace_factory(),
         solver_model=solver,
         solver_factory=solver_factory(Backend.LOCAL),
