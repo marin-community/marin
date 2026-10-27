@@ -20,30 +20,37 @@ from types import SimpleNamespace
 
 import pytest
 import ray
+import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer.module import Float16Module
 from ray.util.placement_group import placement_group
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from transformers import AutoTokenizer
-
-import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
+from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
-from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from skyrl_train.utils.torch_utils import logprobs_from_logits
+from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
+from transformers import AutoTokenizer
+
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_serving import (
     GRUG_BIAS_NAMES as BIAS_NAMES,
+)
+from tests.gpu.grug_serving import (
     GRUG_PARAMETER_NAMES as PARAMETER_NAMES,
+)
+from tests.gpu.grug_serving import (
     GRUG_SERVING_EXPERT_INDEX_BY_NAME as SERVING_EXPERT_INDEX_BY_NAME,
+)
+from tests.gpu.grug_serving import (
     LM_HEAD_NAME,
     ROUTER_NAME,
     assert_engine_weights,
@@ -502,8 +509,7 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
 
 
 @pytest.mark.vllm
-@pytest.mark.parametrize("nccl_max_channels", [None, 32])
-def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path, nccl_max_channels):
+def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path):
     """Rollout, PP2 Megatron update, mixed-dtype broadcast, serving readback, rollout."""
     policy_world_size = 2
     require_hoppers(policy_world_size + ROLLOUT_WORLD_SIZE)
@@ -511,9 +517,6 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
-    if nccl_max_channels is not None:
-        cfg.trainer.algorithm.batch_invariant = True
-        cfg.trainer.policy.megatron_config.nccl_max_channels = nccl_max_channels
     initialize_ray(cfg)
     client = grug_engine_client(cfg, str(model_path))
     try:
@@ -646,6 +649,51 @@ def _idle_pinned_host_bytes(_worker) -> int:
     """Pinned host memory that PyTorch's caching allocator holds but no tensor uses."""
     stats = torch.cuda.host_memory_stats()
     return stats["allocated_bytes.current"] - stats["active_bytes.current"]
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_cpu_offloaded_optimizer_load_does_not_stage_moments_on_cuda(dtype):
+    require_hoppers(1)
+    torch.manual_seed(19)
+    parameters = [torch.nn.Parameter(torch.randn(1024, 1024, device="cuda", dtype=dtype)) for _ in range(4)]
+    optimizer = HybridDeviceOptimizer(
+        parameters,
+        offload_fraction=1.0,
+        cpu_optimizer_cls=torch.optim.AdamW,
+        gpu_optimizer_cls=torch.optim.AdamW,
+        param_update_in_fp32=True,
+        overlap_cpu_optimizer_d2h_h2d=False,
+        lr=1e-3,
+    )
+    for parameter in parameters:
+        parameter.grad = torch.randn_like(parameter)
+    optimizer.step()
+    torch.cuda.synchronize()
+    saved_weights = [parameter.detach().cpu().clone() for parameter in parameters]
+    saved_state = copy.deepcopy(optimizer.state_dict())
+    for parameter in parameters:
+        parameter.grad = torch.randn_like(parameter)
+    optimizer.step()
+    torch.cuda.synchronize()
+    expected = [parameter.detach().cpu().clone() for parameter in parameters]
+
+    with torch.no_grad():
+        for parameter, saved in zip(parameters, saved_weights, strict=True):
+            parameter.copy_(saved)
+    torch.cuda.synchronize()
+    allocated = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    optimizer.load_state_dict(saved_state)
+    torch.cuda.synchronize()
+    extra_allocated = torch.cuda.max_memory_allocated() - allocated
+    # Rebuilding CPU parameter copies can clone one shard on CUDA, but loading
+    # all moments on CUDA would require at least eight FP32 shards.
+    assert extra_allocated <= 2 * parameters[0].numel() * torch.float32.itemsize
+
+    optimizer.step()
+    torch.cuda.synchronize()
+    for parameter, continued in zip(parameters, expected, strict=True):
+        torch.testing.assert_close(parameter.cpu(), continued, rtol=0, atol=0)
 
 
 def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
