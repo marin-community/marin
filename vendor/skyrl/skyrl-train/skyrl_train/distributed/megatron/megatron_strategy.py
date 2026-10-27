@@ -1,3 +1,4 @@
+import gc
 import os
 import math
 import random
@@ -491,6 +492,11 @@ class MegatronStrategy(DistributedStrategy):
             restore_offloaded_optimizer_state(optimizer)
             if model_weights_from_optimizer:
                 restore_model_weights_from_optimizer(optimizer, model)
+            # The template optimizer state that the checkpoint was loaded into is a second full set of moments;
+            # free it before the gradients return, or a resumed Grug policy OOMs on its gradient buffers.
+            del sharded_state_dict["optimizer"]
+            gc.collect()
+            torch.cuda.empty_cache()
             load_megatron_grads_to_gpu(model)
             self.log("Loaded optimizer state dict.")
 
