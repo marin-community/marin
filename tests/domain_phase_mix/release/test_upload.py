@@ -31,7 +31,7 @@ TABLES = {
     "data/heldout/heldout.csv": pd.DataFrame(
         {"observation_id": ["obs_0123456789ab", "obs_123456789abc"], "bpb__arc_easy": [0.81, 0.79]}
     ),
-    "data/fits/fits_task_parameters.parquet": pd.DataFrame({"task_id": ["arc_easy"], "rate": [0.25]}),
+    "data/fits/fits_task_parameters.parquet": pd.DataFrame({"task_id": ["arc_easy"], "rho": [0.25]}),
 }
 # One paper table whose numbers the audit finds differing (0.80), matching (0.79), registered as a constant (7) and
 # unregistered (8).

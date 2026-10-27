@@ -46,7 +46,8 @@ def test_task_parameters(out):
     assert len(t) == 3 * 58
     for swarm in ("qwen3_360m_1p6b", "llama_160m_1p2b", "llama_200m_6b"):
         assert sorted(t[t.swarm == swarm].task_id) == sorted(naming.TASKS), swarm
-    assert t.kappa.between(1, 6).all() and (t.ridge >= 0).all()
+    assert list(t.columns[3:9]) == ["rho", "kappa", "tau", "gamma", "nu", "phi"]
+    assert t.kappa.between(0.3, 1).all() and t.nu.between(1, 6).all() and (t.gamma >= 0).all()
 
 
 def test_learning_curves_round_trip_parquet(out, tmp_path):

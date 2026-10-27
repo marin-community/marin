@@ -7,12 +7,14 @@ The orchestrator writes every table as Parquet. Runs are referenced by observati
 same runs; tasks by the paper's task ids (`naming.task_public`); objectives as `obe_easy` (OlmoBaseEval Easy) and
 `uncheatable`, and the subsets some proposals optimized as `obe_easy_qa15`, `obe_easy_snr5`, `uncheatable_worsened`, ...
 
-- `fits_task_parameters`: MARINER's fits to the three swarms, one row per swarm, objective and task: benefit `rate` and
-  `power`, harm `threshold`, `ridge`, the floor multiplier `kappa` (the paper's gamma), the `floor`, the inner
-  cross-validated RMSE and the rule behind its inner folds (`inner_folds`). The Qwen3 360M/1.6B rows are the reference
-  fit (mixture-selection's `reference_task_fits.csv`), whose fold table holds the folds that rule recomputes; no source
-  holds fits to the archived swarms, so `regenerate_mixture_selection_data.py` refits them with mixture-selection on
-  each swarm's fit rows, with anchors from its ten proportional repeats, and commits them as `archived_swarm_fits.csv`.
+- `fits_task_parameters`: MARINER's fits to the three swarms, one row per swarm, objective and task, with parameters
+  named by the paper's symbols: benefit rate `rho` and Weibull power `kappa`, harm threshold `tau`, ridge weight
+  `gamma`, floor multiplier `nu`, floor `phi`, then the inner cross-validated RMSE and the rule behind its inner folds
+  (`inner_folds`). mixture-selection names them `rate`, `power`, `threshold`, `ridge`, `kappa` and `floor`. The Qwen3
+  360M/1.6B rows are the reference fit (mixture-selection's `reference_task_fits.csv`), whose fold table holds the
+  folds that rule recomputes; no source holds fits to the archived swarms, so `regenerate_mixture_selection_data.py`
+  refits them with mixture-selection on each swarm's fit rows, with anchors from its ten proportional repeats, and
+  commits them as `archived_swarm_fits.csv`.
 - `fits_swarm_predictions`: the reference fit's per-task predictions at the swarm's 280 fit mixtures. The fit trained on
   these runs, so these are in-sample fitted values, not out-of-fold predictions: mixture-selection's self-test compares
   them with `fit.predict_tasks(swarm.weights)` of the full fit. The bundle names each run by its training run name
@@ -69,6 +71,9 @@ from experiments.domain_phase_mix.release.regenerate_mixture_selection_data impo
 )
 
 SWARM = "qwen3_360m_1p6b"
+# mixture-selection's parameter names -> the paper's symbols. Its `kappa` is the floor multiplier nu; the paper's kappa
+# is its Weibull `power`.
+PAPER_SYMBOLS = {"rate": "rho", "power": "kappa", "threshold": "tau", "ridge": "gamma", "kappa": "nu", "floor": "phi"}
 PANEL = {swarm: panel for panel, swarm in heldout.SWARM.items()}[SWARM]  # the held-out registry's name of the swarm
 MIXSEL_OBJECTIVES = ("table9", "uncheatable")  # mixture-selection's names, which name its files
 DATA = paths.MIXSEL / "data"
@@ -261,7 +266,8 @@ def _task_parameters() -> pd.DataFrame:
     t["swarm"] = SWARM
     t["inner_folds"] = INNER_FOLDS
     archived = _csv(ARCHIVED_FITS, comment="#")
-    return pd.concat([t[TASK_PARAMETERS], archived[TASK_PARAMETERS]], ignore_index=True)
+    fits = pd.concat([t[TASK_PARAMETERS], archived[TASK_PARAMETERS]], ignore_index=True)
+    return fits.rename(columns=PAPER_SYMBOLS)
 
 
 def _long_tasks(wide: pd.DataFrame, key: str) -> pd.DataFrame:
