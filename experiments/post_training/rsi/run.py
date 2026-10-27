@@ -44,6 +44,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
     workspace_factory,
 )
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
+from experiments.post_training.rsi.controls import Retriever, replay_failures, retrieve_similar
 from experiments.post_training.rsi.feedback import (
     SYNTHESIZED_LABEL_PREFIX,
     AnalysisConfig,
@@ -80,7 +81,7 @@ from experiments.post_training.rsi.rollouts import (
 )
 from experiments.post_training.rsi.seed import TRAIN_URL, VALIDATION_URL, TaskPool
 from experiments.post_training.rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
-from experiments.post_training.rsi.streams import Source, from_iterable, mix
+from experiments.post_training.rsi.streams import Broadcast, Source, from_iterable, mix
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +386,18 @@ def skyrl_oracle(
     asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=None, oracle=oracle))
 
 
+@main.command("skyrl-focused")
+@skyrl_options
+@click.option("--focus", type=click.Choice(["replay", "retrieval"]), required=True)
+@click.option("--focus-share", type=float, default=0.25, show_default=True, help="The share of the focused tasks.")
+@click.option("--max-pass-rate", type=float, default=0.25, show_default=True, help="A failure: at most this pass rate.")
+def skyrl_focused(focus: str, focus_share: float, max_pass_rate: float, **arguments) -> None:
+    """Feed seed tasks and, at a share, tasks chosen from the policy's failures without synthesis: the failed seed
+    tasks again (replay), or the unseen seed tasks most similar to them (retrieval). The controls of the loop."""
+    options = SkyrlOptions(**arguments)
+    asyncio.run(_skyrl_run(options, feedback=None, focus=FocusOptions(focus, focus_share, max_pass_rate)))
+
+
 @main.command("skyrl-rsi")
 @skyrl_options
 @feedback_options
@@ -392,6 +405,13 @@ def skyrl_rsi(**arguments) -> None:
     """Run the RSI loop with a SkyRL job as its train box."""
     feedback = _pop_feedback(arguments)
     asyncio.run(_skyrl_run(SkyrlOptions(**arguments), feedback=feedback))
+
+
+@dataclass(frozen=True)
+class FocusOptions:
+    kind: str
+    share: float
+    max_pass_rate: float
 
 
 @dataclass(frozen=True)
@@ -403,7 +423,11 @@ class OracleOptions:
 
 
 async def _skyrl_run(
-    options: SkyrlOptions, *, feedback: FeedbackOptions | None, oracle: OracleOptions | None = None
+    options: SkyrlOptions,
+    *,
+    feedback: FeedbackOptions | None,
+    oracle: OracleOptions | None = None,
+    focus: FocusOptions | None = None,
 ) -> None:
     output = StoragePath(options.output_dir)
     feed = options.feed()
@@ -412,12 +436,25 @@ async def _skyrl_run(
     if options.exclude_generators:
         pool = without_generators(pool, frozenset(options.exclude_generators.split(",")))
     strata: dict[str, str] = {}
+    retriever = Retriever(pool.rows) if focus is not None and focus.kind == "retrieval" else None
+    seed_stream = pool.stream(options.seed)
+    if retriever is not None:
+        # A task that the retrieval already chose does not come again from the seed.
+        seed_stream = (task for task in seed_stream if retriever.claim(task.task.id))
     # A restarted loop does not write the pool tasks of its feed again, but labels their groups with their stratum.
-    seed_tasks = from_iterable(_remember_stratum(pool.stream(options.seed), strata, written=written))
+    seed_tasks = from_iterable(_remember_stratum(seed_stream, strata, written=written))
     trainer = partial(skyrl_train, config=feed)
     async with AsyncExitStack() as stack:
         if oracle is not None:
             stream = trainer(await _with_oracle_tasks(seed_tasks, oracle, written, options.seed))
+        elif focus is not None:
+            trained = Broadcast[TaskRollouts]()
+            if retriever is not None:
+                focused = retrieve_similar(trained.listen(), retriever, pool.task, focus.max_pass_rate)
+            else:
+                focused = replay_failures(trained.listen(), focus.max_pass_rate)
+            tasks = mix(Source(seed_tasks, share=1 - focus.share), Source(focused, share=focus.share), seed=options.seed)
+            stream = trained.publish(trainer(tasks))
         elif feedback is None:
             stream = trainer(seed_tasks)
         else:

@@ -89,6 +89,10 @@ class TaskPool:
             payloads = pq.ParquetFile(handle).read(columns=[TASK_COLUMN])[TASK_COLUMN].to_pylist()
         return cls([PoolRow(family(row_id(payload)), payload) for payload in payloads])
 
+    @property
+    def rows(self) -> Sequence[PoolRow]:
+        return self._rows
+
     def filtered(self, keep: Callable[[PoolRow], bool]) -> "TaskPool":
         """The pool without the rows for which ``keep`` is false."""
         return TaskPool([row for row in self._rows if keep(row)])
