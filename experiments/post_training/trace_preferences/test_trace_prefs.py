@@ -127,9 +127,43 @@ def test_real_sample_reproduces_the_readme_numbers():
     res = A.scan_turns(parse.NativeTokenizer(str(_TOKENIZER)), pq.ParquetFile(str(_SAMPLE)))
     c, classes = res[0], res[1]
     assert (c["rows"], c["turns"], c["schema"]) == (22, 156, 22)
+    assert c["schema_consistent"] == 22   # served schema identical across a row's turns
     assert (c["row_mismatch"], c["unmapped"], c["disagree"]) == (0, 0, 0)
     assert c["agree"] == c["turns"]   # native <function=NAME> vs JSON tool-call names
     assert c["misaligned"] == 0      # len(logprobs[t]) == len(ids[t])
+    assert c["no_logprobs_turns"] == 0
+    assert c["tokens_total"] == c["aligned_tokens"]   # nothing omitted from stats
+    # No confirmed malformed format errors in this sample, and nothing mislabeled:
+    assert all(not k.startswith("syntax-") for k in classes)
+    assert sum(v for k, v in classes.items() if k.startswith("syntax-")) == 0
     assert dict(classes) == {"clean-parsable-action": 91, "action-exceeds-max-tokens": 32,
                              "text-turn-no-call": 22, "multiple-function-blocks": 8,
                              "tokenizer-roundtrip": 3}
+
+
+# --- schema-availability is reported, never silently treated as valid --------
+
+
+def test_function_block_status_no_schema_is_schema_unavailable():
+    """A format-correct block whose prefix carried no <tools> schema is NOT a pass."""
+    assert parse.function_block_status(ACTION, None) == parse.STATUS_SCHEMA_UNAVAILABLE
+
+
+def test_schema_unavailable_turn_is_not_counted_as_malformed():
+    from analyze_traces import SCHEMA_UNAVAILABLE, classify_turn
+
+    proof = parse.SpanProof((0, len(ACTION)), ACTION, True, True, None)
+    cls = classify_turn(ACTION, proof, None)
+    assert cls == SCHEMA_UNAVAILABLE
+    assert not cls.startswith("syntax-")   # must not inflate "confirmed malformed"
+
+
+def test_confirmed_syntax_error_counts_as_malformed():
+    from analyze_traces import classify_turn
+
+    bad = ACTION.replace("<parameter=command>", "<parameter=nope>", 1)
+    assert parse.function_block_status(bad, TOOLS) == parse.STATUS_UNDECLARED_PARAMETER
+    # The proof's span_text must carry the malformed block, not the clean ACTION.
+    proof = parse.SpanProof((0, len(bad)), bad, True, True, None)
+    cls = classify_turn(bad, proof, TOOLS)
+    assert cls.startswith("syntax-")   # the only category that is "confirmed malformed"
