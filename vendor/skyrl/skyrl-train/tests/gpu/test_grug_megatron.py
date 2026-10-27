@@ -638,11 +638,18 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
         ray.shutdown()
 
 
+def _idle_pinned_host_bytes(worker) -> int:
+    """Pinned host memory that PyTorch's caching allocator holds but no tensor uses."""
+    stats = torch.cuda.host_memory_stats()
+    return stats["allocated_bytes.current"] - stats["active_bytes.current"]
+
+
 def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
     """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
 
     Training from the checkpoint again must repeat the step taken right after saving it, which
-    holds only if the CPU-offloaded masters and moments were restored too.
+    holds only if the CPU-offloaded masters and moments were restored too. The load must also
+    return the pinned host copies it replaced instead of leaving them cached.
     """
     world_size = 2
     require_hoppers(world_size)
@@ -668,9 +675,12 @@ def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
         after_saved_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
 
         ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", checkpoint_dir))
+        idle_pinned = ray.get([actor.__ray_call__.remote(_idle_pinned_host_bytes) for actor in policy._actor_handlers])
         restored = rank0_validation_snapshot(policy, PARAMETER_NAMES)
         _train_step(policy, batch)
         after_restored_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+
+        assert idle_pinned == [0] * world_size
 
         for name in PARAMETER_NAMES:
             torch.testing.assert_close(restored[name], saved[name], rtol=0, atol=0)
