@@ -427,9 +427,15 @@ def pending_export_steps(training_config: DictConfig) -> list[tuple[int, str]]:
     filesystem, root_path = fs_and_path(checkpoint_root)
     if not filesystem.exists(root_path):
         raise ValueError(f"Successful Iris job did not commit a checkpoint marker: {checkpoint_root}")
+    # detail=True keeps the entry shape deterministic: the guarded remote-I/O
+    # filesystem's listdir returned detail dicts, which sorted() cannot order.
+    entries = filesystem.ls(root_path, detail=True)
+    names = sorted(
+        str(entry["name"] if isinstance(entry, dict) else entry) for entry in entries
+    )
     pending: list[tuple[int, str]] = []
-    for entry in sorted(filesystem.listdir(root_path)):
-        directory = entry.rstrip("/").rsplit("/", 1)[-1]
+    for name in names:
+        directory = name.rstrip("/").rsplit("/", 1)[-1]
         if not directory.startswith(GLOBAL_STEP_PREFIX) or not directory[len(GLOBAL_STEP_PREFIX) :].isdigit():
             continue
         checkpoint_path = join_resource_path(checkpoint_root, directory)
