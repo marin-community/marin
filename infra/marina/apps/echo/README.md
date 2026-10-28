@@ -33,7 +33,14 @@ uv run infra/marina/apps/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/marina/apps/echo/cli.py wiki add --file note.md   # OKF markdown
 uv run infra/marina/apps/echo/cli.py wiki show <id> > note.md  # edit, then `wiki edit`
 uv run infra/marina/apps/echo/cli.py history export > echo-search-history.jsonl
+uv run infra/marina/apps/echo/cli.py work-log recent --project <slug>
+uv run infra/marina/apps/echo/cli.py work-log add --project <slug> --title "..." --body - <<< "..."
 ```
+
+`work-log add` treats a refused write (no credentials, 401, or 403) as a warning and exits 0.
+Inside a Claude Code or Codex session (`CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`), it
+records the refusal in a marker file in the temporary directory, and later adds in that
+session exit without a request. Other errors still fail the command.
 
 Authentication reuses Marin's shared IAP login: run `iris login` once and the CLI mints
 Marina tokens from the same cached credential (`~/.config/marin/credentials`). Agents and CI

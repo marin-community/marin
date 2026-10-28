@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Search Echo wiki, GitHub, Discord, and repository files.
+"""Search Echo wiki, GitHub, Discord, and repository files, and keep the agent work log.
 
 Echo is a Marina app, so this talks to ``<marina>/echo/api``. Run it from the repository:
 
@@ -14,6 +14,8 @@ Echo is a Marina app, so this talks to ``<marina>/echo/api``. Run it from the re
     uv run infra/marina/apps/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/marina/apps/echo/cli.py wiki add --file note.md   # OKF: title/use_when + body
     uv run infra/marina/apps/echo/cli.py wiki show 12 > note.md    # edit, then `wiki edit`
+    uv run infra/marina/apps/echo/cli.py work-log recent --project grug-moe
+    uv run infra/marina/apps/echo/cli.py work-log add --project grug-moe --title "..." --body -
 
 Requests carry a Google-signed ID token for the Marina service's IAP. There is no separate
 Echo login: humans authenticate once with ``iris login`` (cached under
@@ -28,6 +30,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -71,6 +74,13 @@ SEARCH_DETAIL_INSTRUCTION = f"Detail: {CLI_COMMAND} get <source-id> (copy the SO
 SEARCH_DETAIL_MAX_CHARACTERS = 240
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
 DEFAULT_REQUEST_TIMEOUT = 30
+# Agent harnesses that name the current session in every shell command's environment.
+AGENT_SESSION_ENV_VARS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID")
+WORK_LOG_DENIAL_DIR = Path(tempfile.gettempdir())
+
+
+class EchoAccessDenied(Exception):
+    """The caller has no credentials for Marina, or Marina refuses the ones it has."""
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -98,7 +108,7 @@ def bearer_token() -> str:
     try:
         token = provider.get_token()
     except (IapCredentialsUnavailable, IapLoginRequired) as error:
-        raise SystemExit(f"{error}\nHuman callers: {LOGIN_HINT}.") from error
+        raise EchoAccessDenied(f"{error}\nHuman callers: {LOGIN_HINT}.") from error
     if not token:
         raise SystemExit("could not obtain an IAP token for Marina")
     return token
@@ -123,14 +133,17 @@ def request_response(
         allow_redirects=False,
     )
     if response.status_code == 401:
-        raise SystemExit(f"Marina rejected the token (401). Confirm IAP access and that {LOGIN_HINT} succeeded.")
+        raise EchoAccessDenied(f"Marina rejected the token (401). Confirm IAP access and that {LOGIN_HINT} succeeded.")
     if response.status_code >= 400:
         detail = (
             response.json().get("detail", response.text)
             if "json" in response.headers.get("content-type", "")
             else response.text
         )
-        raise SystemExit(f"{method} {path} -> {response.status_code}: {detail}")
+        message = f"{method} {path} -> {response.status_code}: {detail}"
+        if response.status_code == 403:
+            raise EchoAccessDenied(message)
+        raise SystemExit(message)
     return response
 
 
@@ -456,6 +469,53 @@ def cmd_wiki_edit(args: argparse.Namespace) -> None:
     print(wiki_link(entry["id"]))
 
 
+def cmd_work_log_recent(args: argparse.Namespace) -> None:
+    entries = response_objects(
+        request("GET", "/work_log", params={"days": args.days, "project": args.project, "limit": args.limit})
+    )
+    if not entries:
+        scope = f" for project {args.project}" if args.project else ""
+        print(f"No entries in the last {args.days} days{scope}.")
+        return
+    for entry in entries:
+        print(
+            f"#{entry['id']:<5} {str(entry['at'])[:10]}  {entry['author']:<28} {entry['project']:<24} {entry['title']}"
+        )
+
+
+def cmd_work_log_show(args: argparse.Namespace) -> None:
+    entry = response_object(request("GET", f"/work_log/{args.id}"))
+    print(f"#{entry['id']} {entry['at']} {entry['author']} [{entry['project']}]")
+    print(entry["title"])
+    if entry["body"]:
+        print(f"\n{entry['body']}")
+
+
+def work_log_denial_marker() -> Path | None:
+    """The file that records a refused work-log write for this agent session, if one is running."""
+    session = next((os.environ[name] for name in AGENT_SESSION_ENV_VARS if os.environ.get(name)), None)
+    return WORK_LOG_DENIAL_DIR / f"echo-work-log-denied-{session}" if session else None
+
+
+def cmd_work_log_add(args: argparse.Namespace) -> None:
+    # The work log is shared context, not part of the agent's task. A caller without
+    # access warns once and continues, and later adds in the same agent session skip
+    # Echo, so an agent does not retry or debug access at every milestone.
+    marker = work_log_denial_marker()
+    if marker is not None and marker.exists():
+        return
+    body = {"project": args.project, "title": args.title, "body": read_body(args.body) if args.body else None}
+    try:
+        entry = response_object(request("POST", "/work_log", body=body))
+    except EchoAccessDenied as error:
+        print(f"Work-log entry not written: {error}", file=sys.stderr)
+        if marker is not None:
+            marker.touch()
+            print("Later work-log adds in this agent session are skipped.", file=sys.stderr)
+        return
+    print(f"logged #{entry['id']}")
+
+
 def bounded_limit(value: str) -> int:
     limit = int(value)
     if not 1 <= limit <= 100:
@@ -503,7 +563,7 @@ def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Query Echo and manage wiki notes.")
+    parser = argparse.ArgumentParser(description="Query Echo, manage wiki notes, and keep the agent work log.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="federated semantic + lexical search")
@@ -571,12 +631,31 @@ def build_parser() -> argparse.ArgumentParser:
     wiki_edit.add_argument("id", type=int)
     add_wiki_write_args(wiki_edit)
     wiki_edit.set_defaults(func=cmd_wiki_edit)
+    work_log = sub.add_parser("work-log", help="read or append the shared agent work log").add_subparsers(
+        dest="work_log", required=True
+    )
+    work_log_recent = work_log.add_parser("recent", help="list recent entries, newest first")
+    work_log_recent.add_argument("--days", type=int, default=7)
+    work_log_recent.add_argument("--project", help="only entries with this project slug")
+    work_log_recent.add_argument("--limit", type=bounded_limit, default=30)
+    work_log_recent.set_defaults(func=cmd_work_log_recent)
+    work_log_show = work_log.add_parser("show", help="print one entry with its body")
+    work_log_show.add_argument("id", type=int)
+    work_log_show.set_defaults(func=cmd_work_log_show)
+    work_log_add = work_log.add_parser("add", help="append one entry (the server records the author)")
+    work_log_add.add_argument("--project", required=True, type=nonblank, help="stable slug for the thread of work")
+    work_log_add.add_argument("--title", required=True, type=nonblank, help="one-line summary")
+    work_log_add.add_argument("--body", help="short markdown inline, a file path, or - for stdin")
+    work_log_add.set_defaults(func=cmd_work_log_add)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except EchoAccessDenied as error:
+        raise SystemExit(str(error)) from error
 
 
 if __name__ == "__main__":

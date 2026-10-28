@@ -353,3 +353,65 @@ def test_history_export_pages_in_stable_id_order(monkeypatch, capsys):
         ("GET", "/search-executions", {"params": {"after_id": 7, "mode": None, "limit": 2}, "timeout": 180}),
     ]
     assert [cli.json.loads(line)["id"] for line in capsys.readouterr().out.splitlines()] == [4, 7, 9]
+
+
+def http_response(status_code, value):
+    response = json_response(value, {"content-type": "application/json"})
+    response.status_code = status_code
+    return response
+
+
+def test_refused_work_log_add_warns_once_per_agent_session(monkeypatch, tmp_path, capsys):
+    posts = []
+
+    def fake_http(method, url, **options):
+        posts.append(options["json"])
+        return http_response(403, {"detail": "caller lacks IAP access"})
+
+    monkeypatch.setattr(cli, "bearer_token", lambda: "token")
+    monkeypatch.setattr(cli.requests, "request", fake_http)
+    monkeypatch.setattr(cli, "WORK_LOG_DENIAL_DIR", tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-a")
+    args = cli.build_parser().parse_args(["work-log", "add", "--project", "grug-moe", "--title", "20% MFU"])
+
+    args.func(args)
+    first = capsys.readouterr()
+    args.func(args)
+    repeat = capsys.readouterr()
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-b")
+    args.func(args)
+    next_session = capsys.readouterr()
+
+    assert len(posts) == 2
+    assert first.err and not first.out
+    assert (repeat.out, repeat.err) == ("", "")
+    assert next_session.err
+
+
+def test_work_log_add_server_error_fails_without_skipping_later_adds(monkeypatch, tmp_path, capsys):
+    posts = []
+    responses = [
+        http_response(500, {"detail": "database unavailable"}),
+        http_response(201, {"id": 4783, "at": "2026-10-28T12:00:00Z", "author": "a@b", "project": "p", "title": "t"}),
+    ]
+
+    def fake_http(method, url, **options):
+        posts.append(options["json"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(cli, "bearer_token", lambda: "token")
+    monkeypatch.setattr(cli.requests, "request", fake_http)
+    monkeypatch.setattr(cli, "WORK_LOG_DENIAL_DIR", tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-a")
+    args = cli.build_parser().parse_args(
+        ["work-log", "add", "--project", "grug-moe", "--title", "20% MFU", "--body", "-"]
+    )
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Run 81 reached 20.2% MFU.\n"))
+    with pytest.raises(SystemExit):
+        args.func(args)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Run 81 reached 20.2% MFU.\n"))
+    args.func(args)
+
+    assert posts == [{"project": "grug-moe", "title": "20% MFU", "body": "Run 81 reached 20.2% MFU.\n"}] * 2
+    assert "4783" in capsys.readouterr().out
