@@ -63,6 +63,20 @@ BASELINE_ROWS = {
         "launch.isin(['comparator_proposals','table5_repeats']) & variant=='cmp_t9_krr_cap16'",
     ),
 }
+# Paper row of the baseline table -> the model whose own prediction for the row's trained proposal the Predicted
+# columns print (fits_proposal_predictions' `predictor`); the retrained best swarm mixture has none.
+PREDICTORS = {
+    "MARINER": "mariner",
+    "fully convex objective": "mariner_cvx",
+    "additive form": "mariner_add",
+    "per-bucket threshold": "mariner_pbt",
+    "Olmix": "olmix",
+    "Quadratic": "quadratic",
+    "Natural cubic spline": "spline",
+    "RegMix (tuned, sampled proposal)": "regmix",
+    "RegMix (released)": "regmix_official",
+    "Hellinger kernel ridge": "krr",
+}
 # The swarm's best mixture: the swarm's own run (trainer seed 0) and its two retrains at the same data seed.
 BEST_SWARM = (
     "concat(swarm_qwen3_360m_1p6b[run_label=='run_00125'].{c}, "
@@ -246,12 +260,20 @@ def _baselines(reg: _Registry) -> None:
     label = "tab:a-baseline-validation"
     for i in range(len(reg.parsed[label])):
         name = reg.stub(label, i)
-        for col, column in ((1, U), (3, O)):
+        for col, column in ((1, U), (4, O)):
             objective = "Uncheatable" if column == U else "OBE Easy"
             reg.mean_std(label, i, col, _selection(name, column), f"{name}, {objective}, trainer seeds 0-2")
+            if name in PREDICTORS:
+                match = re.search(r"variant=='([^']+)'", _selection(name, column))
+                assert match is not None, f"{name}: no variant in its selection"
+                variant = match.group(1)
+                key = "uncheatable" if column == U else "obe_easy"
+                filters = f"variant=='{variant}' & objective=='{key}' & predictor=='{PREDICTORS[name]}'"
+                query = f"{PRED}[{filters}].predicted_bpb.unique"
+                reg.add(label, i, col + 1, 0, query, f"{PREDICTORS[name]} prediction for {variant}")
             if name != "MARINER":
                 mariner = _selection("MARINER", column)
-                reg.mean_se(label, i, col + 1, _selection(name, column), mariner, f"{name} minus MARINER, {objective}")
+                reg.mean_se(label, i, col + 2, _selection(name, column), mariner, f"{name} minus MARINER, {objective}")
 
 
 def _regmix_argmin(reg: _Registry) -> None:
