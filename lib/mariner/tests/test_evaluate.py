@@ -53,7 +53,7 @@ TABLE_10_COLUMNS = {  # SelectionMetrics field -> fits_surrogate_benchmark colum
 
 
 def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
-    swarm, objective, anchors, _ = synthetic_problem
+    swarm, objective, anchors = synthetic_problem.swarm, synthetic_problem.objective, synthetic_problem.anchors
     outcomes = swarm.outcomes.copy()
     outcomes.loc[PERTURBED_RUN, "t0"] += 0.05
     run = swarm.runs[PERTURBED_RUN]
@@ -68,7 +68,7 @@ def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
 
 
 def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_problem):
-    swarm, objective, anchors, _ = synthetic_problem
+    swarm, objective, anchors = synthetic_problem.swarm, synthetic_problem.objective, synthetic_problem.anchors
     one_task = dataclasses.replace(objective, tasks=objective.tasks[:1], weights=objective.weights[:1])
     fractions = swarm.pool_fractions.copy()
     fractions[PERTURBED_RUN] = 0.5  # the run draws half of every pool, which doubles its exposures
@@ -88,7 +88,7 @@ def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_proble
 
 
 def test_outer_splits_never_validate_calibration_rows(synthetic_problem):
-    swarm, _, _, _ = synthetic_problem
+    swarm = synthetic_problem.swarm
     splits = outer_splits(swarm, repeats=2)
     assert [(split.repeat, split.fold) for split in splits] == [(r, f) for r in range(2) for f in range(OUTER_FOLDS)]
     rows = np.arange(len(swarm.runs))
@@ -142,7 +142,7 @@ def test_selection_metrics_on_a_known_ranking():
 
 
 def test_heldout_metrics_score_each_exposure_by_its_measured_objective(synthetic_problem):
-    _, objective, _, truth = synthetic_problem
+    objective, truth = synthetic_problem.objective, synthetic_problem.truth
     rng = np.random.default_rng(2)
     weights = rng.dirichlet(np.ones(len(truth.buckets)), size=12)
     fractions = np.where(rng.random(weights.shape) < 0.5, 0.5, 1.0)

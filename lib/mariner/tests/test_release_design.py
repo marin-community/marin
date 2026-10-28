@@ -3,7 +3,7 @@
 
 import numpy as np
 import pytest
-from mariner.data import PAPER_TARGET_BUDGET, SWARMS, WEIGHT_PREFIX, read_table, release_partition
+from mariner.data import PAPER_TARGET_BUDGET, SWARMS, WEIGHT_PREFIX, release_partition, release_runs
 from mariner.design import proportional, removals, stratified, unimax
 
 BASELINE_TOLERANCE = 1e-15  # rounding: the designs repeat the released rows' arithmetic, 5.8e-16 apart at most
@@ -16,7 +16,7 @@ UNIMAX_MAX_EPOCHS = 1.0
 @pytest.mark.parametrize("swarm", SWARMS)
 def test_design_baselines_equal_released_swarm_rows(snapshot, swarm):
     partition = release_partition(snapshot)
-    runs = read_table(snapshot, f"swarm_{swarm}")
+    runs = release_runs(snapshot, swarm)
     weight_columns = [f"{WEIGHT_PREFIX}{bucket}" for bucket in partition.bucket_ids]
     proportional_weights = proportional(partition.pool_tokens)
     designed = {

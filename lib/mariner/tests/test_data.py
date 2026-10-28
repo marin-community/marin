@@ -17,12 +17,11 @@ from mariner.data import (
     release_anchors,
     release_heldout_bank,
     release_partition,
+    release_runs,
     release_swarm,
     release_tasks,
     swarm_from_runs,
 )
-
-SWARM_TABLE = f"swarm_{MAIN_SWARM}"
 
 
 def test_release_swarm_keeps_fit_rows_and_divides_exposure_by_pool_fraction(release_snapshot):
@@ -128,20 +127,20 @@ DEFECTS = {
     ],
 )
 def test_swarm_from_runs_rejects_invalid_run_tables(release_snapshot, defect, message):
-    runs = DEFECTS[defect](read_table(release_snapshot, SWARM_TABLE))
+    runs = DEFECTS[defect](release_runs(release_snapshot, MAIN_SWARM))
     with pytest.raises(ValueError, match=message):
         swarm_from_runs(runs, release_partition(release_snapshot), ("t0", "t1"))
 
 
 def test_anchors_from_runs_require_two_repeats(release_snapshot):
-    runs = read_table(release_snapshot, SWARM_TABLE)
+    runs = release_runs(release_snapshot, MAIN_SWARM)
     swarm = swarm_from_runs(runs, release_partition(release_snapshot), ("t0", "t1"))
     with pytest.raises(ValueError, match="two"):
         anchors_from_runs(swarm, runs[runs["design_kind"] == REPEAT].head(1), ("t0", "t1"))
 
 
 def test_anchors_from_runs_reject_a_run_of_another_mixture(release_snapshot):
-    runs = read_table(release_snapshot, SWARM_TABLE)
+    runs = release_runs(release_snapshot, MAIN_SWARM)
     # fit_03, a sampled run, labeled as a proportional repeat: its outcomes would move the anchors.
     runs.loc[runs["observation_id"] == "fit_03", "design_kind"] = REPEAT
     swarm = swarm_from_runs(runs, release_partition(release_snapshot), ("t0", "t1"))

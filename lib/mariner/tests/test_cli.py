@@ -26,6 +26,7 @@ from mariner.data import (
     read_partition,
     read_table,
     release_partition,
+    release_runs,
     release_tasks,
     released_olmix_laws,
     swarm_from_runs,
@@ -103,7 +104,7 @@ def write_own_swarm(directory: Path, swarm: Swarm, objective: Objective, anchors
 
 
 def test_cli_fit_predict_optimize_round_trip_on_own_swarm(tmp_path, synthetic_problem):
-    swarm, objective, anchors, _ = synthetic_problem
+    swarm, objective, anchors = synthetic_problem.swarm, synthetic_problem.objective, synthetic_problem.anchors
     inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
     fit_path = tmp_path / "fit.json"
     assert main(["fit", *inputs, "--objective", objective.name, "--out", str(fit_path)]) == 0
@@ -165,8 +166,8 @@ def write_generating_fit(path: Path, swarm: Swarm, truth: ObjectiveFit) -> None:
 
 
 def test_cli_optimize_applies_cap_and_kl_penalty(tmp_path, synthetic_problem):
-    swarm, objective, anchors, truth = synthetic_problem
-    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
+    inputs = write_own_swarm(tmp_path, swarm, synthetic_problem.objective, synthetic_problem.anchors)
     fit_path, out = tmp_path / "fit.json", tmp_path / "mixture.csv"
     write_generating_fit(fit_path, swarm, truth)
     # Unconstrained, the generating model's optimum puts more than 2 epochs on a bucket (test_optimize).
@@ -176,12 +177,12 @@ def test_cli_optimize_applies_cap_and_kl_penalty(tmp_path, synthetic_problem):
 
 
 def test_cli_optimize_reads_a_fit_json_whose_keys_were_sorted(tmp_path, synthetic_problem):
-    swarm, objective, anchors, truth = synthetic_problem
+    swarm = synthetic_problem.swarm
     # Observation ids in the reverse of their sorted order, as a JSON tool that sorts object keys would reorder them.
     swarm = dataclasses.replace(swarm, runs=tuple(f"run_{len(swarm.runs) - row:03d}" for row in range(len(swarm.runs))))
-    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    inputs = write_own_swarm(tmp_path, swarm, synthetic_problem.objective, synthetic_problem.anchors)
     original, resorted = tmp_path / "fit.json", tmp_path / "sorted.json"
-    write_generating_fit(original, swarm, truth)
+    write_generating_fit(original, swarm, synthetic_problem.truth)
     resorted.write_text(json.dumps(json.loads(original.read_text()), indent=2, sort_keys=True))
     proposals = {}
     for path in (original, resorted):
@@ -192,10 +193,10 @@ def test_cli_optimize_reads_a_fit_json_whose_keys_were_sorted(tmp_path, syntheti
 
 
 def test_cli_optimize_refuses_tables_at_another_target_budget(tmp_path, synthetic_problem, capsys):
-    swarm, objective, anchors, truth = synthetic_problem
-    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    swarm = synthetic_problem.swarm
+    inputs = write_own_swarm(tmp_path, swarm, synthetic_problem.objective, synthetic_problem.anchors)
     fit_path, out = tmp_path / "fit.json", tmp_path / "mixture.csv"
-    write_generating_fit(fit_path, swarm, truth)
+    write_generating_fit(fit_path, swarm, synthetic_problem.truth)
     # The fit's tables at a thousand times its budget, where every bucket materializes a thousand times the epochs.
     other_budget = [*inputs[:-1], str(1000 * TARGET_BUDGET)]
     assert main(["optimize", "--fit", str(fit_path), *other_budget, "--out", str(out)]) == INPUT_ERROR_STATUS
@@ -224,9 +225,9 @@ def test_cli_evaluate_scores_a_fit_only_at_the_main_swarm_s_target_budget(tmp_pa
 
 
 def test_cli_predict_names_missing_buckets(tmp_path, synthetic_problem, capsys):
-    swarm, _, _, truth = synthetic_problem
+    swarm = synthetic_problem.swarm
     fit_path = tmp_path / "fit.json"
-    fit_path.write_text(json.dumps(truth.to_json()))
+    fit_path.write_text(json.dumps(synthetic_problem.truth.to_json()))
     mixtures = tmp_path / "mixtures.csv"
     pd.DataFrame(bucket_columns("w__", swarm.buckets[:5], swarm.weights)).to_csv(mixtures, index=False)
     out = tmp_path / "predicted.csv"
@@ -237,9 +238,9 @@ def test_cli_predict_names_missing_buckets(tmp_path, synthetic_problem, capsys):
 
 
 def test_cli_cross_validate_prints_selection_metrics_of_each_repeat(tmp_path, synthetic_problem, capsys):
-    swarm, objective, anchors, _ = synthetic_problem
+    swarm, objective = synthetic_problem.swarm, synthetic_problem.objective
     one_task = dataclasses.replace(objective, tasks=objective.tasks[:1], weights=objective.weights[:1])
-    inputs = write_own_swarm(tmp_path, swarm, one_task, anchors)
+    inputs = write_own_swarm(tmp_path, swarm, one_task, synthetic_problem.anchors)
     out = tmp_path / "cv.csv"
     command = ["cross-validate", *inputs, "--objective", one_task.name, "--repeats", "2", "--out", str(out)]
     assert main(command) == 0
@@ -255,8 +256,8 @@ def test_cli_cross_validate_prints_selection_metrics_of_each_repeat(tmp_path, sy
 
 
 def test_cli_olmix_writes_the_laws_of_its_tables_and_their_proposal(tmp_path, synthetic_problem):
-    swarm, objective, anchors, _ = synthetic_problem
-    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    swarm, objective = synthetic_problem.swarm, synthetic_problem.objective
+    inputs = write_own_swarm(tmp_path, swarm, objective, synthetic_problem.anchors)
     out, kl = tmp_path / "olmix.csv", 0.05
     command = ["olmix", *inputs, "--objective", objective.name, "--kl", str(kl), "--cap", str(OLMIX_CAP)]
     assert main([*command, "--out", str(out)]) == 0
@@ -329,7 +330,7 @@ def test_cli_design_baselines_and_removals_equal_released_swarm_rows(snapshot, t
     command = ["design", "--partition", str(partition), "--target-budget", str(PAPER_TARGET_BUDGET)]
     options = ["--candidates", "4", "--seed", "0", "--repeats", "2", "--unimax-budget-fraction", "0.8"]
     assert main([*command, *options, "--out", str(out)]) == 0
-    design, released = read_csv(out), read_table(snapshot, f"swarm_{MAIN_SWARM}")
+    design, released = read_csv(out), release_runs(snapshot, MAIN_SWARM)
     columns = [f"w__{bucket}" for bucket in release_partition(snapshot).bucket_ids]
     np.testing.assert_allclose(
         design.set_index("run_label").loc[BASELINES, columns],

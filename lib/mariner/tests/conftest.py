@@ -8,6 +8,7 @@ import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -47,13 +48,22 @@ def snapshot(request: pytest.FixtureRequest) -> Path:
     return Path(root)
 
 
+class SyntheticProblem(NamedTuple):
+    """A swarm, its objective, the anchors of its floors, and the model that generated its outcomes."""
+
+    swarm: Swarm
+    objective: Objective
+    anchors: dict[str, Anchor]
+    truth: ObjectiveFit
+
+
 @pytest.fixture
-def synthetic_problem() -> tuple[Swarm, Objective, dict[str, Anchor], ObjectiveFit]:
+def synthetic_problem() -> SyntheticProblem:
     """A swarm whose outcomes follow a known three-task MARINER model plus Gaussian noise.
 
     Six buckets; row 0 is the proportional mixture and the calibration row, rows 1..160 are Dirichlet draws, and every
-    pool fraction is one. Returns the swarm, its objective, anchors at the model's value for the proportional mixture
-    (repeat SD the noise SD) and the generating model.
+    pool fraction is one. The anchors are the model's values at the proportional mixture, with the noise SD as their
+    repeat SD, and ``truth`` is the generating model.
     """
     rng = np.random.default_rng(SYNTHETIC_SEED)
     epochs = np.asarray(EPOCHS_PER_UNIT_WEIGHT)
@@ -83,7 +93,7 @@ def synthetic_problem() -> tuple[Swarm, Objective, dict[str, Anchor], ObjectiveF
     objective = Objective("synthetic", task_names, np.asarray(TASK_WEIGHTS))
     at_proportional = truth.predict_tasks(proportional)[0]
     anchors = {task: Anchor(float(value), NOISE_SD) for task, value in zip(task_names, at_proportional, strict=True)}
-    return swarm, objective, anchors, truth
+    return SyntheticProblem(swarm, objective, anchors, truth)
 
 
 RELEASE_SEED = 20261029

@@ -11,7 +11,7 @@ from mariner.optimize import MIXTURE_BLOCK_SIZE, propose
 
 
 def test_propose_returns_grid_mixture_no_worse_than_proportional(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     proposal = propose(truth, swarm.weights)
     assert np.issubdtype(proposal.counts.dtype, np.integer)
     assert proposal.counts.min() >= 0 and proposal.counts.sum() == MIXTURE_BLOCK_SIZE
@@ -20,7 +20,7 @@ def test_propose_returns_grid_mixture_no_worse_than_proportional(synthetic_probl
 
 
 def test_propose_kl_penalty_pulls_the_proposal_toward_the_proportional_mixture(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     proportional = swarm.weights[swarm.calibration][0]
 
     def distances(kl: float) -> np.ndarray:
@@ -35,7 +35,7 @@ def test_propose_kl_penalty_pulls_the_proposal_toward_the_proportional_mixture(s
 
 
 def test_propose_reports_the_model_s_predictions_under_a_kl_penalty(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     proposal = propose(truth, swarm.weights, kl=0.1)
     # The penalty steers the search; the diagnostics predict the objective at its continuous and rounded mixtures.
     assert proposal.summary.continuous_prediction == truth.predict(proposal.continuous)[0]
@@ -43,7 +43,7 @@ def test_propose_reports_the_model_s_predictions_under_a_kl_penalty(synthetic_pr
 
 
 def test_propose_respects_epoch_cap(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     epochs = truth.epochs_per_unit_weight
     assert np.max(propose(truth, swarm.weights).weights * epochs) > 2.0  # the cap binds
     proposal = propose(truth, swarm.weights, cap=2.0)
@@ -51,7 +51,7 @@ def test_propose_respects_epoch_cap(synthetic_problem):
 
 
 def test_propose_rejects_cap_that_cannot_fill_a_mixture(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     with pytest.raises(ValueError, match="cap"):
         propose(truth, swarm.weights, cap=0.01)
 

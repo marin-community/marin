@@ -25,8 +25,8 @@ TASK_KEYS = {
 
 
 def test_objective_fit_json_round_trip_predicts_identically(synthetic_problem):
-    swarm, objective, anchors, _ = synthetic_problem
-    fit = fit_objective(swarm, objective, anchors)
+    swarm = synthetic_problem.swarm
+    fit = fit_objective(swarm, synthetic_problem.objective, synthetic_problem.anchors)
     payload = json.loads(json.dumps(fit.to_json()))
     loaded = ObjectiveFit.from_json(payload)
     np.testing.assert_array_equal(loaded.predict_tasks(swarm.weights), fit.predict_tasks(swarm.weights))
@@ -40,7 +40,7 @@ def test_objective_fit_json_round_trip_predicts_identically(synthetic_problem):
 
 
 def test_pool_fractions_divide_exposures_as_in_the_swarm(synthetic_problem):
-    swarm, _, _, truth = synthetic_problem
+    swarm, truth = synthetic_problem.swarm, synthetic_problem.truth
     fractions = np.tile(0.5 ** np.arange(1, len(swarm.buckets) + 1), (len(swarm.runs), 1))  # 1/2, 1/4, ... per bucket
     exposures = dataclasses.replace(swarm, pool_fractions=fractions).exposures
     expected = np.column_stack([task.head.predict(design_matrix(exposures, task.shape)) for task in truth.tasks])

@@ -110,7 +110,7 @@ def test_olmix_proposal_with_infinite_cap_is_unconstrained():
 
 @pytest.mark.filterwarnings("ignore:Solution may be inaccurate:UserWarning")  # cvxpy's notice of SCS's status
 def test_olmix_proposal_for_an_ill_conditioned_law_raises_or_returns_a_mixture_within_the_caps():
-    # exp(43 w0 - 16 w1) spans 23 orders of magnitude over the simplex. On this input the pinned CLARABEL reports
+    # exp(43 w0 - 16 w1) spans e^59, about 10^25.6, over the simplex. On this input the pinned CLARABEL reports
     # "optimal" 1.2e-4 above bucket 1's cap of 0.4273 and SCS "optimal_inaccurate" 0.5 away from the constraints, so
     # propose raises RuntimeError. A solver that converged here would return a mixture within the caps. Either outcome
     # is correct; a mixture over a cap is not.
