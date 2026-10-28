@@ -152,7 +152,7 @@ def create_server(manifest: PointManifest, output: Path, launch: IrisVllmLaunch 
                 "--seed",
                 str(series["server_seed"]),
                 "--hf-config-path",
-                str(checkpoint_config(series, output)),
+                str(checkpoint_config(series, output).parent),
                 "--hf-overrides",
                 json.dumps(series["hf_overrides"]),
                 "--load-format",
