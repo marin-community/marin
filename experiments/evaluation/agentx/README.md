@@ -75,7 +75,9 @@ counter-derived rates do not establish the cause of the decline.
 
 The dashboard's frontier filter can hide C256 because it is dominated. Disable
 the optimal/frontier filter (`i_optimal=0`) to inspect the complete curve.
-Individual repeats remain in run history. Hero's retained C8/C16/C32 results
+Historical metadata fingerprints retain separate points in that curve even
+when their effective serving controls match. Individual repeats remain in
+run history. Hero's retained C8/C16/C32 results
 are provisional; its calibration and weekly-load selection are deferred.
 
 ## Normal use
