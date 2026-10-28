@@ -361,13 +361,25 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     blank (missing, empty or only whitespace). An exposure's measured value of a task is the mean over its runs that
     have one, NaN when none has. Its measured objective is the mean of its runs'
     ``bpb__<objective name>`` when the table has that column, which can record the objective for a run without
-    per-task values; otherwise it is the task means weighted by the objective.
+    per-task values; otherwise it is the task means weighted by the objective. A run may lack a value (NaN), but every
+    value it has must be positive and finite, and the table must have a run.
     """
+    if len(runs) == 0:
+        raise ValueError(f"the {HELDOUT_TABLE} table has no runs")
     runs = runs.reset_index(drop=True)
     weights = mixture_weights(runs, partition.bucket_ids, HELDOUT_TABLE)
     fractions = pool_fractions(runs, partition.bucket_ids, HELDOUT_TABLE)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
     require_columns(runs, columns, HELDOUT_TABLE)
+    aggregate = f"{OUTCOME_PREFIX}{objective.name}"
+    outcome_ids = (*objective.tasks, objective.name) if aggregate in runs.columns else objective.tasks
+    values = runs[[f"{OUTCOME_PREFIX}{identifier}" for identifier in outcome_ids]].to_numpy(float)
+    invalid = ~(np.isnan(values) | (np.isfinite(values) & (values > 0.0)))
+    if invalid.any():
+        raise ValueError(
+            f"the {HELDOUT_TABLE} table's outcomes must be positive and finite where present:"
+            f" {flagged_columns(OUTCOME_PREFIX, outcome_ids, invalid)}"
+        )
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
     blank = blank_identifier_mask(keys)
     if blank.any():
@@ -388,7 +400,6 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
         )
     grouped = runs[columns].astype(float).groupby(exposure, sort=False)
     measured = grouped.mean().set_axis(list(objective.tasks), axis=1).reset_index(drop=True)
-    aggregate = f"{OUTCOME_PREFIX}{objective.name}"
     if aggregate in runs.columns:
         measured_objective = runs[aggregate].astype(float).groupby(exposure, sort=False).mean().to_numpy()
     else:
