@@ -17,7 +17,7 @@ from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import minimize
 
-from mariner.model import Objective, Swarm
+from mariner.model import WEIGHT_SUM_TOLERANCE, Objective, Swarm
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -137,18 +137,23 @@ def quantize_under_cap(weights: np.ndarray, epochs_per_unit_weight: np.ndarray, 
     """Round a mixture to the 2,048-block grid without letting any bucket exceed ``cap`` epochs.
 
     Every bucket takes the floor of its blocks, at most the cap's block maximum; the blocks left over go to the
-    buckets in order of decreasing weight, each up to its maximum. Raises ``ValueError`` when the cap cannot fill
-    the block or the weights sum to more than one.
+    buckets in order of decreasing weight, ties to the lower index, each up to its maximum. With an infinite ``cap`` no
+    bucket is capped. Raises ``ValueError`` when a weight is negative, the weights do not sum to one within 1e-6, or
+    the cap cannot fill the block.
     """
-    maximum = np.floor(cap / epochs_per_unit_weight * MIXTURE_BLOCK_SIZE + CAP_ROUNDING_SLACK).astype(np.int64)
-    maximum = np.minimum(maximum, MIXTURE_BLOCK_SIZE)
+    if not ((weights >= 0).all() and abs(weights.sum() - 1.0) <= WEIGHT_SUM_TOLERANCE):
+        raise ValueError(
+            f"the weights must be nonnegative and sum to one within {WEIGHT_SUM_TOLERANCE:g}:"
+            f" their minimum is {weights.min():g} and their sum {weights.sum():.12g}"
+        )
+    cap_blocks = np.floor(cap / epochs_per_unit_weight * MIXTURE_BLOCK_SIZE + CAP_ROUNDING_SLACK)
+    maximum = np.minimum(cap_blocks, MIXTURE_BLOCK_SIZE).astype(np.int64)  # clipped before the cast: cap may be inf
     if maximum.sum() < MIXTURE_BLOCK_SIZE:
         raise ValueError(f"an epoch cap of {cap:g} holds {maximum.sum()} of the {MIXTURE_BLOCK_SIZE} blocks")
+    # Weights that sum to one within the tolerance floor to at most the whole block, so remaining is never negative.
     counts = np.minimum(np.floor(weights * MIXTURE_BLOCK_SIZE + WEIGHT_ROUNDING_SLACK).astype(np.int64), maximum)
     remaining = MIXTURE_BLOCK_SIZE - int(counts.sum())
-    if remaining < 0:
-        raise ValueError(f"the weights sum to {weights.sum():.12g}, more than one")
-    for bucket in np.argsort(-weights):
+    for bucket in np.argsort(-weights, kind="stable"):
         if remaining == 0:
             break
         added = min(int(maximum[bucket] - counts[bucket]), remaining)

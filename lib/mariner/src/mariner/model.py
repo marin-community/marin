@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 LOG_CLIP = 30.0  # numerical overflow guard on the linear predictor; not a modeling constant
+WEIGHT_SUM_TOLERANCE = 1e-6  # how far a mixture's weights may sum from one
 
 
 # ---------------------------------------------------------------------------------------------------------------

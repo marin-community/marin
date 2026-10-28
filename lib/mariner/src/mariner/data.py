@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from mariner.evaluate import HeldoutBank
-from mariner.model import Anchor, Objective, Swarm
+from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, Objective, Swarm
 from mariner.olmix import LogLinearLaw
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
@@ -49,7 +49,6 @@ WEIGHT_PREFIX = "w__"
 POOL_FRACTION_PREFIX = "pf__"
 OUTCOME_PREFIX = "bpb__"
 COEFFICIENT_PREFIX = "coef__"
-WEIGHT_SUM_TOLERANCE = 1e-6
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12  # floating rounding; the release's runs at one exposure differ by 4.2e-16 at most
 DOWNLOAD_PATTERNS = (
     MANIFEST,
