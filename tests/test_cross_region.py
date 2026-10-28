@@ -6,6 +6,7 @@ import itertools
 import sqlite3
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finelog.client import DirectQuerySegment
@@ -89,29 +90,19 @@ def test_analyze_report_is_independent_of_how_rows_split_across_segments(tmp_pat
     assert sample_times == sorted({row[1] for row in rows if EUROPE_BUCKET_PATH in row[2]}, reverse=True)[:50]
 
 
-def test_iter_log_rows_streams_in_window_gs_rows_and_leaves_no_segment_on_disk(tmp_path: Path) -> None:
-    remote_dir = tmp_path / "remote"
-    remote_dir.mkdir()
+def test_iter_log_rows_streams_in_window_task_rows_that_mention_gs_across_sources(tmp_path: Path) -> None:
     in_window = (f"{TASK_ID}:0", WINDOW.start_ms + 1, f"Reading {EUROPE_BUCKET_PATH}")
-    segments = []
+    sources = []
     for name, rows in {
         "seg-a": [in_window, (f"{TASK_ID}:0", WINDOW.start_ms - 1, f"Reading {EUROPE_BUCKET_PATH}")],
         "seg-b": [(f"{TASK_ID}:0", WINDOW.start_ms + 2, "no paths here"), ("worker-log", WINDOW.start_ms + 3, "gs://x")],
     }.items():
-        object_path = remote_dir / f"{name}.parquet"
+        path = tmp_path / f"{name}.parquet"
         keys, times, data = zip(*rows, strict=True)
-        pq.write_table(pa.table({"key": keys, "epoch_ms": times, "data": data}), object_path)
-        segments.append(
-            DirectQuerySegment(
-                object_uri=str(object_path),
-                byte_size=object_path.stat().st_size,
-                row_count=len(rows),
-                created_at_ms=WINDOW.start_ms,
-            )
-        )
-    scratch_dir = tmp_path / "scratch"
+        pq.write_table(pa.table({"key": keys, "epoch_ms": times, "data": data}), path)
+        sources.append(str(path))
 
-    streamed = list(iter_log_rows(segments, WINDOW, scratch_dir, max_segment_bytes=2**20))
+    with duckdb.connect() as con:
+        streamed = list(iter_log_rows(con, sources, WINDOW))
 
     assert streamed == [in_window]
-    assert list(scratch_dir.iterdir()) == []

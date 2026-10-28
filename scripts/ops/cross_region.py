@@ -7,7 +7,7 @@
 This script:
 - pins the finelog ``log`` table's object catalog under ``<finelog.remote_log_dir>``
   and selects the stable segments created recently enough to hold the window
-- downloads and scans those segments one at a time, so local disk holds at most one
+- scans those segments in place with one DuckDB httpfs query
 - downloads the latest controller checkpoint unless a checkpoint directory is supplied
 - joins task log entries against task attempt / worker region metadata
 - reports cross-region ``gs://`` path mentions
@@ -17,6 +17,7 @@ us-central2; run outside that region, the scan pays internet egress on every
 selected segment. ``egress_report.py`` runs it as an Iris job in us-central2.
 """
 
+import contextlib
 import csv
 import datetime as dt
 import heapq
@@ -33,12 +34,14 @@ from pathlib import Path
 
 import click
 import duckdb
+import google.auth
+import google.auth.transport.requests
 from finelog.client import DirectQuerySegment, ObjectQueryClient
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
+from iris.env_resources import TaskResources
 from rigging.filesystem.cluster_config import get_bucket_location, region_from_prefix
-from rigging.filesystem.storage_path import StoragePath
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -49,10 +52,12 @@ LOG_NAMESPACE = "log"
 
 DEFAULT_LOOKBACK_HOURS = 12.0
 ROW_BATCH_SIZE = 10_000
-# Largest log segment the scan will stage on local disk. Segments seen in
-# October 2026 were a few hundred MiB; refusing a far larger one keeps a
-# change in finelog compaction from silently filling the worker's disk.
-DEFAULT_MAX_SEGMENT_BYTES = 8 * 2**30
+# DuckDB sizes its defaults from the host, not the container's limits, so a scan on
+# a large Iris worker would otherwise outgrow its resource request. The headroom
+# above this fraction covers the Python analysis and its result batches.
+SCAN_MEMORY_FRACTION = 0.8
+GCS_HTTPS_ENDPOINT = "https://storage.googleapis.com/"
+GCS_READ_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
 
 SUMMARY_JSON = "cross_region_ops_summary.json"
 APPENDIX_CSV = "cross_region_ops_appendix.csv"
@@ -293,47 +298,63 @@ def choose_log_segments(
     return chosen
 
 
+def gcs_https_url(uri: str) -> str:
+    """Map ``gs://bucket/key`` to the GCS XML API URL that DuckDB's httpfs reads with a bearer token."""
+    return GCS_HTTPS_ENDPOINT + uri.removeprefix("gs://")
+
+
+def gcs_bearer_token() -> str:
+    credentials, _ = google.auth.default(scopes=[GCS_READ_SCOPE])
+    credentials.refresh(google.auth.transport.requests.Request())
+    return credentials.token
+
+
 def iter_log_rows(
-    segments: Sequence[DirectQuerySegment],
-    window: TimeWindow,
-    scratch_dir: Path,
-    max_segment_bytes: int,
+    con: duckdb.DuckDBPyConnection, sources: Sequence[str], window: TimeWindow
 ) -> Iterator[tuple[str, int, str]]:
     """Yield ``(key, epoch_ms, data)`` for in-window task log lines that mention ``gs://``.
 
-    Segments are downloaded and scanned one at a time and deleted before the
-    next download, so local disk never holds more than one segment.
+    One query scans every source so DuckDB parallelizes across files and row
+    groups; matching rows stream back in batches.
     """
-    oversized = [segment for segment in segments if segment.byte_size > max_segment_bytes]
-    if oversized:
-        raise ValueError(
-            f"{len(oversized)} log segments exceed the {max_segment_bytes} byte disk budget, "
-            f"largest {max(segment.byte_size for segment in oversized)} bytes"
+    cursor = con.execute(
+        """
+        SELECT key, epoch_ms, data
+        FROM read_parquet(?)
+        WHERE epoch_ms >= ? AND epoch_ms < ?
+          AND key LIKE '/%:%'
+          AND data LIKE '%gs://%'
+        """,
+        [list(sources), window.start_ms, window.end_ms],
+    )
+    while batch := cursor.fetchmany(ROW_BATCH_SIZE):
+        yield from batch
+
+
+@contextlib.contextmanager
+def gcs_scan_connection(resources: TaskResources) -> Iterator[duckdb.DuckDBPyConnection]:
+    """A DuckDB connection that reads GCS objects natively through httpfs.
+
+    DuckDB's GCS secret only takes HMAC keys, so this authenticates the XML API
+    endpoint with an OAuth bearer token from the ambient Google credentials;
+    sources must be passed through :func:`gcs_https_url`. The token lasts about
+    an hour, far longer than a scan. Threads and memory follow the task's
+    resource request.
+    """
+    threads = max(1, int(resources.cpu_cores))
+    memory_limit = f"{int(resources.memory_bytes * SCAN_MEMORY_FRACTION) // 2**20}MiB"
+    logging.info(f"DuckDB scan: threads={threads}, memory_limit={memory_limit}")
+    con = duckdb.connect(config={"threads": threads, "memory_limit": memory_limit})
+    try:
+        con.execute("INSTALL httpfs")
+        con.execute("LOAD httpfs")
+        con.execute(
+            "CREATE SECRET gcs_bearer (TYPE http, BEARER_TOKEN ?, SCOPE ?)",
+            [gcs_bearer_token(), GCS_HTTPS_ENDPOINT],
         )
-    scratch_dir.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect()
-    for index, segment in enumerate(segments, 1):
-        logging.info(
-            f"  [{index}/{len(segments)}] Scanning {Path(segment.object_uri).name} "
-            f"({segment.byte_size / 2**20:.0f} MiB)"
-        )
-        local_path = scratch_dir / Path(segment.object_uri).name
-        StoragePath(segment.object_uri).download_to(str(local_path))
-        try:
-            cursor = con.execute(
-                """
-                SELECT key, epoch_ms, data
-                FROM read_parquet(?)
-                WHERE epoch_ms >= ? AND epoch_ms < ?
-                  AND key LIKE '/%:%'
-                  AND data LIKE '%gs://%'
-                """,
-                [str(local_path), window.start_ms, window.end_ms],
-            )
-            while batch := cursor.fetchmany(ROW_BATCH_SIZE):
-                yield from batch
-        finally:
-            local_path.unlink(missing_ok=True)
+        yield con
+    finally:
+        con.close()
 
 
 def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
@@ -851,11 +872,11 @@ def run_analysis(
     lookback_hours: float,
     checkpoint_dir: str | None,
     workdir: Path,
-    max_segment_bytes: int,
 ) -> dict:
     """Scan the finelog ``log`` table for ``window`` and return the cross-region summary.
 
-    ``workdir`` holds the controller checkpoint and, one at a time, each log segment.
+    ``workdir`` holds the controller checkpoint. Log segments are read in place
+    from GCS, so run this in the bucket's region to avoid internet egress.
     """
     logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     cfg = load_config(config_path)
@@ -879,8 +900,11 @@ def run_analysis(
     log_segments = choose_log_segments(pin.segments, window, lookback_hours)
     db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
 
-    rows = iter_log_rows(log_segments, window, workdir / "logs", max_segment_bytes)
-    summary = analyze(rows, db_path, window)
+    sources = [gcs_https_url(segment.object_uri) for segment in log_segments]
+    started = time.monotonic()
+    with gcs_scan_connection(TaskResources.from_environment()) as con:
+        summary = analyze(iter_log_rows(con, sources, window), db_path, window)
+    logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
     summary["local_db_path"] = str(db_path)
     summary["remote_log_dir"] = remote_log_dir
     summary["log_catalog_generation"] = pin.catalog_generation
@@ -907,7 +931,7 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
 @click.option(
     "--outdir",
     default=None,
-    help="Directory for downloaded parquet segments, checkpoint DB, and reports. Defaults to a temp dir.",
+    help="Directory for the controller checkpoint DB and reports. Defaults to a temp dir.",
 )
 @click.option(
     "--hours",
@@ -933,13 +957,6 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
     help="Extra lookback on segment creation time when choosing parquet segments.",
 )
 @click.option(
-    "--max-segment-bytes",
-    type=int,
-    default=DEFAULT_MAX_SEGMENT_BYTES,
-    show_default=True,
-    help="Fail rather than stage a log segment larger than this on local disk.",
-)
-@click.option(
     "--summary-json",
     default=None,
     help="Path to write the JSON summary. Defaults to <outdir>/cross_region_ops_summary.json.",
@@ -961,7 +978,6 @@ def main(
     end_time: str | None,
     checkpoint_dir: str | None,
     download_lookback_hours: float,
-    max_segment_bytes: int,
     summary_json: str | None,
     appendix_csv: str | None,
     report_md: str | None,
@@ -971,7 +987,7 @@ def main(
     out_path.mkdir(parents=True, exist_ok=True)
     logging.info(f"Output directory: {out_path}")
 
-    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path, max_segment_bytes)
+    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path)
 
     summary_json_path = Path(summary_json) if summary_json else out_path / SUMMARY_JSON
     appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / APPENDIX_CSV

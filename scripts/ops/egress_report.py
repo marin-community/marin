@@ -6,7 +6,7 @@
 
 Runs ``scripts/ops/cross_region.py`` over the last 24h of Iris logs as an
 Iris CPU job in us-central2, next to the finelog log segments, so the scan
-pays no internet egress and the runner never stages the logs. The job writes
+pays no internet egress and the runner never reads the logs. The job writes
 only the summary, report, and appendix to a us-central2 staging prefix; this
 script fetches them, publishes the report + appendix as a secret gist, and
 posts a short summary to Discord linking to the gist.
@@ -37,7 +37,6 @@ from rigging.timing import Duration
 from scripts.ops.cross_region import (
     APPENDIX_CSV,
     DEFAULT_LOOKBACK_HOURS,
-    DEFAULT_MAX_SEGMENT_BYTES,
     REPORT_MD,
     SUMMARY_JSON,
     parse_window,
@@ -53,8 +52,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # its outputs there so every large read is same-region.
 LOG_REGION = "us-central2"
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
-JOB_TIMEOUT = Duration.from_seconds(2 * 60 * 60)
+JOB_TIMEOUT = Duration.from_seconds(30 * 60)
 REPORT_FILES = (SUMMARY_JSON, REPORT_MD, APPENDIX_CSV)
+# The scan's DuckDB threads and memory limit follow this request (cross_region.SCAN_MEMORY_FRACTION).
+JOB_RESOURCES = ResourceSpec(cpu=16, memory="16GB", disk="5GB")
 
 
 def _report_stage(config: str, hours: float, end_time: str, output_dir: str) -> None:
@@ -66,7 +67,7 @@ def _report_stage(config: str, hours: float, end_time: str, output_dir: str) -> 
     window = parse_window(end_time, hours)
     with tempfile.TemporaryDirectory(prefix="egress-report-") as workdir:
         local = Path(workdir)
-        summary = run_analysis(config, window, DEFAULT_LOOKBACK_HOURS, None, local, DEFAULT_MAX_SEGMENT_BYTES)
+        summary = run_analysis(config, window, DEFAULT_LOOKBACK_HOURS, None, local)
         write_reports(summary, local / SUMMARY_JSON, local / APPENDIX_CSV, local / REPORT_MD)
         for name in REPORT_FILES:
             (StoragePath(output_dir) / name).upload_from(str(local / name))
@@ -77,9 +78,8 @@ def _run_cross_region_on_iris(config: str, hours: float, end_time: str, output_d
         job = client.submit(
             entrypoint=Entrypoint.from_callable(_report_stage, config, hours, end_time, output_dir),
             name=f"egress-report-{run_id}",
-            # Segments stage one at a time (a few hundred MiB each, capped by
-            # DEFAULT_MAX_SEGMENT_BYTES); the controller checkpoint is a few GB.
-            resources=ResourceSpec(cpu=2, memory="16GB", disk="50GB"),
+            # Disk holds the ~100 MiB controller checkpoint.
+            resources=JOB_RESOURCES,
             environment=EnvironmentSpec(env_vars={}),
             constraints=[region_constraint([LOG_REGION])],
             timeout=JOB_TIMEOUT,
