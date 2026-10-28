@@ -230,7 +230,7 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     else:
         measured_objective = measured.to_numpy() @ objective.weights
     return HeldoutBank(
-        exposure_ids=tuple(keys.iloc[first]),
+        exposure_ids=tuple(map(str, keys.iloc[first])),
         weights=weights[first],
         pool_fractions=fractions[first],
         measured=measured,

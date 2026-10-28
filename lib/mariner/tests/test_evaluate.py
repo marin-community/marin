@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from mariner.data import MAIN_SWARM, release_swarm
+from mariner.data import MAIN_SWARM, objective_from_tasks, read_table, release_anchors, release_swarm, release_tasks
 from mariner.evaluate import OUTER_FOLDS, HeldoutBank, cross_validate, heldout_metrics, outer_splits, selection_metrics
 from mariner.fit import final_inner_fold_labels
 
@@ -19,6 +19,18 @@ from mariner.fit import final_inner_fold_labels
 FOLD_LABELS = Path(__file__).parent / "data" / "qwen3_fold_labels.csv"
 PAPER_REPEATS = 5
 PERTURBED_RUN = 7
+
+# MARINER's row of the paper's surrogate benchmark (Table 10) in fits_surrogate_benchmark: the metrics of one
+# repeat's pooled out-of-fold predictions. Uncheatable takes about 65 s; OlmoBaseEval Easy, about 8 minutes.
+TABLE_10_MODEL = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
+TABLE_10_OBJECTIVE = "uncheatable"
+TABLE_10_TOLERANCE = 1e-6  # the plan's prediction tolerance
+TABLE_10_COLUMNS = {  # selection_metrics key -> fits_surrogate_benchmark column
+    "rmse": "rmse",
+    "spearman": "spearman",
+    "regret_at_1": "regret_at_1",
+    "optimism_at_pick": "selection_optimism",
+}
 
 
 def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
@@ -44,7 +56,7 @@ def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_proble
         swarm, epochs_per_unit_weight=swarm.epochs_per_unit_weight / 2, pool_fractions=np.full_like(swarm.weights, 0.5)
     )
     pd.testing.assert_frame_equal(
-        cross_validate(half_pools, one_task, anchors), cross_validate(swarm, one_task, anchors)
+        cross_validate(half_pools, one_task, anchors), cross_validate(swarm, one_task, anchors), check_exact=True
     )
 
 
@@ -121,3 +133,24 @@ def test_outer_fold_labels_match_paper_schedule(snapshot):
     assert set(labels) == set(oracle.columns)
     expected = oracle.loc[list(swarm.runs), list(labels)].to_numpy(float)
     np.testing.assert_array_equal(np.column_stack(list(labels.values())), expected)
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(300)
+def test_cross_validate_reproduces_table_10_mariner_row_on_uncheatable(snapshot):
+    swarm = release_swarm(snapshot, MAIN_SWARM, TABLE_10_OBJECTIVE)
+    objective = objective_from_tasks(release_tasks(snapshot), TABLE_10_OBJECTIVE)
+    anchors = release_anchors(snapshot, MAIN_SWARM, TABLE_10_OBJECTIVE)
+    table = cross_validate(swarm, objective, anchors, repeats=1)
+    # The pooled out-of-fold predictions of every run but the calibration row.
+    metrics = selection_metrics(table["predicted"].to_numpy(), table["measured"].to_numpy())
+    assert metrics["rows"] == len(swarm.runs) - 1
+    benchmark = read_table(snapshot, "fits_surrogate_benchmark")
+    released = benchmark[
+        (benchmark["model"] == TABLE_10_MODEL)
+        & (benchmark["swarm"] == MAIN_SWARM)
+        & (benchmark["objective"] == TABLE_10_OBJECTIVE)
+    ]
+    assert len(released) == 1
+    gaps = {key: abs(metrics[key] - float(released[column].iloc[0])) for key, column in TABLE_10_COLUMNS.items()}
+    assert all(gap <= TABLE_10_TOLERANCE for gap in gaps.values()), gaps
