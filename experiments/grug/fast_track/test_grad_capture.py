@@ -150,6 +150,8 @@ def test_capture_on_an_expert_sharded_mesh():
     assert "EP_OK" in result.stdout
 
 
+# Compiling the six-layer gradient graph can exceed the default 60 seconds on CI.
+@pytest.mark.timeout(180)
 def test_accumulated_gradients_average_the_microbatches():
     mesh, model, _ = _setup()
     tokens = jax.random.randint(jax.random.PRNGKey(4), (4, t._SEQ), 0, t._VOCAB)
