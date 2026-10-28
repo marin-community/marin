@@ -16,6 +16,8 @@ request time. `internal.mjs` retains whole upstream benchmark, comparison, histo
 point-detail, corpus-exploration and API routes. It omits public content pages and social
 images, and installs `internal-layout.tsx` plus private robots/sitemap entrypoints.
 Building the image needs no database credentials or fixtures.
+Hero's retained points are provisional. Its calibration and weekly-load selection
+remain deferred.
 
 The writer requires its own GitHub source lookup to succeed before database writes.
 Retry ingestion when that lookup is unavailable; an import must preserve the original
@@ -95,11 +97,15 @@ its actual GitHub date, attempt and commit. On the inference chart, disable
 **Optimal Only** (`i_optimal=0`) to inspect non-frontier calibration loads.
 The existing run selector and comparison/history views expose individual source
 runs and repeats; the latest curve shows the newest measurement for each load
-and serving recipe. A runtime image change starts a new curve.
+and serving recipe.
 
 Set `DASHBOARD_URL`, `INVALIDATE_SECRET` and, behind IAP, `IAP_ID_TOKEN` to refresh caches
 after import. The IAP token travels in `Proxy-Authorization`; the application invalidation
 secret travels in `Authorization`. An import or refresh failure is safe to retry.
+Obtain the deployment's accepted token through
+[IAP programmatic authentication](https://docs.cloud.google.com/iap/docs/authentication-howto).
+Production audience and issuer checks remain part of deployment acceptance; the
+private local preview does not use IAP.
 The web service is limited to one instance so invalidating its in-process/Next cache
 reaches the sole live instance. Scaling beyond one instance needs shared cache handling.
 
@@ -114,6 +120,23 @@ profiling records; `total_prompt_tokens` and `total_generation_tokens` preserve 
 server counter deltas. Generated tokens can differ from tokens received by the client;
 check these totals against `server_metrics.tokens`, not client throughput times duration.
 Upstream fixture smoke tests are separate regression evidence.
+
+Compare these fields at the pinned processor's precision:
+
+| Value | Delivered artifact | Dashboard API |
+| --- | --- | --- |
+| Output tokens/s/GPU | `agg.json: request_metrics.throughput.per_gpu.output_tput_tps` | `/api/v1/benchmarks: metrics.output_tput_per_gpu` |
+| P90 time to first token, seconds | `agg.json: request_metrics.latency.ttft.p90` | `/api/v1/benchmarks: metrics.p90_ttft` |
+| Physical GPUs | `agg.json: num_gpus` | `/api/v1/benchmark-siblings: siblings[].num_decode_gpu` |
+| Successful profiling requests | `agentx-source.json: receipt.validation.profiling_requests` | `/api/v1/benchmark-siblings: siblings[].total_requests` |
+
+Per-GPU throughput is client output tokens/s divided by physical GPUs, with the
+processor's rounding. Use its `request_metrics.throughput.duration_seconds` interval.
+Warmup requests remain in the raw trace and are excluded from profiling counts.
+For every raw JSONL record, match `metadata.conversation_id`, `turn_index` and
+`benchmark_phase` to the request-timeline API's `cid`, `ti` and `phase`. Adding
+`startNs` to each relative `start`/`end` must reproduce `request_start_ns` and
+`request_end_ns` within 1024 ns of JSON numeric rounding.
 
 For request-timeline links into the corpus explorer, bootstrap the dataset once with the
 upstream CLI (writer connection and socket mount as above):
@@ -177,11 +200,12 @@ directly, following `infra/pulumi.md`. Keep real-identity previews and passwords
    Traces/BF16/output tokens per GPU/P90, and an unauthenticated caller cannot read APIs.
    Verify the reader role cannot write and the GitHub identity can use the writer secret
    and IAP-protected invalidation endpoint. Do not infer live IAP/TLS behavior from mocks.
-8. Set `AGENTX_STATE_ROOT` as described in the runner runbook, then
+8. Set `AGENTX_STATE_ROOT` as described in the
+   [runner runbook](../../experiments/evaluation/agentx/README.md), then
    `INFERENCEX_INGEST_ENABLED=true`. Submit an H100 run, collect it, and inspect the import
    Action and API/UI values. Retry its collection/import to confirm idempotence. Only then
-   enable `AGENTX_WEEKLY_ENABLED=true`. Verify a current GB200 batch lands within the spare
-   allocation before including it in the weekly profile. Do not hard-code an old rack.
+   enable `AGENTX_WEEKLY_ENABLED=true` for Snowball's selected three-load grid.
+   Hero calibration and weekly-load selection remain deferred.
 
 Automatic imports accept collection completions from this repository's default branch.
 An operator can explicitly retry a reviewed collector from another branch:
@@ -200,7 +224,8 @@ Schema migration is an operator action, not a per-import operation.
 ## Rollback and retention
 
 Disable `AGENTX_WEEKLY_ENABLED` to stop new weekly submissions. Cancel active Iris
-coordinators before disabling collection, following the runner runbook in #10645. Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
+coordinators before disabling collection, following the
+[runner runbook](../../experiments/evaluation/agentx/README.md). Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
 Keep raw artifacts and immutable completed-result descriptors so delivery and ingestion
 can be retried later. Coordinator failure can require manual recovery; the runner runbook
 contains the exact salvage and fresh-submission commands.
@@ -225,7 +250,7 @@ upstream migration changes, take a backup of the existing Cloud SQL instance fir
 check backward compatibility; rolling back the app does not roll back a database.
 
 Keep GitHub plan/result artifacts for 90 days. The benchmark collector copies Iris's
-seven-day output archives into the configured non-TTL prefix with uploader SHA256,
+seven-day output archives into the non-TTL `AGENTX_STATE_ROOT` prefix with uploader SHA256,
 processed-bundle SHA256, all native attempt metadata and validation receipts. Apply the
 organization's retention policy there only after preserving a restore reference. The web
 database is a derived view; archived raw results are the reproduction source.

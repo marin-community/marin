@@ -83,6 +83,38 @@ index cd1d35a6..678cecea 100644
        ...INFERENCE_MODEL_ALIAS_REDIRECTS,
        ...VIDEO_ALIAS_REDIRECTS,
        {
+diff --git a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
+index d797752d..6df51a17 100644
+--- a/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
++++ b/packages/app/src/app/(dashboard)/inference/[model]/page.tsx
+@@ -52,6 +52,11 @@ export default async function InferenceModelPage({ params }: Props) {
+   if (!entry) notFound();
+   return (
+     <InferenceProvider activeTab="inference">
++      {entry.slug === 'marin-hero-step144000' && (
++        <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
++          Hero calibration is provisional. Weekly loads have not been selected.
++        </p>
++      )}
+       <InferenceChartDisplay />
+     </InferenceProvider>
+   );
+diff --git a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
+index 091e729f..4e887bcc 100644
+--- a/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
++++ b/packages/app/src/app/zh/(dashboard)/inference/[model]/page.tsx
+@@ -56,6 +56,11 @@ export default async function ZhInferenceModelPage({ params }: Props) {
+     <>
+       <ZhTabIntro tab="inference" />
+       <InferenceProvider activeTab="inference">
++        {entry.slug === 'marin-hero-step144000' && (
++          <p className="mx-auto max-w-7xl px-4 pt-4 text-sm text-muted-foreground">
++            Hero 校准尚未完成，尚未选择每周测试负载。
++          </p>
++        )}
+         <InferenceChartDisplay />
+       </InferenceProvider>
+     </>
 diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
 index ffa80dc9..00a24b88 100644
 --- a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
