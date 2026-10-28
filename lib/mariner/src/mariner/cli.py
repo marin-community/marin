@@ -354,8 +354,8 @@ def run_predict(args: argparse.Namespace) -> int:
     weights = mixture_weights(mixtures, fit.buckets, MIXTURES_TABLE)
     read = [f"{WEIGHT_PREFIX}{bucket}" for bucket in fit.buckets]
     fraction_columns = [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in fit.buckets]
-    fractions = None  # whole pools, unless the file gives pool fractions
-    if mixtures.columns.isin(fraction_columns).any():
+    fractions = None  # whole pools, unless the file has a pf__ column, which then needs every bucket's
+    if mixtures.columns.str.startswith(POOL_FRACTION_PREFIX).any():
         fractions = pool_fractions(mixtures, fit.buckets, MIXTURES_TABLE)
         read += fraction_columns
     predicted = {f"{PREDICTION_PREFIX}{fit.objective}": fit.predict(weights, fractions)}
