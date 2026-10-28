@@ -22,6 +22,7 @@ from collections.abc import Mapping
 import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
+from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
@@ -31,6 +32,25 @@ from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megat
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
+
+
+def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
+    """Copy loaded masters into the fp32 copies of lower-precision parameters.
+
+    Replaces Megatron's version (through 0.19.2), which looks up ``param_to_fp32_param`` for
+    every parameter with state. That map holds only parameters that were not already fp32, and
+    the distributed optimizer passes fp32 main shards only, so every checkpoint load failed
+    with ``KeyError``. An fp32 parameter has no separate copy to update.
+    """
+    if not self.param_update_in_fp32:
+        return
+    for param, state in self.state.items():
+        fp32_param = self.param_to_fp32_param.get(param)
+        if fp32_param is not None:
+            fp32_param.data.copy_(state["master_param"])
+
+
+HybridDeviceOptimizer._update_fp32_params_by_new_state = _update_fp32_params_by_new_state
 
 
 def _grug_muonh_extra(optim_config: Mapping) -> dict:

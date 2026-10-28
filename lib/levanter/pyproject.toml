@@ -67,7 +67,7 @@ dependencies = [
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "pydantic<3",
-    "filelock~=3.13",
+    "filelock>=4.2.1,<5",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
     "deepdiff>=8.6.2",
@@ -84,6 +84,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 [project.optional-dependencies]
 gpu = [
   "jax[cuda13]==0.11.1",
+  # Scope Torch's cu128 source to Levanter too, so uv enables its CUDA runtime dependencies.
+  "torch==2.11.0; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -187,6 +189,15 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+# PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
+torch = [{ index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.ruff]
 line-length = 119
