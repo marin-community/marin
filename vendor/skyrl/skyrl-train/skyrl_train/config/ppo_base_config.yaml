@@ -265,7 +265,12 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
-    # Cap on prompt groups generating at once; null bounds generation only by staleness.
+    # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
+    # prompt waits until the prompt order offers it again.
+    max_stale_retries: 1
+    # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
+    # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
+    # n_samples_per_prompt. Elsewhere null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
     # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
@@ -536,7 +541,8 @@ trajectory_runner:
   command_timeout: 120
   cleanup_timeout: 30
   shutdown_timeout: 45
-  max_concurrent_tasks: 32
+  # Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers.
+  max_concurrent_tasks: 1024
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4

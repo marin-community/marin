@@ -16,8 +16,8 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.rollout_buffer.max_staleness_steps=2 --run
 
-The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
-groups generating at once, staleness 4, and an 8192-token request window with a
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each, the in-flight
+group cap that the MarinSkyRL launch derives, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The selected MarinSkyRL revision validates the rollout and
 telemetry settings before the job takes a GPU.
@@ -162,8 +162,6 @@ class AsyncPreset:
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
-    # Maximum prompt groups generating at once. Smaller caps fill a batch in several waves.
-    generation_workers: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
     # Longest response the policy may generate, in tokens; it also caps the in-run evaluation.
@@ -185,7 +183,6 @@ DEFAULT = AsyncPreset(
     max_steps=100,
     eval_interval=10,
     max_staleness_steps=4,
-    generation_workers=192,
     request_window_tokens=8192,
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
@@ -200,9 +197,8 @@ SMOKE_PRESET = replace(
     max_new_tokens=1024,
     evals="gsm8k-smoke",
 )
-# Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
-# one update's prompts.
-ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
+# Every consumed group was sampled by the current weights, so at most one update's prompts generate at once.
+ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 )
@@ -294,13 +290,13 @@ def check_loop_shape(config: dict) -> None:
     budget = config["context_budget"]
     trainer = config["trainer"]
     loop = trainer["rollout_buffer"]
-    workers = loop["max_in_flight"]
+    in_flight = loop["max_in_flight"]
     staleness = loop["max_staleness_steps"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
     # generation and their groups fail admission.
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+    if in_flight is not None and (isinstance(in_flight, bool) or not isinstance(in_flight, int) or in_flight < 1):
         raise click.BadParameter("rollout_buffer.max_in_flight must be null or a positive integer")
     if isinstance(staleness, bool) or not isinstance(staleness, int) or staleness < 0:
         raise click.BadParameter("rollout_buffer.max_staleness_steps must be a nonnegative integer")
@@ -400,7 +396,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "rollout_buffer": {
             "max_staleness_steps": preset.max_staleness_steps,
             "batch_policy": preset.batch_policy,
-            "max_in_flight": preset.generation_workers,
+            # MarinSkyRL's launch derives the cap on prompt groups generating at once.
+            "max_in_flight": None,
             "object_store_root": None,
         },
     }
