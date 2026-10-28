@@ -33,21 +33,22 @@ from experiments.post_training.task_curation.datasets.evalchemy.reasoning import
 ORACLE = Path(__file__).parent / "fixtures/evalchemy_choices_oracle.json"
 
 
-@pytest.fixture(params=["GPQADiamond", "MMLUPro"])
+@pytest.fixture(params=["GPQADiamond", "MMLUPro", "MMLUPro-url"])
 def reasoning_corpus(request, tmp_path, monkeypatch):
-    reference = next(case for case in json.loads(ORACLE.read_text())["cases"] if case["name"] == request.param)
-    source = next(source for source in sources() if source.config.protocol.benchmark == request.param)
+    benchmark = request.param.removesuffix("-url")
+    reference = next(case for case in json.loads(ORACLE.read_text())["cases"] if case["name"] == benchmark)
+    source = next(source for source in sources() if source.config.protocol.benchmark == benchmark)
     dataset = source.config
     root = tmp_path / "source"
     file = root / dataset.files[0]
     file.parent.mkdir(parents=True)
-    if request.param == "MMLUPro":
+    if benchmark == "MMLUPro":
         pq.write_table(pa.Table.from_pylist(reference["rows"]), file)
         support = tmp_path / "fewshot"
         support_file = support / MMLU_VALIDATION_FILE
         support_file.parent.mkdir(parents=True)
         pq.write_table(pa.Table.from_pylist(reference["fewshot_rows"]), support_file)
-        auxiliary = {"fewshot": str(support)}
+        auxiliary = {"fewshot": support.as_uri() + "/" if request.param.endswith("-url") else str(support)}
     else:
         with file.open("w", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(reference["rows"][0]))
@@ -57,7 +58,7 @@ def reasoning_corpus(request, tmp_path, monkeypatch):
     protocol = dataset.protocol.model_copy(
         update={
             "expected_population": len(reference["rows"]),
-            "trials": dataset.protocol.trials.model_copy(update={"seed": 7 if request.param == "GPQADiamond" else None}),
+            "trials": dataset.protocol.trials.model_copy(update={"seed": 7 if benchmark == "GPQADiamond" else None}),
         }
     )
     source = replace(source, config=replace(dataset, protocol=protocol))

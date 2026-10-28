@@ -63,6 +63,20 @@ class HarnessTemplate:
     fewshot_file: str = ""
 
 
+@dataclass(frozen=True)
+class ChoiceDocument:
+    prompt: str
+    choices: tuple[str, ...]
+    gold: int
+
+
+@dataclass(frozen=True)
+class GenerationDocument:
+    prompt: str
+    demonstration_target: str
+    references: tuple[tuple[str, ...], ...]
+
+
 def original_task_name(template: HarnessTemplate) -> str:
     return "mmlu_" + template.subject if template.name == "mmlu" else template.name
 
@@ -71,7 +85,7 @@ def _hellaswag_text(text: str) -> str:
     return re.sub(r"\[.*?\]", "", text.strip().replace(" [title]", ". ")).replace("  ", " ")
 
 
-def choice_document(doc: Mapping[str, Any], template: HarnessTemplate) -> tuple[str, tuple[str, ...], int]:
+def choice_document(doc: Mapping[str, Any], template: HarnessTemplate) -> ChoiceDocument:
     """Render public questions and original choices separately from the target delimiter."""
     name = template.name
     if name == "mmlu":
@@ -81,36 +95,46 @@ def choice_document(doc: Mapping[str, Any], template: HarnessTemplate) -> tuple[
             + "\n".join(f"{letter}. {choice}" for letter, choice in zip("ABCD", doc["choices"], strict=True))
             + "\nAnswer:"
         )
-        return prompt, tuple("ABCD"), int(doc["answer"])
+        return ChoiceDocument(prompt=prompt, choices=tuple("ABCD"), gold=int(doc["answer"]))
     if name in {"arc_challenge", "arc_easy"}:
-        return (
-            f"Question: {doc['question']}\nAnswer:",
-            tuple(doc["choices"]["text"]),
-            doc["choices"]["label"].index(doc["answerKey"]),
+        return ChoiceDocument(
+            prompt=f"Question: {doc['question']}\nAnswer:",
+            choices=tuple(doc["choices"]["text"]),
+            gold=doc["choices"]["label"].index(doc["answerKey"]),
         )
     if name == "openbookqa":
-        return (
-            doc["question_stem"],
-            tuple(doc["choices"]["text"]),
-            doc["choices"]["label"].index(doc["answerKey"].lstrip()),
+        return ChoiceDocument(
+            prompt=doc["question_stem"],
+            choices=tuple(doc["choices"]["text"]),
+            gold=doc["choices"]["label"].index(doc["answerKey"].lstrip()),
         )
     if name == "piqa":
-        return f"Question: {doc['goal']}\nAnswer:", (doc["sol1"], doc["sol2"]), int(doc["label"])
+        return ChoiceDocument(
+            prompt=f"Question: {doc['goal']}\nAnswer:", choices=(doc["sol1"], doc["sol2"]), gold=int(doc["label"])
+        )
     if name == "boolq":
-        return f"{doc['passage']}\nQuestion: {doc['question']}?\nAnswer:", ("no", "yes"), int(doc["label"])
+        return ChoiceDocument(
+            prompt=f"{doc['passage']}\nQuestion: {doc['question']}?\nAnswer:",
+            choices=("no", "yes"),
+            gold=int(doc["label"]),
+        )
     if name == "hellaswag":
         context = doc["ctx_a"] + " " + doc["ctx_b"].capitalize()
-        return (
-            _hellaswag_text(doc["activity_label"] + ": " + context),
-            tuple(_hellaswag_text(ending) for ending in doc["endings"]),
-            int(doc["label"]),
+        return ChoiceDocument(
+            prompt=_hellaswag_text(doc["activity_label"] + ": " + context),
+            choices=tuple(_hellaswag_text(ending) for ending in doc["endings"]),
+            gold=int(doc["label"]),
         )
     if name == "truthfulqa_mc2":
-        return TRUTHFULQA_PREFIX + f"\n\nQ: {doc['question']}\nA:", tuple(doc["mc2_targets"]["choices"]), 0
+        return ChoiceDocument(
+            prompt=TRUTHFULQA_PREFIX + f"\n\nQ: {doc['question']}\nA:",
+            choices=tuple(doc["mc2_targets"]["choices"]),
+            gold=0,
+        )
     if name == "winogrande":
         beginning, ending = doc["sentence"].split("_", 1)
         choices = (beginning + doc["option1"], beginning + doc["option2"])
-        return ending.strip(), choices, int(doc["answer"]) - 1
+        return ChoiceDocument(prompt=ending.strip(), choices=choices, gold=int(doc["answer"]) - 1)
     raise ValueError(f"Unsupported pinned likelihood template: {name}")
 
 
@@ -128,26 +152,29 @@ def compile_choice_documents(
             indices = _sample_indices(random, fewshot_documents, doc, template)
             prefix = ""
         for index in indices:
-            prompt, choices, gold = choice_document(fewshot_documents[index], template)
+            demonstration = choice_document(fewshot_documents[index], template)
+            target = demonstration.choices[demonstration.gold]
             prefix += (
-                choices[gold] + " " + prompt if template.name == "winogrande" else prompt + " " + choices[gold]
+                target + " " + demonstration.prompt
+                if template.name == "winogrande"
+                else demonstration.prompt + " " + target
             ) + "\n\n"
-        prompt, choices, gold = choice_document(doc, template)
+        document = choice_document(doc, template)
         requests = tuple(
             (
-                LikelihoodRequest(context=prefix + choice, continuation=" " + prompt)
+                LikelihoodRequest(context=prefix + choice, continuation=" " + document.prompt)
                 if template.name == "winogrande"
-                else LikelihoodRequest(context=prefix + prompt, continuation=" " + choice)
+                else LikelihoodRequest(context=prefix + document.prompt, continuation=" " + choice)
             )
-            for choice in choices
+            for choice in document.choices
         )
         operation = ChoiceLikelihood(
-            choices=choices,
+            choices=document.choices,
             requests=requests,
             gold=(
                 tuple(index for index, label in enumerate(doc["mc2_targets"]["labels"]) if label)
                 if template.name == "truthfulqa_mc2"
-                else (gold,)
+                else (document.gold,)
             ),
         )
         yield {
@@ -257,29 +284,33 @@ def continuation_item(task: TaskSpec) -> EvaluationItem:
     )
 
 
-def generation_document(doc: dict[str, Any], name: str) -> tuple[str, str, tuple[tuple[str, ...], ...]]:
+def generation_document(doc: dict[str, Any], name: str) -> GenerationDocument:
     if name == "gsm8k":
-        return f"Question: {doc['question']}\nAnswer:", doc["answer"], ((doc["answer"].rsplit("#### ", 1)[-1],),)
+        return GenerationDocument(
+            prompt=f"Question: {doc['question']}\nAnswer:",
+            demonstration_target=doc["answer"],
+            references=((doc["answer"].rsplit("#### ", 1)[-1],),),
+        )
     if name == "triviaqa":
         references = tuple((alias,) for alias in doc["answer"]["aliases"])
-        return (
-            f"Question: {doc['question']}?\nRespond with exactly \"Answer: <short answer>\".",
-            "Answer: " + references[0][0],
-            references,
+        return GenerationDocument(
+            prompt=f"Question: {doc['question']}?\nRespond with exactly \"Answer: <short answer>\".",
+            demonstration_target="Answer: " + references[0][0],
+            references=references,
         )
     if name == "nq_open":
         references = tuple((alias,) for alias in doc["answer"])
-        return (
-            f"Q: {doc['question']}?\nRespond with exactly \"Answer: <short answer>\".",
-            f"Answer: {doc['answer']}",
-            references,
+        return GenerationDocument(
+            prompt=f"Q: {doc['question']}?\nRespond with exactly \"Answer: <short answer>\".",
+            demonstration_target=f"Answer: {doc['answer']}",
+            references=references,
         )
     if name == "drop":
         references = drop_references(doc)
-        return (
-            f"{doc['passage']} {doc['question']}\nRespond with exactly \"Answer: <short answer>\".",
-            "Answer: " + ",".join(references[0]),
-            references,
+        return GenerationDocument(
+            prompt=f"{doc['passage']} {doc['question']}\nRespond with exactly \"Answer: <short answer>\".",
+            demonstration_target="Answer: " + ",".join(references[0]),
+            references=references,
         )
     raise ValueError(f"Unsupported pinned generation template: {name}")
 
@@ -294,13 +325,13 @@ def compile_generation_documents(
         delimiter = "\n" if template.name == "drop" else " "
         separator = "\n" if template.name == "nq_open" else "\n\n"
         for index in indices:
-            prompt, target, _ = generation_document(fewshot_documents[index], template.name)
-            prefix += prompt + delimiter + target + separator
-        prompt, _, references = generation_document(doc, template.name)
+            demonstration = generation_document(fewshot_documents[index], template.name)
+            prefix += demonstration.prompt + delimiter + demonstration.demonstration_target + separator
+        document = generation_document(doc, template.name)
         yield {
             "document": doc,
-            "operation": TextGeneration(context=prefix + prompt).model_dump(mode="json"),
-            "references": references,
+            "operation": TextGeneration(context=prefix + document.prompt).model_dump(mode="json"),
+            "references": document.references,
             "profile": template.name,
             "fewshot_indices": indices,
             "fewshot_seed": FEWSHOT_SEED,

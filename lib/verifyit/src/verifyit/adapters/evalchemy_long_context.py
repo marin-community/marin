@@ -68,6 +68,7 @@ def grade_nonce_similarity(expected: str, nonce: str, response: str) -> Reward:
 
 
 def graphwalks_answer(response: str) -> tuple[list[str], bool]:
+    """Return final-line nodes and whether extraction failed; a parsed empty list succeeds."""
     line = response.rstrip().split("\n")[-1]
     if FINAL_ANSWER_PREFIX not in line:
         return [], True
@@ -78,9 +79,9 @@ def graphwalks_answer(response: str) -> tuple[list[str], bool]:
 
 
 def grade_graphwalks(expected: tuple[str, ...], response: str) -> Reward:
-    extracted, failed = graphwalks_answer(response)
+    extracted, extraction_failed = graphwalks_answer(response)
     predicted, truth = set(extracted), set(expected)
-    if failed:
+    if extraction_failed:
         precision = recall = f1 = 0.0
     elif not truth and not predicted:
         precision = recall = f1 = 1.0
@@ -95,8 +96,8 @@ def grade_graphwalks(expected: tuple[str, ...], response: str) -> Reward:
             "f1": f1,
             "precision": precision,
             "recall": recall,
-            "exact_match": float(predicted == truth and not failed),
+            "exact_match": float(predicted == truth and not extraction_failed),
         },
         model_answer=extracted,
-        answer_extraction_errors=["failed_to_parse"] if failed else [],
+        answer_extraction_errors=["failed_to_parse"] if extraction_failed else [],
     )

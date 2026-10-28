@@ -164,11 +164,7 @@ def _rational_value(string: str) -> Fraction | None:
 
 @functools.lru_cache(maxsize=_PARSE_CACHE_SIZE)
 def _sympy_parses(string: str):
-    """Parse a LaTeX string, or return ``None`` if sympy rejects it.
-
-    Memoized: parsing is pure and answers repeat across a run (MATH's 12.5k
-    answers cover 4.3k distinct strings).
-    """
+    """Parse a LaTeX string, returning ``None`` if SymPy rejects it."""
     try:
         return parse_latex(string)
     except (LaTeXParsingError, sympy.SympifyError, TypeError):

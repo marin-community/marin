@@ -7,6 +7,7 @@ import hashlib
 import random
 from functools import lru_cache, partial
 
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
 from taskcompendium.evaluation import (
@@ -98,7 +99,7 @@ def mmlu_prompt(support: tuple[dict, ...], example: dict, *, num_fewshot: int) -
 @lru_cache
 def mmlu_support(root: str) -> tuple[dict, ...]:
     """Read the small, immutable validation split once per conversion worker."""
-    return tuple(load_parquet(root.rstrip("/") + "/" + MMLU_VALIDATION_FILE))
+    return tuple(load_parquet(str(StoragePath(root) / MMLU_VALIDATION_FILE)))
 
 
 def convert_mmlu(row: RawRow, context: ConversionContext) -> TaskSpec:

@@ -347,6 +347,112 @@ async def _score_likelihood(
     return outcome
 
 
+async def _score_generation(
+    case: EvaluationCase,
+    protocol: EvaluationProtocol,
+    config: EvaluationRunConfig,
+    model: Model,
+    store: DataStore,
+    attempt: Attempt,
+    max_tokens: int,
+    *,
+    machine_factories: Mapping[str, MachineFactory],
+    judge_connection: JudgeConnection | None,
+) -> Outcome:
+    task = case.task
+    options = generation_options(protocol, config, attempt.trial)
+    options["max_tokens"] = max_tokens
+    engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
+    spec = TaskRolloutSpec(
+        task=task,
+        harness=EXACT_CHAT_HARNESS,
+        task_machine=config.task_machine,
+        verifier_machine=config.verifier_machine,
+        judge_connection=judge_connection,
+        limits=config.limits,
+        trace=TraceMode.MESSAGES,
+    )
+    operation = case.item.operation
+    assert isinstance(operation, ChatGeneration | TextGeneration)
+
+    policy_model = partial(generation_turn, model=model, operation=operation)
+
+    failure_evidence = None
+    try:
+        result = await engine.run_task(spec, policy_model)
+        rollout, grade = result.rollout, result.grade
+    except GradedRolloutInterrupted as error:
+        rollout, grade = error.rollout, error.grade
+        cause = error.__cause__
+        if isinstance(cause, ModelResponseError):
+            failure_evidence = {"response": cause.response, "response_json": cause.response_json}
+        elif isinstance(cause, APIError):
+            failure_evidence = {"provider_error": cause.body}
+    if rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+        outcome = Outcome.INFRA_ERROR
+    else:
+        outcome = grade.status
+    sample = _sample(case, protocol, task, rollout, grade)
+    turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
+    raw = {
+        "task": task.model_dump(mode="json"),
+        "item": case.item.model_dump(mode="json"),
+        "grade": dataclasses.asdict(grade),
+        "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
+        "stop_reason": rollout.stop_reason,
+        "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
+        "failure_evidence": failure_evidence,
+        "options": options,
+    }
+    _save_attempt(
+        store,
+        attempt,
+        sample,
+        raw,
+        outcome,
+        grade.error,
+        (
+            sum(turn.usage.prompt_tokens if turn.usage else len(turn.prompt_token_ids) for turn in turns)
+            if turns
+            else None
+        ),
+        (
+            sum(turn.usage.completion_tokens if turn.usage else len(turn.response_token_ids) for turn in turns)
+            if turns
+            else None
+        ),
+    )
+    return outcome
+
+
+def _latest_attempts(reader: ReadView) -> dict[tuple[str, str, int], Attempt]:
+    latest: dict[tuple[str, str, int], Attempt] = {}
+    for row in reader.iter_rows(ATTEMPTS_TABLE):
+        attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
+        key = _attempt_key(attempt.dataset, attempt.source_row, attempt.trial)
+        old = latest.get(key)
+        if old is None or (attempt.retry, attempt.phase == AttemptPhase.FINISHED) > (
+            old.retry,
+            old.phase == AttemptPhase.FINISHED,
+        ):
+            latest[key] = attempt
+    return latest
+
+
+def _validate_judge(task: TaskSpec, identity: JudgeIdentity | None) -> None:
+    if not grades_with_judge(task.grader):
+        return
+    if identity is None:
+        raise ValueError(f"Judged task requires an explicit judge identity and connection: {task.id}")
+    assert isinstance(task.grader, VerifyitGrader)
+    verifier = verifyit_spec(task.grader)
+    judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
+    assert isinstance(judge, JudgeSpec)
+    alias = judge.model.strip() or (identity.default_model or "").strip()
+    if not alias or not identity.models.get(alias, "").strip():
+        raise ValueError(f"Judge model has no recorded immutable revision: {alias!r} ({task.id})")
+
+
 async def run_evaluation(
     datasets: tuple[str, ...],
     output: str,
@@ -410,17 +516,7 @@ async def run_evaluation(
             primary_key=("dataset", "source_row"),
             schema_version=1,
         )
-        reader = store.read_view()
-        latest: dict[tuple[str, str, int], Attempt] = {}
-        for row in reader.iter_rows(ATTEMPTS_TABLE):
-            attempt = Attempt.model_validate({name: row[name] for name in Attempt.model_fields})
-            key = _attempt_key(attempt.dataset, attempt.source_row, attempt.trial)
-            old = latest.get(key)
-            if old is None or (attempt.retry, attempt.phase == AttemptPhase.FINISHED) > (
-                old.retry,
-                old.phase == AttemptPhase.FINISHED,
-            ):
-                latest[key] = attempt
+        latest = _latest_attempts(store.read_view())
         with store.transaction() as transaction:
             transaction.write_object(RUN_OBJECT, json.dumps(run, allow_nan=False).encode())
 
@@ -451,20 +547,7 @@ async def run_evaluation(
                     case = decision.case
                     if case is None:
                         continue
-                    if grades_with_judge(case.task.grader):
-                        if config.judge is None:
-                            raise ValueError(
-                                f"Judged task requires an explicit judge identity and connection: {case.task.id}"
-                            )
-                        assert isinstance(case.task.grader, VerifyitGrader)
-                        verifier = verifyit_spec(case.task.grader)
-                        judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
-                        assert isinstance(judge, JudgeSpec)
-                        alias = judge.model.strip() or (config.judge.default_model or "").strip()
-                        if not alias or not config.judge.models.get(alias, "").strip():
-                            raise ValueError(
-                                f"Judge model has no recorded immutable revision: {alias!r} ({case.task.id})"
-                            )
+                    _validate_judge(case.task, config.judge)
                     selected += 1
                     # Cohort decisions are durable before expanding trials, including on resumed runs.
                     for trial in range(protocol.trials.count):
@@ -513,75 +596,20 @@ async def run_evaluation(
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue
-                options = generation_options(protocol, config, trial)
-                assert selection.max_tokens is not None
-                options["max_tokens"] = selection.max_tokens
-                engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
-                spec = TaskRolloutSpec(
-                    task=task,
-                    harness=EXACT_CHAT_HARNESS,
-                    task_machine=config.task_machine,
-                    verifier_machine=config.verifier_machine,
-                    judge_connection=judge_connection,
-                    limits=config.limits,
-                    trace=TraceMode.MESSAGES,
-                )
-                operation = case.item.operation
-                assert isinstance(operation, ChatGeneration | TextGeneration)
-
-                transport = completion_model if isinstance(operation, TextGeneration) else model
-                assert transport is not None
-                policy_model = partial(generation_turn, model=transport, operation=operation)
-
-                failure_evidence = None
-                try:
-                    result = await engine.run_task(spec, policy_model)
-                    rollout, grade = result.rollout, result.grade
-                except GradedRolloutInterrupted as error:
-                    rollout, grade = error.rollout, error.grade
-                    cause = error.__cause__
-                    if isinstance(cause, ModelResponseError):
-                        failure_evidence = {"response": cause.response, "response_json": cause.response_json}
-                    elif isinstance(cause, APIError):
-                        failure_evidence = {"provider_error": cause.body}
-                if rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
-                    failures += 1
-                    outcome = Outcome.INFRA_ERROR
-                else:
-                    outcome = grade.status
-                sample = _sample(case, protocol, task, rollout, grade)
-                turns = [step.turn for conversation in rollout.conversations for step in conversation.steps]
-                raw = {
-                    "task": task.model_dump(mode="json"),
-                    "item": case.item.model_dump(mode="json"),
-                    "grade": dataclasses.asdict(grade),
-                    "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
-                    "stop_reason": rollout.stop_reason,
-                    "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
-                    "failure_evidence": failure_evidence,
-                    "options": options,
-                }
-                _save_attempt(
+                transport = completion_model if isinstance(case.item.operation, TextGeneration) else model
+                assert transport is not None and selection.max_tokens is not None
+                outcome = await _score_generation(
+                    case,
+                    protocol,
+                    config,
+                    transport,
                     store,
                     attempt,
-                    sample,
-                    raw,
-                    outcome,
-                    grade.error,
-                    (
-                        sum(turn.usage.prompt_tokens if turn.usage else len(turn.prompt_token_ids) for turn in turns)
-                        if turns
-                        else None
-                    ),
-                    (
-                        sum(
-                            turn.usage.completion_tokens if turn.usage else len(turn.response_token_ids)
-                            for turn in turns
-                        )
-                        if turns
-                        else None
-                    ),
+                    selection.max_tokens,
+                    machine_factories=machine_factories,
+                    judge_connection=judge_connection,
                 )
+                failures += outcome is Outcome.INFRA_ERROR
 
         async with asyncio.TaskGroup() as group:
             group.create_task(produce())

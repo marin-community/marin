@@ -12,6 +12,7 @@ import threading
 from math_verify import parse, verify
 from sympy.core.relational import Relational
 
+from verifyit.adapters.evalchemy_amc import last_boxed_answer
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.grade import Reward, invalid_task, scored
 
@@ -47,21 +48,7 @@ def final_boxed_answer(response: str) -> str:
     response = response[end:]
     stops = [index for stop in END_OF_TURN_SEQUENCES if (index := response.find(stop)) >= 0]
     response = response[: min(stops)] if stops else response
-    if r"\boxed " in response:
-        return response.split(r"\boxed ")[-1].split("$")[0]
-    start = response.rfind(r"\boxed")
-    if start < 0:
-        return ""
-    depth = 0
-    for index in range(start, len(response)):
-        if response[index] == "{":
-            depth += 1
-        elif response[index] == "}":
-            depth -= 1
-            if depth == 0:
-                boxed = response[start : index + 1]
-                return boxed[len(r"\boxed{") : -1] if boxed.startswith(r"\boxed{") else ""
-    return ""
+    return last_boxed_answer(response)
 
 
 def grade_boxed_math(expected: str, response: str) -> Reward:
