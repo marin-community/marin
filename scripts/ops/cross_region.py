@@ -7,24 +7,27 @@
 This script:
 - pins the finelog ``log`` table's object catalog under ``<finelog.remote_log_dir>``
   and selects the stable segments created recently enough to hold the window
-- downloads those segments
+- downloads and scans those segments one at a time, so local disk holds at most one
 - downloads the latest controller checkpoint unless a checkpoint directory is supplied
 - joins task log entries against task attempt / worker region metadata
 - reports cross-region ``gs://`` path mentions
 
-The default mode analyzes the last 24 hours.
+The default mode analyzes the last 24 hours. The log segments live in
+us-central2; run outside that region, the scan pays internet egress on every
+selected segment. ``egress_report.py`` runs it as an Iris job in us-central2.
 """
 
 import csv
 import datetime as dt
+import heapq
+import itertools
 import json
 import logging
 import re
 import sqlite3
 import time
 from collections import Counter
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +46,17 @@ GS_RE = re.compile(r"gs://[^\s'\"`]+")
 
 # Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
 LOG_NAMESPACE = "log"
+
+DOWNLOAD_CHUNK_BYTES = 8 * 2**20
+ROW_BATCH_SIZE = 10_000
+# Largest log segment the scan will stage on local disk. Segments seen in
+# October 2026 were a few hundred MiB; refusing a far larger one keeps a
+# change in finelog compaction from silently filling the worker's disk.
+DEFAULT_MAX_SEGMENT_BYTES = 8 * 2**30
+
+SUMMARY_JSON = "cross_region_ops_summary.json"
+APPENDIX_CSV = "cross_region_ops_appendix.csv"
+REPORT_MD = "cross_region_ops_report.md"
 
 # Extensions that typically carry bulk bytes. A single cross-region read of one
 # of these is orders of magnitude more expensive than a small JSON/config file.
@@ -279,50 +293,56 @@ def choose_log_segments(
     return chosen
 
 
-def _download_one(fs, segment: DirectQuerySegment, target_dir: Path, index: int, total: int) -> Path:
-    name = Path(segment.object_uri).name
-    local_path = target_dir / name
-    cached_ok = local_path.exists() and local_path.stat().st_size == segment.byte_size
-    if cached_ok:
-        logging.info(f"  [{index}/{total}] {name} already cached")
-        return local_path
-    if local_path.exists():
-        logging.info(
-            f"  [{index}/{total}] {name} cached but size mismatch "
-            f"(local={local_path.stat().st_size}, remote={segment.byte_size}); re-downloading"
-        )
-    else:
-        logging.info(f"  [{index}/{total}] Downloading {name}")
-    tmp_path = local_path.with_suffix(local_path.suffix + ".part")
-    with fs.open(segment.object_uri, "rb") as src, tmp_path.open("wb") as dst:
-        while True:
-            chunk = src.read(8 * 1024 * 1024)
-            if not chunk:
-                break
+def _download_segment(fs, segment: DirectQuerySegment, target_dir: Path) -> Path:
+    local_path = target_dir / Path(segment.object_uri).name
+    with fs.open(segment.object_uri, "rb") as src, local_path.open("wb") as dst:
+        while chunk := src.read(DOWNLOAD_CHUNK_BYTES):
             dst.write(chunk)
-    tmp_path.replace(local_path)
     return local_path
 
 
-def download_log_segments(remote_log_dir: str, segments: list[DirectQuerySegment], target_dir: Path) -> list[Path]:
+def iter_log_rows(
+    remote_log_dir: str,
+    segments: Sequence[DirectQuerySegment],
+    window: TimeWindow,
+    scratch_dir: Path,
+    max_segment_bytes: int,
+) -> Iterator[tuple[str, int, str]]:
+    """Yield ``(key, epoch_ms, data)`` for in-window task log lines that mention ``gs://``.
+
+    Segments are downloaded and scanned one at a time and deleted before the
+    next download, so local disk never holds more than one segment.
+    """
+    oversized = [segment for segment in segments if segment.byte_size > max_segment_bytes]
+    if oversized:
+        raise ValueError(
+            f"{len(oversized)} log segments exceed the {max_segment_bytes} byte disk budget, "
+            f"largest {max(segment.byte_size for segment in oversized)} bytes"
+        )
     fs, _ = url_to_fs(remote_log_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Downloading {len(segments)} parquet files to {target_dir}")
-
-    total = len(segments)
-    results: dict[int, Path] = {}
-
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {
-            pool.submit(_download_one, fs, segment, target_dir, index, total): index
-            for index, segment in enumerate(segments, 1)
-        }
-        for fut in as_completed(futures):
-            results[futures[fut]] = fut.result()
-
-    local_paths = [results[i] for i in range(1, total + 1)]
-    logging.info(f"Finished downloading {len(local_paths)} parquet files")
-    return local_paths
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    for index, segment in enumerate(segments, 1):
+        logging.info(
+            f"  [{index}/{len(segments)}] Scanning {Path(segment.object_uri).name} "
+            f"({segment.byte_size / 2**20:.0f} MiB)"
+        )
+        local_path = _download_segment(fs, segment, scratch_dir)
+        try:
+            cursor = con.execute(
+                """
+                SELECT key, epoch_ms, data
+                FROM read_parquet(?)
+                WHERE epoch_ms >= ? AND epoch_ms < ?
+                  AND key LIKE '/%:%'
+                  AND data LIKE '%gs://%'
+                """,
+                [str(local_path), window.start_ms, window.end_ms],
+            )
+            while batch := cursor.fetchmany(ROW_BATCH_SIZE):
+                yield from batch
+        finally:
+            local_path.unlink(missing_ok=True)
 
 
 def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
@@ -408,11 +428,28 @@ def load_attempt_windows(db_path: Path) -> dict[tuple[str, int], AttemptWindow]:
     return attempts
 
 
+def _keep_newest(pool: list[tuple[int, int, dict]], sample: dict, order: int, cap: int) -> None:
+    """Add ``sample`` to a min-heap that retains the ``cap`` newest samples."""
+    entry = (sample["timestamp_ms"], order, sample)
+    if len(pool) < cap:
+        heapq.heappush(pool, entry)
+    else:
+        heapq.heappushpop(pool, entry)
+
+
+def _newest_first(pool: list[tuple[int, int, dict]]) -> list[dict]:
+    return [sample for _, _, sample in sorted(pool, key=lambda entry: (-entry[0], entry[1]))]
+
+
 def analyze(
-    parquet_paths: list[Path],
+    rows: Iterable[tuple[str, int, str]],
     db_path: Path,
     window: TimeWindow,
 ) -> dict:
+    """Tally cross-region ``gs://`` mentions in ``(key, epoch_ms, data)`` log rows.
+
+    Rows may arrive in any order; samples are the newest by timestamp.
+    """
     attempts = load_attempt_windows(db_path)
     bucket_cache: dict[str, str | None] = {}
 
@@ -442,38 +479,23 @@ def analyze(
     cross_region_extension_counts = Counter()
     unmatched_tasks = Counter()
     unknown_buckets = Counter()
-    samples: list[dict] = []
+    samples: list[tuple[int, int, dict]] = []
     # Per-user sample buffer: keep a small, diverse slice for each user so a
     # single loud user can't crowd everyone else out of the report.
-    user_samples: dict[str, list[dict]] = {}
+    user_pools: dict[str, list[tuple[int, int, dict]]] = {}
+    sample_order = itertools.count()
     # Dedup identical (task, attempt, path, ms) rows — the same log line
     # frequently appears twice in the parquet stream.
     seen_sample_keys: set[tuple] = set()
     # Collect a wider pool per user so we can rank by tier priority at the end
-    # (large ≫ medium ≫ small ≫ unknown) rather than just taking whatever
-    # arrived first in reverse-chron order.
+    # (large ≫ medium ≫ small ≫ unknown) rather than just taking the newest.
     per_user_sample_cap = 10
     per_user_sample_pool = 40
     tier_priority = {"large": 0, "medium": 1, "unknown": 2, "small": 3}
 
-    logging.info(f"Querying {len(parquet_paths)} parquet files for logs with gs:// paths")
-    con = duckdb.connect()
-    rows = con.execute(
-        """
-        SELECT key, epoch_ms, data
-        FROM read_parquet(?)
-        WHERE epoch_ms >= ? AND epoch_ms < ?
-          AND key LIKE '/%:%'
-          AND data LIKE '%gs://%'
-        ORDER BY epoch_ms DESC
-        """,
-        [[str(p) for p in parquet_paths], window.start_ms, window.end_ms],
-    ).fetchall()
-    logging.info(f"Found {len(rows)} log lines with gs:// paths in time window")
-
     for i, (key, epoch_ms, data) in enumerate(rows, 1):
-        if i % 10000 == 0:
-            logging.info(f"  Processed {i}/{len(rows)} log lines...")
+        if i % 100_000 == 0:
+            logging.info(f"  Processed {i} log lines...")
 
         total_lines += 1
         task_id, attempt_str = key.rsplit(":", 1)
@@ -559,17 +581,16 @@ def analyze(
                     "size_tier": size_tier,
                     "data": data,
                 }
-                if len(samples) < 50:
-                    samples.append(sample)
-                bucket = user_samples.setdefault(user, [])
-                if len(bucket) < per_user_sample_pool:
-                    bucket.append(sample)
+                order = next(sample_order)
+                _keep_newest(samples, sample, order, cap=50)
+                _keep_newest(user_pools.setdefault(user, []), sample, order, cap=per_user_sample_pool)
         if line_cross_region:
             cross_region_lines += 1
 
-    for u, pool in user_samples.items():
-        pool.sort(key=lambda s: (tier_priority.get(s["size_tier"], 99), -s["timestamp_ms"]))
-        user_samples[u] = pool[:per_user_sample_cap]
+    user_samples: dict[str, list[dict]] = {}
+    for u, pool in user_pools.items():
+        ranked = sorted(_newest_first(pool), key=lambda s: tier_priority.get(s["size_tier"], 99))
+        user_samples[u] = ranked[:per_user_sample_cap]
 
     logging.info("Analysis complete:")
     logging.info(f"  Total log lines with gs:// paths: {total_lines}")
@@ -609,7 +630,7 @@ def analyze(
         "cross_region_large_users": dict(large_user_counts.most_common()),
         "unmatched_tasks_top25": dict(unmatched_tasks.most_common(25)),
         "unknown_buckets_top25": dict(unknown_buckets.most_common(25)),
-        "samples": samples,
+        "samples": _newest_first(samples),
         "samples_by_user": user_samples,
     }
 
@@ -833,6 +854,59 @@ def write_csv(summary: dict, path: Path) -> None:
             writer.writerow(["extension", key, value])
 
 
+def run_analysis(
+    config_path: str,
+    window: TimeWindow,
+    lookback_hours: float,
+    checkpoint_dir: str | None,
+    workdir: Path,
+    max_segment_bytes: int,
+) -> dict:
+    """Scan the finelog ``log`` table for ``window`` and return the cross-region summary.
+
+    ``workdir`` holds the controller checkpoint and, one at a time, each log segment.
+    """
+    logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
+    cfg = load_config(config_path)
+    if not cfg.finelog.config:
+        raise ValueError(
+            f"Iris config {config_path!r} has no finelog.config; "
+            "cross-region analysis requires logs shipped via finelog."
+        )
+    finelog_cfg = load_finelog_config(cfg.finelog.config)
+    if not finelog_cfg.remote_log_dir:
+        raise ValueError(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
+    remote_log_dir = finelog_cfg.remote_log_dir.rstrip("/")
+
+    # The pin is an immutable catalog snapshot; its objects stay readable for at
+    # least the catalog's query lifetime, which comfortably covers the scan.
+    pin = ObjectQueryClient(remote_log_dir).pin_catalog(LOG_NAMESPACE)
+    logging.info(
+        f"Pinned {LOG_NAMESPACE!r} catalog generation {pin.catalog_generation} "
+        f"under {remote_log_dir}: {len(pin.segments)} stable segments"
+    )
+    log_segments = choose_log_segments(pin.segments, window, lookback_hours)
+    db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
+
+    rows = iter_log_rows(remote_log_dir, log_segments, window, workdir / "logs", max_segment_bytes)
+    summary = analyze(rows, db_path, window)
+    summary["local_db_path"] = str(db_path)
+    summary["remote_log_dir"] = remote_log_dir
+    summary["log_catalog_generation"] = pin.catalog_generation
+    summary["log_segments_scanned"] = len(log_segments)
+    summary["log_bytes_scanned"] = sum(segment.byte_size for segment in log_segments)
+    return summary
+
+
+def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Path, report_md_path: Path) -> None:
+    logging.info(f"Writing summary to {summary_json_path}")
+    summary_json_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    logging.info(f"Writing appendix CSV to {appendix_csv_path}")
+    write_csv(summary, appendix_csv_path)
+    logging.info(f"Writing markdown report to {report_md_path}")
+    write_markdown(summary, report_md_path)
+
+
 @click.command(help=__doc__)
 @click.option(
     "--config",
@@ -867,6 +941,13 @@ def write_csv(summary: dict, path: Path) -> None:
     help="Extra lookback on segment creation time when choosing parquet segments. Defaults to 12.",
 )
 @click.option(
+    "--max-segment-bytes",
+    type=int,
+    default=DEFAULT_MAX_SEGMENT_BYTES,
+    show_default=True,
+    help="Fail rather than stage a log segment larger than this on local disk.",
+)
+@click.option(
     "--summary-json",
     default=None,
     help="Path to write the JSON summary. Defaults to <outdir>/cross_region_ops_summary.json.",
@@ -888,6 +969,7 @@ def main(
     end_time: str | None,
     checkpoint_dir: str | None,
     download_lookback_hours: float,
+    max_segment_bytes: int,
     summary_json: str | None,
     appendix_csv: str | None,
     report_md: str | None,
@@ -895,47 +977,14 @@ def main(
     window = parse_window(end_time, hours)
     out_path = Path(outdir) if outdir is not None else default_outdir()
     out_path.mkdir(parents=True, exist_ok=True)
-
-    logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     logging.info(f"Output directory: {out_path}")
 
-    cfg = load_config(config)
-    if not cfg.finelog.config:
-        raise click.ClickException(
-            f"Iris config {config!r} has no finelog.config; cross-region analysis " "requires logs shipped via finelog."
-        )
-    finelog_cfg = load_finelog_config(cfg.finelog.config)
-    if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
-    remote_log_dir = finelog_cfg.remote_log_dir.rstrip("/")
+    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path, max_segment_bytes)
 
-    # The pin is an immutable catalog snapshot; its objects stay readable for at
-    # least the catalog's query lifetime, which comfortably covers the download.
-    pin = ObjectQueryClient(remote_log_dir).pin_catalog(LOG_NAMESPACE)
-    logging.info(
-        f"Pinned {LOG_NAMESPACE!r} catalog generation {pin.catalog_generation} "
-        f"under {remote_log_dir}: {len(pin.segments)} stable segments"
-    )
-    log_segments = choose_log_segments(pin.segments, window, download_lookback_hours)
-    local_logs_dir = out_path / "logs"
-    local_logs = download_log_segments(remote_log_dir, log_segments, local_logs_dir)
-    db_path = download_checkpoint(cfg, out_path, checkpoint_dir)
-
-    summary = analyze(local_logs, db_path, window)
-    summary["local_log_files"] = [str(path) for path in local_logs]
-    summary["local_db_path"] = str(db_path)
-    summary["remote_log_dir"] = remote_log_dir
-    summary["log_catalog_generation"] = pin.catalog_generation
-
-    summary_json_path = Path(summary_json) if summary_json else out_path / "cross_region_ops_summary.json"
-    appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / "cross_region_ops_appendix.csv"
-    report_md_path = Path(report_md) if report_md else out_path / "cross_region_ops_report.md"
-    logging.info(f"Writing summary to {summary_json_path}")
-    summary_json_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
-    write_csv(summary, appendix_csv_path)
-    logging.info(f"Writing appendix CSV to {appendix_csv_path}")
-    write_markdown(summary, report_md_path)
-    logging.info(f"Writing markdown report to {report_md_path}")
+    summary_json_path = Path(summary_json) if summary_json else out_path / SUMMARY_JSON
+    appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / APPENDIX_CSV
+    report_md_path = Path(report_md) if report_md else out_path / REPORT_MD
+    write_reports(summary, summary_json_path, appendix_csv_path, report_md_path)
 
     gist_desc = f"Iris cross-region GCS ops {_fmt_ms(summary['window_start_ms'])} to {_fmt_ms(summary['window_end_ms'])}"
     logging.info("To publish this report as a private gist, run:")
@@ -949,8 +998,8 @@ def main(
                 "appendix_csv": str(appendix_csv_path),
                 "report_md": str(report_md_path),
                 "gist_command": f"gh gist create --desc {gist_desc!r} {report_md_path} {appendix_csv_path}",
-                "local_db_path": str(db_path),
-                "local_log_files": [str(path) for path in local_logs],
+                "local_db_path": summary["local_db_path"],
+                "log_segments_scanned": summary["log_segments_scanned"],
                 "cross_region_log_lines": summary["cross_region_log_lines"],
                 "cross_region_path_mentions": summary["cross_region_path_mentions"],
                 "top_pairs": list(summary["cross_region_region_pairs"].items())[:10],

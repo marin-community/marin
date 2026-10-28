@@ -1,11 +1,11 @@
 name: "Ops - Egress Report"
 
-# Cross-region egress digest over the trailing 24h, on demand only. The daily
-# schedule was switched off 2026-09-29 after a month of posting "No offenders
-# today." from no data (finelog had moved the log table to its object catalog;
-# scripts/ops/cross_region.py now reads that). Before re-adding the schedule,
-# point it at a dedicated channel (egress_report.py --channel,
-# scripts/ops/discord.py CHANNELS) rather than #internal-discuss.
+# Cross-region egress digest over the trailing 24h, on demand only. The runner
+# submits the log scan as an Iris job in us-central2 and fetches only its report
+# files. The daily schedule was switched off 2026-09-29 after a month of posting
+# "No offenders today." from no data. Before re-adding it, point the report at a
+# dedicated channel (egress_report.py --channel, scripts/ops/discord.py CHANNELS)
+# rather than #internal-discuss.
 
 on:
   workflow_dispatch: {}
@@ -20,7 +20,8 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The Iris job's own timeout is 2h (egress_report.py JOB_TIMEOUT).
+    timeout-minutes: 150
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

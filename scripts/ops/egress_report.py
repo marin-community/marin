@@ -4,9 +4,12 @@
 
 """Daily cross-region egress digest.
 
-Runs ``scripts/ops/cross_region.py`` over the last 24h of Iris logs, publishes
-the resulting report + appendix as a secret gist, and posts a short summary
-to Discord linking to the gist.
+Runs ``scripts/ops/cross_region.py`` over the last 24h of Iris logs as an
+Iris CPU job in us-central2, next to the finelog log segments, so the scan
+pays no internet egress and the runner never stages the logs. The job writes
+only the summary, report, and appendix to a us-central2 staging prefix; this
+script fetches them, publishes the report + appendix as a secret gist, and
+posts a short summary to Discord linking to the gist.
 
 Always posts (writes "No offenders today." when nobody crosses the per-user
 threshold).
@@ -20,33 +23,74 @@ import datetime as dt
 import json
 import logging
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import click
+from iris.cli.connect import open_iris_client
+from iris.cluster.constraints import region_constraint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
+
+from scripts.ops.cross_region import (
+    APPENDIX_CSV,
+    DEFAULT_MAX_SEGMENT_BYTES,
+    REPORT_MD,
+    SUMMARY_JSON,
+    parse_window,
+    run_analysis,
+    write_reports,
+)
 
 LARGE_TIER_USER_THRESHOLD = 10
 MAX_OFFENDERS_IN_MESSAGE = 20
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+IRIS_CONFIG = "lib/iris/config/marin.yaml"
+# The finelog log segments live in us-central2; the job runs there and stages
+# its outputs there so every large read is same-region.
+LOG_REGION = "us-central2"
+DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
+DOWNLOAD_LOOKBACK_HOURS = 12.0
+JOB_TIMEOUT = Duration.from_seconds(2 * 60 * 60)
+REPORT_FILES = (SUMMARY_JSON, REPORT_MD, APPENDIX_CSV)
 
 
-def _run_cross_region(hours: float, outdir: Path) -> dict:
-    subprocess.run(
-        [
-            "uv",
-            "run",
-            "python",
-            str(REPO_ROOT / "scripts" / "ops" / "cross_region.py"),
-            "--hours",
-            str(hours),
-            "--outdir",
-            str(outdir),
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-    )
-    return json.loads((outdir / "cross_region_ops_summary.json").read_text())
+def _report_stage(hours: float, end_time: str, output_dir: str) -> None:
+    """Iris-side entrypoint: scan the logs and upload the report files to ``output_dir``."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    window = parse_window(end_time, hours)
+    with tempfile.TemporaryDirectory(prefix="egress-report-") as workdir:
+        local = Path(workdir)
+        summary = run_analysis(IRIS_CONFIG, window, DOWNLOAD_LOOKBACK_HOURS, None, local, DEFAULT_MAX_SEGMENT_BYTES)
+        write_reports(summary, local / SUMMARY_JSON, local / APPENDIX_CSV, local / REPORT_MD)
+        for name in REPORT_FILES:
+            StoragePath(f"{output_dir}/{name}").upload_from(str(local / name))
+
+
+def _run_cross_region_on_iris(cluster: str, hours: float, end_time: str, output_dir: str, run_id: str) -> None:
+    with open_iris_client(cluster_name=cluster, workspace=REPO_ROOT) as client:
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_report_stage, hours, end_time, output_dir),
+            name=f"egress-report-{run_id}",
+            # Segments stage one at a time (a few hundred MiB each, capped by
+            # DEFAULT_MAX_SEGMENT_BYTES); the controller checkpoint is a few GB.
+            resources=ResourceSpec(cpu=2, memory="16GB", disk="50GB"),
+            environment=EnvironmentSpec(env_vars={}),
+            constraints=[region_constraint([LOG_REGION])],
+            timeout=JOB_TIMEOUT,
+        )
+        print(f"Submitted egress report: {job.job_id}", file=sys.stderr)
+        job.wait(stream_logs=True, timeout=float("inf"))
+
+
+def _fetch_outputs(output_dir: str, outdir: Path) -> dict:
+    """Copy the job's report files locally with gcloud and return the parsed summary."""
+    for name in REPORT_FILES:
+        subprocess.run(["gcloud", "storage", "cp", f"{output_dir}/{name}", str(outdir / name)], check=True)
+    return json.loads((outdir / SUMMARY_JSON).read_text())
 
 
 def _create_gist(outdir: Path, description: str) -> str:
@@ -58,8 +102,8 @@ def _create_gist(outdir: Path, description: str) -> str:
             "create",
             "--desc",
             description,
-            str(outdir / "cross_region_ops_report.md"),
-            str(outdir / "cross_region_ops_appendix.csv"),
+            str(outdir / REPORT_MD),
+            str(outdir / APPENDIX_CSV),
         ],
         check=True,
         text=True,
@@ -115,23 +159,34 @@ def _compose_message(
 @click.command(help=__doc__)
 @click.option("--hours", type=float, default=24.0, help="Analysis window in hours. Defaults to 24.")
 @click.option("--channel", default="internal-discuss", help="Discord channel name.")
+@click.option("--cluster", default="marin", show_default=True, help="Iris cluster to run the scan on.")
+@click.option(
+    "--staging-dir",
+    default=DEFAULT_STAGING_DIR,
+    show_default=True,
+    help=f"{LOG_REGION} GCS prefix the Iris job writes its report files under.",
+)
 @click.option(
     "--dry-run/--no-dry-run",
     default=False,
     help="Skip gist creation and Discord post; print the message that would have been sent.",
 )
-def main(hours: float, channel: str, dry_run: bool) -> None:
+def main(hours: float, channel: str, cluster: str, staging_dir: str, dry_run: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     outdir = Path(tempfile.mkdtemp(prefix="egress-report-"))
     logging.info("Workdir: %s", outdir)
 
-    summary = _run_cross_region(hours, outdir)
+    now = dt.datetime.now(dt.UTC)
+    run_id = now.strftime("%Y%m%d-%H%M%S")
+    output_dir = f"{staging_dir.rstrip('/')}/{run_id}"
+    _run_cross_region_on_iris(cluster, hours, now.isoformat(), output_dir, run_id)
+    summary = _fetch_outputs(output_dir, outdir)
 
     total = summary["cross_region_path_mentions"]
     large_users: dict[str, int] = summary.get("cross_region_large_users") or {}
     offenders = [(u, n) for u, n in large_users.items() if n >= LARGE_TIER_USER_THRESHOLD and u != "<unknown>"]
 
-    date = dt.datetime.now(dt.UTC).strftime("%Y-%m-%d")
+    date = now.strftime("%Y-%m-%d")
     description = f"Marin cross-region egress {date} ({hours:.0f}h window)"
 
     if dry_run:
