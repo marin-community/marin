@@ -48,7 +48,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "18"
+CONTROLS_REVISION = "19"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -110,7 +110,7 @@ def control_suite(
     machines: GradingMachines | None,
     judge_connection: JudgeConnection | None = None,
 ) -> CheckSuite:
-    """Check each sampled task with a declared positive or negative submission, falling back to empty."""
+    """Check each sampled task with its declared golden, and with its declared negative or else an empty submission."""
     return CheckSuite(
         id="controls",
         revision=CONTROLS_REVISION,
@@ -171,17 +171,18 @@ async def _control_checks(
             controls.memory_mb,
             _selected_machine(machines, environment, controls.memory_mb),
         )
+    checks = []
     golden = controls.golden(task) if controls.golden is not None else None
     if golden is not None:
-        check = await _control(task, "golden", golden, 1.0, sandbox, judge_connection)
-    elif controls.negative is not None and (negative := controls.negative(task)) is not None:
+        checks.append(await _control(task, "golden", golden, 1.0, sandbox, judge_connection))
+    if controls.negative is not None and (negative := controls.negative(task)) is not None:
         expected = controls.negative_reward(task) if controls.negative_reward is not None else 0.0
-        check = await _control(task, "negative", negative, expected, sandbox, judge_connection)
+        checks.append(await _control(task, "negative", negative, expected, sandbox, judge_connection))
     elif sandbox is not None:
-        check = await _empty_sandbox_control(task, sandbox)
+        checks.append(await _empty_sandbox_control(task, sandbox))
     else:
-        check = await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection)
-    return VerificationReport([check])
+        checks.append(await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection))
+    return VerificationReport(checks)
 
 
 def _selected_machine(

@@ -69,18 +69,20 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    `unavailable_reviews`. They make the source `incomplete` only when resolving
    them could change the quality decision.
 6. **Verify.** With controls, [source_verification.py](source_verification.py)
-   samples kept rows and grades one control submission per task through the
+   samples kept rows and grades each task's control submissions through the
    same grading path rollouts use ([controls.py](controls.py)):
    - `golden(task)`, a known-correct `Reply`, `WorkspaceFiles` or
-     `OracleCommand`, which must score 1;
-   - otherwise, when the declaration has no `golden` or it returns `None`, an
-     empty submission, which shows that the grader runs. A sandbox grader runs
-     on it in a fresh machine of its image, with an empty answer file where it
-     reads one, a conversation ending in an empty reply, and an empty
-     workspace. The control passes when the grader scores it 0 or rejects it.
-     A positive reward records a `defect`: an empty reply satisfies the task.
-     The row is rejected with `check:empty`, and because the grader ran, the
-     trial counts as checked and passed for the source.
+     `OracleCommand`, which must score 1, unless the declaration has no
+     `golden` or it returns `None`;
+   - `negative(task)` when supplied, otherwise an empty submission, which
+     shows that the grader runs and does not reward a submission that does
+     nothing. A task with a golden is graded on both. A sandbox grader runs
+     on the empty submission in a fresh machine of its image, with an empty
+     answer file where it reads one, a conversation ending in an empty reply,
+     and an empty workspace. The control passes when the grader scores it 0
+     or rejects it. A positive reward records a `defect`: an empty reply
+     satisfies the task. The row is rejected with `check:empty`, and because
+     the grader ran, the trial counts as checked and passed for the source.
 
    An `OracleCommand` runs with the task's worker and oracle resources in a
    fresh machine satisfying the agent's requirements. Empty agent requirements
@@ -127,11 +129,11 @@ is admitted, otherwise `none`.
 
 Verification samples up to the configured sample size with seeded task-ID hashes
 across all shards (the driver samples at most 20 tasks by default) and runs each
-task's control in a fresh environment once per attempt (the driver makes one
+task's controls in fresh environments once per attempt (the driver makes one
 attempt). An attempt
-whose control hits an infrastructure error runs again, up to two more times,
-before it is recorded. A task passes when its control passes or records a defect
-on every attempt and no earlier trial failed; a task with both a pass and a
+whose controls hit an infrastructure error runs again, up to two more times,
+before it is recorded. A task passes when each of its controls passes or records
+a defect on every attempt and no earlier trial failed; a task with both a pass and a
 definite failure counts as inconsistent. The report's `counts.defective` records
 the sampled tasks with a defect. When the pass fraction meets
 `minimum_pass_fraction` (the driver uses 95%) and the sample is conclusive,

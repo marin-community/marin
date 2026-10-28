@@ -141,11 +141,11 @@ def wrong_reply(task: TaskSpec) -> Reply:
 
 
 def test_reference_golden_passes_for_in_process_graders():
-    assert checks(in_process_task("numeric"), REFERENCE_CONTROLS) == {"golden": PASS}
+    assert checks(in_process_task("numeric"), REFERENCE_CONTROLS) == {"golden": PASS, "empty": PASS}
 
 
 def test_golden_fails_when_the_grader_rejects_it():
-    assert checks(in_process_task("numeric"), Controls(golden=wrong_reply)) == {"golden": FAIL}
+    assert checks(in_process_task("numeric"), Controls(golden=wrong_reply)) == {"golden": FAIL, "empty": PASS}
 
 
 @pytest.mark.parametrize("controls", [Controls(), REFERENCE_CONTROLS], ids=["none", "no_reference"])
@@ -190,7 +190,7 @@ def test_controls_reject_unresolved_build_before_machine_selection_or_oracle_fal
     ids=["reply", "oracle_relative_answer_file", "oracle_absolute_answer_file", "workspace_files", "oracle_files"],
 )
 def test_sandbox_golden_is_graded_in_a_fresh_grader_machine(task, golden):
-    assert checks(task, Controls(golden=golden), FixtureGradingMachines()) == {"golden": PASS}
+    assert checks(task, Controls(golden=golden), FixtureGradingMachines()) == {"golden": PASS, "empty": PASS}
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ def test_sandbox_golden_is_graded_in_a_fresh_grader_machine(task, golden):
     ids=["oracle_exits_nonzero", "oracle_writes_no_file", "oracle_writes_no_answer_file"],
 )
 def test_oracle_without_a_correct_submission_fails_the_golden_control(task, oracle):
-    assert checks(task, Controls(golden=lambda _: oracle), FixtureGradingMachines()) == {"golden": FAIL}
+    assert checks(task, Controls(golden=lambda _: oracle), FixtureGradingMachines()) == {"golden": FAIL, "empty": PASS}
 
 
 @pytest.mark.parametrize(
@@ -224,18 +224,31 @@ def test_grader_that_rewards_an_empty_submission_marks_the_task_defective():
     assert checks(task, Controls(), FixtureGradingMachines()) == {"empty": DEFECT}
 
 
+def test_golden_does_not_hide_a_grader_that_ignores_the_submission():
+    task = script_graded(file_task(), b"true\n", answer_path=None)
+    controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"))
+    assert checks(task, controls, FixtureGradingMachines()) == {"golden": PASS, "empty": DEFECT}
+
+
+def test_declared_negative_replaces_the_empty_control_beside_a_golden():
+    controls = Controls(golden=reference_reply, negative=wrong_reply)
+    assert checks(in_process_task("numeric"), controls) == {"golden": PASS, "negative": PASS}
+
+
 @pytest.mark.parametrize(
-    "golden,check",
+    "golden,names",
     [
-        (lambda _: WorkspaceFiles({"/app/solution.txt": b"7"}), "golden"),
-        (lambda _: OracleCommand("bash /solution/solve.sh"), "golden"),
-        (lambda _: None, "empty"),
+        (lambda _: WorkspaceFiles({"/app/solution.txt": b"7"}), ("golden", "empty")),
+        (lambda _: OracleCommand("bash /solution/solve.sh"), ("golden", "empty")),
+        (lambda _: None, ("empty",)),
     ],
     ids=["workspace_files", "oracle", "no_golden"],
 )
-def test_unavailable_grading_machines_are_infrastructure_errors(golden, check):
+def test_unavailable_grading_machines_are_infrastructure_errors(golden, names):
     controls = Controls(golden=golden)
-    assert checks(file_task(), controls, FixtureGradingMachines(UnavailableImages())) == {check: CheckStatus.INFRA_ERROR}
+    assert checks(file_task(), controls, FixtureGradingMachines(UnavailableImages())) == dict.fromkeys(
+        names, CheckStatus.INFRA_ERROR
+    )
 
 
 @pytest.mark.parametrize(
@@ -252,7 +265,7 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
         task = TaskSpec.model_validate(task.model_copy(update={"environment_requirements": requirements}).model_dump())
     images = RecordingImages()
     controls = Controls(golden=lambda _: OracleCommand("bash /solution/solve.sh"))
-    assert checks(task, controls, FixtureGradingMachines(images)) == {"golden": PASS}
+    assert checks(task, controls, FixtureGradingMachines(images)) == {"golden": PASS, "empty": PASS}
     oracles = [machine for machine in images.created if "/solution/solve.sh" in machine.uploads]
     assert [machine.image for machine in oracles] == [oracle_image]
     assert {machine.image for machine in images.created if machine not in oracles} == {GRADER_IMAGE}
@@ -282,7 +295,7 @@ def test_oracle_uses_simulator_directory_and_setup_before_native_grading(monkeyp
     controls = Controls(
         golden=lambda _: OracleCommand('test "$PWD" = /agent && cat ready.txt > answer.out', answer_file="answer.out")
     )
-    assert checks(task, controls, OracleMachines()) == {"golden": PASS}
+    assert checks(task, controls, OracleMachines()) == {"golden": PASS, "empty": PASS}
 
 
 def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_machine_environment):
@@ -306,7 +319,7 @@ def test_local_oracle_and_grader_setup_run_without_changing_host_user(local_mach
 
     report = control_suite(controls, LocalGraderMachines()).run(task)
 
-    assert {check.check: check.status for check in report.checks} == {"golden": PASS}
+    assert {check.check: check.status for check in report.checks} == {"golden": PASS, "empty": PASS}
 
 
 def test_lock_backed_oracle_rejects_image_only_provider_before_acquisition():

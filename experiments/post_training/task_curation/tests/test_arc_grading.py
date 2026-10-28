@@ -53,7 +53,7 @@ def test_golden_control_scores_the_reference_one(name, machines):
     assert controls is not None
     report = run_controls(task, controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"golden": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS, "empty": CheckStatus.PASS}, report
 
 
 def test_transform_cannot_read_the_hidden_record(machines):

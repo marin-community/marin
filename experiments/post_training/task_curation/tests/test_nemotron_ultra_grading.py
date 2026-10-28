@@ -87,7 +87,7 @@ def test_golden_control_scores_the_reference_one(path, machines):
     assert controls is not None
     report = run_controls(task(path), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"golden": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS, "empty": CheckStatus.PASS}, report
 
 
 @pytest.mark.parametrize(("proof", "reward"), [("by trivial", 1.0), ("by no_such_tactic", 0.0), ("by sorry", 0.0)])

@@ -435,7 +435,7 @@ def test_math_golden_scores_the_boxed_reference_one(staged, path):
     assert controls is not None
     report = run_controls(task_for(path, staged), controls=controls, machines=None)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"golden": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS, "empty": CheckStatus.PASS}, report
 
 
 def test_math_grader_compares_the_answer_symbolically_with_the_expected_answer(staged):

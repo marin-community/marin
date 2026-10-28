@@ -401,12 +401,12 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
             assert verification["status"] == "passed"
             assert verification["counts"]["checked"] == len(records)
             trials = json.loads(StoragePath(verification["trial_report"]).read_text())
-            assert all(
-                check["check"] == "golden" and check["status"] == "pass"
+            assert {
+                (check["check"], check["status"])
                 for row in trials["results"]
                 for trial in row["trials"]
                 for check in trial["checks"]
-            )
+            } == {("golden", "pass"), ("empty", "pass")}
         assert not (tmp_path / "artifacts" / "task-curation" / "download").exists()
         manifest = json.loads(StoragePath(second.result.evidence["manifest"]).read_text())
         expected_files = {

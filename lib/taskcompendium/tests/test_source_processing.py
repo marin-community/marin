@@ -919,7 +919,7 @@ def test_sandbox_rows_reach_final_only_after_controls_pass(tmp_path, machines, a
     assert manifest["admission_counts"] == {admission: 3}
     assert len(parquet_rows(result.final_path)) == (3 if admission == "admitted" else 0)
     checks = {check["check"]: check["status"] for row in parquet_rows(result.verify_path) for check in row["checks"]}
-    assert checks == {"golden": "pass" if admission == "admitted" else "infra_error"}
+    assert checks == dict.fromkeys(("golden", "empty"), "pass" if admission == "admitted" else "infra_error")
 
 
 def drop_archive_path(row, _context):

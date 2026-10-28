@@ -83,7 +83,7 @@ def test_archive_grader_passes_its_golden(machines, name, fixture):
     assert controls is not None
     report = run_controls(fixture_task(name, fixture), controls=controls, machines=machines)
     statuses = {check.check: check.status for check in report.checks}
-    assert statuses == {"golden": CheckStatus.PASS}, report
+    assert statuses == {"golden": CheckStatus.PASS, "empty": CheckStatus.PASS}, report
 
 
 @pytest.mark.timeout(120)

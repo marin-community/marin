@@ -436,9 +436,11 @@ Conversion preserves the source's grading semantics. It does not repair
 comparators or rewrite tests to accept a reference.
 
 Controls check a grader before its tasks are admitted. For each sampled task the
-pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
-when the declaration has no `golden` or it returns `None` because the task has no
-known answer, `negative(task)` when supplied, otherwise an empty submission.
+pipeline grades `golden(task)`, which must score 1, unless the declaration has no
+`golden` or it returns `None` because the task has no known answer. It also grades
+`negative(task)` when supplied, otherwise an empty submission. A task with a
+golden is graded on both, so a grader that ignores the submission and rewards an
+unchanged workspace is caught even though the golden passes.
 A negative must score zero unless `negative_reward(task)` declares its expected
 partial reward. MultiChallenge uses this to account for `NO` criteria that an
 empty reply satisfies. A grader that
@@ -567,7 +569,7 @@ Sample and full modes run the reviewed procedure below.
 4. In full mode, convert and audit every row of an accepted source.
 5. Filter rows into kept, rejected and deferred.
 6. With controls, verify a seeded sample of at most 20 kept rows
-   (`--verification-sample-size`): each task's one control runs once in a fresh
+   (`--verification-sample-size`): each of a task's controls runs once in a fresh
    machine, rerun up to twice more after an infrastructure error. At a 95% pass
    fraction, unsampled tasks can skip validation. Otherwise validate every kept
    task, retaining passes, rejecting failures and deferring unavailable results.
