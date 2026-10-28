@@ -38,4 +38,4 @@ packages = ["src/mariner"]
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 markers = ["data_integration: reads a local mariner-data snapshot (pass --mariner-data DIR); run by hand"]
-addopts = "-m 'not data_integration' --import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
