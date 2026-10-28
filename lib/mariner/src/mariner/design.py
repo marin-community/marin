@@ -178,7 +178,7 @@ def removals(base: np.ndarray) -> np.ndarray:
     totals = zeroed.sum(axis=1, keepdims=True)
     empty = np.flatnonzero(totals[:, 0] <= 0.0)
     if len(empty):
-        raise ValueError(f"removing the buckets at positions {', '.join(map(str, empty))} leaves no weight")
+        raise ValueError(f"the base mixture has no weight outside the bucket at position {empty[0]}")
     return zeroed / totals
 
 
