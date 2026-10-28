@@ -106,6 +106,7 @@ class Gap(StrEnum):
     NO_IMAGE_SANDBOX = "no-image-sandbox"
     NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
+    EVAL_USES_TRAINING_SAMPLING = "eval-uses-training-sampling"
 
 
 class EvalHarness(StrEnum):
@@ -505,7 +506,7 @@ _LEARNING_MEDIUM = Preset(
     None,
     (Metric("panel-910/family_mean", True),),
     (*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
-    _GAPS,
+    (*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
 )
 PRESETS = MappingProxyType(
     {
@@ -611,7 +612,7 @@ PRESETS = MappingProxyType(
                 10,
                 (),
                 (),
-                _GAPS,
+                (*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
             ),
         )
     }
