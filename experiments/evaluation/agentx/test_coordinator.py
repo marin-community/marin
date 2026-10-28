@@ -218,8 +218,13 @@ def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(
         write_record(
             result_uri,
             {
-                "source": {"kind": "fixture"},
-                "points": [{"receipt": {"status": "valid", "artifacts_uri": uri, "artifacts_sha256": digest}}],
+                "source": {"kind": "fixture", "head_sha": "1" * 40},
+                "points": [
+                    {
+                        "manifest": {"profile": "h100", "concurrency": 16},
+                        "receipt": {"status": "valid", "artifacts_uri": uri, "artifacts_sha256": digest},
+                    }
+                ],
             },
         )
         completed.append(result_uri)
@@ -228,6 +233,11 @@ def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(
         output = tmp_path / f"delivery-{value}"
         materialize(result_uri, output)
         assert json.loads((output / "agg.json").read_text()) == {"value": value}
+        changelog = read_record(str(output / "changelog-metadata" / "agentx.json"))
+        assert changelog["head_ref"] == "1" * 40
+        assert changelog["entries"] == [
+            {"config-keys": [], "description": "AgentX full-hour measurements: h100 C16", "append-only": True}
+        ]
 
 
 @pytest.fixture
