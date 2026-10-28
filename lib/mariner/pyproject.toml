@@ -23,6 +23,9 @@ dependencies = [
 olmix = ["cvxpy==1.9.2", "clarabel==0.11.1", "ecos==2.0.14"]
 download = ["huggingface-hub>=1.0"]
 
+[project.scripts]
+mariner = "mariner.cli:main"
+
 [dependency-groups]
 test = ["pytest>=8.3.2", "pytest-timeout", "pytest-xdist"]
 
