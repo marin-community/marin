@@ -18,6 +18,10 @@ on:
         type: choice
         options: [interactive, batch]
         default: interactive
+      target_cluster:
+        type: choice
+        options: [cw-rno2a, cw-us-east-02a]
+        default: cw-rno2a
       result_uri:
         type: string
         default: ''
@@ -37,7 +41,7 @@ jobs:
       state_root: s3://marin-rno2a/marin/users/romain/agentx-calibration-01a17a59
       profile: ${{ inputs.profile }}
       concurrency: ${{ inputs.concurrency }}
-      target_cluster: cw-rno2a
+      target_cluster: ${{ inputs.target_cluster }}
       priority: ${{ inputs.priority }}
       placement_uri: ${{ inputs.placement_uri }}
     secrets: inherit
