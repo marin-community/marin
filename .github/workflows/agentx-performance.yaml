@@ -10,9 +10,8 @@ on:
         options: [both, h100, gb200]
         default: both
       concurrency:
-        description: One measured point, or the full fixed grid
-        type: choice
-        options: [all, '8', '32']
+        description: Concurrent AgentX users, or all weekly loads
+        type: string
         default: all
       target_cluster:
         type: choice
@@ -23,6 +22,10 @@ on:
         type: choice
         options: [batch, interactive]
         default: batch
+      placement_uri:
+        description: Verified GB200 spare-node receipt in object storage
+        type: string
+        default: ''
   workflow_call:
     inputs:
       state_root: {type: string, default: ''}
@@ -30,6 +33,7 @@ on:
       concurrency: {type: string, default: all}
       target_cluster: {type: string, default: cw-rno2a}
       priority: {type: string, default: batch}
+      placement_uri: {type: string, default: ''}
 
 concurrency:
   group: agentx-submission
@@ -55,6 +59,7 @@ jobs:
       POINT: ${{ inputs.concurrency || 'all' }}
       TARGET_CLUSTER: ${{ inputs.target_cluster || 'cw-rno2a' }}
       PRIORITY: ${{ inputs.priority || 'batch' }}
+      PLACEMENT_URI: ${{ inputs.placement_uri }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -76,7 +81,8 @@ jobs:
           if [[ "$POINT" != all ]]; then point_args=(--concurrency "$POINT"); fi
           uv run --no-sync python -m experiments.evaluation.agentx.control submit \
             --root "$STATE_ROOT" --profile "$PROFILE" --cluster "$TARGET_CLUSTER" \
-            --priority "$PRIORITY" --work "$RUNNER_TEMP/agentx-submission" "${point_args[@]}"
+            --priority "$PRIORITY" --placement-uri "$PLACEMENT_URI" \
+            --work "$RUNNER_TEMP/agentx-submission" "${point_args[@]}"
       - name: Observe Iris progress for a bounded window
         run: |
           uv run --no-sync python -m experiments.evaluation.agentx.control observe \

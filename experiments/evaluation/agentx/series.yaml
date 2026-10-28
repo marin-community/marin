@@ -1,7 +1,10 @@
 series: "snowball011-native-256k-1h-v1"
 model: "open-athena/Marin-Snowball-67B-A2B-v0.1.1"
+model_prefix: "snowball011"
 # Checkpoint and tokenizer must use this same revision.
 model_revision: "59852d6f07261722bbec1edb6ab148317156b58e"
+tokenizer: "open-athena/Marin-Snowball-67B-A2B-v0.1.1"
+tokenizer_revision: "59852d6f07261722bbec1edb6ab148317156b58e"
 # AgentX owns replay, warmup, reconstruction and native validity.
 harness_version: "1.0.12"
 harness_source: "e4bb2f835ffedbbe6b76252ea5c93caec68c5faf"
@@ -25,6 +28,7 @@ gpu_memory_utilization: 0.94
 tensor_parallel: 1
 precision: "bf16"
 cache: "native"
+enable_prefix_caching: true
 # AgentX request and server metrics stay enabled.
 collect_marin_metrics: false
 collect_nccl: false
@@ -40,17 +44,10 @@ processor_source: "80dff120d27fd6092210f4546b8faa5e6c9723ac"
 profiles:
   h100:
     gpu: "H100"
+    hosts: 1
     gpus: 8
     cpu: 32
     memory: "768GB"
     disk: "1TB"
     cluster: "cw-rno2a"
-    concurrencies: [8, 32]
-  gb200:
-    gpu: "GB200"
-    gpus: 4
-    cpu: 32
-    memory: "512GB"
-    disk: "1TB"
-    cluster: "cw-us-east-08a"
     concurrencies: [8, 32]

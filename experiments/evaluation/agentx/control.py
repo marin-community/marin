@@ -22,7 +22,7 @@ from rigging.timing import Duration
 
 from experiments.evaluation.agentx.artifacts import copy_file, file_digest, read_record, unpack, write_record
 from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, recover_results, run_coordinator
-from experiments.evaluation.agentx.recipe import load_series
+from experiments.evaluation.agentx.recipe import load_series, series_path
 
 
 def action_output(name: str, value: str) -> None:
@@ -52,10 +52,20 @@ def submission_uri(root: str, run_id: int, attempt: int, profile: str) -> str:
 
 
 def coordinator_plan(
-    source: dict, profile: str, cluster: str, priority: str, root: str, concurrency: int | None
+    source: dict,
+    profile: str,
+    cluster: str,
+    priority: str,
+    root: str,
+    concurrency: int | None,
+    placement: dict | None = None,
 ) -> dict:
     """Freeze the Action identity and requested grid; Iris resolves the recipe."""
-    series = load_series()
+    series = load_series(series_path(profile))
+    if concurrency is not None and concurrency <= 0:
+        raise ValueError("Concurrency must be positive")
+    if profile == "gb200" and (placement is None or not placement["nodes"]):
+        raise ValueError("Hero requires a currently verified spare-node placement receipt")
     name = f"agentx-{source['run_id']}-{source['run_attempt']}-{profile}"
     return {
         "name": name,
@@ -64,13 +74,10 @@ def coordinator_plan(
         "profile": profile,
         "cluster": cluster if profile == "h100" else series["profiles"][profile]["cluster"],
         "priority": priority,
+        "placement": placement if profile == "gb200" else {},
         "root": root,
         "retention_uri": prefix_join(root, f"runs/{source['run_id']}/{source['run_attempt']}/{profile}"),
-        "concurrencies": [
-            value
-            for value in series["profiles"][profile]["concurrencies"]
-            if concurrency is None or value == concurrency
-        ],
+        "concurrencies": [concurrency] if concurrency is not None else series["profiles"][profile]["concurrencies"],
     }
 
 
@@ -144,7 +151,8 @@ def main() -> None:
         commands[name].add_argument("--run-attempt", type=int, default=1)
     commands["submit"].add_argument("--cluster", choices=["cw-rno2a", "cw-us-east-02a"], default="cw-rno2a")
     commands["submit"].add_argument("--priority", choices=["batch", "interactive"], default="batch")
-    commands["submit"].add_argument("--concurrency", type=int, choices=[8, 32])
+    commands["submit"].add_argument("--concurrency", type=int)
+    commands["submit"].add_argument("--placement-uri", help="Verified GB200 spare-node receipt in object storage")
     commands["submit"].add_argument("--work", type=Path)
     commands["observe"].add_argument("--observe-seconds", type=int, default=300)
     commands["export"].add_argument("--work", type=Path, required=True)
@@ -169,6 +177,8 @@ def main() -> None:
         action_output("source_run_attempt", str(result["source"]["run_attempt"]))
         return
     profiles = ["h100", "gb200"] if args.profile == "both" else [args.profile]
+    if args.operation == "submit" and "gb200" in profiles and not args.placement_uri:
+        parser.error("Hero submission requires --placement-uri with verified spare nodes")
     source = source_run() if args.operation == "submit" else None
     run_id = source["run_id"] if source is not None else args.run_id
     attempt = source["run_attempt"] if source is not None else args.run_attempt
@@ -181,7 +191,13 @@ def main() -> None:
                         plan = read_record(uri)
                     except FileNotFoundError:
                         plan = coordinator_plan(
-                            source, profile, args.cluster, args.priority, args.root, args.concurrency
+                            source,
+                            profile,
+                            args.cluster,
+                            args.priority,
+                            args.root,
+                            args.concurrency,
+                            read_record(args.placement_uri) if args.placement_uri else None,
                         )
                         write_record(uri, plan)
                     if args.work is not None:

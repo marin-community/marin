@@ -22,6 +22,7 @@ from rigging.timing import Duration, ExponentialBackoff
 
 from experiments.evaluation.agentx.artifacts import read_record, write_record
 from experiments.evaluation.agentx.collect import collect_terminal
+from experiments.evaluation.agentx.recipe import series_path
 from experiments.evaluation.agentx.submit import point_manifest, submit_point
 from experiments.evaluation.agentx.workload import prepare_workload
 
@@ -34,7 +35,10 @@ def resolve_plan(plan: dict, workload: dict) -> dict:
     release = json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE)))
     return plan | {
         "points": [
-            {"name": f"c{value}", "manifest": point_manifest(plan["profile"], value, plan["source"], workload, release)}
+            {
+                "name": f"c{value}",
+                "manifest": point_manifest(plan["profile"], value, plan["source"], workload, release, plan["placement"]),
+            }
             for value in plan["concurrencies"]
         ]
     }
@@ -127,5 +131,5 @@ def run_coordinator(plan: dict) -> None:
         work = Path(directory)
         client = iris_ctx().client
         assert client is not None
-        workload = prepare_workload(work / "workload")
+        workload = prepare_workload(work / "workload", series_path=series_path(plan["profile"]))
         run_points(client, resolve_plan(plan, workload), work)

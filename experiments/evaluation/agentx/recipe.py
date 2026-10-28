@@ -24,10 +24,15 @@ class PointManifest(TypedDict):
     vllm_release: dict
     workload: dict
     source: dict
+    placement: dict
 
 
 def load_series(path: Path = SERIES_PATH) -> dict:
     return yaml.safe_load(path.read_text())
+
+
+def series_path(profile: str) -> Path:
+    return {"h100": SERIES_PATH, "gb200": SERIES_PATH.with_name("hero.yaml")}[profile]
 
 
 def harness_command(series: dict) -> list[str]:
@@ -75,9 +80,9 @@ def profile_arguments(series: dict, concurrency: int, url: str, output: Path) ->
         "--model",
         series["model"],
         "--tokenizer",
-        series["model"],
+        series["tokenizer"],
         "--tokenizer-revision",
-        series["model_revision"],
+        series["tokenizer_revision"],
         "--public-dataset",
         series["dataset_loader"],
         "--max-context-length",

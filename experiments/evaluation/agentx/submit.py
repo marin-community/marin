@@ -8,39 +8,51 @@ import hashlib
 import json
 
 from iris.client.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.timing import Duration
 
-from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, load_series
+from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, load_series, series_path
 from experiments.evaluation.agentx.run import run
 
 
-def point_manifest(profile: str, concurrency: int, source: dict, workload: dict, release: dict) -> PointManifest:
-    series = load_series()
+def point_manifest(
+    profile: str, concurrency: int, source: dict, workload: dict, release: dict, placement: dict
+) -> PointManifest:
+    path = series_path(profile)
+    series = load_series(path)
     requirements = SERIES_PATH.with_name("requirements-harness.txt").read_bytes()
     recipe = {
-        "series": series,
+        "series": (
+            series
+            | {
+                "profiles": {
+                    profile: {key: value for key, value in series["profiles"][profile].items() if key != "concurrencies"}
+                }
+            }
+        ),
         "harness_requirements_sha256": hashlib.sha256(requirements).hexdigest(),
         "preparation_key": workload["key"],
     }
     fingerprint = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
     return {
-        "series_sha256": hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest(),
+        "series_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "recipe_fingerprint": fingerprint,
         "profile": profile,
         "concurrency": concurrency,
         "vllm_release": release,
         "workload": workload,
         "source": source,
+        "placement": placement,
     }
 
 
 def submit_point(client: IrisClient, name: str, manifest: PointManifest, priority: str):
     """Submit a child on the coordinator's peer with native whole-attempt retries."""
-    series = load_series()
-    if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
+    path = series_path(manifest["profile"])
+    series = load_series(path)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise ValueError("The submission checkout does not match the saved series")
     if json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE), sort_keys=True) != json.dumps(
         manifest["vllm_release"], sort_keys=True
@@ -60,6 +72,8 @@ def submit_point(client: IrisClient, name: str, manifest: PointManifest, priorit
         # Cluster pins route roots through federation; a peer cannot route its own
         # children again. Clear inherited routing pins; Iris retains the peer region.
         constraints=[],
+        replicas=profile["hosts"],
+        coscheduling=CoschedulingConfig(group_by="nvlink.domain") if profile["hosts"] > 1 else None,
         priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[priority],
         scheduling_timeout=Duration.from_seconds(series["scheduling_timeout"]),
         timeout=Duration.from_seconds(series["task_timeout"]),
