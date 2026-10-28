@@ -378,7 +378,8 @@ def run_optimize(args: argparse.Namespace) -> int:
     check_swarm_of_fit(fit, swarm)
     proposal = optimize.propose(fit, swarm.weights, args.cap, args.kl)
     write_csv(mixture_table(fit.buckets, proposal.continuous, proposal.counts, fit.epochs_per_unit_weight), args.out)
-    write_json({"summary": proposal.summary, "starts": proposal.starts}, sibling_path(args.out, DIAGNOSTICS_SUFFIX))
+    diagnostics = {"summary": proposal.summary.to_json(), "starts": [record.to_json() for record in proposal.starts]}
+    write_json(diagnostics, sibling_path(args.out, DIAGNOSTICS_SUFFIX))
     return 0
 
 

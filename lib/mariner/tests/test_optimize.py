@@ -38,8 +38,8 @@ def test_propose_reports_the_model_s_predictions_under_a_kl_penalty(synthetic_pr
     swarm, _, _, truth = synthetic_problem
     proposal = propose(truth, swarm.weights, kl=0.1)
     # The penalty steers the search; the diagnostics predict the objective at its continuous and rounded mixtures.
-    assert proposal.summary["continuous_prediction"] == truth.predict(proposal.continuous)[0]
-    assert proposal.summary["runtime_prediction"] == truth.predict(proposal.weights)[0]
+    assert proposal.summary.continuous_prediction == truth.predict(proposal.continuous)[0]
+    assert proposal.summary.runtime_prediction == truth.predict(proposal.weights)[0]
 
 
 def test_propose_respects_epoch_cap(synthetic_problem):

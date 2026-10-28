@@ -23,6 +23,7 @@ from mariner.model import WEIGHT_SUM_TOLERANCE, Objective, Swarm
 from mariner.optimize import (
     MIXTURE_BLOCK_SIZE,
     block_maxima,
+    bounded_simplex_violation,
     bucket_upper_bounds,
     check_cap_and_kl,
     proportional_mixture,
@@ -153,13 +154,13 @@ def fit_laws(swarm: Swarm, objective: Objective, delta: float = HUBER_DELTA) -> 
 
 
 def constraint_violation(solution: np.ndarray, caps: np.ndarray) -> float:
-    """How far ``solution`` lies outside the simplex and the ``caps``; inf when a weight is not finite.
+    """How far ``solution`` lies outside the simplex and the ``caps`` (``optimize.bounded_simplex_violation``).
 
-    The largest of minus its smallest weight, its sum's distance from one and its largest excess over a cap.
+    Inf when a weight is not finite.
     """
     if not np.isfinite(solution).all():
         return np.inf
-    return float(max(-solution.min(), abs(solution.sum() - 1.0), np.max(solution - caps)))
+    return bounded_simplex_violation(solution, caps)
 
 
 class ExactSolution(NamedTuple):
