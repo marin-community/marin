@@ -100,8 +100,10 @@ def sobol_candidates(
     (mixtures already in the swarm, shape (k, n_buckets)) is below ``min_distance``.
 
     Raises:
-        ValueError: If fewer than ``n`` mixtures are accepted within 1,000 ``n`` points.
+        ValueError: If ``n`` is negative, or fewer than ``n`` mixtures are accepted within 1,000 ``n`` points.
     """
+    if n < 0:
+        raise ValueError(f"the number of candidates must be nonnegative, got {n}")
     n_existing = 0 if existing is None else len(existing)
     pool = np.empty((n_existing + n, n_buckets))  # the existing mixtures, then the accepted candidates
     if existing is not None:
@@ -145,10 +147,16 @@ def unimax(pool_tokens: np.ndarray, budget: float, max_epochs: float) -> np.ndar
     budget evenly.
 
     Raises:
-        ValueError: If ``budget`` or ``max_epochs`` is not positive.
+        ValueError: If ``budget`` or ``max_epochs`` is not positive, or ``budget`` exceeds the ``max_epochs`` times the
+            pools' tokens that the capped buckets can hold.
     """
-    if budget <= 0 or max_epochs <= 0:
+    if not (budget > 0 and max_epochs > 0):
         raise ValueError(f"the budget and max_epochs must be positive, got {budget} and {max_epochs}")
+    if budget > max_epochs * pool_tokens.sum():
+        raise ValueError(
+            f"a budget of {budget:g} tokens exceeds max_epochs ({max_epochs:g}) times the pools' {pool_tokens.sum():g}"
+            " tokens"
+        )
     allocation = np.zeros(len(pool_tokens))
     order = np.argsort(pool_tokens, kind="stable")
     remaining_budget = budget

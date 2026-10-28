@@ -94,6 +94,15 @@ def test_unimax_caps_small_pools_and_splits_the_rest_evenly(max_epochs, expected
     np.testing.assert_allclose(weights, np.array(expected)[order], rtol=0, atol=1e-15)
 
 
+def test_unimax_rejects_a_budget_beyond_the_pools_at_max_epochs():
+    pool_tokens = np.array([10.0, 20.0])
+    # The pools hold 30 tokens at one epoch, so a budget of 100 tokens would repeat each bucket 3.33 times.
+    with pytest.raises(ValueError, match="budget"):
+        unimax(pool_tokens, budget=100.0, max_epochs=1.0)
+    # A budget of exactly the pools takes each bucket once.
+    np.testing.assert_allclose(unimax(pool_tokens, budget=30.0, max_epochs=1.0), [1 / 3, 2 / 3], rtol=0, atol=1e-15)
+
+
 def test_proportional_and_stratified_baselines():
     np.testing.assert_allclose(proportional(np.array([10.0, 30.0, 60.0])), [0.1, 0.3, 0.6], rtol=0, atol=1e-15)
     np.testing.assert_array_equal(stratified(4), np.full(4, 0.25))
