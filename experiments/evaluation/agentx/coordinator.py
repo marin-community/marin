@@ -31,7 +31,7 @@ COORDINATOR_TIMEOUT = 7 * 86400
 
 
 def resolve_plan(plan: dict, workload: dict) -> dict:
-    """Resolve the source checkout's adopted release once for the prepared grid."""
+    """Resolve the profile's pinned release once for the prepared grid."""
     release = json.loads(json.dumps(runtime_metadata(plan["profile"])))
     return plan | {
         "points": [

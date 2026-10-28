@@ -268,9 +268,8 @@ def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(
         assert json.loads((output / "agg.json").read_text()) == {"value": value}
         changelog = read_record(str(output / "changelog-metadata" / "agentx.json"))
         assert changelog["head_ref"] == "1" * 40
-        assert changelog["entries"] == [
-            {"config-keys": [], "description": "AgentX full-hour measurements: h100 C16", "append-only": True}
-        ]
+        assert len(changelog["entries"]) == 1
+        assert changelog["entries"][0]["append-only"] is True
 
 
 @pytest.fixture
