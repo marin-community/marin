@@ -367,7 +367,39 @@ class IrisMachineFactory:
         )
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
-        return await asyncio.to_thread(self._create_sync, spec, self._check_spec(spec))
+        return await self._create(spec, self._check_spec(spec))
+
+    async def _create(
+        self, spec: MachineSpec, source: RegistryImage, services: tuple[SandboxServiceSpec, ...] = ()
+    ) -> IrisMachine:
+        submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, source, services))
+        try:
+            machine = await asyncio.shield(submission)
+        except asyncio.CancelledError:
+            machine = await submission
+            await asyncio.shield(machine.close())
+            raise
+        try:
+            deadline = time.monotonic() + self.scheduling_timeout
+            while time.monotonic() < deadline:
+                try:
+                    status = await asyncio.to_thread(machine.task.status)
+                except ConnectError as error:
+                    if error.code != Code.NOT_FOUND:
+                        raise
+                else:
+                    if status.state == TaskState.RUNNING:
+                        created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
+                        if created.exit_code:
+                            raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        return machine
+                    if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
+                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                await asyncio.sleep(2)
+            raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
+        except BaseException:
+            await machine.close()
+            raise
 
     async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
         """Start a credential-free task and services in one private gVisor pod."""
@@ -392,13 +424,7 @@ class IrisMachineFactory:
         )
         if not services:
             raise UnsupportedMachineSpec("A service group requires at least one service")
-        creation = asyncio.create_task(asyncio.to_thread(self._create_sync, spec.task, source, services))
-        try:
-            task = await asyncio.shield(creation)
-        except asyncio.CancelledError:
-            task = await creation
-            await asyncio.shield(task.close())
-            raise
+        task = await self._create(spec.task, source, services)
         members = {
             service.name: IrisMachine(
                 task.endpoint,
@@ -414,7 +440,7 @@ class IrisMachineFactory:
         }
         return ServiceGroup(task, members, spec, task.close)
 
-    def _create_sync(
+    def _submit_sync(
         self, spec: MachineSpec, source: RegistryImage, services: tuple[SandboxServiceSpec, ...] = ()
     ) -> IrisMachine:
         info = get_job_info()
@@ -488,21 +514,7 @@ class IrisMachineFactory:
                 max_retries_failure=0,
                 max_retries_preemption=0,
             )
-            deadline = time.monotonic() + self.scheduling_timeout
-            while time.monotonic() < deadline:
-                tasks = job.tasks()
-                if tasks:
-                    status = tasks[0].status()
-                    if status.state == TaskState.RUNNING:
-                        machine = IrisMachine(endpoint, client, rpc, job, tasks[0], spec)
-                        created = machine._exec_sync(["mkdir", "-p", spec.workdir])
-                        if created.exit_code:
-                            raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
-                        return machine
-                    if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
-                time.sleep(2)
-            raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
+            return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
         except BaseException:
             try:
                 if job is not None:

@@ -74,8 +74,9 @@ secrets must never be used for actor jobs; ordinary factories inject none.
 backend. `ServiceGroupSpec` contains the task's `MachineSpec` and named
 `ServiceSpec` members. Each service has its own machine specification, optional
 image entrypoint/argument overrides, named endpoint ports and a `ReadinessProbe`.
-An omitted override preserves the service image's ENTRYPOINT or CMD. Images must
-already contain their dependencies; group creation does not build or install them.
+With no overrides, the service uses its image's ENTRYPOINT and CMD. Supply both
+fields to specify an exact command. Images must already contain their dependencies;
+group creation does not build or install them.
 
 The Iris factory implements `create_group(spec)`. It creates one CPU-only
 Kubernetes pod under gVisor, with separate container filesystems and a private
@@ -262,9 +263,42 @@ Re-stage bundles built with an earlier prototype when updating this package; the
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
 
+## Live Iris service-group check
+
+The CoreWeave smoke workflow runs `tests/test_iris_service_group_live.py` against
+the shared `cw-us-west-04a` controller in namespace `iris-ci`. It creates two
+CPU-only groups to check private runtime connections, filesystem separation,
+credential absence, denied outbound connections, host HTTP capabilities and
+teardown. The groups use the workflow's digest-pinned Python image.
+
+This check is excluded from default unit runs. Against an already updated test
+controller, supply its URL, image and known network probe targets explicitly:
+
+```sh
+SHELLBOX_IRIS_CONTROLLER_URL=http://127.0.0.1:10000 \
+SHELLBOX_IRIS_PYTHON_IMAGE='<registry-image>@sha256:<digest>' \
+SHELLBOX_IRIS_PRIVATE_ADDRESS='<controller-service-ip>:10000' \
+SHELLBOX_IRIS_PUBLIC_ADDRESS=1.1.1.1:443 \
+uv run --package marin-shellbox --extra iris --frozen --group test pytest \
+  -c lib/taskcompendium/pyproject.toml lib/shellbox/tests/test_iris_service_group_live.py \
+  -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 -v
+```
+
+The controller must advertise `sandbox-service-groups` and have permission to
+read the named `iris-egress-loopback` NetworkPolicy. The CI workflow grants only
+that policy read within `iris-ci`; the operator installs the policy. Running the
+workflow also rebuilds the controller, deletes managed CI task pods and starts
+with fresh controller state. It shares a concurrency lock with the CoreWeave
+canary; use that workflow for CI deployment rather than an unsynchronized restart.
+
 ## Local backend
 
 `LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
+
+An external `SIGKILL` of the bwrap launcher during its internal startup handshake
+can strand a namespace init before Shellbox receives its identity. The local
+backend cannot guarantee reclamation in that window. Use disposable workers;
+ordinary caller cancellation waits for allocation before reclaiming the sandbox.
 
 ```python
 from pathlib import Path

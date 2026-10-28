@@ -269,13 +269,8 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
     if bwrap is not None:
         return (bwrap,)
-    bundled = ()
-    if sys.platform == "linux":
-        from bubblewrap_bin import bwrap_path  # noqa: PLC0415  (optional Linux-only dependency)
-
-        bundled = (bwrap_path(),)
     system = shutil.which("bwrap")
-    return (*bundled, *(() if system is None else (Path(system),)))
+    return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
 def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
@@ -494,18 +489,29 @@ class LocalMachine:
         block_read, block_write = os.pipe()
         allocation = asyncio.create_task(self._allocate_keeper(arguments, peer, block_read, block_write))
         try:
-            await asyncio.shield(allocation)
-        except asyncio.CancelledError:
-            # Namespace setup owns processes before create_subprocess_exec has
-            # returned their handles. Finish bounded setup before reclaiming it.
             try:
                 await asyncio.shield(allocation)
+            except asyncio.CancelledError:
+                # Allocation still consumes the startup descriptors until it
+                # finishes, even if another cancellation arrives while waiting.
+                while not allocation.done():
+                    try:
+                        await asyncio.shield(allocation)
+                    except asyncio.CancelledError:
+                        pass
+                allocation.result()
+                raise
             finally:
-                await asyncio.shield(self._close_local())
+                # An unpinned init may be waiting for this barrier and holding
+                # stderr open. Withhold its start token and release the barrier
+                # before cleanup waits for stderr EOF.
+                if self._keeper is not None and self._keeper.stdin is not None:
+                    self._keeper.stdin.close()
+                os.close(block_read)
+                os.close(block_write)
+        except BaseException:
+            await asyncio.shield(self._close_local())
             raise
-        finally:
-            os.close(block_read)
-            os.close(block_write)
         assert self._keeper_pidfd is not None
         self._watcher = asyncio.create_task(self._watch_keeper(os.dup(self._keeper_pidfd)))
         self._watcher.add_done_callback(_log_task_failure)
@@ -525,7 +531,7 @@ class LocalMachine:
                 DEFAULT_PATH,
                 "/bin/sh",
                 "-c",
-                "exec sleep 2147483647",
+                'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
             ]
             prefix = () if peer is None else peer._network_namespaces
             config = {"namespaces": prefix, "program": arguments}
@@ -541,7 +547,7 @@ class LocalMachine:
                     str(configuration.fileno()),
                     pass_fds=(configuration.fileno(), information.fileno(), block_read, *prefix),
                     env=CONTROL_ENVIRONMENT,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
@@ -549,8 +555,9 @@ class LocalMachine:
                 self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
             async with asyncio.timeout(PROBE_TIMEOUT):
                 while True:
-                    information.seek(0)
-                    payload = information.read()
+                    # The inherited file description shares bwrap's write
+                    # offset; seeking here can corrupt its multi-write JSON.
+                    payload = os.pread(information.fileno(), os.fstat(information.fileno()).st_size, 0)
                     if payload:
                         try:
                             status = json.loads(payload)
@@ -596,6 +603,10 @@ class LocalMachine:
             self._namespaces = (*prefix, owner, *descriptors[1:], descriptors[0])
             self._network_namespaces = (*prefix, owner, descriptors[1])
             os.write(block_write, b"1")
+            assert self._keeper.stdin is not None
+            self._keeper.stdin.write(b"shellbox-ready\n")
+            await self._keeper.stdin.drain()
+            self._keeper.stdin.close()
 
     async def _watch_keeper(self, descriptor: int) -> None:
         # Process.wait also waits for stderr EOF. Watch process death directly:

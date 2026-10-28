@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize]
     paths:
       - "lib/iris/**"
+      - "lib/shellbox/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
       - "scripts/ci/iris_monitor.py"
   workflow_dispatch:
@@ -90,15 +91,16 @@ jobs:
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
 
-      # CI rolls controller images without applying Pulumi. Reconcile the shared
-      # secret-delivery manifests in iris-ci before the controller's RBAC preflight.
-      - name: Prepare CI secret delivery permissions
+      # CI rolls controller images without applying Pulumi. Add the namespaced
+      # credential-delivery and isolation-policy read grants before deployment.
+      - name: Prepare CI controller permissions
         run: |
           cd lib/iris && uv run --group dev --extra controller python - <<'PY'
           import os
           from pathlib import Path
 
           from iris.cluster.config import load_config
+          from iris.cluster.platforms.k8s.network_policies import SERVICE_GROUP_NETWORK_POLICY_NAME
           from iris.cluster.platforms.k8s.rbac_manifests import (
               task_secret_role_manifest,
               task_secret_binding_manifest,
@@ -117,6 +119,28 @@ jobs:
           for manifest in (
               task_secret_role_manifest(namespace),
               task_secret_binding_manifest(namespace, "iris-controller"),
+              {
+                  "apiVersion": "rbac.authorization.k8s.io/v1",
+                  "kind": "Role",
+                  "metadata": {"name": "iris-service-group-policy-reader", "namespace": namespace},
+                  "rules": [{
+                      "apiGroups": ["networking.k8s.io"],
+                      "resources": ["networkpolicies"],
+                      "resourceNames": [SERVICE_GROUP_NETWORK_POLICY_NAME],
+                      "verbs": ["get"],
+                  }],
+              },
+              {
+                  "apiVersion": "rbac.authorization.k8s.io/v1",
+                  "kind": "RoleBinding",
+                  "metadata": {"name": "iris-service-group-policy-reader", "namespace": namespace},
+                  "subjects": [{"kind": "ServiceAccount", "name": "iris-controller", "namespace": namespace}],
+                  "roleRef": {
+                      "apiGroup": "rbac.authorization.k8s.io",
+                      "kind": "Role",
+                      "name": "iris-service-group-policy-reader",
+                  },
+              },
           ):
               kubectl.apply_json(manifest)
           PY
@@ -142,6 +166,30 @@ jobs:
             --namespace "$IRIS_NAMESPACE" \
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
+
+      - name: Run Shellbox service-group integration
+        env:
+          SHELLBOX_IRIS_PYTHON_IMAGE: docker.io/library/python@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+          SHELLBOX_IRIS_PUBLIC_ADDRESS: "1.1.1.1:443"
+        run: |
+          export SHELLBOX_IRIS_CONTROLLER_URL="$IRIS_CONTROLLER_URL"
+          service_ip=$(kubectl --kubeconfig "$HOME/.kube/coreweave-iris" \
+            --context marin_US-WEST-04A -n "$IRIS_NAMESPACE" \
+            get service iris-ci-controller-svc -o jsonpath='{.spec.clusterIP}')
+          export SHELLBOX_IRIS_PRIVATE_ADDRESS="$service_ip:10000"
+          uv run --package marin-shellbox --extra iris --frozen --group test pytest \
+            -c lib/taskcompendium/pyproject.toml lib/shellbox/tests/test_iris_service_group_live.py \
+            -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 \
+            -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/shellbox-iris.xml" -v
+
+      - name: Upload Shellbox integration result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shellbox-iris-result
+          path: ${{ runner.temp }}/shellbox-iris.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Run Marin integration pipeline
         env:
