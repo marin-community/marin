@@ -184,7 +184,8 @@ class ObjectiveFit:
     """A fitted objective: one ``TaskFit`` per task, summed with the objective's evaluation weights.
 
     It predicts at mixtures over ``buckets``, in that order, at the epochs per unit weight of the swarm it was fitted
-    on, and it records the inner fold that validated each of that swarm's runs.
+    on, and it records the inner fold that validated each of that swarm's runs, in the swarm's run order. The JSON
+    form keeps that order as an array of ``[observation_id, inner_fold]`` pairs, since JSON objects are unordered.
     """
 
     objective: str
@@ -192,7 +193,8 @@ class ObjectiveFit:
     epochs_per_unit_weight: np.ndarray
     weights: np.ndarray  # evaluation weights per task
     tasks: tuple[TaskFit, ...]
-    inner_fold_labels: dict[str, int]  # inner fold validating each run, by observation id; -1: never (calibration)
+    # Inner fold validating each run, by observation id in run order; -1: never (calibration).
+    inner_fold_labels: dict[str, int]
 
     def _arrays(self) -> tuple[np.ndarray, ...]:
         rho = np.asarray([t.shape.rho for t in self.tasks])
@@ -231,7 +233,7 @@ class ObjectiveFit:
             "epochs_per_unit_weight": self.epochs_per_unit_weight.tolist(),
             "task_weights": self.weights.tolist(),
             "tasks": [t.to_json() for t in self.tasks],
-            "inner_fold_labels": dict(self.inner_fold_labels),
+            "inner_fold_labels": [[run, label] for run, label in self.inner_fold_labels.items()],
         }
 
     @classmethod
@@ -242,7 +244,7 @@ class ObjectiveFit:
             np.asarray(payload["epochs_per_unit_weight"], float),
             np.asarray(payload["task_weights"], float),
             tuple(TaskFit.from_json(t) for t in payload["tasks"]),
-            {str(run): int(label) for run, label in payload["inner_fold_labels"].items()},
+            {str(run): int(label) for run, label in payload["inner_fold_labels"]},
         )
 
 

@@ -173,6 +173,22 @@ def test_cli_optimize_applies_cap_and_kl_penalty(tmp_path, synthetic_problem):
     np.testing.assert_array_equal(read_csv(out)["runtime_count"], expected.counts)
 
 
+def test_cli_optimize_reads_a_fit_json_whose_keys_were_sorted(tmp_path, synthetic_problem):
+    swarm, objective, anchors, truth = synthetic_problem
+    # Observation ids in the reverse of their sorted order, as a JSON tool that sorts object keys would reorder them.
+    swarm = dataclasses.replace(swarm, runs=tuple(f"run_{len(swarm.runs) - row:03d}" for row in range(len(swarm.runs))))
+    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    original, resorted = tmp_path / "fit.json", tmp_path / "sorted.json"
+    write_generating_fit(original, swarm, truth)
+    resorted.write_text(json.dumps(json.loads(original.read_text()), indent=2, sort_keys=True))
+    proposals = {}
+    for path in (original, resorted):
+        out = tmp_path / f"{path.stem}_mixture.csv"
+        assert main(["optimize", "--fit", str(path), *inputs, "--out", str(out)]) == 0
+        proposals[path] = read_csv(out)
+    pd.testing.assert_frame_equal(proposals[resorted], proposals[original], check_exact=True)
+
+
 def test_cli_optimize_refuses_tables_at_another_target_budget(tmp_path, synthetic_problem, capsys):
     swarm, objective, anchors, truth = synthetic_problem
     inputs = write_own_swarm(tmp_path, swarm, objective, anchors)

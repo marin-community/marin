@@ -31,10 +31,12 @@ def test_objective_fit_json_round_trip_predicts_identically(synthetic_problem):
     loaded = ObjectiveFit.from_json(payload)
     np.testing.assert_array_equal(loaded.predict_tasks(swarm.weights), fit.predict_tasks(swarm.weights))
     assert loaded.to_json() == payload
-    # The fit file is a public format: its field names and the calibration label -1.
+    # The fit file is a public format: its field names, each run's inner fold in run order and the calibration
+    # label -1.
     assert set(payload) == FIT_KEYS
     assert all(set(task) == TASK_KEYS for task in payload["tasks"])
-    assert payload["inner_fold_labels"][swarm.runs[0]] == -1
+    assert [run for run, _ in payload["inner_fold_labels"]] == list(swarm.runs)
+    assert payload["inner_fold_labels"][0] == [swarm.runs[0], -1]
 
 
 def test_pool_fractions_divide_exposures_as_in_the_swarm(synthetic_problem):
