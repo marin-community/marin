@@ -277,6 +277,28 @@ index 89789260..19db34c5 100644
          <MetaLine label={t.offloadType} value={offloadDisplay(meta, locale)} />
          {offloadBackend && <MetaLine label={t.offloadBackend} value={offloadBackend} />}
          {transferEngine && <MetaLine label={t.transferEngine} value={transferEngine} />}
+diff --git a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
+index b2e386fc..9fda6e90 100644
+--- a/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
++++ b/packages/app/src/components/inference/ui/ModelArchitectureInfoLink.tsx
+@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
+ import { TooltipContent, TooltipRoot, TooltipTrigger } from '@/components/ui/tooltip';
+ import { getModelSlugEntryForDisplayName } from '@/lib/compare/compare-slug';
+ import { formatParamCount, getModelArchitecture } from '@/lib/catalog/model-architectures';
+-import { type Model, getModelLabel } from '@/lib/catalog/data-mappings';
++import { Model, getModelLabel } from '@/lib/catalog/data-mappings';
+ import { localePath } from '@/lib/i18n/i18n';
+ 
+ export function ModelArchitectureInfoLink({
+@@ -18,7 +18,7 @@ export function ModelArchitectureInfoLink({
+   locale: 'en' | 'zh';
+ }) {
+   const entry = getModelSlugEntryForDisplayName(model);
+-  if (!entry) return null;
++  if (!entry || model === Model.Snowball011 || model === Model.Hero144k) return null;
+   const arch = getModelArchitecture(model);
+   const label = getModelLabel(model);
+   const text =
 diff --git a/packages/app/src/hooks/api/use-trace-server-metrics.ts b/packages/app/src/hooks/api/use-trace-server-metrics.ts
 index 2605cfb4..a4b2c851 100644
 --- a/packages/app/src/hooks/api/use-trace-server-metrics.ts
