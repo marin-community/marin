@@ -97,6 +97,7 @@ nav:
       - Research Engineering: dev-guide/research-engineering.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
+          - Public Communication Conventions: dev-guide/writing-style/conventions.md
           - Prose Review: dev-guide/writing-style/ai-writing-donts.md
           - Pull Requests and Commits: dev-guide/writing-style/pull-requests.md
           - Issues: dev-guide/writing-style/issues.md
