@@ -364,7 +364,6 @@ class TaskRolloutWorker:
                 harbor.concurrent_trials if concurrent_harbor_tasks is None else concurrent_harbor_tasks
             )
         )
-        self.harbor_eval_slots = nullcontext() if harbor is None else asyncio.Semaphore(harbor.concurrent_trials)
         self.error_handling = ErrorHandlingConfig.from_mapping(trajectory_runner_cfg.get("error_handling", {}))
         self.projection = replace(
             projection,
@@ -475,13 +474,7 @@ class TaskRolloutWorker:
                 )
 
             engine = engines[index]
-            harbor_slots = (
-                nullcontext()
-                if harbor is None
-                else self.harbor_eval_slots
-                if phase == "eval"
-                else self.harbor_task_slots
-            )
+            harbor_slots = nullcontext() if harbor is None else self.harbor_task_slots
             retries = 0
             while True:
                 try:
