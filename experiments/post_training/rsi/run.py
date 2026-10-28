@@ -138,7 +138,7 @@ def feedback_options(function):
             ),
             click.option(
                 "--synthesis",
-                type=click.Choice(tuple(Synthesis)),
+                type=click.Choice([synthesis.value for synthesis in Synthesis]),
                 default=Synthesis.AGENTIC,
                 show_default=True,
                 help="agentic runs a Taskforge session per idea; generator asks GLM for a program per idea.",
