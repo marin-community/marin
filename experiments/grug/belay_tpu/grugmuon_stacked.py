@@ -1,0 +1,708 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Newton-Schulz orthogonalization for the always-stacked EP grug MoE model.
+
+Opinionated companion to ``levanter.optim.grugmuon`` for this variant, whose layers are always
+array-stacked. The transform orthogonalizes each Muon leaf:
+
+- 2D matrices: replicated Newton-Schulz.
+- 3D matrix stacks (stacked non-expert layers): distributed over the intra-rack batch mesh axes,
+  zero-padding the leading axis so it divides the shard count.
+- 4D expert stacks ``[layers, experts, fan_in, fan_out]``: reshaped to a matrix stack and
+  distributed over the intra-rack batch axes without gathering the matrix dimensions, using JAX
+  batched matrix products for ``X @ X.T``.
+
+With a mesh, same-shaped matrices of different leaves are orthogonalized together
+(``_bucketed_newton_schulz``): Newton-Schulz acts on each matrix independently, so one batched call
+per matrix shape computes exactly the per-leaf result with a fraction of the kernel launches and
+collectives -- which dominate the optimizer at small width.
+
+``coefficient_type="aol"`` is Turbo-Muon (arXiv 2512.04632): every path replaces the Frobenius
+normalization with AOL rescaling (``_newton_schulz_start``) and runs exactly the four AOL steps.
+
+The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
+"""
+
+import math
+import re
+
+import jax
+import jax.numpy as jnp
+import optax
+from jax import shard_map
+from jax.sharding import NamedSharding, PartitionSpec, reshard
+from levanter.optim.muon import ScaleByMuonState
+from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS, CoefficientType
+from levanter.utils.jax_utils import leaf_key_paths
+from optax import tree_utils as otu
+
+
+def _intra_rack_axes(mesh) -> list[tuple[str, int]]:
+    """Batch mesh axes with size > 1, excluding the cross-rack DCN axis.
+
+    Orthogonalization stays within a rack: distributing the Newton-Schulz stack over
+    ``replica_dcn`` would run the reshards across the slow inter-rack link.
+    """
+    axes = [(name, size) for name, size in mesh.shape.items() if size > 1]
+    intra = [(name, size) for name, size in axes if name != "replica_dcn"]
+    return intra if intra else axes
+
+
+def _target_named_sharding(array) -> NamedSharding | None:
+    if array is None or not hasattr(array, "shape"):
+        return None
+    sharding = getattr(array, "sharding", None)
+    if sharding is None:
+        sharding = getattr(jax.typeof(array), "sharding", None)
+    return sharding if isinstance(sharding, NamedSharding) else None
+
+
+# Stacked attention projections whose last (``_HEAD_OUT_LEAVES``) or second-to-last (``_HEAD_IN_LEAVES``)
+# axis is ``num_heads * head_dim``, for per-head orthogonalization.
+_HEAD_OUT_LEAVES = re.compile(
+    r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.(w_q|w_k|w_v|w_g|w_uk|w_uv|w_q2|w_uk2)"
+)
+_HEAD_IN_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_o")
+
+
+def _head_axis(path: str) -> int | None:
+    """Axis of a stacked ``[L, a, b]`` leaf that holds ``num_heads * head_dim``, or None."""
+    if _HEAD_OUT_LEAVES.fullmatch(path):
+        return 2
+    if _HEAD_IN_LEAVES.fullmatch(path):
+        return 1
+    return None
+
+
+def _split_heads(x: jax.Array, axis: int, head_dim: int) -> jax.Array:
+    """``[L, a, b]`` -> ``[L * num_heads, ...]``: one matrix per (layer, head)."""
+    layers, rows, cols = x.shape
+    if not jax.sharding.get_abstract_mesh().empty:
+        # Head-sharded layouts do not survive the reshape; the per-head stack is replicated anyway.
+        x = reshard(x, PartitionSpec(None, None, None))
+    if axis == 2:
+        heads = cols // head_dim
+        x = jnp.reshape(x, (layers, rows, heads, head_dim))
+        return jnp.reshape(jnp.moveaxis(x, 2, 1), (layers * heads, rows, head_dim))
+    heads = rows // head_dim
+    return jnp.reshape(x, (layers * heads, head_dim, cols))
+
+
+def _merge_heads(x: jax.Array, like: jax.Array, axis: int) -> jax.Array:
+    layers, rows, cols = like.shape
+    if not jax.sharding.get_abstract_mesh().empty:
+        x = reshard(x, PartitionSpec(None, None, None))
+    if axis == 2:
+        heads = x.shape[0] // layers
+        x = jnp.reshape(x, (layers, heads, rows, cols // heads))
+        merged = jnp.reshape(jnp.moveaxis(x, 1, 2), like.shape)
+    else:
+        merged = jnp.reshape(x, like.shape)
+    target = _target_named_sharding(like)
+    return reshard(merged, target) if target is not None else merged
+
+
+_POWER_ITERS = 3
+
+
+def _is_matrix_stack(x) -> bool:
+    return x is not None and hasattr(x, "ndim") and x.ndim in (2, 3, 4)
+
+
+def _pre_normalize(x, mode: str):
+    if not _is_matrix_stack(x):
+        return x
+    if mode not in ("in", "out"):
+        raise ValueError(f"pre_norm must be none, in or out, got {mode!r}")
+    axis = -2 if mode == "out" else -1
+    x32 = x.astype(jnp.float32)
+    return (x32 / (jnp.sqrt(jnp.sum(jnp.square(x32), axis=axis, keepdims=True)) + 1e-8)).astype(x.dtype)
+
+
+def _shrink_top_direction(direction, m, amount: float):
+    """``direction - amount * u1 v1^T`` per matrix, with ``(u1, v1)`` the top singular pair of ``m``."""
+    if not _is_matrix_stack(direction):
+        return direction
+    # Broadcast-multiply + sum rather than einsum: under explicit sharding a dot_general contracting a
+    # sharded axis needs an out_sharding, while a reduction over it lowers to a plain all-reduce.
+    m32 = m.astype(jnp.float32)
+    v = jnp.sum(m32, axis=-2, keepdims=True)
+    for _ in range(_POWER_ITERS):
+        u = jnp.sum(m32 * v, axis=-1, keepdims=True)
+        u = u / (jnp.sqrt(jnp.sum(jnp.square(u), axis=-2, keepdims=True)) + 1e-12)
+        v = jnp.sum(m32 * u, axis=-2, keepdims=True)
+        v = v / (jnp.sqrt(jnp.sum(jnp.square(v), axis=-1, keepdims=True)) + 1e-12)
+    shrunk = direction.astype(jnp.float32) - amount * (u * v)
+    target = _target_named_sharding(direction)
+    if target is not None:
+        shrunk = reshard(shrunk, target.spec)
+    return shrunk.astype(direction.dtype)
+
+
+def _truncate_bottom_directions(direction, m, frac: float):
+    """Zero the bottom ``frac`` of ``direction``'s singular directions, ranked by the Newton-Schulz input ``m``.
+
+    Newton-Schulz is an odd polynomial in ``m``, so its output shares ``m``'s singular vectors; projecting it onto the
+    span of ``m``'s top ``(1 - frac) min(rows, cols)`` singular vectors (from ``eigh`` of the Gram on the smaller side)
+    removes exactly the weakest directions and leaves the others' Newton-Schulz values unchanged."""
+    if not _is_matrix_stack(direction):
+        return direction
+    rows, cols = m.shape[-2:]
+    rank = min(rows, cols)
+    keep = rank - round(frac * rank)
+    if keep <= 0:
+        raise ValueError(f"truncate_frac {frac} keeps no direction of a rank-{rank} matrix")
+    target = _target_named_sharding(direction)
+    m32, d32 = m.astype(jnp.float32), direction.astype(jnp.float32)
+    if target is not None:
+        spec = tuple(target.spec) + (None,) * (direction.ndim - len(target.spec))
+        # eigh and the projections need each matrix whole; stacked (layer, expert) axes stay sharded.
+        whole = PartitionSpec(*spec[:-2], None, None)
+        m32, d32 = reshard(m32, whole), reshard(d32, whole)
+    if cols <= rows:
+        basis = jnp.linalg.eigh(jnp.swapaxes(m32, -1, -2) @ m32)[1][..., -keep:]
+        out = (d32 @ basis) @ jnp.swapaxes(basis, -1, -2)
+    else:
+        basis = jnp.linalg.eigh(m32 @ jnp.swapaxes(m32, -1, -2))[1][..., -keep:]
+        out = basis @ (jnp.swapaxes(basis, -1, -2) @ d32)
+    if target is not None:
+        out = reshard(out, target.spec)
+    return out.astype(direction.dtype)
+
+
+def _blend_back(ortho: jax.Array | None, matrix: jax.Array | None, alpha: float) -> jax.Array | None:
+    """``(1 - alpha) ortho + alpha matrix ||ortho|| / ||matrix||`` per trailing matrix (``post_blend``)."""
+    if ortho is None or not hasattr(ortho, "ndim") or ortho.ndim < 2:
+        return ortho
+    o = ortho.astype(jnp.float32)
+    m = matrix.astype(jnp.float32)
+    o_norm = jnp.sqrt(jnp.sum(jnp.square(o), axis=(-2, -1), keepdims=True))
+    m_norm = jnp.sqrt(jnp.sum(jnp.square(m), axis=(-2, -1), keepdims=True))
+    return ((1.0 - alpha) * o + alpha * m * (o_norm / jnp.maximum(m_norm, 1e-12))).astype(ortho.dtype)
+
+
+def _grug_scale_with_muon(
+    momentum=0.95,
+    nesterov=True,
+    steps=5,
+    muon_eps=1e-8,
+    coefficient_type="quintic",
+    head_dim: int | None = None,
+    pre_norm: str = "none",
+    top_shrink: float = 0.0,
+    precond_beta2: float | None = None,
+    truncate_frac: float = 0.0,
+    post_blend: float = 0.0,
+):
+    """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
+
+    ``pre_norm`` normalizes the momentum before Newton-Schulz (MuonEq, arXiv 2603.28254): ``"out"`` gives
+    every output unit's column unit norm, ``"in"`` every input unit's row. ``top_shrink`` (SAMuon-lite,
+    arXiv 2608.25990) subtracts ``top_shrink * u1 v1^T`` from the orthogonalized direction, with ``(u1, v1)``
+    the momentum's top singular pair from ``_POWER_ITERS`` power iterations. ``1 - 1/gamma`` matches
+    SAMuon's ``gamma * NS(M) - (gamma - 1) u1 v1^T`` once the hyperball step fixes the overall scale.
+    ``precond_beta2`` (Muon2, arXiv 2604.09967) divides the momentum elementwise by the root of a
+    bias-corrected EMA of the squared gradient before Newton-Schulz; the state is then
+    ``(ScaleByMuonState, count, second_moment)``. ``truncate_frac`` zeroes the weakest fraction of each
+    matrix's singular directions after Newton-Schulz (``_truncate_bottom_directions``). ``post_blend`` mixes the
+    orthogonalized matrix ``U V^T`` with the matrix it came from, rescaled to the same Frobenius norm:
+    ``(1 - a) U V^T + a M ||U V^T|| / ||M||``, which gives the strong singular directions back some weight.
+
+    With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
+    each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
+    """
+    steps = int(steps)
+    _newton_schulz_coefficients(coefficient_type, steps)
+    if precond_beta2 is not None and head_dim is not None:
+        raise ValueError("precond_beta2 does not support per-head orthogonalization (head_dim)")
+
+    def init_fn(params):
+        muon_state = ScaleByMuonState(momentum_buffer=otu.tree_zeros_like(params))
+        if precond_beta2 is None:
+            return muon_state
+        second_moment = jax.tree.map(
+            lambda p: jnp.zeros_like(p, dtype=jnp.float32) if _is_matrix_stack(p) else None, params
+        )
+        return muon_state, jnp.zeros([], jnp.int32), second_moment
+
+    def update_fn(updates, state, params=None):
+        if precond_beta2 is None:
+            return muon_update(updates, state, params)
+        muon_state, count, second_moment = state
+        count = count + 1
+        second_moment = jax.tree.map(
+            lambda v, g: v if v is None else precond_beta2 * v + (1 - precond_beta2) * jnp.square(g.astype(jnp.float32)),
+            second_moment,
+            updates,
+            is_leaf=lambda x: x is None,
+        )
+        correction = 1 - precond_beta2 ** count.astype(jnp.float32)
+        denoms = jax.tree.map(
+            lambda v: v if v is None else jnp.sqrt(v / correction) + 1e-8, second_moment, is_leaf=lambda x: x is None
+        )
+        new_updates, muon_state = muon_update(updates, muon_state, params, denoms)
+        return new_updates, (muon_state, count, second_moment)
+
+    def muon_update(updates, state, params=None, denoms=None):
+        if momentum == 0.0:
+            # A caller-side momentum (e.g. Bi-Maxwell) already mixed the direction; leave the buffer untouched so
+            # the donated state aliases through instead of costing a parameter-sized read and write per step.
+            buf = state.momentum_buffer
+        else:
+            buf = jax.tree.map(
+                lambda m, g: None if g is None else momentum * m + g,
+                state.momentum_buffer,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
+            if nesterov:
+                updates = jax.tree.map(
+                    lambda m, g: None if g is None else momentum * m + g,
+                    buf,
+                    updates,
+                    is_leaf=lambda x: x is None,
+                )
+            else:
+                updates = buf
+
+        def transform_array(path, x, param):
+            if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
+                return x
+            if x.ndim == 2:
+                updated = _zeropower_via_newtonschulz_replicated(x, steps, muon_eps, coefficient_type)
+            elif x.ndim == 3:
+                updated = _newtonschulz_padded_stack_sharded(
+                    x,
+                    steps,
+                    muon_eps,
+                    coefficient_type,
+                    target_sharding=_target_named_sharding(param),
+                )
+            else:
+                updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type)
+
+            fan_in, fan_out = updated.shape[-2:]
+            scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
+            return updated * scale
+
+        head_axes = None
+        if head_dim is not None:
+            if params is None:
+                raise ValueError("per-head Muon needs params to identify the attention projections")
+            paths = jax.tree.map(
+                lambda p: ".".join(p) if isinstance(p, (list, tuple)) else str(p), leaf_key_paths(params)
+            )
+            head_axes = jax.tree.map(_head_axis, paths)
+            original = updates
+            split = jax.tree.map(
+                lambda u, a: u if u is None or a is None else _split_heads(u, a, head_dim),
+                updates,
+                head_axes,
+                is_leaf=lambda x: x is None,
+            )
+            # Split leaves have no parameter sharding to restore; their own layout stands in.
+            params = jax.tree.map(
+                lambda p, u, a: p if a is None else u, params, split, head_axes, is_leaf=lambda x: x is None
+            )
+            updates = split
+
+        if denoms is not None:
+            updates = jax.tree.map(
+                lambda d, u: u if d is None else (u.astype(jnp.float32) / d).astype(u.dtype),
+                denoms,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
+        if pre_norm != "none":
+            updates = jax.tree.map(lambda x: _pre_normalize(x, pre_norm), updates, is_leaf=lambda x: x is None)
+        momentum_dirs = updates
+        mesh = jax.sharding.get_abstract_mesh()
+        if mesh.empty or not _intra_rack_axes(mesh):
+            updates = jax.tree_util.tree_map_with_path(
+                transform_array,
+                updates,
+                params,
+                is_leaf=lambda x: x is None,
+            )
+        else:
+            updates = _bucketed_newton_schulz(updates, params, mesh, steps, muon_eps, coefficient_type)
+        if top_shrink:
+            updates = jax.tree.map(
+                lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
+            )
+        if not (isinstance(post_blend, (int, float)) and post_blend == 0):  # a float, or a traced schedule value
+            updates = jax.tree.map(
+                lambda o, m: _blend_back(o, m, post_blend), updates, momentum_dirs, is_leaf=lambda x: x is None
+            )
+        if truncate_frac:
+            updates = jax.tree.map(
+                lambda o, m: _truncate_bottom_directions(o, m, truncate_frac),
+                updates,
+                momentum_dirs,
+                is_leaf=lambda x: x is None,
+            )
+        if head_axes is not None:
+            updates = jax.tree.map(
+                lambda u, o, a: u if u is None or a is None else _merge_heads(u, o, a),
+                updates,
+                original,
+                head_axes,
+                is_leaf=lambda x: x is None,
+            )
+        return updates, ScaleByMuonState(momentum_buffer=buf)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _muon_shape_scale(shape: tuple[int, ...]) -> float:
+    fan_in, fan_out = shape[-2:]
+    return math.sqrt(max(1, fan_out / fan_in))
+
+
+def _to_wide(x: jax.Array) -> jax.Array:
+    """Orient the trailing matrix dims wide (rows <= cols), as Newton-Schulz iterates internally."""
+    return jnp.swapaxes(x, -1, -2) if x.shape[-2] > x.shape[-1] else x
+
+
+def _from_wide(result: jax.Array, like: jax.Array) -> jax.Array:
+    return jnp.swapaxes(result, -1, -2) if like.shape[-2] > like.shape[-1] else result
+
+
+_NS_CHUNK_BYTES = 1 << 30
+
+
+def _largest_divisor_at_most(n: int, limit: int) -> int:
+    return max(d for d in range(1, min(n, limit) + 1) if n % d == 0)
+
+
+def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coefficient_type: CoefficientType):
+    """Return Muon directions for 2D/3D/4D leaves, preserving the update tree and other leaves."""
+    # Orient matrices wide and group equal shapes. Padding the 2D/3D stacks and sharding
+    # the 4D expert batches must preserve each matrix's Newton-Schulz calculation.
+    flat, treedef = jax.tree_util.tree_flatten(updates, is_leaf=lambda x: x is None)
+    param_leaves = treedef.flatten_up_to(params)
+    out = list(flat)
+    stack_buckets: dict[tuple[int, int], list[int]] = {}
+    expert_buckets: dict[tuple[int, int, int], list[int]] = {}
+    use_expert_sharding = int(mesh.shape.get("expert", 1)) > 1
+    for i, x in enumerate(flat):
+        if x is None or not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
+            continue
+        rows, cols = x.shape[-2:]
+        key = (min(rows, cols), max(rows, cols))
+        if x.ndim == 4 and not use_expert_sharding:
+            out[i] = _newtonschulz_4d_distributed((), x, steps, eps, coefficient_type) * _muon_shape_scale(x.shape)
+        elif x.ndim == 4:
+            expert_buckets.setdefault((x.shape[1], *key), []).append(i)
+        else:
+            stack_buckets.setdefault(key, []).append(i)
+
+    def scatter(indices: list[int], pieces: list[jax.Array], updated: jax.Array) -> None:
+        offset = 0
+        for i, piece in zip(indices, pieces, strict=True):
+            x = flat[i]
+            part = _from_wide(updated[offset : offset + piece.shape[0]], x).astype(x.dtype)
+            offset += piece.shape[0]
+            part = part if x.ndim == piece.ndim else part[0]
+            target = _target_named_sharding(param_leaves[i])
+            out[i] = (reshard(part, target) if target is not None else part) * _muon_shape_scale(x.shape)
+
+    replicated = PartitionSpec(None, None, None)
+    for indices in stack_buckets.values():
+        pieces = [_to_wide((flat[i] if flat[i].ndim == 3 else flat[i][None]).astype(jnp.bfloat16)) for i in indices]
+        if sum(p.size for p in pieces) * 2 <= _NS_CHUNK_BYTES:
+            # Small buckets (the ladder rungs): one replicated stack, one batched Newton-Schulz.
+            stacked = jnp.concatenate([reshard(p, replicated) for p in pieces], axis=0)
+            scatter(indices, pieces, _newtonschulz_padded_stack_sharded(stacked, steps, eps, coefficient_type))
+            continue
+        # Large buckets: one leaf at a time, distributed over its layer axis. Concatenating needs every leaf
+        # replicated, a full copy of the bucket (18 GiB at hero width) on every device.
+        for i, piece in zip(indices, pieces, strict=True):
+            updated = _newtonschulz_padded_stack_sharded(piece, steps, eps, coefficient_type, keep_distributed=True)
+            scatter([i], [piece], updated)
+
+    expert_spec = PartitionSpec(None, "expert", None, None)
+
+    def local_syrk(stack):
+        local_layers, local_experts, local_d, local_last = stack.shape
+        count = local_layers * local_experts
+        # Chunk the batch so the Newton-Schulz temporaries (X, X X^T, its square) stay ~_NS_CHUNK_BYTES per operand
+        # instead of spanning every expert matrix of every layer at once. Same per-matrix math.
+        chunk = _largest_divisor_at_most(count, max(1, _NS_CHUNK_BYTES // (local_d * local_last * 2)))
+        matrices = jax.lax.reshape(stack, (count // chunk, chunk, local_d, local_last))
+        result = jax.lax.map(lambda m: _newtonschulz_batched_syrk(m, steps, eps, coefficient_type), matrices)
+        return jax.lax.reshape(result, stack.shape)
+
+    for indices in expert_buckets.values():
+        pieces = [reshard(_to_wide(flat[i].astype(jnp.bfloat16)), expert_spec) for i in indices]
+        if sum(p.size for p in pieces) * 2 <= _NS_CHUNK_BYTES * jax.device_count():
+            stacked = jnp.concatenate(pieces, axis=0)
+            run = shard_map(local_syrk, mesh=mesh, in_specs=expert_spec, out_specs=expert_spec, check_vma=False)
+            scatter(indices, pieces, run(stacked))
+            continue
+        # Large buckets: one leaf at a time. Concatenating every layer's up and down matrices makes the bf16 input
+        # and output stacks (15 GiB each per GPU at hero width) live together; per leaf they are half that.
+        for i, piece in zip(indices, pieces, strict=True):
+            run = shard_map(local_syrk, mesh=mesh, in_specs=expert_spec, out_specs=expert_spec, check_vma=False)
+            scatter([i], [piece], run(piece))
+    return treedef.unflatten(out)
+
+
+def _newton_schulz_coefficients(coefficient_type: CoefficientType, steps: int) -> list[tuple[float, float, float]]:
+    """The per-step ``(a, b, c)``, cycling the table; ``"aol"`` must run its four steps exactly once."""
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    if coefficient_type == "aol" and steps != len(coeffs):
+        raise ValueError(f"coefficient_type='aol' runs exactly {len(coeffs)} Newton-Schulz steps, got steps={steps}")
+    return [coeffs[i % len(coeffs)] for i in range(steps)]
+
+
+def _newton_schulz_start(X, gram, eps: float, coefficient_type: CoefficientType):
+    """Scale wide matrices ``X`` (batched over leading axes) for Newton-Schulz; return them and their Gram.
+
+    The default divides by the Frobenius norm. ``"aol"`` (Turbo-Muon, arXiv 2512.04632) forms
+    ``A = X X^T`` first and rescales by ``D^{-1/2}`` with ``D_ii = sum_j |A_ij|`` (Prach & Lampert's AOL,
+    which bounds the spectral norm by 1 and moves the matrix toward orthogonal). The rescaled Gram
+    ``D^{-1/2} A D^{-1/2}`` feeds the first iteration, so the preconditioner costs no extra matmul.
+    """
+    if coefficient_type != "aol":
+        X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
+        return X, gram(X)
+    A = gram(X)
+    row_sums = jnp.sum(jnp.abs(A.astype(jnp.float32)), axis=-1)
+    s = jax.lax.rsqrt(jnp.maximum(row_sums, eps)).astype(X.dtype)
+    # The outer product first keeps the rescaled Gram exactly symmetric, as QuACK's symmetric GEMM assumes.
+    return X * s[..., :, None], A * (s[..., :, None] * s[..., None, :])
+
+
+def _zeropower_via_newtonschulz_replicated(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Newton-Schulz on a single matrix, fully replicated across devices.
+
+    Replicates before iterating to avoid sharding ambiguity in the X @ X.T contractions. Runs in
+    bf16 to halve all-gather bytes and double matmul throughput; casts back to the param dtype.
+    """
+    P = PartitionSpec
+    assert X.ndim == 2
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
+    has_mesh = not jax.sharding.get_abstract_mesh().empty
+    if has_mesh:
+        X = reshard(X, P(None, None))
+
+    transpose = X.shape[0] > X.shape[1]
+    if transpose:
+        X = X.T
+
+    out_sharding = P(None, None) if has_mesh else None
+
+    def gram(M):
+        return jnp.einsum("ik,jk->ij", M, M, out_sharding=out_sharding)
+
+    X, A = _newton_schulz_start(X, gram, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = gram(X)
+        B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=out_sharding)
+        X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=out_sharding)
+
+    if transpose:
+        X = X.T
+    return X.astype(orig_dtype)
+
+
+def _zeropower_via_newtonschulz_local(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Run Newton-Schulz on a matrix that is already local to one device."""
+    assert X.ndim == 2
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
+    transpose = X.shape[0] > X.shape[1]
+    if transpose:
+        X = X.T
+
+    def gram(M):
+        return jnp.einsum("ik,jk->ij", M, M)
+
+    X, A = _newton_schulz_start(X, gram, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = gram(X)
+        B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
+        X = a * X + jnp.einsum("ik,kj->ij", B, X)
+
+    if transpose:
+        X = X.T
+    return X.astype(orig_dtype)
+
+
+def _newtonschulz_batched_syrk(
+    X: jax.Array,
+    steps: int,
+    eps: float,
+    coefficient_type: CoefficientType,
+) -> jax.Array:
+    """Run the source BF16 Newton-Schulz formula with portable Gram products."""
+
+    def gram(matrix):
+        return jnp.matmul(matrix, jnp.swapaxes(matrix, -1, -2))
+
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
+    transpose = X.shape[-2] > X.shape[-1]
+    if transpose:
+        X = jnp.swapaxes(X, -1, -2)
+
+    X, A = _newton_schulz_start(X, gram, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = gram(X)
+        B = b * A + c * gram(A)
+        X = a * X + jnp.matmul(B, X)
+
+    if transpose:
+        X = jnp.swapaxes(X, -1, -2)
+    return X.astype(orig_dtype)
+
+
+def _newtonschulz_4d_distributed(
+    path,
+    x: jax.Array,
+    steps: int,
+    eps: float,
+    coefficient_type: CoefficientType,
+) -> jax.Array:
+    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dims."""
+
+    def local_ns(matrix):
+        return _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return jax.vmap(jax.vmap(local_ns))(x)
+    mesh_shape_items = _intra_rack_axes(mesh)
+    if not mesh_shape_items:
+        return jax.vmap(jax.vmap(local_ns))(x)
+
+    layers, expert_count, d, last = x.shape
+    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    trailing = ("model", "data") if is_w_down else ("data", "model")
+    orig_4d_spec = PartitionSpec(None, "expert", *trailing)
+
+    if int(mesh.shape.get("expert", 1)) > 1:
+        distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+        x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
+
+        def local_syrk(stack):
+            local_layers, local_experts, local_d, local_last = stack.shape
+            flat = jax.lax.reshape(stack, (local_layers * local_experts, local_d, local_last))
+            updated = _newtonschulz_batched_syrk(flat, steps, eps, coefficient_type)
+            return jax.lax.reshape(updated, stack.shape)
+
+        updated_distributed = shard_map(
+            local_syrk,
+            mesh=mesh,
+            in_specs=distributed_4d_spec,
+            out_specs=distributed_4d_spec,
+            check_vma=False,
+        )(x_distributed)
+        return reshard(updated_distributed, orig_4d_spec).astype(x.dtype)
+
+    merged = layers * expert_count
+
+    best_axes: tuple[str, ...] = ()
+    best_shards = 0
+    for mask in range(1, 1 << len(mesh_shape_items)):
+        subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
+        prod = math.prod(size for _, size in subset)
+        if merged % prod == 0 and prod > best_shards:
+            best_axes = tuple(name for name, _ in subset)
+            best_shards = prod
+    if not best_axes:
+        raise ValueError(
+            f"4D NS: no subset of batch mesh axes {dict(mesh.shape)} divides "
+            f"merged={merged} (layers={layers} * experts={expert_count}) for "
+            f"{jax.tree_util.keystr(path)}."
+        )
+
+    intermediate_3d_spec = PartitionSpec(None, *trailing)
+    target_3d_spec = (
+        PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
+    )
+
+    x_bf16 = x.astype(jnp.bfloat16)
+    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+    x_distributed = reshard(x_flat, target_3d_spec)
+    updated_distributed = shard_map(
+        lambda stack: _newtonschulz_batched_syrk(stack, steps, eps, coefficient_type),
+        mesh=mesh,
+        in_specs=target_3d_spec,
+        out_specs=target_3d_spec,
+        check_vma=False,
+    )(x_distributed)
+    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    return updated_bf16.astype(x.dtype)
+
+
+def _newtonschulz_padded_stack_sharded(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+    *,
+    target_sharding: NamedSharding | None = None,
+    keep_distributed: bool = False,
+) -> jax.Array:
+    """Distribute a matrix stack over the intra-rack batch axes, zero-padding the leading axis. ``keep_distributed``
+    returns the result still sharded over that axis (the caller reshards each leaf to its parameter's layout)."""
+    P = PartitionSpec
+    assert X.ndim == 3
+
+    def local(matrix):
+        return _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return jax.vmap(local)(X)
+    axes = _intra_rack_axes(mesh)
+    if not axes:
+        return jax.vmap(local)(X)
+
+    batch_axis = tuple(name for name, _ in axes)
+    batch_shards = math.prod(size for _, size in axes)
+    layers = X.shape[0]
+    pad = (-layers) % batch_shards
+
+    Xp = jnp.pad(X, ((0, pad), (0, 0), (0, 0))) if pad else X
+    Xd = reshard(Xp, P(batch_axis[0], None, None))
+    if len(batch_axis) > 1:
+        Xd = reshard(Xd, P(batch_axis, None, None))
+    updated = jax.vmap(local)(Xd)
+    if target_sharding is not None:
+        target_spec = target_sharding.spec
+        if target_spec and target_spec[0] is not None:
+            raise ValueError("padded stack Newton-Schulz requires a replicated parameter layer axis")
+        updated = reshard(updated, target_sharding)
+        return updated[:layers] if pad else updated
+    if keep_distributed:
+        if not pad:
+            return updated
+        # Explicit sharding cannot slice the padded leading axis while it is sharded; move the shards to the rows.
+        rows_spec = P(None, batch_axis, None) if X.shape[1] % batch_shards == 0 else P(None, None, None)
+        return reshard(updated, rows_spec)[:layers]
+    updated = reshard(updated, P(None, None, None))
+    return updated[:layers] if pad else updated

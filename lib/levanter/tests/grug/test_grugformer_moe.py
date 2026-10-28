@@ -699,8 +699,10 @@ def test_expert_mlp_backward_ignores_rows_past_the_active_count(expert_mlp, hidd
         out, residuals = expert_mlp.forward(x, w13, w2, physical_group_sizes, active_group_sizes)
         return out, expert_mlp.backward(residuals, cotangent)
 
-    clean_out, (clean_dx, clean_dw13, clean_dw2, clean_output_dot) = run(x.at[7:].set(0), cotangent.at[7:].set(0))
-    out, (dx, dw13, dw2, output_dot) = run(x_unspecified, cotangent_unspecified)
+    # The row-dot identity reassociates GEMMs; use fp32 products in the TPU interpreter.
+    with jax.default_matmul_precision("highest"):
+        clean_out, (clean_dx, clean_dw13, clean_dw2, clean_output_dot) = run(x.at[7:].set(0), cotangent.at[7:].set(0))
+        out, (dx, dw13, dw2, output_dot) = run(x_unspecified, cotangent_unspecified)
 
     np.testing.assert_array_equal(np.asarray(out[:7]), np.asarray(clean_out[:7]))
     np.testing.assert_array_equal(np.asarray(dx[:7]), np.asarray(clean_dx[:7]))

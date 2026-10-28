@@ -51,9 +51,13 @@ def _moe_mlp_local_scatter(
         # needs zeroing (a zero weight times an unspecified row is not zero).
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
-        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+        if moe_w13.shape[-1] == moe_dim:
+            hidden = activation_fn(w13_out)
+        else:
+            gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+            hidden = activation_fn(gate) * up
         out_dispatch = tree_checkpoint_name(
-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            ragged_dot(hidden, moe_w2, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 

@@ -1,0 +1,417 @@
+{
+  "recipe_source_commit": "8415c3ce8411051c1e22bc13184c272b88ec2b6c",
+  "imported_from_commit": "28fdf7d69ac6fb7737652a5b65f82368a6e813a1",
+  "full_window_source_commit": "22db0f03a73c5bc101d23e514ae3feb111e4a8a0",
+  "pr_parent_commit": "8dbbb33bc6afd6c64eaf4697174dd286e7012702",
+  "selected_profile": "kda-owner-causal-sort-v1",
+  "files": [
+    {
+      "path": "experiments/grug/belay_tpu/__init__.py",
+      "source_path": "experiments/grug/belay_tpu/__init__.py",
+      "source_sha256": "6026bc6a357ca0c546cdd33ed000e6fd8ee02fb6cff84e030e30f3e15ee9040d",
+      "consolidated_sha256": "6026bc6a357ca0c546cdd33ed000e6fd8ee02fb6cff84e030e30f3e15ee9040d"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/adamh.py",
+      "source_path": "experiments/grug/belay_tpu/adamh.py",
+      "source_sha256": "a893d78277849080e8c6fbb3d29fc6124cdbc109185dfee9c108888cc9b9112b",
+      "consolidated_sha256": "046c5651806e87d0f0c1edb3af30099935272ffb082b74a89298166a20d4bf85"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/attention_kernel_check.py",
+      "source_path": "experiments/grug/belay_tpu/attention_kernel_check.py",
+      "source_sha256": "e4ae09f6c1138c4878cebbad02e41cd84a276d47eb00714798ba7fb6b3d7e23f",
+      "consolidated_sha256": "49608da385b52d519ef4a11e7b3e9a229190b274a826ab1722458857e6b4f330"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/attention_rows_probe.py",
+      "source_path": "experiments/grug/belay_tpu/attention_rows_probe.py",
+      "source_sha256": "d6f98659a8b4b25ed6847cfc9f0a679e035edcf7c8fa478a29479471a0c30b8b",
+      "consolidated_sha256": "d6f98659a8b4b25ed6847cfc9f0a679e035edcf7c8fa478a29479471a0c30b8b"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/attn_res_source_grads.py",
+      "source_path": "experiments/grug/belay_tpu/attn_res_source_grads.py",
+      "source_sha256": "ab8ae662985130fa8ef82daf18aa418b135f9c4e70b0a6b8bb2c0fecf8baa2fc",
+      "consolidated_sha256": "ab8ae662985130fa8ef82daf18aa418b135f9c4e70b0a6b8bb2c0fecf8baa2fc"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/belay_ckpt1.py",
+      "source_path": "experiments/grug/belay_tpu/belay_ckpt1.py",
+      "source_sha256": "8a327abfcc298f79afa323e557ca960fd541d6ad0cd1ed24766644b16f752043",
+      "consolidated_sha256": "8a327abfcc298f79afa323e557ca960fd541d6ad0cd1ed24766644b16f752043"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/belay_ckpt1_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/belay_ckpt1_tpu.py",
+      "source_sha256": "9f2e835ffa0d812e437dd6c31430316412ca8c58aabd320d1de70567ebb793e0",
+      "consolidated_sha256": "9f2e835ffa0d812e437dd6c31430316412ca8c58aabd320d1de70567ebb793e0"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_preflight.py",
+      "source_path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_preflight.py",
+      "source_sha256": "fcb5878750c9cc751eda57e44e075e4b268787229f9c5e14b98439664ed0c8f9",
+      "consolidated_sha256": "79b065254956eadad7b79c62ecc2b9a7f76a788f28869eef18ba0e3aa1eda6ee"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_update_check.py",
+      "source_path": "experiments/grug/belay_tpu/belay_ckpt1_tpu_update_check.py",
+      "source_sha256": "1eb7299139d7f62648c108f7b7e09952d1b32f33bed123cc7ae21169836bb396",
+      "consolidated_sha256": "9db0ee54d67dbf381569eb3eb0f60e30366d19caf788c2026d413b60b2e1ac71"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/capacity_layout.py",
+      "source_path": "experiments/grug/belay_tpu/capacity_layout.py",
+      "source_sha256": "01c0ef426215c392c9cefca1cb0447dd94cd3a7de39253e1c2991c341eeda942",
+      "consolidated_sha256": "01c0ef426215c392c9cefca1cb0447dd94cd3a7de39253e1c2991c341eeda942"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/causal_attention.py",
+      "source_path": "experiments/grug/belay_tpu/causal_attention.py",
+      "source_sha256": "9d998cb3c86aa999624dfc5f72905b350dadc599bbe2161027acd9485b1ce562",
+      "consolidated_sha256": "9d998cb3c86aa999624dfc5f72905b350dadc599bbe2161027acd9485b1ce562"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/expert_collectives.py",
+      "source_path": "experiments/grug/belay_tpu/expert_collectives.py",
+      "source_sha256": "ab8450041f7fc813b8b7854adc565716189c9dcd54c3970235070e0cff5df2a6",
+      "consolidated_sha256": "ab8450041f7fc813b8b7854adc565716189c9dcd54c3970235070e0cff5df2a6"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/expert_gradient_adapter.py",
+      "source_path": "experiments/grug/belay_tpu/expert_gradient_adapter.py",
+      "source_sha256": "a8661e0be0ca8685c1c28e030e0223683385f31be2c263802d4124e6b2381d52",
+      "consolidated_sha256": "a8661e0be0ca8685c1c28e030e0223683385f31be2c263802d4124e6b2381d52"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/expert_gradient_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/expert_gradient_tpu.py",
+      "source_sha256": "306a6d42338230e7b6e98dc0e47b65b78532b7cd3296baac3883ebe8df998337",
+      "consolidated_sha256": "306a6d42338230e7b6e98dc0e47b65b78532b7cd3296baac3883ebe8df998337"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/gather_layout.py",
+      "source_path": "experiments/grug/belay_tpu/gather_layout.py",
+      "source_sha256": "132860b3d5d5a1424344b22d7f16ff7e30905997a618cbc8d8dc5b91020cf4c9",
+      "consolidated_sha256": "132860b3d5d5a1424344b22d7f16ff7e30905997a618cbc8d8dc5b91020cf4c9"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/gating.py",
+      "source_path": "experiments/grug/belay_tpu/gating.py",
+      "source_sha256": "a3c86fc64ffe4f3d3e2641c0cc841619575e9b3d54a9749ff739dc544e341444",
+      "consolidated_sha256": "7f0639ba02cc994df4e14955f30896580215edd5ce920653dbbf1d09aa566366"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/grugmuon_stacked.py",
+      "source_path": "experiments/grug/belay_tpu/grugmuon_stacked.py",
+      "source_sha256": "fe4125c43b1916e077429d089381c14fca6006d3c1777ff48f648144842601d3",
+      "consolidated_sha256": "5661efd8c78f8b2b5bae68d545302cf333d50d85821f373b86a9e32bde887d90"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/heuristic.py",
+      "source_path": "experiments/grug/belay_tpu/heuristic.py",
+      "source_sha256": "10ca7af82b2eefe6670f57f1c748f9b291d518ec4dc9dc93a1a6d71a6c9a9ab1",
+      "consolidated_sha256": "10ca7af82b2eefe6670f57f1c748f9b291d518ec4dc9dc93a1a6d71a6c9a9ab1"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/host_stall.py",
+      "source_path": "experiments/grug/belay_tpu/host_stall.py",
+      "source_sha256": "7d4eae7921908cb4e09b4e29404bd9a95dc1d47c6bfae742e766827b8f995571",
+      "consolidated_sha256": "447b80cfcb51f979396cc7dcd489da2635828dcfd286a67a21f86b5940bd907b"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/inkling_fused.py",
+      "source_path": "experiments/grug/belay_tpu/inkling_fused.py",
+      "source_sha256": "3af2fc97539ea9ce71ceac5f4cd76a196cc57cc60a4d1a559fb794f6d7806803",
+      "consolidated_sha256": "3af2fc97539ea9ce71ceac5f4cd76a196cc57cc60a4d1a559fb794f6d7806803"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/inkling_pallas.py",
+      "source_path": "experiments/grug/belay_tpu/inkling_pallas.py",
+      "source_sha256": "6530a339ace6fcd358362b0543985538812a7f24201b6d4476e3f1cd0e3b9b86",
+      "consolidated_sha256": "6530a339ace6fcd358362b0543985538812a7f24201b6d4476e3f1cd0e3b9b86"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/inkling_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/inkling_tpu.py",
+      "source_sha256": "0dc9f16958317d4d30ddad9ab724f27624c0c181af53f15826437ac83c0ad951",
+      "consolidated_sha256": "0dc9f16958317d4d30ddad9ab724f27624c0c181af53f15826437ac83c0ad951"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_chunk_prep.py",
+      "source_path": "experiments/grug/belay_tpu/kda_chunk_prep.py",
+      "source_sha256": "7a58412638c74592554c329cce75615e5131b20cafff5c0508acf8990c5bfdce",
+      "consolidated_sha256": "7a58412638c74592554c329cce75615e5131b20cafff5c0508acf8990c5bfdce"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_fused_prep_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_fused_prep_tpu.py",
+      "source_sha256": "fe233e4d502c4583aee88746e6620a7ced285ffd321574a1f456ef21a393817c",
+      "consolidated_sha256": "fe233e4d502c4583aee88746e6620a7ced285ffd321574a1f456ef21a393817c"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_fused_state_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_fused_state_tpu.py",
+      "source_sha256": "84c95c4130cd9b223f2b7291ad41f121a6429e6fbcc44c9f1590dc27a4d14750",
+      "consolidated_sha256": "84c95c4130cd9b223f2b7291ad41f121a6429e6fbcc44c9f1590dc27a4d14750"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_state_tiled_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_state_tiled_tpu.py",
+      "source_sha256": "4db9ca959471aa5578a189d9fa50db5177106078e210815d541769db39c8f3fc",
+      "consolidated_sha256": "4db9ca959471aa5578a189d9fa50db5177106078e210815d541769db39c8f3fc"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_state_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_state_tpu.py",
+      "source_sha256": "17a9bde11a806b2e8853526a2f56a41852f8e5ccb98cb0c39060ff2695df31a3",
+      "consolidated_sha256": "17a9bde11a806b2e8853526a2f56a41852f8e5ccb98cb0c39060ff2695df31a3"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_tpu.py",
+      "source_sha256": "0fe30657017251458bf681d262b0d419ec5a54701fa56dff47b0fc116dbed0c5",
+      "consolidated_sha256": "0fe30657017251458bf681d262b0d419ec5a54701fa56dff47b0fc116dbed0c5"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kda_triangular_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/kda_triangular_tpu.py",
+      "source_sha256": "230d6906adc05a9ea79bae39380214123c0ad65f25d5b8763bb09a7c59fd2488",
+      "consolidated_sha256": "230d6906adc05a9ea79bae39380214123c0ad65f25d5b8763bb09a7c59fd2488"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/kernel_check.py",
+      "source_path": "experiments/grug/belay_tpu/kernel_check.py",
+      "source_sha256": "fde42908f72654ae407a760ce1ee7f5b7244fc0218cd441656743d6f94912c99",
+      "consolidated_sha256": "ed3321ad1aab84ff1955e1864a36b8382d908e0c797fd207b6ef88c24bdc112f"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/key_offset.py",
+      "source_path": "experiments/grug/belay_tpu/key_offset.py",
+      "source_sha256": "4e73621ca0e1871eb0a22c0b45ce3d321e62ae68de00d4fe66f28576eb79fade",
+      "consolidated_sha256": "4e73621ca0e1871eb0a22c0b45ce3d321e62ae68de00d4fe66f28576eb79fade"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/launch.py",
+      "source_path": "experiments/grug/belay_tpu/launch.py",
+      "source_sha256": "a37e9f9f12f6599c9d63b2a93a06ae0e3f8bbf5036c1557f2446d95921a318cd",
+      "consolidated_sha256": "234dca3c1e763a89011b3e611b598dc3984b66cf4af1bd689eead043a6132407"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/library_kernels.py",
+      "source_path": "experiments/grug/belay_tpu/library_kernels.py",
+      "source_sha256": "c4bcaf8662771b2e42a8cb13b8f7e287878c18942e0d8ce0dddba5fdcf16f38d",
+      "consolidated_sha256": "c4bcaf8662771b2e42a8cb13b8f7e287878c18942e0d8ce0dddba5fdcf16f38d"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/local_experts.py",
+      "source_path": "experiments/grug/belay_tpu/local_experts.py",
+      "source_sha256": "b6b24d564449e66674852becc5d16d1e031510aadce9251afb7effc038d7bf12",
+      "consolidated_sha256": "b6b24d564449e66674852becc5d16d1e031510aadce9251afb7effc038d7bf12"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/local_movement.py",
+      "source_path": "experiments/grug/belay_tpu/local_movement.py",
+      "source_sha256": "4dd18e9e6d56dc25fef91cc3c37b75ecb020bb6e6e7e281f91991c512bd6f006",
+      "consolidated_sha256": "4dd18e9e6d56dc25fef91cc3c37b75ecb020bb6e6e7e281f91991c512bd6f006"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/model.py",
+      "source_path": "experiments/grug/belay_tpu/model.py",
+      "source_sha256": "a289a84c1d0bb9b95f25c7a60bab7b17ebae0f596026709145fd384c657afb24",
+      "consolidated_sha256": "8c30a16c433f99d3accc5f422560af92b5e0386f4620a6765622e6c0d706170c"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/operator_check.py",
+      "source_path": "experiments/grug/belay_tpu/operator_check.py",
+      "source_sha256": "0c63def6c932b02a879ebb0eb66e123d0e94e7535c038aa0ca9b98608f3b27ee",
+      "consolidated_sha256": "feed32da612df9e41ae3915f77ea6480962759b002ae57ec16f559d6edd1e16f"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/optimizer.py",
+      "source_path": "experiments/grug/belay_tpu/optimizer.py",
+      "source_sha256": "1f23d8d17981681b5a15d930aac07e242d2880809d36dc3eb3428e3ec3cda430",
+      "consolidated_sha256": "64c2d7d48c6681fe0d8195fd090b931655b032fc4defcbc32a47fc576ecbfbc3"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/packed_kda_check.py",
+      "source_path": "experiments/grug/belay_tpu/packed_kda_check.py",
+      "source_sha256": "455262e791e15d0e8d94b2a3d354ecefe04bd460d1c75951255a4a0c04baec56",
+      "consolidated_sha256": "455262e791e15d0e8d94b2a3d354ecefe04bd460d1c75951255a4a0c04baec56"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/qb_balancing.py",
+      "source_path": "experiments/grug/belay_tpu/qb_balancing.py",
+      "source_sha256": "12d231af747a33a2862af6aa2d4644f658d9caf4301489a9f44fc51d53881e86",
+      "consolidated_sha256": "12d231af747a33a2862af6aa2d4644f658d9caf4301489a9f44fc51d53881e86"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/qb_hist_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/qb_hist_tpu.py",
+      "source_sha256": "a2cb7ff1d3f114870dd64d1acb49a143aaca5d3ddf641e6151b1f0c1cd458230",
+      "consolidated_sha256": "a2cb7ff1d3f114870dd64d1acb49a143aaca5d3ddf641e6151b1f0c1cd458230"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/router_metrics.py",
+      "source_path": "experiments/grug/belay_tpu/router_metrics.py",
+      "source_sha256": "f763d36ccd3a9bfc4a2e69f00c9a69428290b98852c47cfa1191e7f22b97da4d",
+      "consolidated_sha256": "f763d36ccd3a9bfc4a2e69f00c9a69428290b98852c47cfa1191e7f22b97da4d"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/router_soft_select.py",
+      "source_path": "experiments/grug/belay_tpu/router_soft_select.py",
+      "source_sha256": "999ead11679cf577a9f8e5d4456e7e0f0b9576476b3d879723ef814b3833d7a3",
+      "consolidated_sha256": "999ead11679cf577a9f8e5d4456e7e0f0b9576476b3d879723ef814b3833d7a3"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/routing_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/routing_tpu.py",
+      "source_sha256": "887c52538f39d5ad512105167b8b7720e1cb32a2658a988d61bb05e1e856218f",
+      "consolidated_sha256": "95b897b6ddd8347556c9389478578322c2ff47719e20f5b9bd569ca2a3586a5e"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/row_partitioned_gmm.py",
+      "source_path": "experiments/grug/belay_tpu/row_partitioned_gmm.py",
+      "source_sha256": "bda0d3ad50971f3ca4d876272f7afbedb425d6d83c84f2b8c63a36d5cddd54ff",
+      "consolidated_sha256": "bda0d3ad50971f3ca4d876272f7afbedb425d6d83c84f2b8c63a36d5cddd54ff"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/run_diagnostic_phase.py",
+      "source_path": "experiments/grug/belay_tpu/run_diagnostic_phase.py",
+      "source_sha256": "4af1963e23276736516d8a92d5917f8788ed11a0ea240721136b4fac63835303",
+      "consolidated_sha256": "4af1963e23276736516d8a92d5917f8788ed11a0ea240721136b4fac63835303"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/streaming_combine.py",
+      "source_path": "experiments/grug/belay_tpu/streaming_combine.py",
+      "source_sha256": "8dcd9ab544cb2871c7763fe89376b3e4cedda53589a266a4c8e775cc026ed09c",
+      "consolidated_sha256": "8dcd9ab544cb2871c7763fe89376b3e4cedda53589a266a4c8e775cc026ed09c"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/streaming_combine_check.py",
+      "source_path": "experiments/grug/belay_tpu/streaming_combine_check.py",
+      "source_sha256": "612ace38eebac9c9ac056226e9459d16a03c0a15ee02415c833cda3c6938c14f",
+      "consolidated_sha256": "612ace38eebac9c9ac056226e9459d16a03c0a15ee02415c833cda3c6938c14f"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_capacity_layout.py",
+      "source_path": "experiments/grug/belay_tpu/test_capacity_layout.py",
+      "source_sha256": "7fd77f4fab73dfbb2f74ad945fbdd1afd4702754de1148439c6d89b11842d738",
+      "consolidated_sha256": "7fd77f4fab73dfbb2f74ad945fbdd1afd4702754de1148439c6d89b11842d738"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_causal_attention.py",
+      "source_path": "experiments/grug/belay_tpu/test_causal_attention.py",
+      "source_sha256": "9f4c5a3e97f71d0a28d6920f39f5458d16cf76b6c2fd1ab8c85e6ac0b95435ea",
+      "consolidated_sha256": "9f4c5a3e97f71d0a28d6920f39f5458d16cf76b6c2fd1ab8c85e6ac0b95435ea"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_expert_collectives.py",
+      "source_path": "experiments/grug/belay_tpu/test_expert_collectives.py",
+      "source_sha256": "70c1daab7148463993638fbeb7a684389f348cc67c6248acca0355a2ea62a27c",
+      "consolidated_sha256": "70c1daab7148463993638fbeb7a684389f348cc67c6248acca0355a2ea62a27c"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_expert_owner_sum.py",
+      "source_path": "experiments/grug/belay_tpu/test_expert_owner_sum.py",
+      "source_sha256": "291a4380ff6a741fde558c20420c09e65e32b895d49c96731bd92bebeebdf104",
+      "consolidated_sha256": "291a4380ff6a741fde558c20420c09e65e32b895d49c96731bd92bebeebdf104"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_kda_chunk_prep.py",
+      "source_path": "experiments/grug/belay_tpu/test_kda_chunk_prep.py",
+      "source_sha256": "5398450aee13e5ab39f3dcdfb5c9ae0bd45b2c8afe2441024a77eec7559ebbe0",
+      "consolidated_sha256": "5398450aee13e5ab39f3dcdfb5c9ae0bd45b2c8afe2441024a77eec7559ebbe0"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_kda_local.py",
+      "source_path": "experiments/grug/belay_tpu/test_kda_local.py",
+      "source_sha256": "3add69ddcb3d5b38acc745dbf24bf89859b96a23137e86a12c95402f9229ab16",
+      "consolidated_sha256": "3add69ddcb3d5b38acc745dbf24bf89859b96a23137e86a12c95402f9229ab16"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_kda_saved_solve.py",
+      "source_path": "experiments/grug/belay_tpu/test_kda_saved_solve.py",
+      "source_sha256": "bee0867748b5a38ba53eb3121e8fbb4999e4b28b09e8b38795ca9ecdd0a2979c",
+      "consolidated_sha256": "bee0867748b5a38ba53eb3121e8fbb4999e4b28b09e8b38795ca9ecdd0a2979c"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_kda_state_tiled_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/test_kda_state_tiled_tpu.py",
+      "source_sha256": "93d8ec376ef0ab712269fd092a6fd5e8b7c23e74d7f9a233808dc613c14aff6b",
+      "consolidated_sha256": "30316436e8ece74fab0910cbd0cab7ab472d039fdc67e3e02973d7a47a4ceeb6"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_local_experts.py",
+      "source_path": "tests/grug/test_belay_local_experts.py",
+      "source_sha256": "7c41b39b66ce2b15df3772cdcc8df9eef0d472d229464f0356b455491e4f21e3",
+      "consolidated_sha256": "7c41b39b66ce2b15df3772cdcc8df9eef0d472d229464f0356b455491e4f21e3"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_mla_num_heads.py",
+      "source_path": "experiments/grug/belay_tpu/test_mla_num_heads.py",
+      "source_sha256": "47c0fc4ca837d08b2f65271908733b715855c8a80a760b0953da6fd1ad4ac92b",
+      "consolidated_sha256": "47c0fc4ca837d08b2f65271908733b715855c8a80a760b0953da6fd1ad4ac92b"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_qb_hist_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/test_qb_hist_tpu.py",
+      "source_sha256": "dbbb82049268bb2d56002e6183fa4ad9e9624d773ce8eee3750d7c06107c6f0a",
+      "consolidated_sha256": "dbbb82049268bb2d56002e6183fa4ad9e9624d773ce8eee3750d7c06107c6f0a"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_routing_tpu.py",
+      "source_path": "experiments/grug/belay_tpu/test_routing_tpu.py",
+      "source_sha256": "7abc7e9282af572aa67ae8029a2971dac46d8dedcf907764e69092b172cfdbd1",
+      "consolidated_sha256": "7abc7e9282af572aa67ae8029a2971dac46d8dedcf907764e69092b172cfdbd1"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_row_partitioned_gmm.py",
+      "source_path": "experiments/grug/belay_tpu/test_row_partitioned_gmm.py",
+      "source_sha256": "d109f15eb9aebfdfc80c4918fc2552a02afce57cf73a241c8bba5d4587e9b78b",
+      "consolidated_sha256": "d109f15eb9aebfdfc80c4918fc2552a02afce57cf73a241c8bba5d4587e9b78b"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_streaming_combine.py",
+      "source_path": "experiments/grug/belay_tpu/test_streaming_combine.py",
+      "source_sha256": "6287c0aaed177f6ba8e7c5faa43631e16a409660af3a6e7f808f9b2c5fe7e3fb",
+      "consolidated_sha256": "6287c0aaed177f6ba8e7c5faa43631e16a409660af3a6e7f808f9b2c5fe7e3fb"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_tpu_kernels.py",
+      "source_path": "experiments/grug/belay_tpu/test_tpu_kernels.py",
+      "source_sha256": "1741d64856fc368b86cfe652b87133cd68049c46f597a674aba90c143448bdf5",
+      "consolidated_sha256": "1741d64856fc368b86cfe652b87133cd68049c46f597a674aba90c143448bdf5"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/test_useful_mfu.py",
+      "source_path": "experiments/grug/belay_tpu/test_useful_mfu.py",
+      "source_sha256": "f99c363a91a492deea66033f0240639870897978339c2afe9925b03939fda5ba",
+      "consolidated_sha256": "f99c363a91a492deea66033f0240639870897978339c2afe9925b03939fda5ba"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/tpu_kernel_profiles.py",
+      "source_path": "experiments/grug/belay_tpu/tpu_kernel_profiles.py",
+      "source_sha256": "0293cd040c74948ea7b15157dca95369fb3d1eb33e57328914ece1baa294cdfe",
+      "consolidated_sha256": "93457c85dc15809300f20bfa348a742cb1c2de0a33b97604695315755290e5f4"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/trace_capture.py",
+      "source_path": "experiments/grug/belay_tpu/trace_capture.py",
+      "source_sha256": "85d54db454ed10b92eca7fecdf9c4a6c01b2fcfc61c9a95fedaf8bd0ea116189",
+      "consolidated_sha256": "85d54db454ed10b92eca7fecdf9c4a6c01b2fcfc61c9a95fedaf8bd0ea116189"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/train.py",
+      "source_path": "experiments/grug/belay_tpu/train.py",
+      "source_sha256": "35abe5f6dec007ce976af2d69b64c8a5a16b6d2d75d96c44792ff1c9311a416f",
+      "consolidated_sha256": "35abe5f6dec007ce976af2d69b64c8a5a16b6d2d75d96c44792ff1c9311a416f"
+    },
+    {
+      "path": "experiments/grug/belay_tpu/useful_mfu.py",
+      "source_path": "experiments/grug/belay_tpu/useful_mfu.py",
+      "source_sha256": "c22d676dc1e2e82a7b8314eda3621c48e67ff023c4ea04afe1ab794589365346",
+      "consolidated_sha256": "c22d676dc1e2e82a7b8314eda3621c48e67ff023c4ea04afe1ab794589365346"
+    }
+  ]
+}

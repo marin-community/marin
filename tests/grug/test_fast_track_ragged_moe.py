@@ -134,7 +134,7 @@ def test_ragged_transport_flags_replace_conflicting_kernel_flags(transport: Ragg
     monkeypatch = runtime_env
     stray = "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=maybe"
     monkeypatch.setenv("XLA_FLAGS", f"--xla_dump_to=/tmp/hlo {stray}")
-    _apply_runtime_defaults(inline_watch_enabled=False, ragged_transport=transport)
+    _apply_runtime_defaults(inline_watch_enabled=False, ragged_transport=transport, collective_overlap_limit=None)
     flags = os.environ["XLA_FLAGS"].split()
     assert stray not in flags
     assert "--xla_dump_to=/tmp/hlo" in flags
@@ -144,5 +144,5 @@ def test_ragged_transport_flags_replace_conflicting_kernel_flags(transport: Ragg
 
 def test_pooled_wave_leaves_ragged_kernel_flags_alone(runtime_env):
     runtime_env.setenv("XLA_FLAGS", "")
-    _apply_runtime_defaults(inline_watch_enabled=False, ragged_transport=None)
+    _apply_runtime_defaults(inline_watch_enabled=False, ragged_transport=None, collective_overlap_limit=None)
     assert "ragged_all_to_all" not in os.environ["XLA_FLAGS"]
