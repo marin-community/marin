@@ -65,7 +65,7 @@ from mariner.data import (
 from mariner.design import STRATIFIED, UNIMAX, proportional, sobol_candidates, stratified, swarm_table, unimax
 from mariner.evaluate import cross_validate, heldout_metrics, selection_metrics
 from mariner.fit import fit_objective
-from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets
+from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets, order_difference, shown_values
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 PREDICTION_TOLERANCE = 1e-6
 EXACT = 0.0  # buckets in which a re-derived mixture may differ from the trained one
 EPOCHS_TOLERANCE = 1e-12  # relative: one partition and target budget give the same epochs up to floating rounding
+TASK_WEIGHT_TOLERANCE = 1e-12  # relative: one tasks table gives the same weights up to floating rounding
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket
 PREDICTION_PREFIX = "predicted_"
 DIAGNOSTICS_SUFFIX = ".diagnostics.json"
@@ -246,6 +247,30 @@ def read_fit(path: Path) -> ObjectiveFit:
         raise ValueError(f"{path} is not a fit JSON of mariner fit: it has no field {error}") from error
 
 
+def check_epochs(fit: ObjectiveFit, epochs_per_unit_weight: np.ndarray, source: str) -> None:
+    """Raise ``ValueError`` unless ``source``'s epochs per unit weight are the fit's within ``EPOCHS_TOLERANCE``."""
+    if np.allclose(epochs_per_unit_weight, fit.epochs_per_unit_weight, rtol=EPOCHS_TOLERANCE, atol=0.0):
+        return
+    ratio = np.max(np.abs(epochs_per_unit_weight / fit.epochs_per_unit_weight - 1.0))
+    raise ValueError(
+        f"the epochs per unit weight of {source} differ from the fit's by up to a relative {ratio:.3g}: the fit read"
+        " another partition or target budget"
+    )
+
+
+def check_tasks(fit: ObjectiveFit, objective: Objective) -> None:
+    """Raise ``ValueError`` unless the fit's tasks are ``objective``'s in its order, with its weights within 1e-12."""
+    tasks = tuple(task.task for task in fit.tasks)
+    if tasks != objective.tasks:
+        raise ValueError(
+            f"the fit's tasks are not those of {objective.name} in its order: {order_difference(objective.tasks, tasks)}"
+        )
+    differing = ~np.isclose(fit.weights, objective.weights, rtol=TASK_WEIGHT_TOLERANCE, atol=0.0)
+    if differing.any():
+        named = shown_values([task for task, differs in zip(tasks, differing, strict=True) if differs])
+        raise ValueError(f"the fit's weights of {named} differ from those of {objective.name}")
+
+
 def check_swarm_of_fit(fit: ObjectiveFit, swarm: Swarm) -> None:
     """Raise ``ValueError`` unless ``swarm`` has the buckets, epochs per unit weight and runs, in order, of ``fit``.
 
@@ -254,12 +279,7 @@ def check_swarm_of_fit(fit: ObjectiveFit, swarm: Swarm) -> None:
     start from runs the fit was not fitted on.
     """
     check_buckets(fit, swarm.buckets, "the swarm")
-    if not np.allclose(swarm.epochs_per_unit_weight, fit.epochs_per_unit_weight, rtol=EPOCHS_TOLERANCE, atol=0.0):
-        ratio = np.max(np.abs(swarm.epochs_per_unit_weight / fit.epochs_per_unit_weight - 1.0))
-        raise ValueError(
-            f"the swarm's epochs per unit weight differ from the fit's by up to a relative {ratio:.3g}; give the"
-            " partition and target budget that the fit read"
-        )
+    check_epochs(fit, swarm.epochs_per_unit_weight, "the swarm")
     if tuple(map(str, swarm.runs)) != tuple(fit.inner_fold_labels):
         raise ValueError("the swarm's runs are not the runs of the fit in the fit's order; give the fit's run table")
 
@@ -351,9 +371,15 @@ def run_cross_validate(args: argparse.Namespace) -> int:
 
 def run_evaluate(args: argparse.Namespace) -> int:
     fit = read_fit(args.fit)
-    # The held-out runs share the main swarm's model and data scale, so they test only a fit of that swarm.
-    if set(fit.inner_fold_labels) != set(map(str, release_swarm(args.data, MAIN_SWARM, fit.objective).runs)):
+    # The held-out runs share the main swarm's model and data scale, so they test only a fit of that swarm's runs, in
+    # any order, at its epochs per unit weight, for a released objective.
+    swarm = release_swarm(args.data, MAIN_SWARM, fit.objective)
+    if set(fit.inner_fold_labels) != set(map(str, swarm.runs)):
         raise ValueError(f"evaluate scores a fit of the main swarm ({MAIN_SWARM}), and {args.fit} fits other runs")
+    source = f"the main swarm ({MAIN_SWARM})"
+    check_buckets(fit, swarm.buckets, source)
+    check_epochs(fit, swarm.epochs_per_unit_weight, source)
+    check_tasks(fit, objective_from_tasks(release_tasks(args.data), fit.objective))
     print(json.dumps(heldout_metrics(fit, release_heldout_bank(args.data, fit.objective)), indent=2))
     return 0
 
@@ -518,7 +544,7 @@ def argument_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         metavar="FIT.json",
-        help=f"fit JSON: a fit of the main swarm ({MAIN_SWARM}) for a released objective",
+        help=f"fit JSON: a fit of the main swarm ({MAIN_SWARM}) at its target budget, for a released objective",
     )
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
     command.set_defaults(run=run_evaluate)

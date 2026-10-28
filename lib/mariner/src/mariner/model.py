@@ -22,6 +22,7 @@ import pandas as pd
 
 LOG_CLIP = 30.0  # numerical overflow guard on the linear predictor; not a modeling constant
 WEIGHT_SUM_TOLERANCE = 1e-6  # how far a mixture's weights may sum from one
+SHOWN_VALUES = 5  # distinct values an error message quotes
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -245,19 +246,31 @@ class ObjectiveFit:
         )
 
 
+def shown_values(values: Sequence[object]) -> str:
+    """The first ``SHOWN_VALUES`` of ``values`` for an error message, and how many more there are."""
+    shown = ", ".join(map(str, values[:SHOWN_VALUES]))
+    if len(values) <= SHOWN_VALUES:
+        return shown
+    return f"{shown} and {len(values) - SHOWN_VALUES} more"
+
+
+def order_difference(expected: Sequence[str], given: Sequence[str]) -> str:
+    """How the ids ``given`` differ from ``expected``: the ids they lack and add, or, with the same ids, those moved."""
+    lacks = [item for item in expected if item not in given]
+    adds = [item for item in given if item not in expected]
+    if lacks or adds:
+        return f"it lacks {shown_values(lacks) or 'none'} and adds {shown_values(adds) or 'none'}"
+    moved = [item for item, other in zip(expected, given, strict=True) if item != other]
+    return f"it orders {shown_values(moved)} differently"
+
+
 def check_buckets(fit: ObjectiveFit, buckets: Sequence[str], source: str) -> None:
     """Raise ``ValueError`` unless ``buckets``, those of ``source``, are the fit's buckets in the fit's order.
 
     The message names the fit's buckets that ``source`` lacks and the buckets it adds, or, when it has the fit's
-    buckets, those it orders differently.
+    buckets, those it orders differently (``order_difference``).
     """
     if tuple(buckets) == fit.buckets:
         return
-    lacks = [bucket for bucket in fit.buckets if bucket not in buckets]
-    adds = [bucket for bucket in buckets if bucket not in fit.buckets]
-    if lacks or adds:
-        detail = f"it lacks {', '.join(lacks) or 'none'} and adds {', '.join(adds) or 'none'}"
-    else:
-        moved = [bucket for bucket, other in zip(fit.buckets, buckets, strict=True) if bucket != other]
-        detail = f"it orders {', '.join(moved)} differently"
+    detail = order_difference(fit.buckets, buckets)
     raise ValueError(f"the buckets of {source} are not the fit's buckets in the fit's order: {detail}")

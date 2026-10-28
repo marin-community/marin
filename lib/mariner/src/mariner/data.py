@@ -25,7 +25,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, HeldoutBank, Objective, Swarm
+from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, HeldoutBank, Objective, Swarm, shown_values
 from mariner.olmix import LogLinearLaw
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
@@ -87,7 +87,6 @@ TASKS_TABLE = "tasks"
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
-SHOWN_VALUES = 5  # distinct values an error message quotes
 
 MANIFEST = "MANIFEST.json"
 COEFFICIENT_PREFIX = "coef__"
@@ -137,14 +136,6 @@ def read_csv(path: Path) -> pd.DataFrame:
     small magnitudes. As text, bucket ids such as ``00`` and numeric observation ids keep their spelling.
     """
     return pd.read_csv(path, float_precision="round_trip", dtype=dict.fromkeys(IDENTIFIER_COLUMNS, str))
-
-
-def shown_values(values: Sequence[object]) -> str:
-    """The first ``SHOWN_VALUES`` of ``values`` for an error message, and how many more there are."""
-    shown = ", ".join(map(str, values[:SHOWN_VALUES]))
-    if len(values) <= SHOWN_VALUES:
-        return shown
-    return f"{shown} and {len(values) - SHOWN_VALUES} more"
 
 
 def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> None:

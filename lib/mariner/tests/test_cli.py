@@ -186,6 +186,25 @@ def test_cli_optimize_refuses_tables_at_another_target_budget(tmp_path, syntheti
     assert not out.exists()
 
 
+def test_cli_evaluate_scores_a_fit_only_at_the_main_swarm_s_target_budget(tmp_path, release_snapshot, capsys):
+    # The miniature snapshot's main swarm as one's own tables: its pools of 400, 200 and 100 tokens give its 2, 4 and
+    # 8 epochs per unit weight at a target budget of 800 tokens.
+    data = release_snapshot / "data"
+    own = ["--runs", str(data / f"swarm_{MAIN_SWARM}" / f"swarm_{MAIN_SWARM}.csv")]
+    own += ["--partition", str(data / "partition" / "partition.csv"), "--tasks", str(data / "tasks" / "tasks.csv")]
+    fits = {budget: tmp_path / f"fit_{budget}.json" for budget in (800, 8000)}
+    for budget, path in fits.items():
+        assert main(["fit", *own, "--target-budget", str(budget), "--objective", "obe_easy", "--out", str(path)]) == 0
+    capsys.readouterr()
+    assert main(["evaluate", "--fit", str(fits[800]), "--data", str(release_snapshot)]) == 0
+    assert json.loads(capsys.readouterr().out)["rows"] == 2  # the held-out exposures e0 and e1
+    # At ten times the budget, the fit predicts each mixture at ten times the epochs that the held-out runs trained.
+    assert main(["evaluate", "--fit", str(fits[8000]), "--data", str(release_snapshot)]) == INPUT_ERROR_STATUS
+    captured = capsys.readouterr()
+    error = captured.err.splitlines()
+    assert not captured.out and len(error) == 1 and error[0].startswith("mariner evaluate: error:")
+
+
 def test_cli_predict_names_missing_buckets(tmp_path, synthetic_problem, capsys):
     swarm, _, _, truth = synthetic_problem
     fit_path = tmp_path / "fit.json"
