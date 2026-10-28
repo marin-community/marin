@@ -11,7 +11,7 @@ import pytest
 from mariner.data import MAIN_SWARM, objective_from_tasks, read_table, release_anchors, release_swarm, release_tasks
 from mariner.evaluate import OUTER_FOLDS, cross_validate, heldout_metrics, outer_splits, selection_metrics
 from mariner.fit import final_inner_fold_labels
-from mariner.model import HeldoutBank
+from mariner.model import HeldoutBank, Swarm
 
 # The paper's fold labels of the main swarm's fit rows, by observation id: final_inner, the final fit's inner fold;
 # outer_r{r}, the outer fold that tests the run in repeat r; inner_r{r}_f{f}, the inner fold that validates it within
@@ -85,6 +85,26 @@ def test_outer_splits_never_validate_calibration_rows(synthetic_problem):
     for repeat in range(2):
         tested = np.concatenate([split.test for split in splits if split.repeat == repeat])
         np.testing.assert_array_equal(np.sort(tested), rows[1:])
+
+
+def test_outer_splits_reject_an_inner_fold_of_calibration_runs_only():
+    # Fifteen calibration runs at one corner mixture, three runs near it and sixty near the centre: the corner's block
+    # tests the three runs, and the split that tests them leaves the calibration runs an inner block of their own.
+    rng = np.random.default_rng(0)
+    corner = np.tile([0.97, 0.01, 0.01, 0.01], (15, 1))
+    near = rng.dirichlet([291.0, 3.0, 3.0, 3.0], size=3)
+    weights = np.vstack([corner, near, rng.dirichlet(np.full(4, 5.0), size=60)])
+    swarm = Swarm(
+        runs=tuple(f"run_{row:02d}" for row in range(len(weights))),
+        buckets=("b0", "b1", "b2", "b3"),
+        weights=weights,
+        epochs_per_unit_weight=np.ones(4),
+        pool_fractions=np.ones_like(weights),
+        outcomes=pd.DataFrame({"t0": np.ones(len(weights))}),
+        calibration=np.arange(len(weights)) < len(corner),
+    )
+    with pytest.raises(ValueError, match=r"inner fold \d of outer fold \d of repeat 0 validates no run"):
+        outer_splits(swarm, repeats=1)
 
 
 def test_selection_metrics_on_a_known_ranking():

@@ -49,8 +49,9 @@ class Split:
 def outer_splits(swarm: Swarm, repeats: int) -> tuple[Split, ...]:
     """The paper's outer folds of ``swarm`` for ``repeats`` repeats, in repeat then fold order.
 
-    The calibration runs train in every split, and no split tests or validates them. Raises ``ValueError`` when a
-    fold would test no run because its mixture block holds only calibration runs.
+    The calibration runs train in every split, and no split tests or validates them. Raises ``ValueError`` when an
+    outer fold would test no run, or an inner fold of a split validate no run, because its mixture block holds only
+    calibration runs.
     """
     if repeats < 1:
         raise ValueError(f"cross-validation needs at least one repeat, got {repeats}")
@@ -75,6 +76,12 @@ def outer_splits(swarm: Swarm, repeats: int) -> tuple[Split, ...]:
                 ),
                 np.flatnonzero(swarm.calibration[train]),
             )
+            for index in range(INNER_FOLDS):
+                if not np.any(inner == index):
+                    raise ValueError(
+                        f"inner fold {index} of outer fold {fold} of repeat {repeat} validates no run: its mixture"
+                        " block holds only calibration runs"
+                    )
             splits.append(Split(repeat, fold, train, rows[outer == fold], folds_from_labels(train, inner, INNER_FOLDS)))
     return tuple(splits)
 
