@@ -9,9 +9,10 @@ summing to one), the fraction of each bucket's pool it drew from ``pf__<bucket_i
 labels the proportional mixture's fit run ``baseline_proportional`` (``run_label``) and gives the proportional repeats,
 which anchor the floors and must train that run's mixture, the ``design_kind`` ``repeat``. A partition table lists
 each ``bucket_id`` with its ``pool_tokens`` (positive), and a tasks table each ``task_id`` with its ``objective`` and
-``aggregate_weight`` (positive). Identifier columns are read as text, and no row may leave a required one blank.
-Observation ids and bucket ids are unique, and so are task ids within an objective. A snapshot of the released dataset
-is read through its ``MANIFEST.json``, which gives each table's file and format.
+``aggregate_weight`` (positive). Identifier columns are read as text, and no row may leave a required one blank
+(missing, empty or only whitespace). Observation ids and bucket ids are unique, and so are task ids within an
+objective. A snapshot of the released dataset is read through its ``MANIFEST.json``, which gives each table's file and
+format.
 """
 
 from __future__ import annotations
@@ -146,13 +147,23 @@ def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> N
         raise ValueError(f"the {name} table has no column {', '.join(missing)}")
 
 
+def blank_identifiers(identifiers: pd.Series) -> pd.Series:
+    """Which of the ``identifiers`` are missing, empty or only whitespace."""
+    return identifiers.isna() | (identifiers.astype(str).str.strip() == "")
+
+
 def require_identifiers(table: pd.DataFrame, columns: Sequence[str], name: str) -> None:
-    """Raise ``ValueError`` naming the identifier ``columns`` of ``table`` (called ``name``) that a row leaves blank."""
-    blanks = table[list(columns)].isna().sum()
-    blanks = blanks[blanks > 0]
-    if len(blanks):
-        counts = ", ".join(f"{column} ({count} of {len(table)} rows)" for column, count in blanks.items())
-        raise ValueError(f"the {name} table has rows without {counts}; {MISSING_NOTE}")
+    """Raise ``ValueError`` naming the identifier ``columns`` of ``table`` (called ``name``) that a row leaves blank.
+
+    A blank identifier is missing, empty or only whitespace.
+    """
+    blanks = {column: int(blank_identifiers(table[column]).sum()) for column in columns}
+    counts = ", ".join(f"{column} ({count} of {len(table)} rows)" for column, count in blanks.items() if count)
+    if counts:
+        raise ValueError(
+            f"the {name} table has rows without {counts}; an identifier must not be empty or whitespace, and"
+            f" {MISSING_NOTE}"
+        )
 
 
 def require_unique(ids: pd.Series, where: str) -> None:
