@@ -7,7 +7,7 @@ import json
 import socket
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from fray.client import JobHandle
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
+from marin.evaluation.runner import _inference_session
 from marin.execution.lazy import lower
 from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.broker import InferenceBroker
@@ -240,6 +241,83 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     assert exc_info.value.jobs == (job,)
     assert job.terminated
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("failed_cleanup", ["direct_worker", "broker_worker", "broker", "partial_submission"])
+def test_eval_inference_failed_cleanup_prevents_replacement(monkeypatch, failed_cleanup) -> None:
+    active = set()
+    jobs = []
+    groups = []
+
+    class FakeJob:
+        def __init__(self):
+            self.job_id = f"/tester/worker-{len(jobs)}"
+            active.add(self.job_id)
+
+        def status(self):
+            return JobStatus.RUNNING
+
+        def terminate(self):
+            if self is jobs[0] and failed_cleanup != "broker":
+                raise TimeoutError("Cancellation RPC unavailable")
+            active.remove(self.job_id)
+
+    class FakeActorGroup:
+        def __init__(self):
+            self.job_id = f"/tester/broker-{len(groups)}"
+            active.add(self.job_id)
+
+        def wait_ready(self, **kwargs):
+            return [InferenceBroker(request_lease_timeout_seconds=240)]
+
+        def shutdown(self):
+            if failed_cleanup == "broker":
+                raise TimeoutError("Broker cancellation RPC unavailable")
+            active.remove(self.job_id)
+
+    class FakeClient:
+        def submit(self, request):
+            if failed_cleanup == "partial_submission" and len(jobs) == 2:
+                raise TimeoutError("Worker submission RPC unavailable")
+            job = FakeJob()
+            jobs.append(job)
+            return job
+
+        def create_actor_group(self, *args, **kwargs):
+            group = FakeActorGroup()
+            groups.append(group)
+            return group
+
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace(advertise_host="127.0.0.1"))
+    monkeypatch.setattr(iris_module, "current_client", FakeClient)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=lambda _name: [],
+                list_tasks=lambda _job: [SimpleNamespace(state=TaskState.RUNNING)],
+            )
+        ),
+    )
+    config = RemoteInferenceConfig(
+        model=ServedModelConfig(weights="gpt2"),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_tpu("v6e-4"),
+            worker_environment=create_environment(extras=["tpu"]),
+            endpoint_ready_timeout_seconds=1e-9,
+            max_retries_failure=1,
+        ),
+        instances=1 if failed_cleanup == "direct_worker" else 3 if failed_cleanup == "partial_submission" else 2,
+    )
+
+    with ExitStack() as stack, pytest.raises((RuntimeError, TimeoutError)):
+        _inference_session(stack, config)
+
+    assert len(jobs) == (1 if failed_cleanup == "direct_worker" else 2)
+    assert len(groups) == (0 if failed_cleanup == "direct_worker" else 1)
+    assert active == {"/tester/broker-0" if failed_cleanup == "broker" else "/tester/worker-0"}
 
 
 @dataclass
