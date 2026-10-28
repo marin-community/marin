@@ -47,18 +47,18 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize, minimize_scalar, nnls
+from scipy.optimize import minimize
 from scipy.special import xlogy
 from scipy.stats import spearmanr
 
-from mariner.model import Anchor, Head, Objective, ObjectiveFit, Swarm, TaskFit, design_matrix
+from mariner.fit import final_inner_folds, fit_objective
+from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
 
 # ---------------------------------------------------------------------------------------------------------------
 # Constants of the frozen procedure (every value is the one the paper's runs used)
@@ -69,31 +69,10 @@ DATA = HERE / "data"
 
 EXPOSURE_REFERENCE_TOKENS = 6_325_183_647_689  # D_tgt: the production budget whose repetition the proxies reproduce
 CALIBRATION_MARKER = "baseline_proportional"  # swarm run(s) that anchor the floors; never scored out of fold
-CALIBRATION_LABEL = -1
 
-RHO_GRID = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0)
-KAPPA_GRID = (0.3, 0.5, 0.7, 1.0)
-TAU_GRID = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-GAMMA_GRID = (0.0, 1e-3, 1e-2, 0.1, 1.0)
-SHAPES = tuple({"rho": rho, "kappa": kappa, "tau": tau} for rho in RHO_GRID for kappa in KAPPA_GRID for tau in TAU_GRID)
 
-NU_PROVISIONAL = 2.5  # the multiplier at which the shape and ridge are scored
-NU_BOUNDS = (1.0, 6.0)
-NU_SEARCH_EVALUATIONS = 24
-NU_SEARCH_XATOL = 0.02
-FLAT_PROFILE_FRACTION = 0.1
-NU_DEFAULT = 1.5
-NOISE_MARGIN_SDS = 3.0
-INFINITE_CV_PENALTY = 1e3
-
-INNER_FOLDS = 3
 OUTER_FOLDS = 5
-FOLD_SEED = 20_260_902
-HELDOUT_INNER_SEED = FOLD_SEED + 90_000
-KMEANS_RESTARTS = 50
 
-DEFICIT_FLOOR = 1e-9
-NNLS_MAXITER_FACTOR = 200
 ACTIVE_TOLERANCE = 1e-10
 
 START_SEED = 20_260_906
@@ -156,200 +135,6 @@ def read_anchors(path: Path, objective: str) -> dict[str, Anchor]:
     table = pd.read_csv(path)
     table = table[table["objective"].eq(objective)]
     return {str(r.component): Anchor(float(r.proportional_bpb), float(r.repeat_sd)) for r in table.itertuples()}
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Folds: mixture-blocked k-means on sqrt(weights); calibration rows pinned to training
-# ---------------------------------------------------------------------------------------------------------------
-
-Folds = tuple[tuple[np.ndarray, np.ndarray], ...]  # (train rows, validation rows) per fold
-
-
-def block_labels(weights: np.ndarray, folds: int, seed: int) -> np.ndarray:
-    """Cluster runs into mixture blocks (k-means on sqrt weights); needs scikit-learn, pinned in pyproject."""
-    from sklearn.cluster import KMeans  # noqa: PLC0415  (optional dependency: only when folds are not supplied)
-
-    labels = KMeans(n_clusters=folds, n_init=KMEANS_RESTARTS, random_state=seed).fit_predict(np.sqrt(weights))
-    if len(np.unique(labels)) != folds:
-        raise ValueError("mixture-block construction produced an empty fold")
-    return labels
-
-
-def pin_calibration(labels: np.ndarray, positions: np.ndarray) -> np.ndarray:
-    pinned = np.array(labels, copy=True)
-    pinned[positions] = CALIBRATION_LABEL
-    return pinned
-
-
-def folds_from_labels(rows: np.ndarray, labels: np.ndarray, folds: int) -> Folds:
-    return tuple((rows[labels != index], rows[labels == index]) for index in range(folds))
-
-
-def final_inner_folds(swarm: Swarm, splits: pd.DataFrame | None) -> Folds:
-    """Inner folds of the final fit on every run: from a splits table (fold -1 rows) or recomputed."""
-    rows = np.arange(len(swarm.runs))
-    if splits is not None:
-        table = splits[splits["fold"].eq(-1) & splits["repeat"].eq(0)].sort_values("row")
-        if list(table["row"]) != list(rows):
-            raise ValueError("splits table must list every run once for fold -1")
-        labels = table["inner_fold"].to_numpy(int)
-        if not set(np.unique(labels)) <= set(range(INNER_FOLDS)) | {CALIBRATION_LABEL}:
-            raise ValueError("inner fold labels must be 0..INNER_FOLDS-1 or the calibration label")
-        if np.any(labels[swarm.calibration] != CALIBRATION_LABEL):
-            raise ValueError("calibration rows must carry the calibration label (never validated)")
-        if np.any(labels[~swarm.calibration] == CALIBRATION_LABEL):
-            raise ValueError("only calibration rows may carry the calibration label")
-        if any(np.sum(labels == index) == 0 for index in range(INNER_FOLDS)):
-            raise ValueError("every inner fold must validate at least one run")
-    else:
-        labels = pin_calibration(
-            block_labels(swarm.weights, INNER_FOLDS, HELDOUT_INNER_SEED), np.flatnonzero(swarm.calibration)
-        )
-    return folds_from_labels(rows, labels, INNER_FOLDS)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Floored log-deficit head
-# ---------------------------------------------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class FloorSpec:
-    anchor: float  # NaN: the training median
-    noise_sd: float
-    nu: float
-    noise_margin_sds: float = NOISE_MARGIN_SDS
-
-
-def floor_value(response: np.ndarray, spec: FloorSpec) -> float:
-    anchor = float(np.median(response)) if math.isnan(spec.anchor) else spec.anchor
-    gap = anchor - float(np.min(response))
-    if gap <= 0.0:
-        gap = max(float(np.std(response)), 1e-3 * abs(anchor), 1e-6)
-    return anchor - max(spec.nu * gap, spec.noise_margin_sds * spec.noise_sd)
-
-
-def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, gamma: float) -> tuple[float, np.ndarray]:
-    """Centered nonnegative least squares with a free intercept and ridge rows, on the QR-reduced system."""
-    width = matrix.shape[1]
-    design_mean = matrix.mean(axis=0)
-    target_mean = float(target.mean())
-    rows = matrix - design_mean[None, :]
-    rhs = target - target_mean
-    if gamma > 0.0:
-        rows = np.vstack([rows, np.diag(np.full(width, math.sqrt(gamma)))])
-        rhs = np.concatenate([rhs, np.zeros(width)])
-    if rows.shape[0] > 2 * width:
-        orthogonal, triangular = np.linalg.qr(rows, mode="reduced")
-        rows, rhs = triangular, orthogonal.T @ rhs
-    coefficients, _residual = nnls(rows, rhs, maxiter=NNLS_MAXITER_FACTOR * width)
-    intercept = target_mean - float(design_mean @ coefficients)
-    return intercept, coefficients
-
-
-def fit_head(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorSpec) -> Head:
-    phi = floor_value(response, spec)
-    target = np.log(np.maximum(response - phi, DEFICIT_FLOOR))
-    intercept, coefficients = nonnegative_solve(matrix, target, gamma)
-    return Head(float(intercept), np.asarray(coefficients, dtype=float), phi)
-
-
-def cv_rmse(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorSpec, folds: Folds) -> float:
-    error = 0.0
-    count = 0
-    for train, validation in folds:
-        head = fit_head(matrix[train], response[train], gamma, spec)
-        prediction = head.predict(matrix[validation])
-        if not np.isfinite(prediction).all():
-            return float("inf")
-        error += float(np.sum((prediction - response[validation]) ** 2))
-        count += len(validation)
-    return math.sqrt(error / count)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Per-task fit: grid, nu search, final head
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def select_shape_and_ridge(
-    exposures: np.ndarray, response: np.ndarray, spec: FloorSpec, folds: Folds
-) -> tuple[dict[str, float], float, float]:
-    """Exhaustive inner-CV search over the shape and ridge grids; ties go to the earlier grid entry."""
-    best: tuple[float, int, int] | None = None
-    for shape_index, shape in enumerate(SHAPES):
-        matrix = design_matrix(exposures, shape)
-        for gamma_index, gamma in enumerate(GAMMA_GRID):
-            candidate = (cv_rmse(matrix, response, gamma, spec, folds), shape_index, gamma_index)
-            if best is None or candidate < best:
-                best = candidate
-    if best is None or not math.isfinite(best[0]):
-        raise ValueError("no finite inner-CV candidate")
-    score, shape_index, gamma_index = best
-    return dict(SHAPES[shape_index]), GAMMA_GRID[gamma_index], score
-
-
-def search_nu(
-    matrix: np.ndarray, response: np.ndarray, gamma: float, anchor: Anchor, folds: Folds
-) -> tuple[float, bool, float]:
-    """Bounded scalar search on log nu; flat profiles (argmin near the upper bound) get the default."""
-    low, high = NU_BOUNDS
-
-    def objective(log_nu: float) -> float:
-        spec = FloorSpec(anchor.proportional, anchor.repeat_sd, math.exp(log_nu))
-        value = cv_rmse(matrix, response, gamma, spec, folds)
-        return value if math.isfinite(value) else INFINITE_CV_PENALTY
-
-    search = minimize_scalar(
-        objective,
-        bounds=(math.log(low), math.log(high)),
-        method="bounded",
-        options={"maxiter": NU_SEARCH_EVALUATIONS, "xatol": NU_SEARCH_XATOL},
-    )
-    nu, score = float(math.exp(search.x)), float(search.fun)
-    flat = math.log(nu) >= (1 - FLAT_PROFILE_FRACTION) * math.log(high)
-    if flat:
-        nu = NU_DEFAULT
-        score = objective(math.log(nu))
-    return nu, flat, score
-
-
-def fit_task(swarm: Swarm, task: str, anchor: Anchor, folds: Folds) -> TaskFit:
-    """Fit one task on every run of the swarm; ``folds`` index the swarm's rows."""
-    exposures = swarm.exposures
-    response = swarm.outcomes[task].to_numpy(float)
-    provisional = FloorSpec(anchor.proportional, anchor.repeat_sd, NU_PROVISIONAL)
-    shape, gamma, _ = select_shape_and_ridge(exposures, response, provisional, folds)
-    matrix = design_matrix(exposures, shape)
-    nu, flat, score = search_nu(matrix, response, gamma, anchor, folds)
-    head = fit_head(matrix, response, gamma, FloorSpec(anchor.proportional, anchor.repeat_sd, nu))
-    return TaskFit(task, shape, gamma, nu, flat, score, head)
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Objective fit: every task, vectorized prediction
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def fit_objective(
-    swarm: Swarm,
-    objective: Objective,
-    anchors: dict[str, Anchor],
-    folds: Folds,
-    log: Callable[[str], None] | None = None,
-) -> ObjectiveFit:
-    tasks = []
-    for task in objective.tasks:
-        if task not in anchors:
-            raise ValueError(f"no anchor for {task}")
-        fit = fit_task(swarm, task, anchors[task], folds)
-        if log is not None:
-            log(
-                f"{task}: shape {fit.shape} gamma {fit.gamma} nu {fit.nu:.3f}"
-                f"{' (flat)' if fit.flat_profile else ''} cv {fit.inner_cv_rmse:.5f}"
-            )
-        tasks.append(fit)
-    return ObjectiveFit(objective.name, swarm.buckets, swarm.epochs_per_unit_weight, objective.weights, tuple(tasks))
 
 
 # ---------------------------------------------------------------------------------------------------------------
