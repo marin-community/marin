@@ -29,10 +29,7 @@ from taskcompendium.models import TaskSpec
 from taskforge.llm.glm_client import GlmClient, Pool
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import pipeline as failed_run_analysis
-from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import (
-    CAPABILITY_RULES,
-    GENERAL_CAPABILITIES,
-)
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import ANALYSIS_RULES as RULES
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
 from experiments.post_training.rsi.evaluate import read_gap_tasks
@@ -48,18 +45,6 @@ SHARD_SIZE = 8
 WORKERS = 16
 MIXED_BATCH = 16
 GAP_FAILURES_PER_TYPE = 16
-
-SPECIFIC_RULES = """\
-A capability can be a general skill, or the skill that one kind of problem needs, for example: integrate a product \
-of functions by substitution, find the shortest sequence of moves through a small state space, or sort strings by \
-their character codes. When several failures share a kind of problem, name that kind of problem and the skill that \
-it needs, so that new tasks of the same kind can train it.
-
-- Write each capability as a catalog entry for the skill. Do not copy a failed task, its data, or its answer into it: \
-a different step writes new tasks that train the skill, and the failed tasks evaluate it.
-- A rollout that stopped at its turn limit or its time limit shows a gap only if it used its turns or its time on \
-repeated or unneeded steps. The agent does not see the limits unless its messages state them."""
-RULES = {"general": (CAPABILITY_RULES, GENERAL_CAPABILITIES), "specific": (SPECIFIC_RULES, "capabilities")}
 
 
 def graded_rollout(record: Mapping, attempt: int) -> GradedRollout:

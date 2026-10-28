@@ -32,6 +32,7 @@ from taskforge.llm.glm_client import GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 from transformers import AutoTokenizer
 
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import ANALYSIS_RULES
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import (
     COMMAND_TIMEOUT,
@@ -112,6 +113,13 @@ def feedback_options(function):
             click.option("--max-pass-rate", type=float, default=0.25, show_default=True),
             click.option("--failures-per-analysis", type=int, default=64, show_default=True),
             click.option("--max-new-ideas", type=int, default=8, show_default=True),
+            click.option(
+                "--analysis-rules",
+                type=click.Choice(tuple(ANALYSIS_RULES)),
+                default="general",
+                show_default=True,
+                help="general names general capabilities only; specific also names the skill of one kind of problem.",
+            ),
             click.option("--synthesized-share", type=float, default=0.5, show_default=True),
             click.option(
                 "--synthesis-max-wait",
@@ -178,6 +186,7 @@ class FeedbackOptions:
     max_pass_rate: float
     failures_per_analysis: int
     max_new_ideas: int
+    analysis_rules: str
     synthesized_share: float
     synthesis_max_wait: float
     tasks_per_idea: int
@@ -255,6 +264,8 @@ async def _feedback_boxes(
     analysis = AnalysisConfig(
         make_client=partial(GlmClient, source, GLM_PROVIDER),
         max_new_ideas=feedback.max_new_ideas,
+        capability_rules=ANALYSIS_RULES[feedback.analysis_rules][0],
+        capability_kind=ANALYSIS_RULES[feedback.analysis_rules][1],
         shard_size=8,
         extract_policy=ANALYSIS_POLICY,
         merge_policy=ANALYSIS_POLICY,

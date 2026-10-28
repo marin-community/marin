@@ -18,6 +18,21 @@ repeated or unneeded steps. The agent does not see the limits unless its message
 GENERAL_CAPABILITIES = "general capabilities"
 
 
+SPECIFIC_RULES = """\
+A capability can be a general skill, or the skill that one kind of problem needs, for example: integrate a product \
+of functions by substitution, find the shortest sequence of moves through a small state space, or sort strings by \
+their character codes. When several failures share a kind of problem, name that kind of problem and the skill that \
+it needs, so that new tasks of the same kind can train it.
+
+- Write each capability as a catalog entry for the skill. Do not copy a failed task, its data, or its answer into it: \
+a different step writes new tasks that train the skill, and the failed tasks evaluate it.
+- A rollout that stopped at its turn limit or its time limit shows a gap only if it used its turns or its time on \
+repeated or unneeded steps. The agent does not see the limits unless its messages state them."""
+# The rules of the analysis by name: the general ones name general capabilities only; the specific ones also let a
+# capability be the skill of one kind of problem, which names a capability gap that the failures share.
+ANALYSIS_RULES = {"general": (CAPABILITY_RULES, GENERAL_CAPABILITIES), "specific": (SPECIFIC_RULES, "capabilities")}
+
+
 def extract_prompt(capability_rules: str, kind: str = GENERAL_CAPABILITIES) -> str:
     return f"""\
 You analyze one failed rollout of a language-model agent to decide what the agent must learn next. A rollout is one \

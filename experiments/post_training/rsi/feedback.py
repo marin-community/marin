@@ -72,6 +72,9 @@ async def failed_runs(groups: AsyncIterable[TaskRollouts], max_pass_rate: float)
 class AnalysisConfig:
     make_client: MakeClient
     max_new_ideas: int
+    capability_rules: str
+    """What the analysis counts as a capability (``ANALYSIS_RULES``)."""
+    capability_kind: str
     shard_size: int
     extract_policy: LLMPolicy
     merge_policy: LLMPolicy
@@ -93,6 +96,8 @@ async def analyze_failed_runs(
             config.make_client,
             pass_threshold=PASS_REWARD,
             max_new_ideas=config.max_new_ideas,
+            capability_rules=config.capability_rules,
+            capability_kind=config.capability_kind,
             shard_size=config.shard_size,
             extract_ideas_llm_policy=config.extract_policy,
             merge_ideas_llm_policy=config.merge_policy,
