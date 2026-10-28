@@ -37,9 +37,10 @@ FIT_SEED = 0
 MAX_LOG = 50.0
 SOLVERS = ("CLARABEL", "SCS")
 SOLVER_STATUSES = ("optimal", "optimal_inaccurate")
-# How far a solver's solution, and the weights returned from it, may lie outside the simplex and the caps: the accuracy
-# cvxpy asks of SCS (eps_abs and eps_rel 1e-5). The released solves lie 1.1e-10 outside at most, and SCS alone solves
-# them 3.8e-8 outside.
+# How far a solver's solution may lie outside the simplex and the caps: the accuracy cvxpy asks of SCS (eps_abs and
+# eps_rel 1e-5). The released solves lie 1.1e-10 outside at most, and SCS alone solves them 3.8e-8 outside. The weights
+# returned are that solution clipped at zero and renormalized, so they lie on the simplex and only a cap can be
+# exceeded, by at most this much.
 SOLUTION_TOLERANCE = 1e-5
 # Slack in blocks for floating rounding: a block maximum or a weight this close below a whole block reaches it.
 CAP_ROUNDING_SLACK = 1e-9
