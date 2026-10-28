@@ -873,6 +873,7 @@ PRECOMMIT_CONFIGS = [
     PrecommitConfig(
         patterns=[
             "lib/marin/src/**/*.py",
+            "lib/mariner/src/**/*.py",
             "lib/levanter/src/**/*.py",
             "lib/haliax/src/**/*.py",
             "lib/fray/src/**/*.py",

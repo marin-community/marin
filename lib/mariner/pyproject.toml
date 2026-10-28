@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-mariner"
+version = "0.1.0"
+description = "MARINER, an epoch-aware surrogate for choosing a pretraining data mixture from a swarm of proxy runs."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy>=2.3.5,<3",
+    "pandas>=2.2.2,<3",
+    "pyarrow>=17",
+    "scikit-learn>=1.8,<2",
+    "scipy>=1.17,<2",
+]
+
+[project.optional-dependencies]
+# Exact pins: one bucket of the trained Olmix OlmoBaseEval Easy mixture lies 1.4e-6 of a block from a rounding
+# boundary of the 2,048-block grid, so another solver release can round it to a different mixture.
+olmix = ["cvxpy==1.9.2", "clarabel==0.11.1", "ecos==2.0.14"]
+download = ["huggingface-hub>=1.0"]
+
+[dependency-groups]
+test = ["pytest>=8.3.2", "pytest-timeout", "pytest-xdist"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mariner"]
+
+[tool.pytest.ini_options]
+timeout = 60
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["data_integration: reads a local mariner-data snapshot (pass --mariner-data DIR); run by hand"]
+addopts = "-m 'not data_integration' --import-mode=importlib"

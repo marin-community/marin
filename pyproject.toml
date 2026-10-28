@@ -201,6 +201,7 @@ members = [
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
+    "lib/mariner",
     "lib/rigging",
     "lib/rolloutengine",
     "lib/shellbox",
@@ -235,6 +236,7 @@ marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
+marin-mariner = { workspace = true }
 marin-rigging = { workspace = true }
 marin-rolloutengine = { workspace = true }
 marin-shellbox = { workspace = true }
@@ -361,6 +363,7 @@ disable-project-excludes-heuristics = true
 
 project-includes = [
     "lib/marin/src/**/*.py",
+    "lib/mariner/src/**/*.py",
     "lib/levanter/src/**/*.py",
     "lib/haliax/src/**/*.py",
     "lib/fray/src/**/*.py",
@@ -384,6 +387,7 @@ project-includes = [
 # contains a handful of legacy modules.
 search-path = [
     "lib/marin/src",
+    "lib/mariner/src",
     "lib/levanter/src",
     "lib/haliax/src",
     "lib/rigging/src",
@@ -429,6 +433,9 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
+    # Optional extra marin-mariner[olmix]; only mariner.olmix imports it, lazily.
+    "cvxpy",
+    "cvxpy.*",
     # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
     "cutlass",
     "cutlass.*",
