@@ -9,21 +9,26 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from mariner import olmix
 from mariner.cli import INPUT_ERROR_STATUS, main
 from mariner.data import (
+    CALIBRATION_RUN,
     MAIN_SWARM,
     OLMIX_CAP,
     PAPER_TARGET_BUDGET,
+    REPEAT,
     TRAINED_MARINER,
     TRAINED_OLMIX,
     mixture_weights,
     objective_from_tasks,
     pool_fractions,
     read_csv,
+    read_partition,
     read_table,
     release_partition,
     release_tasks,
     released_olmix_laws,
+    swarm_from_runs,
     trained_counts,
 )
 from mariner.evaluate import selection_metrics
@@ -209,6 +214,43 @@ def test_cli_cross_validate_prints_selection_metrics_of_each_repeat(tmp_path, sy
         # Each repeat scores every run but the calibration run once, and only its own predictions.
         assert sorted(rows["observation_id"]) == sorted(swarm.runs[1:])
         assert metrics == selection_metrics(rows["predicted"].to_numpy(), rows["measured"].to_numpy())
+
+
+def test_cli_olmix_writes_the_laws_of_its_tables_and_their_proposal(tmp_path, synthetic_problem):
+    swarm, objective, anchors, _ = synthetic_problem
+    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    out, kl = tmp_path / "olmix.csv", 0.05
+    command = ["olmix", *inputs, "--objective", objective.name, "--kl", str(kl), "--cap", str(OLMIX_CAP)]
+    assert main([*command, "--out", str(out)]) == 0
+    # The laws that fit_laws gives for the swarm of the tables, read as the command reads them.
+    partition = read_partition(tmp_path / "partition.csv", TARGET_BUDGET)
+    tables = swarm_from_runs(read_csv(tmp_path / "runs.csv"), partition, objective.tasks)
+    laws = olmix.fit_laws(tables, objective)
+    written = json.loads((tmp_path / "olmix.laws.json").read_text())
+    assert (written["objective"], written["buckets"]) == (objective.name, list(swarm.buckets))
+    expected = [
+        {"task": task, "log_c": law.log_c, "coefficients": law.coefficients.tolist(), "huber_loss": law.huber_loss}
+        for task, law in zip(objective.tasks, laws, strict=True)
+    ]
+    assert written["tasks"] == expected
+    proposal = olmix.propose(laws, objective, partition.epochs_per_unit_weight, OLMIX_CAP, kl)
+    np.testing.assert_array_equal(read_csv(out)["runtime_count"], proposal.counts)
+
+
+def test_cli_design_counts_data_seeds_up_from_seed_and_repeats_the_calibration_mixture(tmp_path):
+    partition, out = tmp_path / "partition.csv", tmp_path / "design.csv"
+    pd.DataFrame({"bucket_id": ["b0", "b1", "b2"], "pool_tokens": [400.0, 200.0, 100.0]}).to_csv(partition, index=False)
+    command = ["design", "--partition", str(partition), "--target-budget", "500", "--candidates", "3", "--seed", "11"]
+    assert main([*command, "--repeats", "2", "--unimax-budget-fraction", "0.8", "--out", str(out)]) == 0
+    design = read_csv(out)
+    np.testing.assert_array_equal(design["data_seed"], 11 + np.arange(len(design)))
+    repeats = design[design["design_kind"] == REPEAT]
+    assert list(repeats["run_label"]) == ["proportional_repeat_00", "proportional_repeat_01"]
+    assert not repeats["fit_inclusion"].any()
+    # The repeats train the calibration run's mixture, which the anchors require of them.
+    mixture = design.columns[design.columns.str.match("^(w|pf)__")]
+    calibration = design.loc[design["run_label"] == CALIBRATION_RUN, mixture].to_numpy()
+    np.testing.assert_array_equal(repeats[mixture].to_numpy(), np.repeat(calibration, 2, axis=0))
 
 
 @pytest.mark.data_integration

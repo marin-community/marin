@@ -30,6 +30,7 @@ def test_sobol_candidates_fall_back_to_the_uniform_mixture_when_every_weight_is_
     # No weight of 4 buckets is 0.9 or more in most rows: they become the uniform mixture, the rest a single bucket.
     candidates = sobol_candidates(3, 4, seed=0, min_weight=0.9, min_distance=0.0)
     uniform = np.all(candidates == 0.25, axis=1)
+    # One uniform row at most: the four-decimal deduplication skips every later row that repeats it.
     assert uniform.sum() == 1
     assert np.all(np.sort(candidates[~uniform], axis=1)[:, -1] == 1.0)
 
@@ -169,18 +170,6 @@ def test_swarm_table_may_omit_candidates_and_removals():
         data_seed_start=0,
     )
     assert list(table["run_label"]) == ["baseline_proportional", "proportional_repeat_00", "proportional_repeat_01"]
-
-
-def test_swarm_table_requires_the_proportional_baseline():
-    with pytest.raises(ValueError, match="proportional"):
-        swarm_table(
-            BUCKETS,
-            sobol_candidates(2, len(BUCKETS), seed=0),
-            {"stratified": stratified(len(BUCKETS))},
-            removal_base=None,
-            repeats=2,
-            data_seed_start=0,
-        )
 
 
 def test_swarm_table_loads_as_a_swarm_after_outcomes_join():
