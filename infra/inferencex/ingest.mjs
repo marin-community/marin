@@ -42,19 +42,30 @@ if (
   throw new Error('Source attempt is not the completed, uncancelled run saved by submission');
 }
 const expected = [];
-const allowed = ['agentx-source.json'];
+const allowed = ['agentx-source.json', 'changelog-metadata'];
+const profiles = {
+  h100: { prefix: 'snowball011', model: 'open-athena/Marin-Snowball-67B-A2B-v0.1.1', gpus: 8 },
+  gb200: { prefix: 'hero144k', model: 'marin-community/Hero-535B-step144000', gpus: 16 },
+};
 for (const point of bundle.points) {
   if (point.receipt?.status !== 'valid') continue;
   const { profile, concurrency } = point.manifest;
-  if (!['h100', 'gb200'].includes(profile) || ![8, 32].includes(concurrency)) {
-    throw new Error('Point is outside the fixed comparison grid');
+  const hardware = profiles[profile];
+  if (!hardware || !Number.isSafeInteger(concurrency) || concurrency < 1) {
+    throw new Error('Unknown profile or invalid calibration concurrency');
   }
-  const suffix = `agentic_snowball011_${profile}_vllm_bf16_agentx_c${concurrency}`;
+  const suffix = `agentic_${hardware.prefix}_${profile}_vllm_bf16_agentx_c${concurrency}`;
   const aggregateName = `bmk_${suffix}`;
   const aggregate = read(join(artifacts, aggregateName, 'agg.json'));
   const attempt = read(join(artifacts, suffix, 'attempt.json'));
   if (
-    aggregate.num_gpus !== (profile === 'h100' ? 8 : 4) ||
+    aggregate.num_gpus !== hardware.gpus ||
+    aggregate.conc !== concurrency ||
+    aggregate.hw !== profile ||
+    aggregate.model !== hardware.model ||
+    aggregate.infmax_model_prefix !== hardware.prefix ||
+    aggregate.disagg !== false ||
+    aggregate.is_multinode !== (profile === 'gb200') ||
     attempt.status !== 'succeeded' ||
     attempt.iris_attempt_uid !== point.receipt.attempt_uid ||
     !isDeepStrictEqual(attempt.source, source) ||
@@ -65,8 +76,50 @@ for (const point of bundle.points) {
       'Aggregate, physical GPU count or Iris attempt provenance differs from its receipt',
     );
   }
+  const validation = point.receipt.validation;
+  if (
+    validation?.coverage?.expected_duration_seconds !== 3600 ||
+    validation.profiling_requests < 1 ||
+    validation.profiling_error_ratio > 0.01 ||
+    !Number.isFinite(validation.profiling_error_ratio) ||
+    aggregate.dataset?.num_dataset_entries !== 393
+  ) {
+    throw new Error('Import requires a valid full-hour, full-corpus profiling window');
+  }
+  if (profile === 'gb200') {
+    const gang = read(join(artifacts, suffix, 'gang.json'));
+    const tasks = gang.tasks;
+    if (
+      !Array.isArray(tasks) || tasks.length !== 4 ||
+      new Set(tasks.map((task) => task.iris_node_name)).size !== 4 ||
+      tasks.some((task) =>
+        task.status !== 'succeeded' ||
+        gang.attempts[task.iris_task_id.replace(/:\d+$/u, '')] !== task.iris_attempt_uid ||
+        !isDeepStrictEqual(task.source, source) ||
+        task.recipe_fingerprint !== point.manifest.recipe_fingerprint ||
+        !point.manifest.placement.nodes.includes(task.iris_node_name) ||
+        task.gpu_uuids.length !== 4) ||
+      new Set(tasks.flatMap((task) => task.gpu_uuids)).size !== hardware.gpus
+    ) {
+      throw new Error('Hero requires one validated four-host, sixteen-GPU attempt set');
+    }
+  }
   expected.push(aggregateName);
   allowed.push(aggregateName, suffix);
+}
+if (readdirSync(artifacts).includes('changelog-metadata')) {
+  const directory = join(artifacts, 'changelog-metadata');
+  if (!isDeepStrictEqual(readdirSync(directory), ['agentx.json'])) {
+    throw new Error('Unexpected AgentX changelog metadata');
+  }
+  const changelog = read(join(directory, 'agentx.json'));
+  if (
+    changelog.base_ref !== 'agentx' || changelog.head_ref !== source.head_sha ||
+    !changelog.entries?.length ||
+    changelog.entries.some((entry) => entry['append-only'] !== true)
+  ) {
+    throw new Error('AgentX curve metadata must retain its exact source commit');
+  }
 }
 if (readdirSync(artifacts).some((name) => !allowed.includes(name))) {
   throw new Error('Bundle has an unexpected entry; source-override metadata is not accepted');

@@ -1,4 +1,4 @@
-# Snowball performance dashboard
+# Marin inference performance dashboard
 
 This packages an internal build of the pinned InferenceX-app as a standalone Next.js service at
 `https://performance.oa.dev`. Cloud Run's native IAP gate covers the service and its APIs.
@@ -8,7 +8,7 @@ only the `inferencex_reader` password. The import Action receives `inferencex_wr
 
 `settings.json` pins the upstream source, Node, Bun and build origin; Docker base images
 also use immutable digests. `app.patch` contains the upstream fixes and configuration changes. It adds the
-Snowball catalog entry, landing defaults, build/recipe detail, internal origin, Unix
+Snowball and Hero catalog entries, landing defaults, build/recipe detail, internal origin, Unix
 socket connections and exact GitHub-attempt ingestion. It leaves the upstream schema,
 processing, view transforms and trace importer in use. APIs supply benchmark data at
 request time. `internal.mjs` retains whole upstream benchmark, comparison, history,
@@ -53,6 +53,8 @@ docker build --target ingest -t inferencex-ingest infra/inferencex
 
 Use disposable PostgreSQL 17 with two LOGIN roles created through SQL, both
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`, and an `inferencex` database.
+Initialize local/socket authentication with `scram-sha-256`, too; PostgreSQL's
+default local `trust` rule would accept an incorrect password on that socket.
 As its administrator, apply `roles.sql`. Run migrations **as the writer** so its default
 privileges grant the reader SELECT on later tables. The upstream migration command is:
 
@@ -81,8 +83,27 @@ failure or timed out after Iris accepted the job. The exact completed source ide
 still verified and upstream retains its actual conclusion. Cancelled sources and failed
 or interrupted native windows remain excluded. A failed collection Action may also
 publish valid siblings; import admission checks each point independently.
+Calibration accepts any positive integer concurrency: Snowball on eight H100s,
+and the pinned Hero step144000 BF16 export on sixteen GB200s across four hosts.
+Each point must retain its validated one-hour window and all 393 corpus entries.
+Hero additionally requires four distinct nodes, sixteen GPU UUIDs and the exact
+successful host-attempt set saved with the measured window. Startup probes and
+partial or replaced gangs do not enter the chart.
+The pinned processor's `IS_MULTINODE` input selects disaggregated prefill/decode
+pools. Hero uses its combined-pool path for the sixteen-GPU denominator, preserves
+that processor output as `processor-aggregate.json` beside the raw trace, and
+annotates only the final aggregate's physical `is_multinode` marker. The app
+retains a combined pool (`disagg=false`) on four hosts. No request metric changes.
 It rejects local/sentinel source IDs and source-override metadata. No manual SQL metadata
 update is part of this path. Retain the source manifest with the original artifact.
+
+The collector's `changelog-metadata/agentx.json` uses the existing upstream
+append-only contract. Each source extends its model/hardware curve while keeping
+its actual GitHub date, attempt and commit. On the inference chart, disable
+**Optimal Only** (`i_optimal=0`) to inspect non-frontier calibration loads.
+The existing run selector and comparison/history views expose individual source
+runs and repeats; the latest curve shows the newest measurement for each load
+and serving recipe. A runtime image change starts a new curve.
 
 Set `DASHBOARD_URL`, `INVALIDATE_SECRET` and, behind IAP, `IAP_ID_TOKEN` to refresh caches
 after import. The IAP token travels in `Proxy-Authorization`; the application invalidation

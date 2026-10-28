@@ -181,7 +181,7 @@ index 39b5484d..fb4c28b7 100644
      phase === 'warmup' ? request.start < boundaryOff : request.start >= boundaryOff;
    const shift = phase === 'profiling' ? boundaryOff : 0;
 diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
-index a3bbce47..5410ecff 100644
+index a3bbce47..94b290c3 100644
 --- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 +++ b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 @@ -32,6 +32,7 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
@@ -311,19 +311,22 @@ index a75f8802..1b5b4993 100644
            },
            startNs: integerSchema,
 diff --git a/packages/app/src/lib/api/api-route-catalog.ts b/packages/app/src/lib/api/api-route-catalog.ts
-index 0956a0d6..27e4d28d 100644
+index 0956a0d6..d29d0e5f 100644
 --- a/packages/app/src/lib/api/api-route-catalog.ts
 +++ b/packages/app/src/lib/api/api-route-catalog.ts
-@@ -1629,7 +1629,7 @@ export const apiContractSourceDigests = [
+@@ -1629,7 +1629,10 @@ export const apiContractSourceDigests = [
      // Reviewed for the MiniMax-M3.1-Flash addition (InferenceX#4426): one new DB
      // key, `minimaxm31flash`, with its own display name and release date. The
      // AgentX cookbook documents the model; no endpoint or parameter shape changes.
 -    sourceSha256: '63a8ca335fccef8db1e93205db10456d75f2f8d4f100f89b160e6c1c574d62d4',
-+    sourceSha256: '201a889355e1d9a8ff75bb63d554d9a42f41b8ccfb4a1e6673ddee33dbb33524',
++    // Marin Hero step144000 adds a distinct BF16 AgentX model. The generated
++    // model-name enum includes it; the AgentX cookbook records both Marin keys.
++    // Existing route parameters, response shapes and translations still apply.
++    sourceSha256: 'e2227f50996c66f533bcd99d1aec4e9c25f9ddfb0cb19f27613b20ae0d497bb1',
      reviewArea: {
        en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
        zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
-@@ -1769,7 +1769,7 @@ export const apiContractSourceDigests = [
+@@ -1769,7 +1772,7 @@ export const apiContractSourceDigests = [
    },
    {
      source: '../db/src/queries/trace-server-metrics.ts',
@@ -345,10 +348,10 @@ index 2bb8f1e1..243938b7 100644
    offload_mode: 'on',
    kv_offloading: 'dram',
 diff --git a/packages/app/src/lib/catalog/data-mappings.test.ts b/packages/app/src/lib/catalog/data-mappings.test.ts
-index 46be7d22..5d9ffa27 100644
+index 46be7d22..459f84d6 100644
 --- a/packages/app/src/lib/catalog/data-mappings.test.ts
 +++ b/packages/app/src/lib/catalog/data-mappings.test.ts
-@@ -369,9 +369,9 @@ describe('getModelLabel', () => {
+@@ -369,9 +369,13 @@ describe('getModelLabel', () => {
  });
  
  describe('getOpenRouterModelId', () => {
@@ -356,26 +359,36 @@ index 46be7d22..5d9ffa27 100644
 +  it('maps catalog models to exact OpenRouter ids without inventing unavailable listings', () => {
      for (const model of MODEL_OPTIONS) {
 -      if (model === Model.Muse_Spark_Open) {
-+      if (model === Model.Muse_Spark_Open || model === Model.Snowball011) {
++      if (
++        model === Model.Muse_Spark_Open ||
++        model === Model.Snowball011 ||
++        model === Model.Hero144k
++      ) {
          expect(getOpenRouterModelId(model)).toBeNull();
          continue;
        }
 diff --git a/packages/app/src/lib/catalog/data-mappings.ts b/packages/app/src/lib/catalog/data-mappings.ts
-index 72b251b2..514022d8 100644
+index 72b251b2..dae4489a 100644
 --- a/packages/app/src/lib/catalog/data-mappings.ts
 +++ b/packages/app/src/lib/catalog/data-mappings.ts
-@@ -3,6 +3,7 @@ import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants/models
+@@ -3,6 +3,8 @@ import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants/models
  import type { ExclusionConflictPolicy, ExclusionSpec } from '../benchmarks/exclusion';
  
  export enum Model {
++  Hero144k = 'Marin-Hero-535B-step144000',
 +  Snowball011 = 'Marin-Snowball-67B-A2B-v0.1.1',
    Llama3_3_70B = 'Llama-3.3-70B-Instruct-FP8',
    Llama3_1_70B = 'Llama-3.1-70B-Instruct-FP8-KV',
    DeepSeek_R1 = 'DeepSeek-R1-0528',
-@@ -70,6 +71,11 @@ const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+@@ -70,6 +72,16 @@ const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
  const GUARDED_ENGINE_FAMILIES = ['vllm', 'sglang'] as const;
  
  const MODEL_CONFIG: Record<Model, ModelConfig> = {
++  [Model.Hero144k]: {
++    label: 'Marin Hero 535B step144000',
++    prefix: 'hero144k',
++    category: 'experimental',
++  },
 +  [Model.Snowball011]: {
 +    label: 'Marin Snowball 67B-A2B v0.1.1',
 +    prefix: 'snowball011',
@@ -385,25 +398,33 @@ index 72b251b2..514022d8 100644
      label: 'Muse Spark Open 816B',
      prefix: 'musespark',
 diff --git a/packages/app/src/lib/compare/compare-slug.test.ts b/packages/app/src/lib/compare/compare-slug.test.ts
-index 11ca8deb..1f6db2d4 100644
+index 11ca8deb..12855f95 100644
 --- a/packages/app/src/lib/compare/compare-slug.test.ts
 +++ b/packages/app/src/lib/compare/compare-slug.test.ts
-@@ -262,6 +262,7 @@ describe('compareModelDisplayLabel', () => {
+@@ -262,6 +262,8 @@ describe('compareModelDisplayLabel', () => {
  
  describe('compareModelSeoName', () => {
    const EXPECTED: Record<string, string> = {
++    'marin-hero-step144000': 'Marin Hero step144000',
 +    'marin-snowball-v011': 'Marin Snowball v0.1.1',
      'muse-spark-open': 'Muse Spark Open',
      'deepseek-v4': 'DeepSeek V4 Pro',
      'deepseek-v41-flash': 'DeepSeek V4.1 Flash',
 diff --git a/packages/app/src/lib/compare/compare-slug.ts b/packages/app/src/lib/compare/compare-slug.ts
-index 53f33b6d..f2f0c414 100644
+index 53f33b6d..c464e339 100644
 --- a/packages/app/src/lib/compare/compare-slug.ts
 +++ b/packages/app/src/lib/compare/compare-slug.ts
-@@ -11,6 +11,13 @@ export interface CompareModelSlug {
+@@ -11,6 +11,20 @@ export interface CompareModelSlug {
  }
  
  export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
++  {
++    slug: 'marin-hero-step144000',
++    displayName: 'Marin-Hero-535B-step144000',
++    dbKeys: ['hero144k'],
++    label: 'Marin Hero 535B step144000',
++    seoName: 'Marin Hero step144000',
++  },
 +  {
 +    slug: 'marin-snowball-v011',
 +    displayName: 'Marin-Snowball-67B-A2B-v0.1.1',
@@ -415,13 +436,14 @@ index 53f33b6d..f2f0c414 100644
      slug: 'muse-spark-open',
      displayName: 'Muse-Spark-Open',
 diff --git a/packages/app/src/lib/compare/compare-ssr.ts b/packages/app/src/lib/compare/compare-ssr.ts
-index 84f77f61..4ec18144 100644
+index 84f77f61..dd0ee6eb 100644
 --- a/packages/app/src/lib/compare/compare-ssr.ts
 +++ b/packages/app/src/lib/compare/compare-ssr.ts
-@@ -27,6 +27,7 @@ import { getHardwareConfig, getGpuSpecs } from '@/lib/catalog/constants';
+@@ -27,6 +27,8 @@ import { getHardwareConfig, getGpuSpecs } from '@/lib/catalog/constants';
  export { getCachedBenchmarks };
  
  export const KNOWN_MODELS = new Set([
++  'Marin-Hero-535B-step144000',
 +  'Marin-Snowball-67B-A2B-v0.1.1',
    'Muse-Spark-Open',
    'Llama-3.3-70B-Instruct-FP8',
@@ -451,21 +473,24 @@ index fbb69bb7..6a32c9b9 100644
  
    it('has unique, well-formed slugs', () => {
 diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
-index 6d8b60fb..0e3c29c1 100644
+index 6d8b60fb..b18f1de7 100644
 --- a/packages/constants/src/models.ts
 +++ b/packages/constants/src/models.ts
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,8 @@
   * display option in the UI. See `DISPLAY_MODEL_TO_DB` for the inverse mapping.
   */
  export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
 +  snowball011: 'Marin-Snowball-67B-A2B-v0.1.1',
++  hero144k: 'Marin-Hero-535B-step144000',
    dsr1: 'DeepSeek-R1-0528',
    gptoss120b: 'gpt-oss-120b',
    llama70b: 'Llama-3.3-70B-Instruct-FP8',
-@@ -126,6 +127,8 @@ export function rowToSequence(row: {
+@@ -126,6 +128,10 @@ export function rowToSequence(row: {
   * earliest date they actually have data for.
   */
  export const MODEL_RELEASE_DATES: Record<string, string> = {
++  // Permanent step-144000 BF16 export: Marin #10388.
++  'Marin-Hero-535B-step144000': '2026-09-24',
 +  // https://huggingface.co/open-athena/Marin-Snowball-67B-A2B-v0.1.1/commits/main
 +  'Marin-Snowball-67B-A2B-v0.1.1': '2026-10-22',
    // Newest first. `sweep:` is the model's "Date added" from MODELS.md — the first
@@ -630,14 +655,37 @@ index 310efb23..d0fcaa00 100644
      ...pgOpts,
      ssl: connection.ssl,
    });
+diff --git a/packages/db/src/etl/normalizers.test.ts b/packages/db/src/etl/normalizers.test.ts
+index eb07bae5..60435118 100644
+--- a/packages/db/src/etl/normalizers.test.ts
++++ b/packages/db/src/etl/normalizers.test.ts
+@@ -14,6 +14,17 @@ import {
+ } from './normalizers';
+ import { DB_MODEL_TO_DISPLAY } from '@semianalysisai/inferencex-constants';
+ 
++describe('Marin Hero serving export', () => {
++  it.each([
++    { infmax_model_prefix: 'hero144k' },
++    { model_prefix: 'hero144k' },
++    { model: 'marin-community/Hero-535B-step144000' },
++  ])('keeps the pinned Hero checkpoint separate from Snowball: %j', (row) => {
++    expect(resolveModelKey(row)).toBe('hero144k');
++    expect(DB_MODEL_TO_DISPLAY.hero144k).toBe('Marin-Hero-535B-step144000');
++  });
++});
++
+ describe('Muse Spark Open ingestion', () => {
+   it.each([
+     { infmax_model_prefix: 'musespark' },
 diff --git a/packages/db/src/etl/normalizers.ts b/packages/db/src/etl/normalizers.ts
-index 552759e1..da99ea9e 100644
+index 552759e1..bb26350f 100644
 --- a/packages/db/src/etl/normalizers.ts
 +++ b/packages/db/src/etl/normalizers.ts
-@@ -33,6 +33,7 @@ function resolvePrefixToKey(prefix: string): string | null {
+@@ -33,6 +33,8 @@ function resolvePrefixToKey(prefix: string): string | null {
  }
  
  export const MODEL_TO_KEY: Record<string, string> = {
++  'marin-community/Hero-535B-step144000': 'hero144k',
 +  'open-athena/Marin-Snowball-67B-A2B-v0.1.1': 'snowball011',
    'nvidia/DeepSeek-R1-0528-FP4-V2': 'dsr1',
    'nvidia/DeepSeek-R1-0528-FP4-v2': 'dsr1',
@@ -737,7 +785,7 @@ index d4f3195e..17d0b9c1 100644
      }
    }
 diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
-index 50130cb5..f8d8d278 100644
+index 50130cb5..d9726674 100644
 --- a/packages/db/src/ingest-ci-run.ts
 +++ b/packages/db/src/ingest-ci-run.ts
 @@ -296,7 +296,10 @@ async function main(): Promise<void> {
@@ -824,7 +872,7 @@ index 9cf16f39..7631a4f8 100644
  weight-sharing group, `prefill_tp` stays 1, and `prefill_num_workers` counts
  groups. Do not interpret the group width as TP or EP. Sibling rows expose the
 diff --git a/packages/skills/skills/inferencex-api/integrity.json b/packages/skills/skills/inferencex-api/integrity.json
-index 45c4d764..feea5baf 100644
+index 45c4d764..77f7a334 100644
 --- a/packages/skills/skills/inferencex-api/integrity.json
 +++ b/packages/skills/skills/inferencex-api/integrity.json
 @@ -2,14 +2,14 @@
@@ -834,7 +882,8 @@ index 45c4d764..feea5baf 100644
 -    "SKILL.md": "f8d9113c23503efa7d910298e3373660a2460943ad8505a07a806ab2da6031cd",
 +    "SKILL.md": "cc634f8ee363482f7c32ec33cde3df5e1663ac66d4c2bf79dfbdc166ea823fbb",
      "references/agentic-interactivity.md": "663596c3e29296bbd7e7db6fac05362e3befe5d84652600da88470b47d18b959",
-     "references/agentx.md": "b2bb42d84f1df69f354ddd5f897fff50c42d61fa0ee1274fe754276116ed2735",
+-    "references/agentx.md": "b2bb42d84f1df69f354ddd5f897fff50c42d61fa0ee1274fe754276116ed2735",
++    "references/agentx.md": "e128cb57a3f05fccb7180c28a134cfa506aa0ef21a1a3c90201b5466ba370aa7",
      "references/chart-templates.md": "aed6854627142019a4a5df4a2d07523b1a64e5814dd2bbdcc74ee18beb083912",
      "references/cli-contract.md": "4f070877eeefffad2860c58f79f68432fbe27aa21fc578a1c696f0309a3d7d7b",
      "references/cli.md": "11e1183f7ed70d669019e8435ac16a6a9f873de027507b8850a9943f6659bfd9",
@@ -844,6 +893,26 @@ index 45c4d764..feea5baf 100644
      "references/offline-exports.md": "95aa565dcd4c9e592159baa560a9a58217bc61e395de1c6daf0576795c7f4ec9",
      "references/pareto.md": "1b4d2d163f982e3f2d97addce310789eae9c1e5badd82dd7501708c9e0385027",
      "references/powerx.md": "5af5527d54a7e6191a5769080c122638b333b1ceb59e19fdee7df662a5cd3c8f",
+diff --git a/packages/skills/skills/inferencex-api/references/agentx.md b/packages/skills/skills/inferencex-api/references/agentx.md
+index ab5e0658..322598cb 100644
+--- a/packages/skills/skills/inferencex-api/references/agentx.md
++++ b/packages/skills/skills/inferencex-api/references/agentx.md
+@@ -67,6 +67,15 @@ drafter, which the API reports as spec method `mtp`. Use
+ `model=MiniMax-M3.1-Flash` for benchmark reads and the inference view API, with
+ `sequence=agentic-traces` for the latter. Its rows never fall back to `MiniMax-M3`.
+ 
++Marin private builds add `Marin-Snowball-67B-A2B-v0.1.1` (`snowball011`, eight H100s)
++and `Marin-Hero-535B-step144000` (`hero144k`, sixteen GB200s across four hosts).
++Use the display model for benchmark and inference-view reads, with
++`sequence=agentic-traces`; keep the returned raw key when joining point details.
++These BF16 measurements use a 262,144-token performance window and do not measure
++answer quality. Calibration loads extend the existing curve as append-only runs.
++Disable Optimal Only to inspect every load, and select an original GitHub run
++to inspect an individual repeat. Retain each point's run URL and recipe fingerprint.
++
+ Installed raw recipes use `scripts/capture-response.mjs`, which applies the shared
+ request-header helper for version attribution. Set `INFERENCEX_TELEMETRY=0` or
+ `DO_NOT_TRACK=1` to omit attribution; use `INFERENCEX_TRAFFIC=validation` for demos
 diff --git a/packages/skills/skills/inferencex-api/references/dashboard-views.md b/packages/skills/skills/inferencex-api/references/dashboard-views.md
 index 411cc8c5..d7814f7e 100644
 --- a/packages/skills/skills/inferencex-api/references/dashboard-views.md
