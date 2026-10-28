@@ -82,6 +82,7 @@ test = ["pytest>=8.3.2", "pytest-timeout", "pytest-mock", "zstandard"]
 dev = [{ include-group = "test" }]
 
 [tool.uv]
+constraint-dependencies = ["nltk>=3.10.4"]
 exclude-dependencies = ["litellm"]
 
 [tool.uv.sources]
