@@ -1,8 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import numpy as np
 import pytest
+from mariner import optimize
+from mariner.model import Head, ObjectiveFit, Shape, TaskFit
 from mariner.optimize import MIXTURE_BLOCK_SIZE, propose
 
 
@@ -27,3 +31,14 @@ def test_propose_rejects_cap_that_cannot_fill_a_mixture(synthetic_problem):
     swarm, _, _, truth = synthetic_problem
     with pytest.raises(ValueError, match="cap"):
         propose(truth, swarm.weights, cap=0.01)
+
+
+def test_propose_rejects_a_cap_the_block_grid_cannot_fill_before_solving(monkeypatch):
+    # At 3 epochs per unit weight, a cap of 1 epoch bounds each of three buckets at a third of the mixture: the bounds
+    # sum to one, but each bucket holds at most floor(2048 / 3) = 682 blocks, 2,046 of the 2,048.
+    head = Head(math.log(0.3), np.full(6, 0.2), 0.8)
+    task = TaskFit("t0", Shape(1.0, 1.0, 2.0), 0.0, 1.0, False, 0.0, head)
+    fit = ObjectiveFit("o", ("b0", "b1", "b2"), np.full(3, 3.0), np.ones(1), (task,), {})
+    monkeypatch.setattr(optimize, "minimize", lambda *args, **kwargs: pytest.fail("SLSQP ran"))
+    with pytest.raises(ValueError, match="2046 of the 2048 blocks"):
+        propose(fit, np.full((4, 3), 1 / 3), cap=1.0)

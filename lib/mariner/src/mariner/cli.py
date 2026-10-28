@@ -362,6 +362,8 @@ def run_olmix(args: argparse.Namespace) -> int:
     olmix.require_cvxpy()
     tables = read_swarm(args, args.objective)
     swarm, objective = tables.swarm, tables.objective
+    # Before the laws, whose fit takes minutes on a released swarm.
+    optimize.check_cap_and_kl(swarm.epochs_per_unit_weight, args.cap, args.kl, olmix.CAP_ROUNDING_SLACK)
     logger.info(
         "fitting the Olmix laws of the %d tasks of %s on %d runs", len(objective.tasks), objective.name, len(swarm.runs)
     )

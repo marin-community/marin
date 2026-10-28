@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from mariner import olmix
 from mariner.model import Objective, Swarm
 from mariner.olmix import (
     HUBER_DELTA,
@@ -103,6 +104,15 @@ def test_olmix_proposal_with_infinite_cap_is_unconstrained():
     # numpy reports the invalid cast of an infinite block maximum to integers as a RuntimeWarning.
     assert not [str(warning.message) for warning in caught if issubclass(warning.category, RuntimeWarning)]
     assert proposal.counts.tolist() == [2048, 0, 0, 0]  # the law alone puts the whole block on bucket 0
+
+
+def test_olmix_proposal_rejects_a_cap_the_block_grid_cannot_fill_before_solving(monkeypatch):
+    # At 3 epochs per unit weight, a cap of 1 epoch bounds each of three buckets at a third of the mixture: the bounds
+    # sum to one, but each bucket holds at most floor(2048 / 3) = 682 blocks, 2,046 of the 2,048.
+    law = LogLinearLaw(math.log(FLOOR), COEFFICIENTS[:3], math.nan)
+    monkeypatch.setattr(olmix, "exact_proposal", lambda *args, **kwargs: pytest.fail("the exact proposer ran"))
+    with pytest.raises(ValueError, match="2046 of the 2048 blocks"):
+        propose([law], ONE_TASK, np.full(3, 3.0), cap=1.0, kl=0.01)
 
 
 def test_olmix_proposal_approaches_the_reference_mixture_under_large_kl():

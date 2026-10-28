@@ -19,7 +19,13 @@ import numpy as np
 from scipy.optimize import minimize
 
 from mariner.model import WEIGHT_SUM_TOLERANCE, Objective, Swarm
-from mariner.optimize import MIXTURE_BLOCK_SIZE, bucket_upper_bounds, proportional_mixture
+from mariner.optimize import (
+    MIXTURE_BLOCK_SIZE,
+    block_maxima,
+    bucket_upper_bounds,
+    check_cap_and_kl,
+    proportional_mixture,
+)
 
 # ---------------------------------------------------------------------------------------------------------------
 # Constants of the frozen procedure (every value is the one the paper's runs used)
@@ -186,8 +192,7 @@ def quantize_under_cap(weights: np.ndarray, epochs_per_unit_weight: np.ndarray, 
             f"the weights must be nonnegative and sum to one within {WEIGHT_SUM_TOLERANCE:g}:"
             f" their minimum is {weights.min():g} and their sum {weights.sum():.12g}"
         )
-    cap_blocks = np.floor(cap / epochs_per_unit_weight * MIXTURE_BLOCK_SIZE + CAP_ROUNDING_SLACK)
-    maximum = np.minimum(cap_blocks, MIXTURE_BLOCK_SIZE).astype(np.int64)  # clipped before the cast: cap may be inf
+    maximum = block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap), CAP_ROUNDING_SLACK)
     if maximum.sum() < MIXTURE_BLOCK_SIZE:
         raise ValueError(f"an epoch cap of {cap:g} holds {maximum.sum()} of the {MIXTURE_BLOCK_SIZE} blocks")
     # Weights that sum to one within the tolerance floor to at most the whole block, so remaining is never negative.
@@ -219,10 +224,12 @@ def propose(
 
     ``laws`` holds one law per task of ``objective``, in task order. The KL penalty, weighted by ``kl``, pulls toward
     the proportional mixture (1 / epochs) / sum(1 / epochs), and each bucket's weight is capped at min(1, cap / epochs).
-    Raises ``ValueError`` when the laws do not match the tasks or the cap cannot hold a complete mixture.
+    Raises ``ValueError`` before any solve when the laws do not match the tasks, ``kl`` is negative or not finite, or
+    the cap is NaN or cannot hold a complete mixture on the 2,048-block grid (``optimize.check_cap_and_kl``).
     """
     if len(laws) != len(objective.tasks):
         raise ValueError(f"{len(laws)} laws for the {len(objective.tasks)} tasks of {objective.name}")
+    check_cap_and_kl(epochs_per_unit_weight, cap, kl, CAP_ROUNDING_SLACK)
     natural = proportional_mixture(epochs_per_unit_weight)
     caps = bucket_upper_bounds(epochs_per_unit_weight, cap)
     continuous, predicted, solver = exact_proposal(laws, objective.weights, natural, caps, kl)

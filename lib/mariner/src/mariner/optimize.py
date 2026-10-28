@@ -36,6 +36,8 @@ ENDPOINT_FEASIBILITY_TOLERANCE = 10 * FEASIBILITY_TOLERANCE
 MIXTURE_BLOCK_SIZE = 2_048
 MAX_EXCHANGE_STEPS = 4 * MIXTURE_BLOCK_SIZE
 REFINE_TOLERANCE = 1e-13
+# Slack in blocks for floating rounding: a cap's block maximum this close below a whole block reaches it.
+BLOCK_MAXIMUM_SLACK = 1e-12
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -117,6 +119,29 @@ def bucket_upper_bounds(epochs_per_unit_weight: np.ndarray, cap: float | None) -
     return upper
 
 
+def block_maxima(upper: np.ndarray, slack: float) -> np.ndarray:
+    """The most blocks of the 2,048-block grid within the weight bounds ``upper``: floor(2,048 upper + ``slack``)."""
+    return np.floor(upper * MIXTURE_BLOCK_SIZE + slack).astype(np.int64)
+
+
+def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: float, slack: float) -> None:
+    """Raise ``ValueError`` unless a proposal can satisfy the epoch cap with the KL weight; callers check before solving.
+
+    ``kl`` must be finite and nonnegative. ``cap`` is None (no cap) or a number of epochs, inf included, whose weight
+    bounds (``bucket_upper_bounds``) sum to at least one and whose block maxima, computed as the rounding computes
+    them with its ``slack`` (``block_maxima``), hold the 2,048 blocks of a mixture.
+    """
+    if not (np.isfinite(kl) and kl >= 0.0):
+        raise ValueError(f"the KL weight must be finite and nonnegative, got {kl:g}")
+    if cap is None:
+        return
+    if np.isnan(cap):
+        raise ValueError(f"the epoch cap must be a positive number of epochs or inf, got {cap:g}")
+    blocks = int(block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap), slack).sum())
+    if blocks < MIXTURE_BLOCK_SIZE:
+        raise ValueError(f"an epoch cap of {cap:g} holds {blocks} of the {MIXTURE_BLOCK_SIZE} blocks")
+
+
 def continuous_optimum(
     fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
@@ -194,8 +219,7 @@ def runtime_policy(
     fit: ObjectiveFit, weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and predictions."""
-    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap)
-    maximum = np.floor(upper * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
+    maximum = block_maxima(bucket_upper_bounds(fit.epochs_per_unit_weight, cap), BLOCK_MAXIMUM_SLACK)
     natural = proportional_mixture(fit.epochs_per_unit_weight)
 
     def predict(rows: np.ndarray) -> np.ndarray:
@@ -237,9 +261,11 @@ def propose(fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = No
     """The fitted objective's optimum (``continuous_optimum``) rounded to the sampler grid (``runtime_policy``).
 
     ``cap`` bounds every bucket's materialized epochs and ``kl`` weights a KL penalty toward the proportional
-    mixture; both are optional and not part of the procedure. Raises ``ValueError`` before any solve when the cap
-    cannot hold a complete mixture.
+    mixture; both are optional and not part of the procedure. Raises ``ValueError`` before any solve when ``kl`` is
+    negative or not finite, or the cap is NaN or cannot hold a complete mixture on the 2,048-block grid
+    (``check_cap_and_kl``).
     """
+    check_cap_and_kl(fit.epochs_per_unit_weight, cap, kl, BLOCK_MAXIMUM_SLACK)
     continuous, starts = continuous_optimum(fit, swarm_weights, cap, kl)
     counts, summary = runtime_policy(fit, continuous, cap, kl)
     return Proposal(counts, continuous, summary, starts)
