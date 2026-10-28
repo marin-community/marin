@@ -111,7 +111,7 @@ def test_iter_log_rows_streams_in_window_gs_rows_and_leaves_no_segment_on_disk(t
         )
     scratch_dir = tmp_path / "scratch"
 
-    streamed = list(iter_log_rows(str(remote_dir), segments, WINDOW, scratch_dir, max_segment_bytes=2**20))
+    streamed = list(iter_log_rows(segments, WINDOW, scratch_dir, max_segment_bytes=2**20))
 
     assert streamed == [in_window]
     assert list(scratch_dir.iterdir()) == []

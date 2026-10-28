@@ -38,7 +38,7 @@ from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem.cluster_config import get_bucket_location, region_from_prefix
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -47,7 +47,7 @@ GS_RE = re.compile(r"gs://[^\s'\"`]+")
 # Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
 LOG_NAMESPACE = "log"
 
-DOWNLOAD_CHUNK_BYTES = 8 * 2**20
+DEFAULT_LOOKBACK_HOURS = 12.0
 ROW_BATCH_SIZE = 10_000
 # Largest log segment the scan will stage on local disk. Segments seen in
 # October 2026 were a few hundred MiB; refusing a far larger one keeps a
@@ -293,16 +293,7 @@ def choose_log_segments(
     return chosen
 
 
-def _download_segment(fs, segment: DirectQuerySegment, target_dir: Path) -> Path:
-    local_path = target_dir / Path(segment.object_uri).name
-    with fs.open(segment.object_uri, "rb") as src, local_path.open("wb") as dst:
-        while chunk := src.read(DOWNLOAD_CHUNK_BYTES):
-            dst.write(chunk)
-    return local_path
-
-
 def iter_log_rows(
-    remote_log_dir: str,
     segments: Sequence[DirectQuerySegment],
     window: TimeWindow,
     scratch_dir: Path,
@@ -319,7 +310,6 @@ def iter_log_rows(
             f"{len(oversized)} log segments exceed the {max_segment_bytes} byte disk budget, "
             f"largest {max(segment.byte_size for segment in oversized)} bytes"
         )
-    fs, _ = url_to_fs(remote_log_dir)
     scratch_dir.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     for index, segment in enumerate(segments, 1):
@@ -327,7 +317,8 @@ def iter_log_rows(
             f"  [{index}/{len(segments)}] Scanning {Path(segment.object_uri).name} "
             f"({segment.byte_size / 2**20:.0f} MiB)"
         )
-        local_path = _download_segment(fs, segment, scratch_dir)
+        local_path = scratch_dir / Path(segment.object_uri).name
+        StoragePath(segment.object_uri).download_to(str(local_path))
         try:
             cursor = con.execute(
                 """
@@ -888,7 +879,7 @@ def run_analysis(
     log_segments = choose_log_segments(pin.segments, window, lookback_hours)
     db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
 
-    rows = iter_log_rows(remote_log_dir, log_segments, window, workdir / "logs", max_segment_bytes)
+    rows = iter_log_rows(log_segments, window, workdir / "logs", max_segment_bytes)
     summary = analyze(rows, db_path, window)
     summary["local_db_path"] = str(db_path)
     summary["remote_log_dir"] = remote_log_dir
@@ -937,8 +928,9 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
 @click.option(
     "--download-lookback-hours",
     type=float,
-    default=12.0,
-    help="Extra lookback on segment creation time when choosing parquet segments. Defaults to 12.",
+    default=DEFAULT_LOOKBACK_HOURS,
+    show_default=True,
+    help="Extra lookback on segment creation time when choosing parquet segments.",
 )
 @click.option(
     "--max-segment-bytes",
