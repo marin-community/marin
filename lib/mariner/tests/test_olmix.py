@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 import warnings
 
@@ -11,6 +12,7 @@ from mariner import olmix
 from mariner.model import Objective, Swarm
 from mariner.olmix import (
     HUBER_DELTA,
+    SOLUTION_TOLERANCE,
     LogLinearLaw,
     fit_laws,
     fit_log_linear,
@@ -107,12 +109,18 @@ def test_olmix_proposal_with_infinite_cap_is_unconstrained():
 
 
 @pytest.mark.filterwarnings("ignore:Solution may be inaccurate:UserWarning")  # cvxpy's notice of SCS's status
-def test_olmix_proposal_refuses_solver_solutions_outside_the_caps():
-    # exp(43 w0 - 16 w1) spans 23 orders of magnitude over the simplex. CLARABEL reports "optimal" 1.2e-4 above
-    # bucket 1's cap of 0.4273 and SCS "optimal_inaccurate" 0.5 away from the constraints: neither is a mixture.
+def test_olmix_proposal_for_an_ill_conditioned_law_raises_or_returns_a_mixture_within_the_caps():
+    # exp(43 w0 - 16 w1) spans 23 orders of magnitude over the simplex. On this input the pinned CLARABEL reports
+    # "optimal" 1.2e-4 above bucket 1's cap of 0.4273 and SCS "optimal_inaccurate" 0.5 away from the constraints, so
+    # propose raises RuntimeError. A solver that converged here would return a mixture within the caps. Either outcome
+    # is correct; a mixture over a cap is not.
     law = LogLinearLaw(0.0, np.array([43.0, -16.0]), math.nan)
-    with pytest.raises(RuntimeError):
-        propose([law], ONE_TASK, np.array([1.2, 2.2]), cap=0.94, kl=0.01)
+    epochs, cap = np.array([1.2, 2.2]), 0.94
+    with contextlib.suppress(RuntimeError):
+        continuous = propose([law], ONE_TASK, epochs, cap=cap, kl=0.01).continuous
+        assert continuous.min() >= 0
+        assert continuous.sum() == pytest.approx(1.0, abs=1e-12)
+        assert np.max(continuous - np.minimum(1.0, cap / epochs)) <= SOLUTION_TOLERANCE
 
 
 def test_olmix_proposal_takes_a_cap_whose_block_maxima_just_fill_the_grid():
