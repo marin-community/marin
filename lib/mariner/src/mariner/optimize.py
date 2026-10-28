@@ -218,7 +218,11 @@ def refine_counts(
 def runtime_policy(
     fit: ObjectiveFit, weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and predictions."""
+    """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and a summary.
+
+    The exchange search minimizes the objective plus the KL penalty; the summary reports the fit's predictions,
+    without the penalty, at the continuous optimum and at the counts' mixture.
+    """
     maximum = block_maxima(bucket_upper_bounds(fit.epochs_per_unit_weight, cap), BLOCK_MAXIMUM_SLACK)
     natural = proportional_mixture(fit.epochs_per_unit_weight)
 
@@ -236,8 +240,8 @@ def runtime_policy(
     if int(counts.sum()) != MIXTURE_BLOCK_SIZE or counts.min() < 0 or np.any(counts > maximum):
         raise RuntimeError("invalid refined runtime allocation")
     return counts, {
-        "continuous_prediction": float(predict(weights)[0]),
-        "runtime_prediction": float(predict(runtime)[0]),
+        "continuous_prediction": float(fit.predict(weights)[0]),
+        "runtime_prediction": float(fit.predict(runtime)[0]),
         "exchange_steps": float(steps),
         "max_materialized_epoch": float((runtime * fit.epochs_per_unit_weight).max()),
     }
@@ -249,7 +253,7 @@ class Proposal:
 
     counts: np.ndarray  # (buckets,) blocks of the 2,048-block grid
     continuous: np.ndarray  # (buckets,) the continuous optimum
-    summary: dict[str, float]  # predictions before and after rounding, exchange steps, largest materialized epoch
+    summary: dict[str, float]  # fit's predictions before and after rounding, exchange steps, largest materialized epoch
     starts: list[dict[str, Any]]  # one record per SLSQP start
 
     @property
