@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 from scipy.optimize import minimize_scalar, nnls
@@ -120,14 +121,13 @@ class FloorSpec:
     anchor: float
     noise_sd: float
     nu: float
-    noise_margin_sds: float = NOISE_MARGIN_SDS
 
 
 def floor_value(response: np.ndarray, spec: FloorSpec) -> float:
     gap = spec.anchor - float(np.min(response))
     if gap <= 0.0:
         gap = max(float(np.std(response)), 1e-3 * abs(spec.anchor), 1e-6)
-    return spec.anchor - max(spec.nu * gap, spec.noise_margin_sds * spec.noise_sd)
+    return spec.anchor - max(spec.nu * gap, NOISE_MARGIN_SDS * spec.noise_sd)
 
 
 def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, gamma: float) -> tuple[float, np.ndarray]:
@@ -173,9 +173,23 @@ def cv_rmse(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorS
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def select_shape_and_ridge(
-    exposures: np.ndarray, response: np.ndarray, spec: FloorSpec, folds: Folds
-) -> tuple[Shape, float, float]:
+class ShapeAndRidge(NamedTuple):
+    """A task's shape and ridge weight from the grids, and their inner-CV RMSE (``select_shape_and_ridge``)."""
+
+    shape: Shape
+    gamma: float
+    score: float
+
+
+class FloorMultiplier(NamedTuple):
+    """A task's floor multiplier, whether its profile was flat, and the inner-CV RMSE at it (``search_nu``)."""
+
+    nu: float
+    flat: bool
+    score: float
+
+
+def select_shape_and_ridge(exposures: np.ndarray, response: np.ndarray, spec: FloorSpec, folds: Folds) -> ShapeAndRidge:
     """Exhaustive inner-CV search over the shape and ridge grids; ties go to the earlier grid entry."""
     best: tuple[float, int, int] | None = None
     for shape_index, shape in enumerate(SHAPES):
@@ -187,12 +201,10 @@ def select_shape_and_ridge(
     if best is None or not math.isfinite(best[0]):
         raise ValueError("no finite inner-CV candidate")
     score, shape_index, gamma_index = best
-    return SHAPES[shape_index], GAMMA_GRID[gamma_index], score
+    return ShapeAndRidge(SHAPES[shape_index], GAMMA_GRID[gamma_index], score)
 
 
-def search_nu(
-    matrix: np.ndarray, response: np.ndarray, gamma: float, anchor: Anchor, folds: Folds
-) -> tuple[float, bool, float]:
+def search_nu(matrix: np.ndarray, response: np.ndarray, gamma: float, anchor: Anchor, folds: Folds) -> FloorMultiplier:
     """Bounded scalar search on log nu; flat profiles (argmin near the upper bound) get the default."""
     low, high = NU_BOUNDS
 
@@ -212,7 +224,7 @@ def search_nu(
     if flat:
         nu = NU_DEFAULT
         score = objective(math.log(nu))
-    return nu, flat, score
+    return FloorMultiplier(nu, flat, score)
 
 
 def fit_task(swarm: Swarm, task: str, anchor: Anchor, folds: Folds) -> TaskFit:
@@ -220,11 +232,11 @@ def fit_task(swarm: Swarm, task: str, anchor: Anchor, folds: Folds) -> TaskFit:
     exposures = swarm.exposures
     response = swarm.outcomes[task].to_numpy(float)
     provisional = FloorSpec(anchor.proportional, anchor.repeat_sd, NU_PROVISIONAL)
-    shape, gamma, _ = select_shape_and_ridge(exposures, response, provisional, folds)
-    matrix = design_matrix(exposures, shape)
-    nu, flat, score = search_nu(matrix, response, gamma, anchor, folds)
-    head = fit_head(matrix, response, gamma, FloorSpec(anchor.proportional, anchor.repeat_sd, nu))
-    return TaskFit(task, shape, gamma, nu, flat, score, head)
+    selected = select_shape_and_ridge(exposures, response, provisional, folds)
+    matrix = design_matrix(exposures, selected.shape)
+    multiplier = search_nu(matrix, response, selected.gamma, anchor, folds)
+    head = fit_head(matrix, response, selected.gamma, FloorSpec(anchor.proportional, anchor.repeat_sd, multiplier.nu))
+    return TaskFit(task, selected.shape, selected.gamma, multiplier.nu, multiplier.flat, multiplier.score, head)
 
 
 # ---------------------------------------------------------------------------------------------------------------
