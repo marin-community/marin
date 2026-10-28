@@ -142,10 +142,18 @@ def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: 
         raise ValueError(f"an epoch cap of {cap:g} holds {blocks} of the {MIXTURE_BLOCK_SIZE} blocks")
 
 
+def endpoint_rank(diagnostics: dict[str, Any]) -> tuple[bool, float]:
+    """Sort key of an SLSQP endpoint: feasible (raw violation within the tolerance) before infeasible, then objective."""
+    return diagnostics["raw_feasibility_violation"] > ENDPOINT_FEASIBILITY_TOLERANCE, diagnostics["objective"]
+
+
 def continuous_optimum(
     fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished."""
+    """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished.
+
+    Each restart keeps the better of its first-pass and polished endpoints by ``endpoint_rank``, the polish on a tie.
+    """
     natural = proportional_mixture(fit.epochs_per_unit_weight)
     upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap)
     indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
@@ -157,7 +165,7 @@ def continuous_optimum(
         solutions.append(weights)
     for index, start in enumerate(list(solutions)):
         weights, diagnostics = optimize_start(fit.predict, start, natural, upper, kl, POLISH_OPTIONS)
-        if diagnostics["objective"] <= records[index]["objective"]:
+        if endpoint_rank(diagnostics) <= endpoint_rank(records[index]):
             solutions[index] = weights
             records[index] = {"start": index, **diagnostics, "polished": True}
     feasible = [i for i, row in enumerate(records) if row["raw_feasibility_violation"] <= ENDPOINT_FEASIBILITY_TOLERANCE]
