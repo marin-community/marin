@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -57,7 +59,7 @@ def test_main_swarm_refit_reproduces_release(snapshot, objective):
     assert heldout_gap.max() <= PREDICTION_TOLERANCE
     # Every exposure is scored, the five Uncheatable ones whose runs recorded only the aggregate included.
     metrics = heldout_metrics(fit, bank)
-    assert metrics["rows"] == HELDOUT_EXPOSURES[objective] and np.isfinite(list(metrics.values())).all()
+    assert metrics.rows == HELDOUT_EXPOSURES[objective] and np.isfinite(list(dataclasses.asdict(metrics).values())).all()
 
     fitted = pd.DataFrame([task.to_json() for task in fit.tasks]).set_index("task")
     released = released_task_parameters(snapshot, MAIN_SWARM, objective)

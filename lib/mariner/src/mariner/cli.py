@@ -65,7 +65,14 @@ from mariner.data import (
     trained_counts,
 )
 from mariner.design import STRATIFIED, UNIMAX, proportional, sobol_candidates, stratified, swarm_table, unimax
-from mariner.evaluate import cross_validate, heldout_metrics, selection_metrics
+from mariner.evaluate import (
+    MEASURED_COLUMN,
+    PREDICTED_COLUMN,
+    REPEAT_COLUMN,
+    cross_validate,
+    heldout_metrics,
+    selection_metrics,
+)
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets, order_difference, shown_values
 
@@ -378,9 +385,9 @@ def run_cross_validate(args: argparse.Namespace) -> int:
     anchors = read_anchors(args, tables)
     table = cross_validate(tables.swarm, tables.objective, anchors, args.repeats, log=logger.info)
     write_csv(table, args.out)
-    for repeat, rows in table.groupby("repeat"):
-        metrics = selection_metrics(rows["predicted"].to_numpy(), rows["measured"].to_numpy())
-        print(json.dumps({"repeat": int(repeat), **metrics}))
+    for repeat, rows in table.groupby(REPEAT_COLUMN):
+        metrics = selection_metrics(rows[PREDICTED_COLUMN].to_numpy(), rows[MEASURED_COLUMN].to_numpy())
+        print(json.dumps({REPEAT_COLUMN: int(repeat), **dataclasses.asdict(metrics)}))
     return 0
 
 
@@ -395,7 +402,8 @@ def run_evaluate(args: argparse.Namespace) -> int:
     check_buckets(fit, swarm.buckets, source)
     check_epochs(fit, swarm.epochs_per_unit_weight, source)
     check_tasks(fit, objective_from_tasks(release_tasks(args.data), fit.objective))
-    print(json.dumps(heldout_metrics(fit, release_heldout_bank(args.data, fit.objective)), indent=2))
+    metrics = heldout_metrics(fit, release_heldout_bank(args.data, fit.objective))
+    print(json.dumps(dataclasses.asdict(metrics), indent=2))
     return 0
 
 

@@ -250,7 +250,8 @@ def test_cli_cross_validate_prints_selection_metrics_of_each_repeat(tmp_path, sy
         rows = table[table["repeat"] == repeat]
         # Each repeat scores every run but the calibration run once, and only its own predictions.
         assert sorted(rows["observation_id"]) == sorted(swarm.runs[1:])
-        assert metrics == selection_metrics(rows["predicted"].to_numpy(), rows["measured"].to_numpy())
+        expected = selection_metrics(rows["predicted"].to_numpy(), rows["measured"].to_numpy())
+        assert metrics == dataclasses.asdict(expected)
 
 
 def test_cli_olmix_writes_the_laws_of_its_tables_and_their_proposal(tmp_path, synthetic_problem):

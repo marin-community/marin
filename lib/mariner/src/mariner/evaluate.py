@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from mariner.data import OBSERVATION_ID
 from mariner.fit import FOLD_SEED, INNER_FOLDS, Folds, block_labels, fit_objective, folds_from_labels, pin_calibration
 from mariner.model import Anchor, HeldoutBank, Objective, ObjectiveFit, Swarm, check_buckets
 
@@ -29,6 +30,11 @@ OUTER_FOLDS = 5
 OUTER_REPEAT_SEED_STEP = 100
 INNER_REPEAT_SEED_STEP = 10_000
 INNER_FOLD_SEED_STEP = 100
+# cross_validate's columns besides the observation id.
+REPEAT_COLUMN = "repeat"
+FOLD_COLUMN = "fold"
+MEASURED_COLUMN = "measured"
+PREDICTED_COLUMN = "predicted"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -113,18 +119,30 @@ def cross_validate(
         tables.append(
             pd.DataFrame(
                 {
-                    "repeat": split.repeat,
-                    "fold": split.fold,
-                    "observation_id": [swarm.runs[row] for row in split.test],
-                    "measured": measured[split.test],
-                    "predicted": fit.predict(swarm.weights[split.test], swarm.pool_fractions[split.test]),
+                    REPEAT_COLUMN: split.repeat,
+                    FOLD_COLUMN: split.fold,
+                    OBSERVATION_ID: [swarm.runs[row] for row in split.test],
+                    MEASURED_COLUMN: measured[split.test],
+                    PREDICTED_COLUMN: fit.predict(swarm.weights[split.test], swarm.pool_fractions[split.test]),
                 }
             )
         )
     return pd.concat(tables, ignore_index=True)
 
 
-def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, float | int]:
+@dataclasses.dataclass(frozen=True)
+class SelectionMetrics:
+    """How well predictions select among ``rows`` mixtures by their measured BPB (``selection_metrics``)."""
+
+    rows: int
+    regret_at_1: float
+    selected_rank: int
+    optimism_at_pick: float
+    rmse: float
+    spearman: float
+
+
+def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> SelectionMetrics:
     """How well ``predicted`` selects among mixtures by their ``measured`` BPB, where lower is better.
 
     ``regret_at_1`` (its measured value minus the best), ``selected_rank`` (1 for the best) and ``optimism_at_pick``
@@ -132,17 +150,17 @@ def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, 
     score every mixture.
     """
     pick = int(np.argmin(predicted))
-    return {
-        "rows": len(measured),
-        "regret_at_1": float(measured[pick] - measured.min()),
-        "selected_rank": int(np.sum(measured <= measured[pick])),
-        "optimism_at_pick": float(measured[pick] - predicted[pick]),
-        "rmse": float(np.sqrt(np.mean((predicted - measured) ** 2))),
-        "spearman": float(spearmanr(predicted, measured).correlation),
-    }
+    return SelectionMetrics(
+        rows=len(measured),
+        regret_at_1=float(measured[pick] - measured.min()),
+        selected_rank=int(np.sum(measured <= measured[pick])),
+        optimism_at_pick=float(measured[pick] - predicted[pick]),
+        rmse=float(np.sqrt(np.mean((predicted - measured) ** 2))),
+        spearman=float(spearmanr(predicted, measured).correlation),
+    )
 
 
-def heldout_metrics(fit: ObjectiveFit, bank: HeldoutBank) -> dict[str, float | int]:
+def heldout_metrics(fit: ObjectiveFit, bank: HeldoutBank) -> SelectionMetrics:
     """``selection_metrics`` of the fit's predictions at the bank's exposures against their measured objective.
 
     Raises ``ValueError`` when the bank's buckets are not the fit's in the fit's order, it measures other tasks than

@@ -8,8 +8,25 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from mariner.data import MAIN_SWARM, objective_from_tasks, read_table, release_anchors, release_swarm, release_tasks
-from mariner.evaluate import OUTER_FOLDS, cross_validate, heldout_metrics, outer_splits, selection_metrics
+from mariner.data import (
+    MAIN_SWARM,
+    OBSERVATION_ID,
+    objective_from_tasks,
+    read_table,
+    release_anchors,
+    release_swarm,
+    release_tasks,
+)
+from mariner.evaluate import (
+    FOLD_COLUMN,
+    MEASURED_COLUMN,
+    OUTER_FOLDS,
+    PREDICTED_COLUMN,
+    cross_validate,
+    heldout_metrics,
+    outer_splits,
+    selection_metrics,
+)
 from mariner.fit import final_inner_fold_labels
 from mariner.model import HeldoutBank, Swarm
 
@@ -27,7 +44,7 @@ TABLE_10_MODEL = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
 TABLE_10_OBJECTIVE = "uncheatable"
 # The prediction tolerance: the metrics are computed from predictions that match the research fit's within it.
 TABLE_10_TOLERANCE = 1e-6
-TABLE_10_COLUMNS = {  # selection_metrics key -> fits_surrogate_benchmark column
+TABLE_10_COLUMNS = {  # SelectionMetrics field -> fits_surrogate_benchmark column
     "rmse": "rmse",
     "spearman": "spearman",
     "regret_at_1": "regret_at_1",
@@ -40,14 +57,14 @@ def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
     outcomes = swarm.outcomes.copy()
     outcomes.loc[PERTURBED_RUN, "t0"] += 0.05
     run = swarm.runs[PERTURBED_RUN]
-    before = cross_validate(swarm, objective, anchors).set_index("observation_id")
-    after = cross_validate(dataclasses.replace(swarm, outcomes=outcomes), objective, anchors).set_index("observation_id")
+    before = cross_validate(swarm, objective, anchors).set_index(OBSERVATION_ID)
+    after = cross_validate(dataclasses.replace(swarm, outcomes=outcomes), objective, anchors).set_index(OBSERVATION_ID)
     # Every run but the calibration row 0 is scored once; measured moves by 0.05 times t0's objective weight, 0.5.
     assert sorted(before.index) == sorted(swarm.runs[1:])
-    assert after.loc[run, "measured"] == pytest.approx(before.loc[run, "measured"] + 0.025)
-    assert after.loc[run, "predicted"] == before.loc[run, "predicted"]
+    assert after.loc[run, MEASURED_COLUMN] == pytest.approx(before.loc[run, MEASURED_COLUMN] + 0.025)
+    assert after.loc[run, PREDICTED_COLUMN] == before.loc[run, PREDICTED_COLUMN]
     # The fits that train on the run see the change.
-    assert (after["predicted"].drop(run) != before["predicted"].drop(run)).any()
+    assert (after[PREDICTED_COLUMN].drop(run) != before[PREDICTED_COLUMN].drop(run)).any()
 
 
 def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_problem):
@@ -56,16 +73,18 @@ def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_proble
     fractions = swarm.pool_fractions.copy()
     fractions[PERTURBED_RUN] = 0.5  # the run draws half of every pool, which doubles its exposures
     run = swarm.runs[PERTURBED_RUN]
-    before = cross_validate(swarm, one_task, anchors).set_index("observation_id")
+    before = cross_validate(swarm, one_task, anchors).set_index(OBSERVATION_ID)
     one_run_halved = dataclasses.replace(swarm, pool_fractions=fractions)
-    after = cross_validate(one_run_halved, one_task, anchors).set_index("observation_id")
+    after = cross_validate(one_run_halved, one_task, anchors).set_index(OBSERVATION_ID)
     # The fit that predicts the run never trains on it, so in the run's fold only the run's own prediction moves.
-    fold = before["fold"] == before.loc[run, "fold"]
-    assert after.loc[run, "predicted"] != before.loc[run, "predicted"]
+    fold = before[FOLD_COLUMN] == before.loc[run, FOLD_COLUMN]
+    assert after.loc[run, PREDICTED_COLUMN] != before.loc[run, PREDICTED_COLUMN]
     others = fold & (before.index != run)
-    pd.testing.assert_series_equal(after.loc[others, "predicted"], before.loc[others, "predicted"], check_exact=True)
+    pd.testing.assert_series_equal(
+        after.loc[others, PREDICTED_COLUMN], before.loc[others, PREDICTED_COLUMN], check_exact=True
+    )
     # The fits of the other folds train on the run at its new exposures.
-    assert (after.loc[~fold, "predicted"] != before.loc[~fold, "predicted"]).any()
+    assert (after.loc[~fold, PREDICTED_COLUMN] != before.loc[~fold, PREDICTED_COLUMN]).any()
 
 
 def test_outer_splits_never_validate_calibration_rows(synthetic_problem):
@@ -110,7 +129,7 @@ def test_outer_splits_reject_an_inner_fold_of_calibration_runs_only():
 def test_selection_metrics_on_a_known_ranking():
     metrics = selection_metrics(np.array([0.3, 0.1, 0.2]), np.array([1.0, 1.2, 0.9]))
     # The pick, predicted 0.1, measures 1.2: the worst of three, 0.3 above the best.
-    assert metrics == pytest.approx(
+    assert dataclasses.asdict(metrics) == pytest.approx(
         {
             "rows": 3,
             "regret_at_1": 0.3,
@@ -139,7 +158,7 @@ def test_heldout_metrics_score_each_exposure_by_its_measured_objective(synthetic
         runs=np.ones(len(weights), dtype=int),
     )
     # The generating model, evaluated at each exposure's weights and pool fractions, scores perfectly.
-    assert heldout_metrics(truth, bank) == pytest.approx(
+    assert dataclasses.asdict(heldout_metrics(truth, bank)) == pytest.approx(
         {"rows": 12, "regret_at_1": 0.0, "selected_rank": 1, "optimism_at_pick": 0.0, "rmse": 0.0, "spearman": 1.0}
     )
 
@@ -172,8 +191,8 @@ def test_cross_validate_reproduces_table_10_mariner_row_on_uncheatable(snapshot)
     anchors = release_anchors(snapshot, MAIN_SWARM, TABLE_10_OBJECTIVE)
     table = cross_validate(swarm, objective, anchors, repeats=1)
     # The pooled out-of-fold predictions of every run but the calibration row.
-    metrics = selection_metrics(table["predicted"].to_numpy(), table["measured"].to_numpy())
-    assert metrics["rows"] == len(swarm.runs) - 1
+    metrics = selection_metrics(table[PREDICTED_COLUMN].to_numpy(), table[MEASURED_COLUMN].to_numpy())
+    assert metrics.rows == len(swarm.runs) - 1
     benchmark = read_table(snapshot, "fits_surrogate_benchmark")
     released = benchmark[
         (benchmark["model"] == TABLE_10_MODEL)
@@ -181,5 +200,8 @@ def test_cross_validate_reproduces_table_10_mariner_row_on_uncheatable(snapshot)
         & (benchmark["objective"] == TABLE_10_OBJECTIVE)
     ]
     assert len(released) == 1
-    gaps = {key: abs(metrics[key] - float(released[column].iloc[0])) for key, column in TABLE_10_COLUMNS.items()}
+    gaps = {
+        field: abs(getattr(metrics, field) - float(released[column].iloc[0]))
+        for field, column in TABLE_10_COLUMNS.items()
+    }
     assert all(gap <= TABLE_10_TOLERANCE for gap in gaps.values()), gaps
