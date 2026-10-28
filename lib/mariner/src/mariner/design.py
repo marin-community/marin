@@ -10,8 +10,9 @@ repeats are not fit rows; they anchor the floors. The paper's D-optimal selectio
 recipe, so every candidate is a run. After training, one adds ``observation_id`` and the ``bpb__<task_id>`` outcomes,
 and ``mariner.data.swarm_from_runs`` reads the table.
 
-The candidates port ``sobol_weight_configs`` for one phase, and UniMax ``compute_unimax_weights``, from the
-research code on the ``calvin/swarm-olmo3-regmix-test`` branch of marin-community/marin.
+The candidates port the research code's ``sobol_weight_configs`` for one phase, and UniMax its
+``compute_unimax_weights``. The README's "Research code" section gives the research code's location: the research
+branch at its release tag.
 """
 
 from __future__ import annotations
