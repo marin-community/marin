@@ -18,9 +18,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Exact pins: one bucket of the trained Olmix OlmoBaseEval Easy mixture lies 1.4e-6 of a block from a rounding
-# boundary of the 2,048-block grid, so another solver release can round it to a different mixture.
-olmix = ["cvxpy==1.9.2", "clarabel==0.11.1", "ecos==2.0.14"]
+# Exact pins: on the 2,048-block grid, the trained Olmix mixtures lie 0.020 block (Uncheatable) and 0.036 block
+# (OlmoBaseEval Easy) from the nearest rounding boundary that a change of solver can reach, and the paper's solve and
+# these releases put the continuous weights up to 0.025 block apart, so another release can round to another mixture.
+olmix = ["cvxpy==1.9.2", "clarabel==0.11.1"]
 download = ["huggingface-hub>=1.0"]
 
 [project.scripts]

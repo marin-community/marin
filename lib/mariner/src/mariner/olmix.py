@@ -29,7 +29,7 @@ HUBER_DELTA = 0.01
 FIT_STARTS = 48
 FIT_SEED = 0
 MAX_LOG = 50.0
-SOLVERS = ("CLARABEL", "ECOS", "SCS")
+SOLVERS = ("CLARABEL", "SCS")
 # Slack in blocks for floating rounding: a block maximum or a weight this close below a whole block reaches it.
 CAP_ROUNDING_SLACK = 1e-9
 WEIGHT_ROUNDING_SLACK = 1e-12
