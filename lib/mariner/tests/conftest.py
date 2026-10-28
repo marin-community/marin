@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures: one thread per BLAS and OpenMP pool for the session, a synthetic swarm drawn from a known MARINER
+"""Shared fixtures: one thread per BLAS and OpenMP pool in each test, a synthetic swarm drawn from a known MARINER
 model, a miniature snapshot in mariner-data's layout, and the local mariner-data snapshot."""
 
 import json
@@ -29,9 +29,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--mariner-data", default=None, help="local mariner-data snapshot read by data_integration tests")
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def one_thread_per_pool():
-    """One thread in each BLAS and OpenMP pool, as ``mariner.cli.main`` runs its commands."""
+    """One thread in each BLAS and OpenMP pool during each test, as ``mariner.cli.main`` runs its commands.
+
+    The limit ends with the test, so that later tests of other packages in the same pytest process keep their threads.
+    """
     with threadpool_limits(limits=1):
         yield
 
