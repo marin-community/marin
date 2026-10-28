@@ -170,17 +170,31 @@ def require_unique(ids: pd.Series, where: str) -> None:
         raise ValueError(f"{ids.name} must be unique {where}; repeated: {shown_values(repeated)}")
 
 
+def require_positive(values: np.ndarray, ids: Sequence[str], name: str) -> None:
+    """Raise ``ValueError`` naming the ``ids`` whose value of ``name`` in ``values`` is not positive and finite."""
+    invalid = [
+        identifier for identifier, value in zip(ids, values, strict=True) if not (np.isfinite(value) and value > 0)
+    ]
+    if invalid:
+        raise ValueError(f"{name} must be positive and finite, which it is not for {shown_values(invalid)}")
+
+
 def partition_from_table(table: pd.DataFrame, target_budget: float | None = None) -> Partition:
     """A partition table's buckets in table order.
 
     The epochs per unit weight are ``target_budget / pool_tokens`` for a target budget in tokens, else the table's
-    ``epochs_per_unit_weight``. Every row needs a ``bucket_id`` that no other row has.
+    ``epochs_per_unit_weight``. Every row needs a ``bucket_id`` that no other row has, and the pools, the target
+    budget and the epochs per unit weight must be positive and finite.
     """
     require_columns(table, PARTITION_COLUMNS, PARTITION_TABLE)
     require_identifiers(table, (BUCKET_ID,), PARTITION_TABLE)
     require_unique(table[BUCKET_ID], f"in the {PARTITION_TABLE} table")
+    bucket_ids = tuple(table[BUCKET_ID])
     pool_tokens = table[POOL_TOKENS].to_numpy(float)
+    require_positive(pool_tokens, bucket_ids, POOL_TOKENS)
     if target_budget is not None:
+        if not (np.isfinite(target_budget) and target_budget > 0):
+            raise ValueError(f"the target budget must be a positive and finite number of tokens, got {target_budget:g}")
         epochs = target_budget / pool_tokens
     elif EPOCHS_PER_UNIT_WEIGHT in table.columns:
         epochs = table[EPOCHS_PER_UNIT_WEIGHT].to_numpy(float)
@@ -188,7 +202,8 @@ def partition_from_table(table: pd.DataFrame, target_budget: float | None = None
         raise ValueError(
             f"the {PARTITION_TABLE} table has no {EPOCHS_PER_UNIT_WEIGHT} column; give the target budget in tokens"
         )
-    return Partition(tuple(table[BUCKET_ID]), pool_tokens, epochs)
+    require_positive(epochs, bucket_ids, EPOCHS_PER_UNIT_WEIGHT)
+    return Partition(bucket_ids, pool_tokens, epochs)
 
 
 def read_partition(path: Path, target_budget: float | None = None) -> Partition:
@@ -199,7 +214,8 @@ def read_partition(path: Path, target_budget: float | None = None) -> Partition:
 def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:
     """The objective ``name`` of a tasks table: its tasks in table order, weighted by their ``aggregate_weight``.
 
-    Every row needs a ``task_id`` and an ``objective``, and a task may appear once in an objective.
+    Every row needs a ``task_id`` and an ``objective``, a task may appear once in an objective, and the objective's
+    weights must be positive and finite.
     """
     require_columns(tasks, TASK_COLUMNS, TASKS_TABLE)
     require_identifiers(tasks, (TASK_ID, OBJECTIVE_COLUMN), TASKS_TABLE)
@@ -207,7 +223,9 @@ def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:
     if rows.empty:
         raise ValueError(f"no task belongs to objective {name}")
     require_unique(rows[TASK_ID], f"within objective {name}")
-    return Objective(name, tuple(rows[TASK_ID]), rows[AGGREGATE_WEIGHT].to_numpy(float))
+    task_ids, weights = tuple(rows[TASK_ID]), rows[AGGREGATE_WEIGHT].to_numpy(float)
+    require_positive(weights, task_ids, AGGREGATE_WEIGHT)
+    return Objective(name, task_ids, weights)
 
 
 def bucket_values(runs: pd.DataFrame, prefix: str, bucket_ids: Sequence[str]) -> np.ndarray:
@@ -216,17 +234,19 @@ def bucket_values(runs: pd.DataFrame, prefix: str, bucket_ids: Sequence[str]) ->
     return runs[columns].to_numpy(float)
 
 
-def flagged_columns(prefix: str, bucket_ids: Sequence[str], flagged: np.ndarray) -> str:
-    """The columns ``<prefix><bucket_id>`` that hold a flagged value; ``flagged`` is (runs, buckets)."""
-    return ", ".join(f"{prefix}{bucket}" for bucket, bad in zip(bucket_ids, flagged.any(axis=0), strict=True) if bad)
+def flagged_columns(prefix: str, ids: Sequence[str], flagged: np.ndarray) -> str:
+    """The columns ``<prefix><id>`` that hold a flagged value; ``flagged`` is (runs, ids), ids being buckets or tasks."""
+    return ", ".join(f"{prefix}{identifier}" for identifier, bad in zip(ids, flagged.any(axis=0), strict=True) if bad)
 
 
 def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
-    """The runs' weights (runs x buckets); each must be nonnegative, and each run's must sum to one within 1e-6."""
+    """The runs' weights (runs x buckets): finite and nonnegative, and each run's summing to one within 1e-6."""
     weights = bucket_values(runs, WEIGHT_PREFIX, bucket_ids)
-    negative = weights < 0.0
-    if negative.any():
-        raise ValueError(f"weights must be nonnegative: {flagged_columns(WEIGHT_PREFIX, bucket_ids, negative)}")
+    invalid = ~(np.isfinite(weights) & (weights >= 0.0))
+    if invalid.any():
+        raise ValueError(
+            f"weights must be finite and nonnegative: {flagged_columns(WEIGHT_PREFIX, bucket_ids, invalid)}"
+        )
     unnormalized = ~(np.abs(weights.sum(axis=1) - 1.0) <= WEIGHT_SUM_TOLERANCE)
     if unnormalized.any():
         raise ValueError(
@@ -247,7 +267,8 @@ def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
 
 
 def measured_outcomes(runs: pd.DataFrame, task_ids: Sequence[str]) -> pd.DataFrame:
-    """The runs' BPB on ``task_ids`` (runs x tasks, named by task id); every run must have every value."""
+    """The runs' BPB on ``task_ids`` (runs x tasks, named by task id); every run must have every value, positive and
+    finite."""
     columns = [f"{OUTCOME_PREFIX}{task}" for task in task_ids]
     require_columns(runs, columns, RUN_TABLE)
     outcomes = runs[columns].astype(float)
@@ -255,6 +276,10 @@ def measured_outcomes(runs: pd.DataFrame, task_ids: Sequence[str]) -> pd.DataFra
     if missing.any():
         counts = ", ".join(f"{column} in {count} of {len(runs)} runs" for column, count in missing[missing > 0].items())
         raise ValueError(f"missing outcomes: {counts}")
+    values = outcomes.to_numpy()
+    invalid = ~(np.isfinite(values) & (values > 0.0))
+    if invalid.any():
+        raise ValueError(f"outcomes must be positive and finite: {flagged_columns(OUTCOME_PREFIX, task_ids, invalid)}")
     return outcomes.set_axis(list(task_ids), axis=1).reset_index(drop=True)
 
 
