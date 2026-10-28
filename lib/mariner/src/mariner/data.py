@@ -145,8 +145,8 @@ def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> N
         raise ValueError(f"the {name} table has no column {', '.join(missing)}")
 
 
-def blank_identifiers(identifiers: pd.Series) -> pd.Series:
-    """Which of the ``identifiers`` are missing, empty or only whitespace."""
+def blank_identifier_mask(identifiers: pd.Series) -> pd.Series:
+    """The boolean mask of the ``identifiers`` that are missing, empty or only whitespace."""
     return identifiers.isna() | (identifiers.astype(str).str.strip() == "")
 
 
@@ -155,7 +155,7 @@ def require_identifiers(table: pd.DataFrame, columns: Sequence[str], name: str) 
 
     A blank identifier is missing, empty or only whitespace.
     """
-    blanks = {column: int(blank_identifiers(table[column]).sum()) for column in columns}
+    blanks = {column: int(blank_identifier_mask(table[column]).sum()) for column in columns}
     counts = ", ".join(f"{column} ({count} of {len(table)} rows)" for column, count in blanks.items() if count)
     if counts:
         raise ValueError(
