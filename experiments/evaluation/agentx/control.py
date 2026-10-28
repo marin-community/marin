@@ -133,6 +133,29 @@ def materialize(result_uri: str, output: Path) -> dict:
             raise ValueError("Retained processed artifact checksum changed")
         unpack(archive, output)
     write_record(str(output / "agentx-source.json"), result)
+    # Explicit single-load runs extend the measured curve through the app's
+    # existing append-only history contract, preserving each original source.
+    valid = [point for point in result["points"] if point["receipt"]["status"] == "valid"]
+    if valid:
+        write_record(
+            str(output / "changelog-metadata" / "agentx.json"),
+            {
+                "base_ref": "agentx",
+                "head_ref": result["source"]["head_sha"],
+                "entries": [
+                    {
+                        "config-keys": [],
+                        "description": (
+                            "AgentX full-hour measurements: "
+                            + ", ".join(
+                                f"{point['manifest']['profile']} C{point['manifest']['concurrency']}" for point in valid
+                            )
+                        ),
+                        "append-only": True,
+                    }
+                ],
+            },
+        )
     return result
 
 
