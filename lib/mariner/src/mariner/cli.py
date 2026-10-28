@@ -267,7 +267,7 @@ def check_epochs(fit: ObjectiveFit, epochs_per_unit_weight: np.ndarray, source: 
 
 
 def check_tasks(fit: ObjectiveFit, objective: Objective) -> None:
-    """Raise ``ValueError`` unless the fit's tasks are ``objective``'s in its order, with its weights within 1e-12."""
+    """Raise ``ValueError`` unless the fit's tasks and task weights are ``objective``'s, in order and within 1e-12."""
     tasks = tuple(task.task for task in fit.tasks)
     if tasks != objective.tasks:
         raise ValueError(

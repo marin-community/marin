@@ -5,12 +5,13 @@
 
 A run table has one row per training run: its ``observation_id``, its mixture weights ``w__<bucket_id>`` (nonnegative,
 summing to one), the fraction of each bucket's pool it drew from ``pf__<bucket_id>`` and its BPB on each task
-``bpb__<task_id>``. A swarm's run table also marks the runs a fit uses (``fit_inclusion``, True or False), labels the
-proportional mixture's fit run ``baseline_proportional`` (``run_label``) and gives the proportional repeats, which
-anchor the floors and must train that run's mixture, the ``design_kind`` ``repeat``. A partition table lists each
-``bucket_id`` with its ``pool_tokens``, and a tasks table each ``task_id`` with its ``objective`` and
-``aggregate_weight``. Identifier columns are read as text. A snapshot of the released dataset is read through its
-``MANIFEST.json``, which gives each table's file and format.
+``bpb__<task_id>`` (positive). A swarm's run table also marks the runs a fit uses (``fit_inclusion``, True or False),
+labels the proportional mixture's fit run ``baseline_proportional`` (``run_label``) and gives the proportional repeats,
+which anchor the floors and must train that run's mixture, the ``design_kind`` ``repeat``. A partition table lists
+each ``bucket_id`` with its ``pool_tokens`` (positive), and a tasks table each ``task_id`` with its ``objective`` and
+``aggregate_weight`` (positive). Identifier columns are read as text, and no row may leave a required one blank.
+Observation ids and bucket ids are unique, and so are task ids within an objective. A snapshot of the released dataset
+is read through its ``MANIFEST.json``, which gives each table's file and format.
 """
 
 from __future__ import annotations
@@ -258,8 +259,7 @@ def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
 
 
 def measured_outcomes(runs: pd.DataFrame, task_ids: Sequence[str]) -> pd.DataFrame:
-    """The runs' BPB on ``task_ids`` (runs x tasks, named by task id); every run must have every value, positive and
-    finite."""
+    """The runs' BPB on ``task_ids`` (runs x tasks, named by task id): every run's value, positive and finite."""
     columns = [f"{OUTCOME_PREFIX}{task}" for task in task_ids]
     require_columns(runs, columns, RUN_TABLE)
     outcomes = runs[columns].astype(float)
@@ -280,8 +280,9 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
     The calibration run is the fit row with ``run_label`` ``baseline_proportional``. Raises ``ValueError`` when the
     table lacks ``observation_id``, ``run_label``, ``design_kind`` or ``fit_inclusion``, a row leaves one of the first
     three blank, two rows share an ``observation_id``, ``fit_inclusion`` holds anything but True and False, no fit row
-    has that label, a fit row lacks an outcome of ``task_ids``, a fit row has a negative weight or weights that do not
-    sum to one within 1e-6, a bucket's ``w__`` or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
+    has that label, a fit row lacks an outcome of ``task_ids`` or has one that is not positive and finite, a fit row
+    has a weight that is not finite and nonnegative or weights that do not sum to one within 1e-6, a bucket's ``w__``
+    or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
     """
     require_columns(runs, RUN_COLUMNS, RUN_TABLE)
     require_identifiers(runs, (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND), RUN_TABLE)

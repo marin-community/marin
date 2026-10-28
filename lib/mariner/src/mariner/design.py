@@ -147,8 +147,8 @@ def unimax(pool_tokens: np.ndarray, budget: float, max_epochs: float) -> np.ndar
     budget evenly.
 
     Raises:
-        ValueError: If ``budget`` or ``max_epochs`` is not positive, or ``budget`` exceeds the ``max_epochs`` times the
-            pools' tokens that the capped buckets can hold.
+        ValueError: If ``budget`` or ``max_epochs`` is not positive, or ``budget`` exceeds ``max_epochs`` times the
+            pools' tokens, so that no bucket could stay within ``max_epochs``.
     """
     if not (budget > 0 and max_epochs > 0):
         raise ValueError(f"the budget and max_epochs must be positive, got {budget} and {max_epochs}")

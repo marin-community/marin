@@ -125,7 +125,7 @@ def block_maxima(upper: np.ndarray, slack: float) -> np.ndarray:
 
 
 def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: float, slack: float) -> None:
-    """Raise ``ValueError`` unless a proposal can satisfy the epoch cap with the KL weight; callers check before solving.
+    """Raise ``ValueError`` unless the epoch cap and the KL weight admit a proposal; proposers call it before solving.
 
     ``kl`` must be finite and nonnegative. ``cap`` is None (no cap) or a number of epochs, inf included, whose weight
     bounds (``bucket_upper_bounds``) sum to at least one and whose block maxima, computed as the rounding computes
