@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures: a synthetic swarm drawn from a known MARINER model, a miniature snapshot in mariner-data's layout,
-and the local mariner-data snapshot."""
+"""Shared fixtures: one thread per BLAS and OpenMP pool for the session, a synthetic swarm drawn from a known MARINER
+model, a miniature snapshot in mariner-data's layout, and the local mariner-data snapshot."""
 
 import json
 import math
@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from mariner.model import Anchor, Head, Objective, ObjectiveFit, Shape, Swarm, TaskFit
+from threadpoolctl import threadpool_limits
 
 SYNTHETIC_SEED = 20261028
 EPOCHS_PER_UNIT_WEIGHT = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
@@ -26,6 +27,13 @@ NOISE_SD = 0.002
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--mariner-data", default=None, help="local mariner-data snapshot read by data_integration tests")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def one_thread_per_pool():
+    """One thread in each BLAS and OpenMP pool, as ``mariner.cli.main`` runs its commands."""
+    with threadpool_limits(limits=1):
+        yield
 
 
 @pytest.fixture(scope="session")

@@ -7580,6 +7580,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "threadpoolctl" },
 ]
 
 [package.optional-dependencies]
@@ -7608,6 +7609,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=17" },
     { name = "scikit-learn", specifier = ">=1.8,<2" },
     { name = "scipy", specifier = ">=1.17,<2" },
+    { name = "threadpoolctl", specifier = ">=3.2" },
 ]
 provides-extras = ["olmix", "download"]
 

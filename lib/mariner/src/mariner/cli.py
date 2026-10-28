@@ -27,6 +27,7 @@ from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_limits
 
 from mariner import olmix, optimize
 from mariner.data import (
@@ -627,17 +628,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``mariner`` command with ``argv`` (default: the process's arguments) and return its exit status.
 
     A malformed argument exits through argparse with status 2. The directory of ``--out`` is created before the
-    command runs. An input the command cannot use, raised as a ``ValueError`` (such as a table without a bucket's
-    ``w__`` column) or an ``OSError`` (such as a missing file), or an extra it needs and lacks, raised as an
-    ``ImportError`` that names the extra, stops it with a message on stderr and status 2. Other exceptions, a solver's
-    ``RuntimeError`` among them, propagate. ``self-test`` returns 1 when a check fails.
+    command runs, and the command runs with one thread in each BLAS and OpenMP pool. An input the command cannot use,
+    raised as a ``ValueError`` (such as a table without a bucket's ``w__`` column) or an ``OSError`` (such as a missing
+    file), or an extra it needs and lacks, raised as an ``ImportError`` that names the extra, stops it with a message
+    on stderr and status 2. Other exceptions, a solver's ``RuntimeError`` among them, propagate. ``self-test`` returns
+    1 when a check fails.
     """
     args = argument_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
     try:
         if args.out is not None:
             args.out.parent.mkdir(parents=True, exist_ok=True)  # before the compute, which a bad path would waste
-        return args.run(args)
+        # NumPy, SciPy and scikit-learn each start a pool of one thread per core, and a fit is many small NNLS and
+        # least-squares solves, where those threads only contend: on 16 Linux cores a fit took over ten times longer.
+        with threadpool_limits(limits=1):
+            return args.run(args)
     except (ImportError, OSError, ValueError) as error:
         print(f"mariner {args.command}: error: {error}", file=sys.stderr)
         return INPUT_ERROR_STATUS
