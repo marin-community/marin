@@ -86,6 +86,7 @@ TASK_COLUMNS = (TASK_ID, OBJECTIVE_COLUMN, AGGREGATE_WEIGHT)
 RUN_TABLE = "run"
 PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
+HELDOUT_TABLE = "heldout"  # the held-out runs' table, in the snapshot's MANIFEST.json and in messages
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
@@ -244,12 +245,12 @@ def flagged_columns(prefix: str, ids: Sequence[str], flagged: np.ndarray) -> str
     return shown_values(columns)
 
 
-def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
-    """The runs' weights (runs x buckets): finite and nonnegative, and each run's summing to one within 1e-6.
+def mixture_weights(table: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
+    """The weights (rows x buckets) of ``table``: finite and nonnegative, each row summing to one within 1e-6.
 
     ``name`` is the table's name in messages.
     """
-    weights = bucket_values(runs, WEIGHT_PREFIX, bucket_ids, name)
+    weights = bucket_values(table, WEIGHT_PREFIX, bucket_ids, name)
     invalid = ~(np.isfinite(weights) & (weights >= 0.0))
     if invalid.any():
         raise ValueError(
@@ -258,17 +259,18 @@ def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str], name: str) ->
     unnormalized = ~(np.abs(weights.sum(axis=1) - 1.0) <= WEIGHT_SUM_TOLERANCE)
     if unnormalized.any():
         raise ValueError(
-            f"the weights of {unnormalized.sum()} of {len(runs)} runs do not sum to one within {WEIGHT_SUM_TOLERANCE:g}"
+            f"the weights of {unnormalized.sum()} of {len(table)} rows of the {name} table do not sum to one within"
+            f" {WEIGHT_SUM_TOLERANCE:g}"
         )
     return weights
 
 
-def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
-    """The runs' pool fractions (runs x buckets); each must lie in (0, 1], since a zero gives infinite exposure.
+def pool_fractions(table: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
+    """The pool fractions (rows x buckets) of ``table``; each must lie in (0, 1], since a zero gives infinite exposure.
 
     ``name`` is the table's name in messages.
     """
-    fractions = bucket_values(runs, POOL_FRACTION_PREFIX, bucket_ids, name)
+    fractions = bucket_values(table, POOL_FRACTION_PREFIX, bucket_ids, name)
     outside = ~((fractions > 0.0) & (fractions <= 1.0))
     if outside.any():
         raise ValueError(
@@ -359,10 +361,10 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     per-task values; otherwise it is the task means weighted by the objective.
     """
     runs = runs.reset_index(drop=True)
-    weights = mixture_weights(runs, partition.bucket_ids, RUN_TABLE)
-    fractions = pool_fractions(runs, partition.bucket_ids, RUN_TABLE)
+    weights = mixture_weights(runs, partition.bucket_ids, HELDOUT_TABLE)
+    fractions = pool_fractions(runs, partition.bucket_ids, HELDOUT_TABLE)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
-    require_columns(runs, columns, RUN_TABLE)
+    require_columns(runs, columns, HELDOUT_TABLE)
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
     if keys.isna().any():
         raise ValueError(f"{keys.isna().sum()} of {len(runs)} runs have no {keys.name}")
@@ -512,7 +514,7 @@ def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
     """The paper's held-out bank: the ``heldout`` runs that ``fits_heldout_predictions`` predicts for ``objective``."""
     predictions = read_table(root, "fits_heldout_predictions")
     population = predictions.loc[predictions[OBJECTIVE_COLUMN] == objective, OBSERVATION_ID]
-    heldout = read_table(root, "heldout")
+    heldout = read_table(root, HELDOUT_TABLE)
     return heldout_bank(
         heldout[heldout[OBSERVATION_ID].isin(population)],
         release_partition(root),

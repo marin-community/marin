@@ -33,6 +33,7 @@ from mariner import olmix, optimize
 from mariner.data import (
     DATASET_REPO,
     DESIGN_KIND,
+    HELDOUT_TABLE,
     MAIN_SWARM,
     OBJECTIVES,
     OBSERVATION_ID,
@@ -78,7 +79,6 @@ EPOCHS_TOLERANCE = 1e-12  # relative: one partition and target budget give the s
 TASK_WEIGHT_TOLERANCE = 1e-12  # relative: one tasks table gives the same weights up to floating rounding
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket
 PREDICTION_PREFIX = "predicted_"
-HELDOUT_TABLE = "heldout"  # the snapshot's held-out runs
 MIXTURES_TABLE = "mixtures"  # predict's --mixtures, in error messages
 DIAGNOSTICS_SUFFIX = ".diagnostics.json"
 LAWS_SUFFIX = ".laws.json"
