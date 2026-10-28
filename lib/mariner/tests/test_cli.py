@@ -208,11 +208,11 @@ def test_cli_fit_and_optimize_rederive_trained_mariner_mixture(snapshot, tmp_pat
 @pytest.mark.data_integration
 @pytest.mark.timeout(300)
 def test_cli_olmix_refits_released_laws_and_rederives_trained_mixture(snapshot, tmp_path):
-    mixture_id, kl = TRAINED_OLMIX["uncheatable"]
+    trained = TRAINED_OLMIX["uncheatable"]
     out = tmp_path / "olmix.csv"
     command = ["olmix", "--data", str(snapshot), "--swarm", MAIN_SWARM, "--objective", "uncheatable"]
-    assert main([*command, "--kl", str(kl), "--cap", str(OLMIX_CAP), "--out", str(out)]) == 0
-    np.testing.assert_array_equal(read_csv(out)["runtime_count"], trained_counts(snapshot, mixture_id))
+    assert main([*command, "--kl", str(trained.kl), "--cap", str(OLMIX_CAP), "--out", str(out)]) == 0
+    np.testing.assert_array_equal(read_csv(out)["runtime_count"], trained_counts(snapshot, trained.mixture_id))
     laws = json.loads((tmp_path / "olmix.laws.json").read_text())["tasks"]
     assert [law["task"] for law in laws] == list(objective_from_tasks(release_tasks(snapshot), "uncheatable").tasks)
     refit = np.array([[law["log_c"], law["huber_loss"], *law["coefficients"]] for law in laws])

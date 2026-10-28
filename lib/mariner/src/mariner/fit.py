@@ -117,18 +117,17 @@ def final_inner_folds(swarm: Swarm) -> Folds:
 
 @dataclasses.dataclass(frozen=True)
 class FloorSpec:
-    anchor: float  # NaN: the training median
+    anchor: float
     noise_sd: float
     nu: float
     noise_margin_sds: float = NOISE_MARGIN_SDS
 
 
 def floor_value(response: np.ndarray, spec: FloorSpec) -> float:
-    anchor = float(np.median(response)) if math.isnan(spec.anchor) else spec.anchor
-    gap = anchor - float(np.min(response))
+    gap = spec.anchor - float(np.min(response))
     if gap <= 0.0:
-        gap = max(float(np.std(response)), 1e-3 * abs(anchor), 1e-6)
-    return anchor - max(spec.nu * gap, spec.noise_margin_sds * spec.noise_sd)
+        gap = max(float(np.std(response)), 1e-3 * abs(spec.anchor), 1e-6)
+    return spec.anchor - max(spec.nu * gap, spec.noise_margin_sds * spec.noise_sd)
 
 
 def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, gamma: float) -> tuple[float, np.ndarray]:

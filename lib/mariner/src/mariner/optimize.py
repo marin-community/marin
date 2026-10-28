@@ -97,20 +97,32 @@ def optimize_start(
     }
 
 
-def bucket_upper_bounds(fit: ObjectiveFit, cap: float | None) -> np.ndarray:
-    """Per-bucket weight bounds: the simplex alone (``cap`` None, the procedure) or an optional epoch cap."""
+def proportional_mixture(epochs_per_unit_weight: np.ndarray) -> np.ndarray:
+    """The mixture in proportion to the buckets' pools: (1 / epochs) / sum(1 / epochs)."""
+    natural = 1.0 / epochs_per_unit_weight
+    return natural / natural.sum()
+
+
+def bucket_upper_bounds(epochs_per_unit_weight: np.ndarray, cap: float | None) -> np.ndarray:
+    """Per-bucket weight bounds: the simplex alone (``cap`` None, the procedure) or an epoch cap, min(1, cap / epochs).
+
+    Raises:
+        ValueError: If the cap's bounds sum to less than one, so that no complete mixture satisfies them.
+    """
     if cap is None:
-        return np.ones(len(fit.epochs_per_unit_weight))
-    return np.minimum(1.0, cap / fit.epochs_per_unit_weight)
+        return np.ones(len(epochs_per_unit_weight))
+    upper = np.minimum(1.0, cap / epochs_per_unit_weight)
+    if upper.sum() < 1:
+        raise ValueError(f"an epoch cap of {cap:g} cannot hold a complete mixture")
+    return upper
 
 
 def continuous_optimum(
     fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished."""
-    natural = 1.0 / fit.epochs_per_unit_weight
-    natural = natural / natural.sum()
-    upper = bucket_upper_bounds(fit, cap)
+    natural = proportional_mixture(fit.epochs_per_unit_weight)
+    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap)
     indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
     starts = [project_start(row, upper, natural) for row in (natural, *swarm_weights[indices])]
     records, solutions = [], []
@@ -182,9 +194,9 @@ def runtime_policy(
     fit: ObjectiveFit, weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and predictions."""
-    maximum = np.floor(bucket_upper_bounds(fit, cap) * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
-    natural = 1.0 / fit.epochs_per_unit_weight
-    natural = natural / natural.sum()
+    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap)
+    maximum = np.floor(upper * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
+    natural = proportional_mixture(fit.epochs_per_unit_weight)
 
     def predict(rows: np.ndarray) -> np.ndarray:
         rows = np.atleast_2d(rows)
@@ -225,10 +237,9 @@ def propose(fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = No
     """The fitted objective's optimum (``continuous_optimum``) rounded to the sampler grid (``runtime_policy``).
 
     ``cap`` bounds every bucket's materialized epochs and ``kl`` weights a KL penalty toward the proportional
-    mixture; both are optional and not part of the procedure.
+    mixture; both are optional and not part of the procedure. Raises ``ValueError`` before any solve when the cap
+    cannot hold a complete mixture.
     """
-    if bucket_upper_bounds(fit, cap).sum() < 1:
-        raise ValueError(f"epoch cap {cap} cannot hold a complete mixture")
     continuous, starts = continuous_optimum(fit, swarm_weights, cap, kl)
     counts, summary = runtime_policy(fit, continuous, cap, kl)
     return Proposal(counts, continuous, summary, starts)

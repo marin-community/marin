@@ -23,6 +23,7 @@ import sys
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -30,11 +31,13 @@ import pandas as pd
 from mariner import olmix, optimize
 from mariner.data import (
     DATASET_REPO,
+    DESIGN_KIND,
     MAIN_SWARM,
     OBJECTIVES,
     OBSERVATION_ID,
     OLMIX_CAP,
     POOL_FRACTION_PREFIX,
+    PROPORTIONAL,
     REPEAT,
     SWARMS,
     TRAINED_MARINER,
@@ -51,6 +54,7 @@ from mariner.data import (
     release_anchors,
     release_heldout_bank,
     release_partition,
+    release_runs,
     release_swarm,
     release_tasks,
     released_olmix_laws,
@@ -58,7 +62,7 @@ from mariner.data import (
     swarm_from_runs,
     trained_counts,
 )
-from mariner.design import PROPORTIONAL, proportional, sobol_candidates, stratified, swarm_table, unimax
+from mariner.design import STRATIFIED, UNIMAX, proportional, sobol_candidates, stratified, swarm_table, unimax
 from mariner.evaluate import cross_validate, heldout_metrics, selection_metrics
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
@@ -67,8 +71,6 @@ logger = logging.getLogger(__name__)
 
 PREDICTION_TOLERANCE = 1e-6  # agreed: the refit's predictions against the released ones, in BPB
 EXACT = 0.0  # buckets in which a re-derived mixture may differ from the trained one
-UNIMAX = "unimax"
-STRATIFIED = "stratified"
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket
 PREDICTION_PREFIX = "predicted_"
 DIAGNOSTICS_SUFFIX = ".diagnostics.json"
@@ -162,12 +164,12 @@ def self_test(
             laws = released_olmix_laws(root, name)
         else:
             laws = olmix.fit_laws(swarm, objective)
-        olmix_mixture, kl = TRAINED_OLMIX[name]
-        olmix_proposal = olmix.propose(laws, objective, swarm.epochs_per_unit_weight, OLMIX_CAP, kl)
+        trained = TRAINED_OLMIX[name]
+        olmix_proposal = olmix.propose(laws, objective, swarm.epochs_per_unit_weight, OLMIX_CAP, trained.kl)
         checks.append(
             Check(
-                f"{name} Olmix ({olmix_laws} laws) buckets off {olmix_mixture}",
-                differing_buckets(olmix_proposal.counts, trained_counts(root, olmix_mixture)),
+                f"{name} Olmix ({olmix_laws} laws) buckets off {trained.mixture_id}",
+                differing_buckets(olmix_proposal.counts, trained_counts(root, trained.mixture_id)),
                 EXACT,
             )
         )
@@ -197,23 +199,32 @@ def check_swarm_arguments(args: argparse.Namespace) -> None:
         raise ValueError(f"{source} does not take {', '.join(unused)}")
 
 
-def read_swarm(args: argparse.Namespace, objective_name: str) -> tuple[Swarm, Objective]:
-    """The fit rows of the swarm the arguments name, with the outcomes of the objective ``objective_name``."""
+class SwarmTables(NamedTuple):
+    """A swarm as the commands read it: its fit rows, the objective whose outcomes they hold, and its run table."""
+
+    swarm: Swarm
+    objective: Objective
+    runs: pd.DataFrame
+
+
+def read_swarm(args: argparse.Namespace, objective_name: str) -> SwarmTables:
+    """The swarm the arguments name, with the outcomes of the objective ``objective_name``."""
     check_swarm_arguments(args)
     if args.data is not None:
-        objective = objective_from_tasks(release_tasks(args.data), objective_name)
-        return release_swarm(args.data, args.swarm, objective_name), objective
-    objective = objective_from_tasks(read_csv(args.tasks), objective_name)
-    partition = read_partition(args.partition, args.target_budget)
-    return swarm_from_runs(read_csv(args.runs), partition, objective.tasks), objective
+        tasks, runs = release_tasks(args.data), release_runs(args.data, args.swarm)
+        partition = release_partition(args.data)
+    else:
+        tasks, runs = read_csv(args.tasks), read_csv(args.runs)
+        partition = read_partition(args.partition, args.target_budget)
+    objective = objective_from_tasks(tasks, objective_name)
+    return SwarmTables(swarm_from_runs(runs, partition, objective.tasks), objective, runs)
 
 
-def read_anchors(args: argparse.Namespace, objective: Objective) -> dict[str, Anchor]:
-    """The released swarm's anchors, or the mean and SD of one's own ``repeat`` runs."""
+def read_anchors(args: argparse.Namespace, tables: SwarmTables) -> dict[str, Anchor]:
+    """The released swarm's anchors, or the mean and SD of the ``repeat`` runs of one's own run table."""
     if args.data is not None:
-        return release_anchors(args.data, args.swarm, objective.name)
-    runs = read_csv(args.runs)
-    return anchors_from_runs(runs[runs["design_kind"] == REPEAT], objective.tasks)
+        return release_anchors(args.data, args.swarm, tables.objective.name)
+    return anchors_from_runs(tables.runs[tables.runs[DESIGN_KIND] == REPEAT], tables.objective.tasks)
 
 
 def read_fit(path: Path) -> ObjectiveFit:
@@ -225,8 +236,8 @@ def check_buckets(fit: ObjectiveFit, buckets: Sequence[str], source: str) -> Non
         raise ValueError(f"the buckets of {source} are not the fit's buckets in the fit's order")
 
 
-def beside(path: Path, suffix: str) -> Path:
-    """The file next to ``path`` with its stem and ``suffix``: mixture.csv -> mixture<suffix>."""
+def sibling_path(path: Path, suffix: str) -> Path:
+    """The file in the directory of ``path`` named by its stem and ``suffix``: mixture.csv -> mixture<suffix>."""
     return path.with_name(f"{path.stem}{suffix}")
 
 
@@ -266,9 +277,10 @@ def run_download(args: argparse.Namespace) -> int:
 
 
 def run_fit(args: argparse.Namespace) -> int:
-    swarm, objective = read_swarm(args, args.objective)
+    tables = read_swarm(args, args.objective)
+    swarm, objective = tables.swarm, tables.objective
     logger.info("fitting the %d tasks of %s on %d runs", len(objective.tasks), objective.name, len(swarm.runs))
-    fit = fit_objective(swarm, objective, read_anchors(args, objective), log=logger.info)
+    fit = fit_objective(swarm, objective, read_anchors(args, tables), log=logger.info)
     write_json(fit.to_json(), args.out)
     return 0
 
@@ -290,17 +302,18 @@ def run_predict(args: argparse.Namespace) -> int:
 
 def run_optimize(args: argparse.Namespace) -> int:
     fit = read_fit(args.fit)
-    swarm, _ = read_swarm(args, fit.objective)
+    swarm = read_swarm(args, fit.objective).swarm
     check_buckets(fit, swarm.buckets, "the swarm")
     proposal = optimize.propose(fit, swarm.weights, args.cap, args.kl)
     write_csv(mixture_table(fit.buckets, proposal.continuous, proposal.counts, fit.epochs_per_unit_weight), args.out)
-    write_json({"summary": proposal.summary, "starts": proposal.starts}, beside(args.out, DIAGNOSTICS_SUFFIX))
+    write_json({"summary": proposal.summary, "starts": proposal.starts}, sibling_path(args.out, DIAGNOSTICS_SUFFIX))
     return 0
 
 
 def run_cross_validate(args: argparse.Namespace) -> int:
-    swarm, objective = read_swarm(args, args.objective)
-    table = cross_validate(swarm, objective, read_anchors(args, objective), args.repeats, log=logger.info)
+    tables = read_swarm(args, args.objective)
+    anchors = read_anchors(args, tables)
+    table = cross_validate(tables.swarm, tables.objective, anchors, args.repeats, log=logger.info)
     write_csv(table, args.out)
     for repeat, rows in table.groupby("repeat"):
         metrics = selection_metrics(rows["predicted"].to_numpy(), rows["measured"].to_numpy())
@@ -316,7 +329,8 @@ def run_evaluate(args: argparse.Namespace) -> int:
 
 
 def run_olmix(args: argparse.Namespace) -> int:
-    swarm, objective = read_swarm(args, args.objective)
+    tables = read_swarm(args, args.objective)
+    swarm, objective = tables.swarm, tables.objective
     logger.info(
         "fitting the Olmix laws of the %d tasks of %s on %d runs", len(objective.tasks), objective.name, len(swarm.runs)
     )
@@ -332,7 +346,7 @@ def run_olmix(args: argparse.Namespace) -> int:
             for task, law in zip(objective.tasks, laws, strict=True)
         ],
     }
-    write_json(payload, beside(args.out, LAWS_SUFFIX))
+    write_json(payload, sibling_path(args.out, LAWS_SUFFIX))
     return 0
 
 

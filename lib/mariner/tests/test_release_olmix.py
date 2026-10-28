@@ -26,7 +26,7 @@ def matched_proposal(snapshot: Path, objective: str, laws: Sequence[LogLinearLaw
     """The proposal of ``laws`` at the trained matched Olmix mixture's epoch cap and KL weight."""
     target = objective_from_tasks(release_tasks(snapshot), objective)
     epochs = release_partition(snapshot).epochs_per_unit_weight
-    return propose(laws, target, epochs, cap=OLMIX_CAP, kl=TRAINED_OLMIX[objective][1])
+    return propose(laws, target, epochs, cap=OLMIX_CAP, kl=TRAINED_OLMIX[objective].kl)
 
 
 def law_parameters(laws: Sequence[LogLinearLaw]) -> np.ndarray:
@@ -38,7 +38,7 @@ def law_parameters(laws: Sequence[LogLinearLaw]) -> np.ndarray:
 @pytest.mark.parametrize("objective", ["uncheatable", "obe_easy"])
 def test_released_laws_reproduce_trained_olmix_mixture(snapshot, objective):
     proposal = matched_proposal(snapshot, objective, released_olmix_laws(snapshot, objective))
-    np.testing.assert_array_equal(proposal.counts, trained_counts(snapshot, TRAINED_OLMIX[objective][0]))
+    np.testing.assert_array_equal(proposal.counts, trained_counts(snapshot, TRAINED_OLMIX[objective].mixture_id))
 
 
 @pytest.mark.data_integration
@@ -50,4 +50,4 @@ def test_refit_laws_equal_released_laws_and_trained_mixture(snapshot, objective)
     released = law_parameters(released_olmix_laws(snapshot, objective))
     np.testing.assert_allclose(law_parameters(laws), released, rtol=0, atol=LAW_TOLERANCE)
     proposal = matched_proposal(snapshot, objective, laws)
-    np.testing.assert_array_equal(proposal.counts, trained_counts(snapshot, TRAINED_OLMIX[objective][0]))
+    np.testing.assert_array_equal(proposal.counts, trained_counts(snapshot, TRAINED_OLMIX[objective].mixture_id))

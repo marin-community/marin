@@ -25,6 +25,20 @@ import numpy as np
 import pandas as pd
 from scipy.stats import qmc
 
+from mariner.data import (
+    BASELINE,
+    BASELINE_PREFIX,
+    DELETION,
+    DESIGN_KIND,
+    FIT_INCLUSION,
+    POOL_FRACTION_PREFIX,
+    PROPORTIONAL,
+    REPEAT,
+    RUN_LABEL,
+    SAMPLED,
+    WEIGHT_PREFIX,
+)
+
 MIN_WEIGHT = 2e-4  # candidate weights below this become zero
 MIN_DISTANCE = 0.001  # the least total variation distance between two candidates
 SOBOL_CLIP = 1e-9  # keeps -log(u) finite and positive at the ends of the unit interval
@@ -32,14 +46,11 @@ POINTS_PER_CANDIDATE = 1_000  # Sobol' points tried per requested candidate befo
 FIRST_BLOCK_EXPONENT = 3  # the first block holds 2**3 points
 DEDUPLICATION_DECIMALS = 4
 
-WEIGHT_PREFIX = "w__"
-POOL_FRACTION_PREFIX = "pf__"
-BASELINE_PREFIX = "baseline_"
-PROPORTIONAL = "proportional"  # the baseline that calibrates the fit and that the repeats train
-BASELINE = "baseline"
-SAMPLED = "sampled"
-DELETION = "deletion"
-REPEAT = "repeat"
+UNIMAX = "unimax"  # the recipe's other baselines, beside the calibrating PROPORTIONAL of mariner.data
+STRATIFIED = "stratified"
+SAMPLED_RUN_PREFIX = "run_"  # run labels run_00000, ..., deletion_<bucket_id> and proportional_repeat_00, ...
+DELETION_RUN_PREFIX = "deletion_"
+REPEAT_RUN_INFIX = "_repeat_"
 TRAINER_SEED = 0
 
 
@@ -57,8 +68,10 @@ def sobol_mixtures(n_buckets: int, seed: int, min_weight: float) -> Iterator[np.
     # seed=<int> seeds NumPy's legacy RandomState; rng=<int> would seed a Generator and draw a different sequence.
     sobol = qmc.Sobol(d=n_buckets, scramble=True, seed=seed)
     exponent = FIRST_BLOCK_EXPONENT
+    drawn = 0
     while True:
         points = np.clip(sobol.random_base2(exponent), SOBOL_CLIP, 1.0 - SOBOL_CLIP)
+        drawn += len(points)
         exponentials = -np.log(points)
         simplex = exponentials / exponentials.sum(axis=1, keepdims=True)
         kept = np.where(simplex >= min_weight, simplex, 0.0)
@@ -67,7 +80,7 @@ def sobol_mixtures(n_buckets: int, seed: int, min_weight: float) -> Iterator[np.
         np.divide(kept, total, out=mixtures, where=total > 0)
         yield from mixtures
         # random_base2 needs the points drawn so far to total a power of two, so each block doubles that total.
-        exponent = int(math.log2(sobol.num_generated))
+        exponent = int(math.log2(drawn))
 
 
 def sobol_candidates(
@@ -129,6 +142,9 @@ def unimax(pool_tokens: np.ndarray, budget: float, max_epochs: float) -> np.ndar
     Taking the buckets in ascending pool size (ties in bucket order), a bucket whose even share of the remaining
     budget exceeds ``max_epochs * pool`` is capped at that many tokens, and the buckets left split the remaining
     budget evenly.
+
+    Raises:
+        ValueError: If ``budget`` or ``max_epochs`` is not positive.
     """
     if budget <= 0 or max_epochs <= 0:
         raise ValueError(f"the budget and max_epochs must be positive, got {budget} and {max_epochs}")
@@ -202,25 +218,42 @@ def swarm_table(
     if PROPORTIONAL not in baselines:
         raise ValueError(f"the baselines must include '{PROPORTIONAL}', which calibrates the fit and is repeated")
     groups = [
-        RunGroup([f"{BASELINE_PREFIX}{name}" for name in baselines], BASELINE, True, np.stack(list(baselines.values()))),
-        RunGroup([f"run_{index:05d}" for index in range(len(candidates))], SAMPLED, True, candidates),
+        RunGroup(
+            [f"{BASELINE_PREFIX}{name}" for name in baselines],
+            BASELINE,
+            fit_inclusion=True,
+            weights=np.stack(list(baselines.values())),
+        ),
+        RunGroup(
+            [f"{SAMPLED_RUN_PREFIX}{index:05d}" for index in range(len(candidates))],
+            SAMPLED,
+            fit_inclusion=True,
+            weights=candidates,
+        ),
     ]
     if removal_base is not None:
-        groups.append(RunGroup([f"deletion_{bucket}" for bucket in bucket_ids], DELETION, True, removals(removal_base)))
+        groups.append(
+            RunGroup(
+                [f"{DELETION_RUN_PREFIX}{bucket}" for bucket in bucket_ids],
+                DELETION,
+                fit_inclusion=True,
+                weights=removals(removal_base),
+            )
+        )
     groups.append(
         RunGroup(
-            [f"{PROPORTIONAL}_repeat_{index:02d}" for index in range(repeats)],
+            [f"{PROPORTIONAL}{REPEAT_RUN_INFIX}{index:02d}" for index in range(repeats)],
             REPEAT,
-            False,
-            np.tile(baselines[PROPORTIONAL], (repeats, 1)),
+            fit_inclusion=False,
+            weights=np.tile(baselines[PROPORTIONAL], (repeats, 1)),
         )
     )
     labels = [label for group in groups for label in group.labels]
     runs = pd.DataFrame(
         {
-            "run_label": labels,
-            "design_kind": [group.kind for group in groups for _ in group.labels],
-            "fit_inclusion": [group.fit_inclusion for group in groups for _ in group.labels],
+            RUN_LABEL: labels,
+            DESIGN_KIND: [group.kind for group in groups for _ in group.labels],
+            FIT_INCLUSION: [group.fit_inclusion for group in groups for _ in group.labels],
             "data_seed": data_seed_start + np.arange(len(labels)),
             "trainer_seed": TRAINER_SEED,
         }

@@ -19,6 +19,7 @@ import json
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -33,21 +34,43 @@ SWARMS = ("qwen3_360m_1p6b", "llama_160m_1p2b", "llama_200m_6b")
 MAIN_SWARM = "qwen3_360m_1p6b"
 OBJECTIVES = ("uncheatable", "obe_easy")
 PAPER_TARGET_BUDGET = 6_325_183_647_689  # D_tgt in tokens: the release's epochs per unit weight are D_tgt / P_i
-CALIBRATION_RUN = "baseline_proportional"
-REPEAT = "repeat"
 JUNE_RUN_FLOPS = 3e18
 JUNE_RUN_OBJECTIVE = "uncheatable"  # the one objective whose main-swarm anchors include the June run
 TRAINED_MARINER = {"uncheatable": "mix_4c2c8b25f9e6d5ca", "obe_easy": "mix_dcbcb8cd4cfc72df"}
-# The matched Olmix mixture trained for each objective, with the KL weight that proposed it under the epoch cap.
-TRAINED_OLMIX = {"uncheatable": ("mix_645a3bf43226a443", 0.05), "obe_easy": ("mix_40fb2116404045a4", 0.005)}
+
+
+class TrainedOlmix(NamedTuple):
+    """A matched Olmix mixture that the paper trained, and the KL weight that proposed it under the epoch cap."""
+
+    mixture_id: str
+    kl: float
+
+
+TRAINED_OLMIX = {
+    "uncheatable": TrainedOlmix("mix_645a3bf43226a443", 0.05),
+    "obe_easy": TrainedOlmix("mix_40fb2116404045a4", 0.005),
+}
 OLMIX_CAP = 4.0
 
-MANIFEST = "MANIFEST.json"
+# The run-table schema, which mariner.design writes: columns, the prefixes of the per-bucket and per-task columns,
+# the calibration run's label and the design kinds.
 OBSERVATION_ID = "observation_id"
+RUN_LABEL = "run_label"
+DESIGN_KIND = "design_kind"
+FIT_INCLUSION = "fit_inclusion"
 EXPOSURE_ID = "exposure_id"
 WEIGHT_PREFIX = "w__"
 POOL_FRACTION_PREFIX = "pf__"
 OUTCOME_PREFIX = "bpb__"
+BASELINE_PREFIX = "baseline_"  # a baseline mixture's run label is baseline_<name>
+PROPORTIONAL = "proportional"  # the baseline that calibrates the fit and that the repeats train
+CALIBRATION_RUN = f"{BASELINE_PREFIX}{PROPORTIONAL}"
+BASELINE = "baseline"
+SAMPLED = "sampled"
+DELETION = "deletion"
+REPEAT = "repeat"
+
+MANIFEST = "MANIFEST.json"
 COEFFICIENT_PREFIX = "coef__"
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12  # floating rounding; the release's runs at one exposure differ by 4.2e-16 at most
 DOWNLOAD_PATTERNS = (
@@ -174,8 +197,8 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
     row has that label, a fit row lacks an outcome of ``task_ids``, a fit row's weights do not sum to one within 1e-6,
     a bucket's ``w__`` or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
     """
-    fit = runs[runs["fit_inclusion"]].reset_index(drop=True)
-    calibration = (fit["run_label"] == CALIBRATION_RUN).to_numpy()
+    fit = runs[runs[FIT_INCLUSION]].reset_index(drop=True)
+    calibration = (fit[RUN_LABEL] == CALIBRATION_RUN).to_numpy()
     if not calibration.any():
         raise ValueError(f"no fit row has run_label {CALIBRATION_RUN}, the calibration run")
     return Swarm(
@@ -267,10 +290,15 @@ def release_tasks(root: Path) -> pd.DataFrame:
     return read_table(root, "tasks")
 
 
+def release_runs(root: Path, swarm: str) -> pd.DataFrame:
+    """The run table of the released swarm ``swarm`` (table ``swarm_<swarm>``)."""
+    return read_table(root, f"swarm_{swarm}")
+
+
 def release_swarm(root: Path, swarm: str, objective: str) -> Swarm:
-    """The fit rows of the released swarm ``swarm`` (table ``swarm_<swarm>``), with the outcomes of ``objective``."""
+    """The fit rows of the released swarm ``swarm``, with the outcomes of ``objective``."""
     task_ids = objective_from_tasks(release_tasks(root), objective).tasks
-    return swarm_from_runs(read_table(root, f"swarm_{swarm}"), release_partition(root), task_ids)
+    return swarm_from_runs(release_runs(root, swarm), release_partition(root), task_ids)
 
 
 def june_run(root: Path, swarm_table: pd.DataFrame) -> pd.DataFrame:
@@ -294,8 +322,8 @@ def release_anchors(root: Path, swarm: str, objective: str) -> dict[str, Anchor]
     The main swarm's Uncheatable anchors also include the June proportional run (``june_run``), as the paper's
     reference fit did.
     """
-    table = read_table(root, f"swarm_{swarm}")
-    runs = table[table["design_kind"] == REPEAT]
+    table = release_runs(root, swarm)
+    runs = table[table[DESIGN_KIND] == REPEAT]
     if (swarm, objective) == (MAIN_SWARM, JUNE_RUN_OBJECTIVE):
         runs = pd.concat([runs, june_run(root, table)])
     return anchors_from_runs(runs, objective_from_tasks(release_tasks(root), objective).tasks)

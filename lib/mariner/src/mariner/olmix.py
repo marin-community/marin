@@ -18,7 +18,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from mariner.model import WEIGHT_SUM_TOLERANCE, Objective, Swarm
-from mariner.optimize import MIXTURE_BLOCK_SIZE
+from mariner.optimize import MIXTURE_BLOCK_SIZE, bucket_upper_bounds, proportional_mixture
 
 # ---------------------------------------------------------------------------------------------------------------
 # Constants of the frozen procedure (every value is the one the paper's runs used)
@@ -183,10 +183,7 @@ def propose(
     """
     if len(laws) != len(objective.tasks):
         raise ValueError(f"{len(laws)} laws for the {len(objective.tasks)} tasks of {objective.name}")
-    natural = 1.0 / epochs_per_unit_weight
-    natural = natural / natural.sum()
-    caps = np.minimum(1.0, cap / epochs_per_unit_weight)
-    if caps.sum() < 1:
-        raise ValueError(f"an epoch cap of {cap:g} cannot hold a complete mixture")
+    natural = proportional_mixture(epochs_per_unit_weight)
+    caps = bucket_upper_bounds(epochs_per_unit_weight, cap)
     continuous, predicted, solver = exact_proposal(laws, objective.weights, natural, caps, kl)
     return OlmixProposal(quantize_under_cap(continuous, epochs_per_unit_weight, cap), continuous, predicted, solver)
