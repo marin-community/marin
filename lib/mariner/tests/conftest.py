@@ -110,8 +110,10 @@ def release_snapshot(tmp_path: Path) -> Path:
     - ladder: the June proportional run at 3e18 (t0 and t1 5.0, u0 2.6), a copy of repeat_0, a MARINER run at 3e18
       and a proportional run at 2e19.
     - heldout: h0 (t0 1.0, t1 0.8) and h2 (t0 1.2, t1 1.0) at exposure e0, h1 (t0 1.4, t1 1.2) at e1, which draws
-      half of b2's pool, and h3 at e2. fits_heldout_predictions, the one Parquet table, predicts h0 to h2 for both
-      objectives and h3 for uncheatable only.
+      half of b2's pool, and h3 at e2. bpb__uncheatable records the Uncheatable aggregate (2.0, 2.4, 2.2, 2.6); h3
+      has it but no u0, as five of the release's held-out runs do. The table has no bpb__obe_easy.
+      fits_heldout_predictions, the one Parquet table, predicts h0 to h2 for both objectives and h3 for uncheatable
+      only.
     """
     rng = np.random.default_rng(RELEASE_SEED)
     fit_rows = []
@@ -167,7 +169,7 @@ def release_snapshot(tmp_path: Path) -> Path:
             {"observation_id": "h2", "exposure_id": "e0", **mixture_columns((0.2, 0.3, 0.5)), "bpb__t0": 1.2},
             {"observation_id": "h3", "exposure_id": "e2", **mixture_columns((0.1, 0.1, 0.8)), "bpb__t0": 1.6},
         ]
-    ).assign(bpb__t1=[0.8, 1.2, 1.0, 1.4], bpb__u0=[2.0, 2.4, 2.2, 2.6])
+    ).assign(bpb__t1=[0.8, 1.2, 1.0, 1.4], bpb__u0=[2.0, 2.4, 2.2, math.nan], bpb__uncheatable=[2.0, 2.4, 2.2, 2.6])
     predictions = pd.DataFrame(
         [
             {"objective": objective, "observation_id": run, "task_id": task, "predicted_bpb": 1.0}

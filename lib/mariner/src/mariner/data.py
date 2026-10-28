@@ -45,6 +45,7 @@ WEIGHT_PREFIX = "w__"
 POOL_FRACTION_PREFIX = "pf__"
 OUTCOME_PREFIX = "bpb__"
 WEIGHT_SUM_TOLERANCE = 1e-6
+EXPOSURE_MIXTURE_TOLERANCE = 1e-12  # floating rounding; the release's runs at one exposure differ by 4.2e-16 at most
 DOWNLOAD_PATTERNS = (
     MANIFEST,
     "README.md",
@@ -78,7 +79,11 @@ class Partition:
 
 
 def read_csv(path: Path) -> pd.DataFrame:
-    """``pd.read_csv`` with exact float parsing; pandas' default parser misreads some 17-digit values by one ulp."""
+    """``pd.read_csv`` with exact float parsing.
+
+    Pandas' default parser misreads 16,973 values of the released tables this package reads, by up to 921 ulps at
+    small magnitudes.
+    """
     return pd.read_csv(path, float_precision="round_trip")
 
 
@@ -191,9 +196,11 @@ def anchors_from_runs(runs: pd.DataFrame, task_ids: Sequence[str]) -> dict[str, 
 def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective) -> HeldoutBank:
     """Held-out runs as a bank of exposures, in order of first appearance.
 
-    The runs that share an ``exposure_id`` (each run alone when the table has no such column) form one exposure, with
-    its first run's weights and pool fractions. An exposure's measured value of a task is the mean over its runs that
-    have one; NaN when none has.
+    The runs that share an ``exposure_id`` (each run alone when the table has no such column) form one exposure, and
+    must share their weights and pool fractions within 1e-12. An exposure's measured value of a task is the mean over
+    its runs that have one, NaN when none has. Its measured objective is the mean of its runs'
+    ``bpb__<objective name>`` when the table has that column, which can record the objective for a run without
+    per-task values; otherwise it is the task means weighted by the objective.
     """
     runs = runs.reset_index(drop=True)
     weights = mixture_weights(runs, partition.bucket_ids)
@@ -203,13 +210,31 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
     if keys.isna().any():
         raise ValueError(f"{keys.isna().sum()} of {len(runs)} runs have no {keys.name}")
+    exposure, _ = pd.factorize(keys)  # each run's exposure, numbered in order of first appearance
     first = keys.drop_duplicates().index.to_numpy()
-    grouped = runs[columns].astype(float).groupby(keys.to_numpy(), sort=False)
+    deviation = np.maximum(
+        np.abs(weights - weights[first][exposure]).max(axis=1),
+        np.abs(fractions - fractions[first][exposure]).max(axis=1),
+    )
+    differing = keys[deviation > EXPOSURE_MIXTURE_TOLERANCE].unique()
+    if len(differing):
+        raise ValueError(
+            f"runs at one exposure differ in weights or pool fractions beyond {EXPOSURE_MIXTURE_TOLERANCE:g}:"
+            f" {', '.join(map(str, differing))}"
+        )
+    grouped = runs[columns].astype(float).groupby(exposure, sort=False)
+    measured = grouped.mean().set_axis(list(objective.tasks), axis=1).reset_index(drop=True)
+    aggregate = f"{OUTCOME_PREFIX}{objective.name}"
+    if aggregate in runs.columns:
+        measured_objective = runs[aggregate].astype(float).groupby(exposure, sort=False).mean().to_numpy()
+    else:
+        measured_objective = measured.to_numpy() @ objective.weights
     return HeldoutBank(
         exposure_ids=tuple(keys.iloc[first]),
         weights=weights[first],
         pool_fractions=fractions[first],
-        measured=grouped.mean().set_axis(list(objective.tasks), axis=1).reset_index(drop=True),
+        measured=measured,
+        measured_objective=measured_objective,
         runs=grouped.size().to_numpy(),
     )
 

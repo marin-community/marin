@@ -1,0 +1,123 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import dataclasses
+import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+from mariner.data import MAIN_SWARM, release_swarm
+from mariner.evaluate import OUTER_FOLDS, HeldoutBank, cross_validate, heldout_metrics, outer_splits, selection_metrics
+from mariner.fit import final_inner_fold_labels
+
+# The paper's fold labels of the main swarm's fit rows, by observation id: final_inner, the final fit's inner fold;
+# outer_r{r}, the outer fold that tests the run in repeat r; inner_r{r}_f{f}, the inner fold that validates it within
+# outer fold f's training rows, empty when that fold tests it. -1 marks the calibration row, which no fold tests or
+# validates.
+FOLD_LABELS = Path(__file__).parent / "data" / "qwen3_fold_labels.csv"
+PAPER_REPEATS = 5
+PERTURBED_RUN = 7
+
+
+def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
+    swarm, objective, anchors, _ = synthetic_problem
+    outcomes = swarm.outcomes.copy()
+    outcomes.loc[PERTURBED_RUN, "t0"] += 0.05
+    run = swarm.runs[PERTURBED_RUN]
+    before = cross_validate(swarm, objective, anchors).set_index("observation_id")
+    after = cross_validate(dataclasses.replace(swarm, outcomes=outcomes), objective, anchors).set_index("observation_id")
+    # Every run but the calibration row 0 is scored once; measured moves by 0.05 times t0's objective weight, 0.5.
+    assert sorted(before.index) == sorted(swarm.runs[1:])
+    assert after.loc[run, "measured"] == pytest.approx(before.loc[run, "measured"] + 0.025)
+    assert after.loc[run, "predicted"] == before.loc[run, "predicted"]
+    # The fits that train on the run see the change.
+    assert (after["predicted"].drop(run) != before["predicted"].drop(run)).any()
+
+
+def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_problem):
+    swarm, objective, anchors, _ = synthetic_problem
+    one_task = dataclasses.replace(objective, tasks=objective.tasks[:1], weights=objective.weights[:1])
+    # Half of every pool at half the epochs per unit weight materializes the same exposures as the whole pools.
+    half_pools = dataclasses.replace(
+        swarm, epochs_per_unit_weight=swarm.epochs_per_unit_weight / 2, pool_fractions=np.full_like(swarm.weights, 0.5)
+    )
+    pd.testing.assert_frame_equal(
+        cross_validate(half_pools, one_task, anchors), cross_validate(swarm, one_task, anchors)
+    )
+
+
+def test_outer_splits_never_validate_calibration_rows(synthetic_problem):
+    swarm, _, _, _ = synthetic_problem
+    splits = outer_splits(swarm, repeats=2)
+    assert [(split.repeat, split.fold) for split in splits] == [(r, f) for r in range(2) for f in range(OUTER_FOLDS)]
+    rows = np.arange(len(swarm.runs))
+    for split in splits:
+        np.testing.assert_array_equal(np.sort(np.concatenate([split.train, split.test])), rows)
+        assert 0 in split.train and 0 not in split.test
+        assert all(0 in train and 0 not in validation for train, validation in split.inner)
+        # The inner folds validate each training run but row 0 exactly once, and train on the rest.
+        validated = np.concatenate([validation for _, validation in split.inner])
+        np.testing.assert_array_equal(np.sort(validated), split.train[split.train != 0])
+        for train, validation in split.inner:
+            np.testing.assert_array_equal(np.sort(np.concatenate([train, validation])), split.train)
+    for repeat in range(2):
+        tested = np.concatenate([split.test for split in splits if split.repeat == repeat])
+        np.testing.assert_array_equal(np.sort(tested), rows[1:])
+
+
+def test_selection_metrics_on_a_known_ranking():
+    metrics = selection_metrics(np.array([0.3, 0.1, 0.2]), np.array([1.0, 1.2, 0.9]))
+    # The pick, predicted 0.1, measures 1.2: the worst of three, 0.3 above the best.
+    assert metrics == pytest.approx(
+        {
+            "rows": 3,
+            "regret_at_1": 0.3,
+            "selected_rank": 3,
+            "optimism_at_pick": 1.1,
+            "rmse": math.sqrt(0.73),
+            "spearman": -0.5,
+        }
+    )
+
+
+def test_heldout_metrics_score_each_exposure_by_its_measured_objective(synthetic_problem):
+    _, objective, _, truth = synthetic_problem
+    rng = np.random.default_rng(2)
+    weights = rng.dirichlet(np.ones(len(truth.buckets)), size=12)
+    fractions = np.where(rng.random(weights.shape) < 0.5, 0.5, 1.0)
+    measured = pd.DataFrame(truth.predict_tasks(weights, fractions), columns=list(objective.tasks))
+    measured.iloc[0] = math.nan  # an exposure whose runs recorded only the objective
+    bank = HeldoutBank(
+        exposure_ids=tuple(f"e{index}" for index in range(len(weights))),
+        weights=weights,
+        pool_fractions=fractions,
+        measured=measured,
+        measured_objective=truth.predict(weights, fractions),
+        runs=np.ones(len(weights), dtype=int),
+    )
+    # The generating model, evaluated at each exposure's weights and pool fractions, scores perfectly.
+    assert heldout_metrics(truth, bank) == pytest.approx(
+        {"rows": 12, "regret_at_1": 0.0, "selected_rank": 1, "optimism_at_pick": 0.0, "rmse": 0.0, "spearman": 1.0}
+    )
+
+
+@pytest.mark.data_integration
+@pytest.mark.timeout(120)
+def test_outer_fold_labels_match_paper_schedule(snapshot):
+    swarm = release_swarm(snapshot, MAIN_SWARM, "obe_easy")
+    oracle = pd.read_csv(FOLD_LABELS, comment="#").set_index("observation_id")
+    assert sorted(oracle.index) == sorted(swarm.runs)
+    runs = len(swarm.runs)
+    labels = {"final_inner": final_inner_fold_labels(swarm).astype(float)}
+    for split in outer_splits(swarm, repeats=PAPER_REPEATS):
+        labels.setdefault(f"outer_r{split.repeat}", np.full(runs, -1.0))[split.test] = split.fold
+        inner = np.full(runs, math.nan)
+        inner[split.train] = -1.0
+        for index, (_train, validation) in enumerate(split.inner):
+            inner[validation] = index
+        labels[f"inner_r{split.repeat}_f{split.fold}"] = inner
+    assert set(labels) == set(oracle.columns)
+    expected = oracle.loc[list(swarm.runs), list(labels)].to_numpy(float)
+    np.testing.assert_array_equal(np.column_stack(list(labels.values())), expected)

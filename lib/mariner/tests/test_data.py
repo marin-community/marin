@@ -11,11 +11,14 @@ from mariner.data import (
     MAIN_SWARM,
     REPEAT,
     anchors_from_runs,
+    heldout_bank,
+    objective_from_tasks,
     read_table,
     release_anchors,
     release_heldout_bank,
     release_partition,
     release_swarm,
+    release_tasks,
     swarm_from_runs,
 )
 
@@ -50,8 +53,28 @@ def test_heldout_bank_averages_runs_at_one_exposure(release_snapshot):
     assert bank.exposure_ids == ("e0", "e1")
     np.testing.assert_array_equal(bank.runs, [2, 1])
     np.testing.assert_allclose(bank.measured[["t0", "t1"]].to_numpy(), [[1.1, 0.9], [1.4, 1.2]], rtol=1e-12)
+    # The table records no bpb__obe_easy, so the objective is the task means at weights 1/2 each.
+    np.testing.assert_allclose(bank.measured_objective, [1.0, 1.3], rtol=1e-12)
     np.testing.assert_array_equal(bank.weights, [[0.2, 0.3, 0.5], [0.6, 0.2, 0.2]])
     np.testing.assert_array_equal(bank.pool_fractions, [[1.0, 1.0, 1.0], [1.0, 1.0, 0.5]])
+
+
+def test_heldout_bank_takes_the_recorded_objective_where_task_values_are_missing(release_snapshot):
+    bank = release_heldout_bank(release_snapshot, "uncheatable")
+    assert bank.exposure_ids == ("e0", "e1", "e2")
+    # h3, alone at e2, recorded bpb__uncheatable but no u0.
+    assert np.isnan(bank.measured["u0"].iloc[2])
+    np.testing.assert_allclose(bank.measured_objective, [2.1, 2.4, 2.6], rtol=1e-12)
+
+
+@pytest.mark.parametrize("change", [{"w__b0": 0.25, "w__b1": 0.25}, {"pf__b2": 0.5}], ids=["weights", "pool_fractions"])
+def test_heldout_bank_rejects_an_exposure_whose_runs_differ(release_snapshot, change):
+    runs = read_table(release_snapshot, "heldout")
+    # h2 shares e0 with h0, whose mixture is (0.2, 0.3, 0.5) from whole pools.
+    runs.loc[runs["observation_id"] == "h2", list(change)] = list(change.values())
+    objective = objective_from_tasks(release_tasks(release_snapshot), "obe_easy")
+    with pytest.raises(ValueError, match="e0"):
+        heldout_bank(runs, release_partition(release_snapshot), objective)
 
 
 def first_row_set(runs: pd.DataFrame, column: str, value: float) -> pd.DataFrame:

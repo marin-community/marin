@@ -17,6 +17,7 @@ from mariner.data import (
     released_task_predictions,
     trained_counts,
 )
+from mariner.evaluate import heldout_metrics
 from mariner.fit import final_inner_folds, fit_objective, fit_task
 from mariner.optimize import propose
 
@@ -54,13 +55,18 @@ def test_main_swarm_refit_reproduces_release(snapshot, objective):
     released_heldout = by_exposure.first().loc[list(bank.exposure_ids), tasks].to_numpy()
     heldout_gap = np.abs(fit.predict_tasks(bank.weights, bank.pool_fractions) - released_heldout)
     assert heldout_gap.max() <= PREDICTION_TOLERANCE
+    # Every exposure is scored, the five Uncheatable ones whose runs recorded only the aggregate included.
+    metrics = heldout_metrics(fit, bank)
+    assert metrics["rows"] == HELDOUT_EXPOSURES[objective] and np.isfinite(list(metrics.values())).all()
 
     fitted = pd.DataFrame([task.to_json() for task in fit.tasks]).set_index("task")
-    parameters = released_task_parameters(snapshot, MAIN_SWARM, objective).loc[fitted.index]
+    released = released_task_parameters(snapshot, MAIN_SWARM, objective)
+    assert sorted(released.index) == sorted(fitted.index)
+    parameters = released.loc[fitted.index]
     for field in DISCRETE_FIELDS:
         np.testing.assert_array_equal(fitted[field].to_numpy(), parameters[field].to_numpy())
     for field, tolerance in MAIN_SWARM_TOLERANCES.items():
-        assert np.abs(fitted[field] - parameters[field]).max() <= tolerance
+        assert np.abs(fitted[field].to_numpy() - parameters[field].to_numpy()).max() <= tolerance
 
     proposal = propose(fit, swarm.weights)
     np.testing.assert_array_equal(proposal.counts, trained_counts(snapshot, TRAINED_MARINER[objective]))
