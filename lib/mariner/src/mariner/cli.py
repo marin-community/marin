@@ -33,6 +33,7 @@ from mariner import olmix, optimize
 from mariner.data import (
     DATASET_REPO,
     DESIGN_KIND,
+    HELDOUT_PREDICTIONS_TABLE,
     HELDOUT_TABLE,
     MAIN_SWARM,
     OBJECTIVES,
@@ -41,6 +42,7 @@ from mariner.data import (
     POOL_FRACTION_PREFIX,
     PROPORTIONAL,
     REPEAT,
+    SWARM_PREDICTIONS_TABLE,
     SWARMS,
     TRAINED_MARINER,
     TRAINED_OLMIX,
@@ -150,8 +152,8 @@ def self_test(
         swarm = release_swarm(root, MAIN_SWARM, name)
         logger.info("%s: refitting MARINER on the %d runs of %s", name, len(swarm.runs), MAIN_SWARM)
         fit = fit_objective(swarm, objective, release_anchors(root, MAIN_SWARM, name), log=logger.info)
-        in_sample = released_task_predictions(root, "fits_swarm_predictions", name).loc[list(swarm.runs), tasks]
-        heldout = released_task_predictions(root, "fits_heldout_predictions", name)[tasks]
+        in_sample = released_task_predictions(root, SWARM_PREDICTIONS_TABLE, name).loc[list(swarm.runs), tasks]
+        heldout = released_task_predictions(root, HELDOUT_PREDICTIONS_TABLE, name)[tasks]
         runs = heldout_runs.loc[heldout.index]
         heldout_predictions = fit.predict_tasks(
             mixture_weights(runs, fit.buckets, HELDOUT_TABLE), pool_fractions(runs, fit.buckets, HELDOUT_TABLE)

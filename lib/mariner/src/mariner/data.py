@@ -78,6 +78,7 @@ EPOCHS_PER_UNIT_WEIGHT = "epochs_per_unit_weight"
 TASK_ID = "task_id"
 OBJECTIVE_COLUMN = "objective"
 AGGREGATE_WEIGHT = "aggregate_weight"
+SWARM_COLUMN = "swarm"  # the fits tables' column naming the released swarm of each fit
 
 # Each table's required columns besides the w__, pf__ and bpb__ ones, and its name in error messages.
 RUN_COLUMNS = (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, FIT_INCLUSION)
@@ -93,6 +94,9 @@ IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
 
 MANIFEST = "MANIFEST.json"
+# The released fits' per-task predictions at the swarm's runs and at the held-out runs.
+SWARM_PREDICTIONS_TABLE = "fits_swarm_predictions"
+HELDOUT_PREDICTIONS_TABLE = "fits_heldout_predictions"
 COEFFICIENT_PREFIX = "coef__"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
@@ -507,8 +511,8 @@ def released_task_predictions(root: Path, table: str, objective: str) -> pd.Data
 def released_task_parameters(root: Path, swarm: str, objective: str) -> pd.DataFrame:
     """The released per-task parameters (``fits_task_parameters``) of one swarm and objective, indexed by task id."""
     frame = read_table(root, "fits_task_parameters")
-    rows = frame[(frame["swarm"] == swarm) & (frame[OBJECTIVE_COLUMN] == objective)]
-    return rows.drop(columns=["swarm", OBJECTIVE_COLUMN]).set_index(TASK_ID)
+    rows = frame[(frame[SWARM_COLUMN] == swarm) & (frame[OBJECTIVE_COLUMN] == objective)]
+    return rows.drop(columns=[SWARM_COLUMN, OBJECTIVE_COLUMN]).set_index(TASK_ID)
 
 
 def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
@@ -518,7 +522,7 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
     """
     name = "fits_olmix_task_laws"
     frame = read_table(root, name)
-    rows = frame[(frame["swarm"] == MAIN_SWARM) & (frame[OBJECTIVE_COLUMN] == objective)].set_index(TASK_ID)
+    rows = frame[(frame[SWARM_COLUMN] == MAIN_SWARM) & (frame[OBJECTIVE_COLUMN] == objective)].set_index(TASK_ID)
     rows = rows.loc[list(objective_from_tasks(release_tasks(root), objective).tasks)]
     coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids, name)
     return tuple(
@@ -529,7 +533,7 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
 
 def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
     """The paper's held-out bank: the ``heldout`` runs that ``fits_heldout_predictions`` predicts for ``objective``."""
-    predictions = read_table(root, "fits_heldout_predictions")
+    predictions = read_table(root, HELDOUT_PREDICTIONS_TABLE)
     population = predictions.loc[predictions[OBJECTIVE_COLUMN] == objective, OBSERVATION_ID]
     heldout = read_table(root, HELDOUT_TABLE)
     return heldout_bank(
