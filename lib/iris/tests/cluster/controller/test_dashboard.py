@@ -1958,6 +1958,16 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
     assert vm["runningTaskCount"] == 1
 
 
+def test_list_backends_advertises_private_service_groups_to_clients(state, scheduler, tmp_path, log_client):
+    client, _, provider, _ = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    try:
+        [summary] = rpc_post(client, "ListBackends")["backends"]
+        assert "cluster" in summary["capabilities"]
+        assert "sandbox-service-groups" in summary["capabilities"]
+    finally:
+        provider.close()
+
+
 def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tmp_path, log_client):
     """ListBackends.detail.kubernetes carries the backend's synced node/pod snapshot."""
     client, k8s, provider, refresh = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)

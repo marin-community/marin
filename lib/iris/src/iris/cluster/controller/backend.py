@@ -137,6 +137,8 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
         capabilities.append("workers")
     if BackendCapability.AUTOSCALER in descriptor.capabilities:
         capabilities.append("autoscaler")
+    if BackendCapability.SANDBOX_SERVICE_GROUPS in descriptor.capabilities:
+        capabilities.append(SANDBOX_SERVICE_GROUP_CAPABILITY)
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
         capabilities=capabilities,
