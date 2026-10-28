@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 from collections import Counter
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -180,6 +180,17 @@ class TaskFit:
         )
 
 
+class TaskArrays(NamedTuple):
+    """An objective fit's per-task parameters, one entry per task in task order."""
+
+    rho: np.ndarray
+    kappa: np.ndarray
+    tau: np.ndarray
+    intercept: np.ndarray
+    coefficients: np.ndarray  # (tasks, columns of design_matrix)
+    phi: np.ndarray
+
+
 @dataclasses.dataclass(frozen=True)
 class ObjectiveFit:
     """A fitted objective: one ``TaskFit`` per task, summed with the objective's evaluation weights.
@@ -197,14 +208,15 @@ class ObjectiveFit:
     # Inner fold validating each run, by observation id in run order; -1: never (calibration).
     inner_fold_labels: dict[str, int]
 
-    def _arrays(self) -> tuple[np.ndarray, ...]:
-        rho = np.asarray([t.shape.rho for t in self.tasks])
-        kappa = np.asarray([t.shape.kappa for t in self.tasks])
-        tau = np.asarray([t.shape.tau for t in self.tasks])
-        intercept = np.asarray([t.head.intercept for t in self.tasks])
-        coefficients = np.stack([t.head.coefficients for t in self.tasks])
-        phi = np.asarray([t.head.phi for t in self.tasks])
-        return rho, kappa, tau, intercept, coefficients, phi
+    def _arrays(self) -> TaskArrays:
+        return TaskArrays(
+            rho=np.asarray([t.shape.rho for t in self.tasks]),
+            kappa=np.asarray([t.shape.kappa for t in self.tasks]),
+            tau=np.asarray([t.shape.tau for t in self.tasks]),
+            intercept=np.asarray([t.head.intercept for t in self.tasks]),
+            coefficients=np.stack([t.head.coefficients for t in self.tasks]),
+            phi=np.asarray([t.head.phi for t in self.tasks]),
+        )
 
     def predict_tasks(self, mixtures: np.ndarray, pool_fractions: np.ndarray | None = None) -> np.ndarray:
         """Per-task predictions for every mixture row, shape (mixtures, tasks).
@@ -212,17 +224,20 @@ class ObjectiveFit:
         ``pool_fractions``, broadcast against ``mixtures``, divide the exposures as in ``Swarm.exposures``; omitted,
         every mixture draws from whole pools.
         """
-        rho, kappa, tau, intercept, coefficients, phi = self._arrays()
+        arrays = self._arrays()
         exposure = np.atleast_2d(mixtures) * self.epochs_per_unit_weight[None, :]
         if pool_fractions is not None:
             exposure = exposure / pool_fractions
         exposure = exposure[:, None, :]
         columns = np.concatenate(
-            [-benefit(exposure, rho[None, :, None], kappa[None, :, None]), harm(exposure, tau[None, :, None])],
+            [
+                -benefit(exposure, arrays.rho[None, :, None], arrays.kappa[None, :, None]),
+                harm(exposure, arrays.tau[None, :, None]),
+            ],
             axis=2,
         )
-        linear = intercept[None, :] + np.einsum("nck,ck->nc", columns, coefficients)
-        return phi[None, :] + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
+        linear = arrays.intercept[None, :] + np.einsum("nck,ck->nc", columns, arrays.coefficients)
+        return arrays.phi[None, :] + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
 
     def predict(self, mixtures: np.ndarray, pool_fractions: np.ndarray | None = None) -> np.ndarray:
         return self.predict_tasks(mixtures, pool_fractions) @ self.weights
