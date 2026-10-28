@@ -45,18 +45,17 @@ usage:
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 from scipy.stats import spearmanr
 
 from mariner.fit import final_inner_folds, fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
+from mariner.olmix import FIT_SEED, FIT_STARTS, HUBER_DELTA, exact_proposal, fit_log_linear
 from mariner.optimize import MIXTURE_BLOCK_SIZE, PANEL_STARTS, START_SEED, continuous_optimum, runtime_policy
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -74,12 +73,6 @@ OUTER_FOLDS = 5
 
 ACTIVE_TOLERANCE = 1e-10
 
-
-OLMIX_HUBER_DELTA = 0.01
-OLMIX_FIT_STARTS = 48
-OLMIX_FIT_SEED = 0
-OLMIX_MAX_LOG = 50.0
-OLMIX_SOLVERS = ("CLARABEL", "ECOS", "SCS")
 
 PARITY_TOLERANCE = 1e-8
 
@@ -124,92 +117,6 @@ def read_anchors(path: Path, objective: str) -> dict[str, Anchor]:
     table = pd.read_csv(path)
     table = table[table["objective"].eq(objective)]
     return {str(r.component): Anchor(float(r.proportional_bpb), float(r.repeat_sd)) for r in table.itertuples()}
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Olmix baseline: positive log-linear law per task, exact KL-regularized proposer
-# ---------------------------------------------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class LogLinearLaw:
-    log_c: float
-    coefficients: np.ndarray
-    huber_loss: float
-
-    def predict(self, weights: np.ndarray) -> np.ndarray:
-        logits = np.clip(np.atleast_2d(weights) @ self.coefficients, -OLMIX_MAX_LOG, OLMIX_MAX_LOG)
-        return np.exp(np.clip(self.log_c, -OLMIX_MAX_LOG, OLMIX_MAX_LOG)) + np.exp(logits)
-
-
-def huber_sum(residuals: np.ndarray, delta: float) -> float:
-    magnitude = np.abs(residuals)
-    quadratic = 0.5 * residuals * residuals
-    linear = delta * (magnitude - 0.5 * delta)
-    return float(np.where(magnitude <= delta, quadratic, linear).sum())
-
-
-def fit_log_linear(
-    weights: np.ndarray,
-    targets: np.ndarray,
-    delta: float = OLMIX_HUBER_DELTA,
-    seed: int = OLMIX_FIT_SEED,
-    starts: int = OLMIX_FIT_STARTS,
-) -> LogLinearLaw:
-    x = np.asarray(weights, dtype=float)
-    y = np.asarray(targets, dtype=float)
-    if np.any(y <= 0.0):
-        raise ValueError("the log-linear law needs positive targets")
-    rng = np.random.default_rng(seed)
-
-    def objective(params: np.ndarray) -> float:
-        logits = np.clip(x @ params[1:], -OLMIX_MAX_LOG, OLMIX_MAX_LOG)
-        return huber_sum(np.exp(params[0]) + np.exp(logits) - y, delta)
-
-    log_c_candidates = np.linspace(np.log(max(np.min(y) * 0.25, 1e-3)), np.log(max(np.median(y), 1e-3)), 6)
-    initial: list[np.ndarray] = []
-    for log_c in log_c_candidates:
-        initial.append(np.concatenate([[log_c], np.zeros(x.shape[1])]))
-        for _ in range(max(starts // len(log_c_candidates) - 1, 0)):
-            initial.append(np.concatenate([[log_c], rng.normal(0.0, 1.0, size=x.shape[1])]))
-    best_params, best_loss = None, float("inf")
-    bounds = [(-OLMIX_MAX_LOG, OLMIX_MAX_LOG), *[(None, None)] * x.shape[1]]
-    for start in initial:
-        result = minimize(objective, start, method="L-BFGS-B", bounds=bounds)
-        if not result.success and best_params is not None:
-            continue
-        if float(result.fun) < best_loss:
-            best_loss, best_params = float(result.fun), np.asarray(result.x, dtype=float)
-    if best_params is None:
-        raise RuntimeError("log-linear fit failed")
-    return LogLinearLaw(float(best_params[0]), best_params[1:], best_loss)
-
-
-def exact_proposal(
-    laws: Sequence[LogLinearLaw], task_weights: np.ndarray, natural: np.ndarray, caps: np.ndarray, kl_reg: float
-) -> tuple[np.ndarray, float, str]:
-    """Olmix's exact proposer: minimize the weighted mean prediction plus kl_reg * KL(w || natural) on the
-    capped simplex."""
-    import cvxpy as cp  # noqa: PLC0415  (optional dependency: only for the Olmix baseline)
-
-    weights = cp.Variable(len(natural))
-    predicted = sum(
-        float(task_weights[i]) * (float(np.exp(law.log_c)) + cp.exp(cp.sum(cp.multiply(law.coefficients, weights))))
-        for i, law in enumerate(laws)
-    )
-    problem = cp.Problem(
-        cp.Minimize(predicted + kl_reg * cp.sum(cp.rel_entr(weights, natural))),
-        [weights >= 0, cp.sum(weights) == 1, weights <= caps],
-    )
-    for solver in OLMIX_SOLVERS:
-        try:
-            problem.solve(solver=solver, warm_start=True, verbose=False)
-        except cp.error.SolverError:
-            continue
-        if problem.status in ("optimal", "optimal_inaccurate"):
-            solution = np.clip(np.asarray(weights.value, float), 0.0, None)
-            return solution / solution.sum(), float(predicted.value), f"{solver}:{problem.status}"
-    raise RuntimeError("no solver converged")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -328,8 +235,8 @@ def command_olmix(args: argparse.Namespace) -> None:
         "kl_reg": args.kl,
         "cap": args.cap,
         "huber_delta": args.delta,
-        "starts": OLMIX_FIT_STARTS,
-        "seed": OLMIX_FIT_SEED,
+        "starts": FIT_STARTS,
+        "seed": FIT_SEED,
         "solver": status,
         "predicted": predicted,
         "max_epochs": float((solution * swarm.epochs_per_unit_weight).max()),
@@ -433,7 +340,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     olmix.add_argument("--objective", required=True)
     olmix.add_argument("--kl", type=float, required=True)
     olmix.add_argument("--cap", type=float, default=4.0)
-    olmix.add_argument("--delta", type=float, default=OLMIX_HUBER_DELTA)
+    olmix.add_argument("--delta", type=float, default=HUBER_DELTA)
     olmix.add_argument("--out", required=True)
     olmix.set_defaults(func=command_olmix)
     test = commands.add_parser("self-test", help="parity with the bundled reference fits and policies")
