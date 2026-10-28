@@ -53,13 +53,19 @@ def test_cross_validate_prediction_ignores_its_own_outcome(synthetic_problem):
 def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_problem):
     swarm, objective, anchors, _ = synthetic_problem
     one_task = dataclasses.replace(objective, tasks=objective.tasks[:1], weights=objective.weights[:1])
-    # Half of every pool at half the epochs per unit weight materializes the same exposures as the whole pools.
-    half_pools = dataclasses.replace(
-        swarm, epochs_per_unit_weight=swarm.epochs_per_unit_weight / 2, pool_fractions=np.full_like(swarm.weights, 0.5)
-    )
-    pd.testing.assert_frame_equal(
-        cross_validate(half_pools, one_task, anchors), cross_validate(swarm, one_task, anchors), check_exact=True
-    )
+    fractions = swarm.pool_fractions.copy()
+    fractions[PERTURBED_RUN] = 0.5  # the run draws half of every pool, which doubles its exposures
+    run = swarm.runs[PERTURBED_RUN]
+    before = cross_validate(swarm, one_task, anchors).set_index("observation_id")
+    half_pools = dataclasses.replace(swarm, pool_fractions=fractions)
+    after = cross_validate(half_pools, one_task, anchors).set_index("observation_id")
+    # The fit that predicts the run never trains on it, so in the run's fold only the run's own prediction moves.
+    fold = before["fold"] == before.loc[run, "fold"]
+    assert after.loc[run, "predicted"] != before.loc[run, "predicted"]
+    others = fold & (before.index != run)
+    pd.testing.assert_series_equal(after.loc[others, "predicted"], before.loc[others, "predicted"], check_exact=True)
+    # The fits of the other folds train on the run at its new exposures.
+    assert (after.loc[~fold, "predicted"] != before.loc[~fold, "predicted"]).any()
 
 
 def test_outer_splits_never_validate_calibration_rows(synthetic_problem):

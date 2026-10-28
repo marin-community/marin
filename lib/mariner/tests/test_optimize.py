@@ -19,6 +19,21 @@ def test_propose_returns_grid_mixture_no_worse_than_proportional(synthetic_probl
     assert truth.predict(proposal.weights)[0] <= truth.predict(proportional)[0]
 
 
+def test_propose_kl_penalty_pulls_the_proposal_toward_the_proportional_mixture(synthetic_problem):
+    swarm, _, _, truth = synthetic_problem
+    proportional = swarm.weights[swarm.calibration][0]
+
+    def distances(kl: float) -> np.ndarray:
+        """Total variation distances from the proportional mixture of the continuous optimum and of its rounding."""
+        proposal = propose(truth, swarm.weights, kl=kl)
+        return 0.5 * np.abs(np.stack([proposal.continuous, proposal.weights]) - proportional).sum(axis=1)
+
+    unpenalized = distances(0.0)
+    assert (unpenalized > 0.5).all()  # the generating model's optimum lies far from the proportional mixture
+    assert (distances(0.03) < unpenalized - 0.1).all()
+    assert (distances(100.0) < 0.01).all()
+
+
 def test_propose_reports_the_model_s_predictions_under_a_kl_penalty(synthetic_problem):
     swarm, _, _, truth = synthetic_problem
     proposal = propose(truth, swarm.weights, kl=0.1)
