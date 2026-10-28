@@ -86,6 +86,7 @@ PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
+MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
 SHOWN_VALUES = 5  # distinct values an error message quotes
 
 MANIFEST = "MANIFEST.json"
@@ -138,6 +139,14 @@ def read_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, float_precision="round_trip", dtype=dict.fromkeys(IDENTIFIER_COLUMNS, str))
 
 
+def shown_values(values: Sequence[object]) -> str:
+    """The first ``SHOWN_VALUES`` of ``values`` for an error message, and how many more there are."""
+    shown = ", ".join(map(str, values[:SHOWN_VALUES]))
+    if len(values) <= SHOWN_VALUES:
+        return shown
+    return f"{shown} and {len(values) - SHOWN_VALUES} more"
+
+
 def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> None:
     """Raise ``ValueError`` naming the ``columns`` that ``table``, the table called ``name`` in messages, lacks."""
     missing = [column for column in columns if column not in table.columns]
@@ -145,13 +154,31 @@ def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> N
         raise ValueError(f"the {name} table has no column {', '.join(missing)}")
 
 
+def require_identifiers(table: pd.DataFrame, columns: Sequence[str], name: str) -> None:
+    """Raise ``ValueError`` naming the identifier ``columns`` of ``table`` (called ``name``) that a row leaves blank."""
+    blanks = table[list(columns)].isna().sum()
+    blanks = blanks[blanks > 0]
+    if len(blanks):
+        counts = ", ".join(f"{column} ({count} of {len(table)} rows)" for column, count in blanks.items())
+        raise ValueError(f"the {name} table has rows without {counts}; {MISSING_NOTE}")
+
+
+def require_unique(ids: pd.Series, where: str) -> None:
+    """Raise ``ValueError`` naming the values of the identifier column ``ids`` that repeat ``where``."""
+    repeated = ids[ids.duplicated()].unique()
+    if len(repeated):
+        raise ValueError(f"{ids.name} must be unique {where}; repeated: {shown_values(repeated)}")
+
+
 def partition_from_table(table: pd.DataFrame, target_budget: float | None = None) -> Partition:
     """A partition table's buckets in table order.
 
     The epochs per unit weight are ``target_budget / pool_tokens`` for a target budget in tokens, else the table's
-    ``epochs_per_unit_weight``.
+    ``epochs_per_unit_weight``. Every row needs a ``bucket_id`` that no other row has.
     """
     require_columns(table, PARTITION_COLUMNS, PARTITION_TABLE)
+    require_identifiers(table, (BUCKET_ID,), PARTITION_TABLE)
+    require_unique(table[BUCKET_ID], f"in the {PARTITION_TABLE} table")
     pool_tokens = table[POOL_TOKENS].to_numpy(float)
     if target_budget is not None:
         epochs = target_budget / pool_tokens
@@ -170,11 +197,16 @@ def read_partition(path: Path, target_budget: float | None = None) -> Partition:
 
 
 def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:
-    """The objective ``name`` of a tasks table: its tasks in table order, weighted by their ``aggregate_weight``."""
+    """The objective ``name`` of a tasks table: its tasks in table order, weighted by their ``aggregate_weight``.
+
+    Every row needs a ``task_id`` and an ``objective``, and a task may appear once in an objective.
+    """
     require_columns(tasks, TASK_COLUMNS, TASKS_TABLE)
+    require_identifiers(tasks, (TASK_ID, OBJECTIVE_COLUMN), TASKS_TABLE)
     rows = tasks[tasks[OBJECTIVE_COLUMN] == name]
     if rows.empty:
         raise ValueError(f"no task belongs to objective {name}")
+    require_unique(rows[TASK_ID], f"within objective {name}")
     return Objective(name, tuple(rows[TASK_ID]), rows[AGGREGATE_WEIGHT].to_numpy(float))
 
 
@@ -230,15 +262,17 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
     """The fit rows (``fit_inclusion``) of a swarm's run table, in table order, over the partition's buckets.
 
     The calibration run is the fit row with ``run_label`` ``baseline_proportional``. Raises ``ValueError`` when the
-    table lacks ``observation_id``, ``run_label``, ``design_kind`` or ``fit_inclusion``, ``fit_inclusion`` holds
-    anything but True and False, no fit row has that label, a fit row lacks an outcome of ``task_ids``, a fit row has
-    a negative weight or weights that do not sum to one within 1e-6, a bucket's ``w__`` or ``pf__`` column is missing,
-    or a pool fraction lies outside (0, 1].
+    table lacks ``observation_id``, ``run_label``, ``design_kind`` or ``fit_inclusion``, a row leaves one of the first
+    three blank, two rows share an ``observation_id``, ``fit_inclusion`` holds anything but True and False, no fit row
+    has that label, a fit row lacks an outcome of ``task_ids``, a fit row has a negative weight or weights that do not
+    sum to one within 1e-6, a bucket's ``w__`` or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
     """
     require_columns(runs, RUN_COLUMNS, RUN_TABLE)
+    require_identifiers(runs, (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND), RUN_TABLE)
+    require_unique(runs[OBSERVATION_ID], f"in the {RUN_TABLE} table")
     inclusion = runs[FIT_INCLUSION]
     if not pd.api.types.is_bool_dtype(inclusion):
-        values = ", ".join(map(str, inclusion.unique()[:SHOWN_VALUES]))
+        values = shown_values(inclusion.unique())
         raise ValueError(f"{FIT_INCLUSION} must be True or False, but it holds {inclusion.dtype} values: {values}")
     fit = runs[inclusion].reset_index(drop=True)
     calibration = (fit[RUN_LABEL] == CALIBRATION_RUN).to_numpy()

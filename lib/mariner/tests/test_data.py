@@ -91,6 +91,8 @@ DEFECTS = {
     "missing_pool_fraction": lambda runs: runs.drop(columns="pf__b2"),
     "zero_pool_fraction": lambda runs: first_row_set(runs, "pf__b0", 0.0),
     "integer_fit_inclusion": lambda runs: runs.assign(fit_inclusion=runs["fit_inclusion"].astype(int)),
+    "duplicate_observation_id": lambda runs: runs.replace({"observation_id": {"fit_03": "fit_02"}}),
+    "blank_observation_id": lambda runs: first_row_set(runs, "observation_id", math.nan),
 }
 
 
@@ -103,6 +105,8 @@ DEFECTS = {
         ("missing_pool_fraction", "pf__b2"),
         ("zero_pool_fraction", "pf__b0"),
         ("integer_fit_inclusion", "fit_inclusion"),
+        ("duplicate_observation_id", "fit_02"),
+        ("blank_observation_id", "observation_id"),
     ],
 )
 def test_swarm_from_runs_rejects_invalid_run_tables(release_snapshot, defect, message):
