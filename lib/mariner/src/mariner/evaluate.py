@@ -117,7 +117,7 @@ def cross_validate(
     return pd.concat(tables, ignore_index=True)
 
 
-def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, float]:
+def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, float | int]:
     """How well ``predicted`` selects among mixtures by their ``measured`` BPB, where lower is better.
 
     ``regret_at_1`` (its measured value minus the best), ``selected_rank`` (1 for the best) and ``optimism_at_pick``
@@ -126,16 +126,16 @@ def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, 
     """
     pick = int(np.argmin(predicted))
     return {
-        "rows": float(len(measured)),
+        "rows": len(measured),
         "regret_at_1": float(measured[pick] - measured.min()),
-        "selected_rank": float(np.sum(measured <= measured[pick])),
+        "selected_rank": int(np.sum(measured <= measured[pick])),
         "optimism_at_pick": float(measured[pick] - predicted[pick]),
         "rmse": float(np.sqrt(np.mean((predicted - measured) ** 2))),
         "spearman": float(spearmanr(predicted, measured).correlation),
     }
 
 
-def heldout_metrics(fit: ObjectiveFit, bank: HeldoutBank) -> dict[str, float]:
+def heldout_metrics(fit: ObjectiveFit, bank: HeldoutBank) -> dict[str, float | int]:
     """``selection_metrics`` of the fit's predictions at the bank's exposures against their measured objective.
 
     Raises ``ValueError`` when the bank's buckets are not the fit's in the fit's order, it measures other tasks than

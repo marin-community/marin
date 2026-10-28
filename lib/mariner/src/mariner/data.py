@@ -93,6 +93,10 @@ COEFFICIENT_PREFIX = "coef__"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12
+HUGGINGFACE_HUB_MISSING = (
+    "downloading mariner-data needs huggingface_hub, which the download extra installs:"
+    ' pip install "marin-mariner[download]"'
+)
 DOWNLOAD_PATTERNS = (
     MANIFEST,
     "README.md",
@@ -448,7 +452,10 @@ def download(local_dir: Path, repo_id: str = DATASET_REPO, revision: str | None 
     The tables are partition, tasks, the three swarms, ladder, heldout, validation_3e18 and the fits; the StarCoder,
     domain-sweep, other ladder and run-set tables stay on the Hub.
     """
-    from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)
+    try:
+        from huggingface_hub import snapshot_download  # noqa: PLC0415  (optional dependency: the download extra)
+    except ImportError as error:
+        raise ImportError(HUGGINGFACE_HUB_MISSING) from error
 
     return Path(
         snapshot_download(

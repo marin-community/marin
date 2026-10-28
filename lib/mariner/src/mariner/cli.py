@@ -10,7 +10,7 @@ The commands that read a swarm take either a released swarm, ``--data DIR --swar
 one row per bucket: the continuous optimum's weight, the blocks of the sampler's 2,048-block grid, the weight they
 give, and the epochs that weight materializes in the target run. A command whose input it cannot use, such as a
 missing file or a table without a ``w__``, ``pf__`` or ``bpb__`` column it needs, stops with a message on stderr and
-exit status 2, as argparse does for a malformed argument.
+exit status 2, as argparse does for a malformed argument, and so does a command that needs an extra not installed.
 """
 
 from __future__ import annotations
@@ -124,8 +124,11 @@ def self_test(
     For each objective, MARINER is refitted to the main swarm. Its predictions at the swarm's runs and at the held-out
     runs must match the released ones within 1e-6, and its unconstrained proposal must equal the trained MARINER
     mixture block for block. The Olmix proposal from the released or refitted laws, at the trained Olmix mixture's
-    epoch cap and KL weight, must equal that mixture block for block.
+    epoch cap and KL weight, must equal that mixture block for block. Raises ``ImportError`` before any fit when the
+    olmix extra is not installed.
     """
+    olmix_laws = OlmixLaws(olmix_laws)  # also takes the value, "released" or "refit"
+    olmix.require_cvxpy()
     heldout_runs = read_table(root, "heldout").set_index(OBSERVATION_ID)
     checks = []
     for name in objectives:
@@ -161,7 +164,7 @@ def self_test(
         )
 
         logger.info("%s: proposing the Olmix mixture from the %s laws", name, olmix_laws)
-        if olmix_laws is OlmixLaws.RELEASED:
+        if olmix_laws == OlmixLaws.RELEASED:
             laws = released_olmix_laws(root, name)
         else:
             laws = olmix.fit_laws(swarm, objective)
@@ -230,7 +233,15 @@ def read_anchors(args: argparse.Namespace, tables: SwarmTables) -> dict[str, Anc
 
 
 def read_fit(path: Path) -> ObjectiveFit:
-    return ObjectiveFit.from_json(json.loads(path.read_text()))
+    """The fit JSON at ``path``; raises ``ValueError`` naming the path when the file is not JSON or not a fit."""
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path} is not JSON: {error}") from error
+    try:
+        return ObjectiveFit.from_json(payload)
+    except KeyError as error:
+        raise ValueError(f"{path} is not a fit JSON of mariner fit: it has no field {error}") from error
 
 
 def check_swarm_of_fit(fit: ObjectiveFit, swarm: Swarm) -> None:
@@ -346,6 +357,7 @@ def run_evaluate(args: argparse.Namespace) -> int:
 
 
 def run_olmix(args: argparse.Namespace) -> int:
+    olmix.require_cvxpy()
     tables = read_swarm(args, args.objective)
     swarm, objective = tables.swarm, tables.objective
     logger.info(
@@ -427,6 +439,7 @@ def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mariner", description="Fit MARINER to a swarm of proxy runs and propose a pretraining data mixture."
     )
+    parser.set_defaults(out=None)  # evaluate and self-test write no file
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     command = commands.add_parser("download", help="download the mariner-data tables this package reads")
@@ -575,15 +588,18 @@ def argument_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``mariner`` command with ``argv`` (default: the process's arguments) and return its exit status.
 
-    A malformed argument exits through argparse with status 2. An input the command cannot use, raised as a
-    ``ValueError`` (such as a table without a bucket's ``w__`` column) or an ``OSError`` (such as a missing file),
-    stops it with a message on stderr and status 2; other exceptions propagate. ``self-test`` returns 1 when a check
-    fails.
+    A malformed argument exits through argparse with status 2. The directory of ``--out`` is created before the
+    command runs. An input the command cannot use, raised as a ``ValueError`` (such as a table without a bucket's
+    ``w__`` column) or an ``OSError`` (such as a missing file), or an extra it needs and lacks, raised as an
+    ``ImportError`` that names the extra, stops it with a message on stderr and status 2. Other exceptions, a solver's
+    ``RuntimeError`` among them, propagate. ``self-test`` returns 1 when a check fails.
     """
     args = argument_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
     try:
+        if args.out is not None:
+            args.out.parent.mkdir(parents=True, exist_ok=True)  # before the compute, which a bad path would waste
         return args.run(args)
-    except (OSError, ValueError) as error:
+    except (ImportError, OSError, ValueError) as error:
         print(f"mariner {args.command}: error: {error}", file=sys.stderr)
         return INPUT_ERROR_STATUS

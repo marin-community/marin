@@ -57,7 +57,7 @@ def project_start(weights: np.ndarray, upper: np.ndarray, feasible: np.ndarray) 
         options=PROJECTION_OPTIONS,
     )
     if not result.success or max(abs(result.x.sum() - 1), -result.x.min(), np.max(result.x - upper)) > 1e-10:
-        raise ValueError(f"start projection failed: {result.message}")
+        raise RuntimeError(f"start projection failed: {result.message}")
     return result.x
 
 
@@ -88,7 +88,7 @@ def optimize_start(
     weights = project_start(result.x, upper, natural)
     value = objective(weights)
     if not np.isfinite(value):
-        raise ValueError("continuous optimizer produced a nonfinite objective")
+        raise RuntimeError("continuous optimizer produced a nonfinite objective")
     return weights, {
         "objective": value,
         "raw_feasibility_violation": violation,
@@ -137,7 +137,7 @@ def continuous_optimum(
             records[index] = {"start": index, **diagnostics, "polished": True}
     feasible = [i for i, row in enumerate(records) if row["raw_feasibility_violation"] <= ENDPOINT_FEASIBILITY_TOLERANCE]
     if not feasible:
-        raise ValueError("no restart ended feasibly")
+        raise RuntimeError("no restart ended feasibly")
     best = min(feasible, key=lambda i: records[i]["objective"])
     for row in records:
         row["selected"] = row["start"] == best
@@ -210,7 +210,7 @@ def runtime_policy(
     counts, steps = refine_counts(predict, initial, maximum)
     runtime = counts / MIXTURE_BLOCK_SIZE
     if int(counts.sum()) != MIXTURE_BLOCK_SIZE or counts.min() < 0 or np.any(counts > maximum):
-        raise ValueError("invalid refined runtime allocation")
+        raise RuntimeError("invalid refined runtime allocation")
     return counts, {
         "continuous_prediction": float(predict(weights)[0]),
         "runtime_prediction": float(predict(runtime)[0]),

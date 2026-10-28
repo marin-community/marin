@@ -168,9 +168,17 @@ def stratified(n_buckets: int) -> np.ndarray:
 
 
 def removals(base: np.ndarray) -> np.ndarray:
-    """One mixture per bucket, shape (buckets, buckets): row i is ``base`` with bucket i zeroed and renormalized."""
+    """One mixture per bucket, shape (buckets, buckets): row i is ``base`` with bucket i zeroed and renormalized.
+
+    Raises:
+        ValueError: If removing a bucket leaves no weight, as when ``base`` puts all of its weight on that bucket.
+    """
     zeroed = base[None, :] * (1.0 - np.eye(len(base)))
-    return zeroed / zeroed.sum(axis=1, keepdims=True)
+    totals = zeroed.sum(axis=1, keepdims=True)
+    empty = np.flatnonzero(totals[:, 0] <= 0.0)
+    if len(empty):
+        raise ValueError(f"removing the buckets at positions {', '.join(map(str, empty))} leaves no weight")
+    return zeroed / totals
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -206,17 +214,19 @@ def swarm_table(
     - ``deletion_<bucket_id>`` (``deletion``) for each bucket, the ``removal_base`` mixture with that bucket removed,
       unless ``removal_base`` is None;
     - ``repeats`` rows ``proportional_repeat_00``, ... (``repeat``) of the proportional baseline, which have
-      ``fit_inclusion`` false; every other row has it true.
+      ``fit_inclusion`` false; every other row has it true. The anchors need at least two, for a standard deviation.
 
     The columns are ``run_label``, ``design_kind``, ``fit_inclusion``, ``data_seed`` (``data_seed_start`` plus the
     row's position), ``trainer_seed`` (0), the weights ``w__<bucket_id>`` and the pool fractions ``pf__<bucket_id>``,
     which are all one. After training, one adds ``observation_id`` and the outcomes ``bpb__<task_id>``.
 
     Raises:
-        ValueError: If ``baselines`` has no ``proportional`` mixture.
+        ValueError: If ``baselines`` has no ``proportional`` mixture, or ``repeats`` is below two.
     """
     if PROPORTIONAL not in baselines:
         raise ValueError(f"the baselines must include '{PROPORTIONAL}', which calibrates the fit and is repeated")
+    if repeats < 2:
+        raise ValueError(f"the anchors need at least two proportional repeats for a standard deviation, got {repeats}")
     groups = [
         RunGroup(
             [f"{BASELINE_PREFIX}{name}" for name in baselines],

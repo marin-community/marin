@@ -12,6 +12,7 @@ letting any bucket exceed the cap, as the matched Olmix mixtures the paper train
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 from collections.abc import Sequence
 
 import numpy as np
@@ -32,6 +33,17 @@ SOLVERS = ("CLARABEL", "ECOS", "SCS")
 # Slack in blocks for floating rounding: a block maximum or a weight this close below a whole block reaches it.
 CAP_ROUNDING_SLACK = 1e-9
 WEIGHT_ROUNDING_SLACK = 1e-12
+CVXPY = "cvxpy"
+CVXPY_MISSING = 'the Olmix baseline needs cvxpy, which the olmix extra installs: pip install "marin-mariner[olmix]"'
+
+
+def require_cvxpy() -> None:
+    """Raise ``ImportError`` naming the olmix extra when cvxpy is not installed.
+
+    It finds the module without importing it, so that a command can check before any compute.
+    """
+    if importlib.util.find_spec(CVXPY) is None:
+        raise ImportError(CVXPY_MISSING)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -106,7 +118,10 @@ def exact_proposal(
 ) -> tuple[np.ndarray, float, str]:
     """Olmix's exact proposer: minimize the weighted mean prediction plus kl_reg * KL(w || natural) on the
     capped simplex."""
-    import cvxpy as cp  # noqa: PLC0415  (optional dependency: only for the Olmix baseline)
+    try:
+        import cvxpy as cp  # noqa: PLC0415  (optional dependency: the olmix extra)
+    except ImportError as error:
+        raise ImportError(CVXPY_MISSING) from error
 
     weights = cp.Variable(len(natural))
     predicted = sum(
