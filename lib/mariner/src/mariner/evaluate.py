@@ -9,8 +9,22 @@ pick, and the RMSE and Spearman correlation of the predictions over the bank.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
+import pandas as pd
 from scipy.stats import spearmanr
+
+
+@dataclasses.dataclass(frozen=True)
+class HeldoutBank:
+    """Measured mixtures outside the swarm, one row per exposure; the runs at one exposure are averaged."""
+
+    exposure_ids: tuple[str, ...]
+    weights: np.ndarray  # (exposures, buckets)
+    pool_fractions: np.ndarray  # (exposures, buckets)
+    measured: pd.DataFrame  # (exposures, tasks) each task's mean over the exposure's runs; task names as columns
+    runs: np.ndarray  # (exposures,) the number of runs at each exposure
 
 
 def bank_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, float]:
