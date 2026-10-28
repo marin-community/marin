@@ -1,4 +1,4 @@
-# Copyright 2026 Baixin Guo (Max)
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 """Screening statistics for same-history preference pairs from agent traces.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-import parse
+from experiments.post_training.trace_preferences import parse
 
 DATASET_ID = "penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces"
 DATASET_REVISION = "404f3fc"
@@ -110,10 +110,7 @@ def scan_turns(tok, pf) -> tuple:
         # row's turns.  A prefix carrying no <tools> yields served=None for that turn,
         # which marks schema validation UNAVAILABLE rather than silently valid.
         prompt_ids = r["prompt_token_ids"] or []
-        served_by_turn = [
-            parse.extract_served_tools(tok.decode(seg)) if seg else None
-            for seg in prompt_ids
-        ]
+        served_by_turn = [parse.extract_served_tools(tok.decode(seg)) if seg else None for seg in prompt_ids]
         schema_present = any(s is not None for s in served_by_turn)
         c["schema"] += 1 if schema_present else 0
         if schema_present:
@@ -152,7 +149,7 @@ def scan_turns(tok, pf) -> tuple:
 
             # messages after the action, before the next assistant turn
             consecutive = 0
-            for following in messages[pos + 1:]:
+            for following in messages[pos + 1 :]:
                 if following.get("role") not in FOLLOW_ROLES:
                     break
                 consecutive += 1
@@ -174,9 +171,11 @@ def scan_turns(tok, pf) -> tuple:
             c["aligned"] += 1
             c["aligned_tokens"] += len(ids)
             for i, v in enumerate(lp):
-                region = ("unverified-turn" if span is None
-                          else "action-span" if span[0] <= i < span[1]
-                          else "verified-non-action")
+                region = (
+                    "unverified-turn"
+                    if span is None
+                    else "action-span" if span[0] <= i < span[1] else "verified-non-action"
+                )
                 tot[region] += 1
                 if v < LOWPROB_THRESHOLD:
                     low[region] += 1
@@ -190,57 +189,62 @@ def main() -> int:
     args = ap.parse_args()
 
     pq_path = Path(args.parquet)
-    c, classes, roles, low, tot = scan_turns(
-        parse.NativeTokenizer(args.tokenizer), pq.ParquetFile(str(pq_path)))
+    c, classes, roles, low, tot = scan_turns(parse.NativeTokenizer(args.tokenizer), pq.ParquetFile(str(pq_path)))
 
     roles_line = ", ".join(f"{k}={v}" for k, v in sorted(roles.items()))
     classes_line = "  ".join(f"{k}={v}" for k, v in sorted(classes.items(), key=lambda x: -x[1]))
-    regions_line = "  ".join(f"{r}={low[r]}/{tot[r]}={100 * low[r] / tot[r]:.3f}%"
-                             for r in ("action-span", "verified-non-action", "unverified-turn")
-                             if tot[r])
+    regions_line = "  ".join(
+        f"{r}={low[r]}/{tot[r]}={100 * low[r] / tot[r]:.3f}%"
+        for r in ("action-span", "verified-non-action", "unverified-turn")
+        if tot[r]
+    )
 
-    print("\n".join([
-        "=" * 74,
-        "TRACE -> PREFERENCE : SCREENING (local CPU, no model run)",
-        f"  dataset   {DATASET_ID}@{DATASET_REVISION}",
-        f"  tokenizer {parse.PINNED_TOKENIZER_ID}@{parse.PINNED_TOKENIZER_REVISION[:7]}",
-        f"  parquet   {pq_path}",
-        f"  sha256    {hashlib.sha256(pq_path.read_bytes()).hexdigest()}",
-        f"  rows={c['rows']} turns={c['turns']} operator_cap={MAX_ACTION_TOKENS}",
-        "",
-        "-- 1. pairing evidence (row level) --",
-        f"  instruction={c['instruction']} prompt_ids={c['rows']} action_ids={c['rows']}"
-        f" logprobs={c['logprobs_rows']} served_schema_extracted={c['schema']}"
-        f" schema_consistent_across_turns={c['schema_consistent']}",
-        "  schema extracted != schema verified against the engine's served tools",
-        "  MISSING: execution-result column; pre-action environment-state column; per-step verifier",
-        "",
-        "-- 2. conversations column --",
-        f"  roles_observed: {roles_line}",
-        f"  assistant_msgs_with_tool_call={c['toolcall']}"
-        f" turns_followed_by_a_message={c['following']}/{c['turns']}",
-        "  those are FOLLOWING MESSAGES, not observations: unlabeled, unframed, one branch only",
-        "  mapping rule: turn k <-> k-th `assistant` message, in order",
-        f"    [rows_mismatch={c['row_mismatch']} agree={c['agree']}/{c['turns']} disagree={c['disagree']}"
-        f" unmapped={c['unmapped']} adapter_reject_turns={c['adapter_reject']}]",
-        f"  classes: {classes_line}",
-        f"  confirmed_format_malformed={sum(v for k, v in classes.items() if k.startswith('syntax-'))}"
-        f" of {c['turns']}  (syntax-* only: real format errors the parser established)",
-        "  undetermined (NOT counted as malformed): span-unprovable, multiple-block,"
-        "  schema-unavailable, unmapped-gate -- see the classes line above",
-        "",
-        "-- 3. recorded on-policy logprobs vs action spans (descriptive, small n) --",
-        f"  shape: len(logprobs[t])==len(ids[t]) for {c['aligned']} turns, {c['misaligned']} mismatch"
-        "  -> TOKEN-COUNT AGREEMENT ONLY; positional correspondence is ASSUMED",
-        f"  turns in statistics: aligned={c['aligned']}  omitted: misaligned={c['misaligned']}"
-        f" no_logprobs={c['no_logprobs_turns']}",
-        f"  tokens_in_statistics={c['aligned_tokens']}"
-        f" tokens_omitted={c['tokens_total'] - c['aligned_tokens']}"
-        f" (misaligned={c['misaligned_tokens']} + no_logprobs={c['no_logprobs_tokens']})",
-        f"  low(<{LOWPROB_THRESHOLD}): {regions_line}",
-        f"  the {classes.get(TOO_LONG, 0)} over-cap turns have PROVEN spans and DO contribute above",
-        "=" * 74,
-    ]))
+    print(
+        "\n".join(
+            [
+                "=" * 74,
+                "TRACE -> PREFERENCE : SCREENING (local CPU, no model run)",
+                f"  dataset   {DATASET_ID}@{DATASET_REVISION}",
+                f"  tokenizer {parse.PINNED_TOKENIZER_ID}@{parse.PINNED_TOKENIZER_REVISION[:7]}",
+                f"  parquet   {pq_path}",
+                f"  sha256    {hashlib.sha256(pq_path.read_bytes()).hexdigest()}",
+                f"  rows={c['rows']} turns={c['turns']} operator_cap={MAX_ACTION_TOKENS}",
+                "",
+                "-- 1. pairing evidence (row level) --",
+                f"  instruction={c['instruction']} prompt_ids={c['rows']} action_ids={c['rows']}"
+                f" logprobs={c['logprobs_rows']} served_schema_extracted={c['schema']}"
+                f" schema_consistent_across_turns={c['schema_consistent']}",
+                "  schema extracted != schema verified against the engine's served tools",
+                "  MISSING: execution-result column; pre-action environment-state column; per-step verifier",
+                "",
+                "-- 2. conversations column --",
+                f"  roles_observed: {roles_line}",
+                f"  assistant_msgs_with_tool_call={c['toolcall']}"
+                f" turns_followed_by_a_message={c['following']}/{c['turns']}",
+                "  those are FOLLOWING MESSAGES, not observations: unlabeled, unframed, one branch only",
+                "  mapping rule: turn k <-> k-th `assistant` message, in order",
+                f"    [rows_mismatch={c['row_mismatch']} agree={c['agree']}/{c['turns']} disagree={c['disagree']}"
+                f" unmapped={c['unmapped']} adapter_reject_turns={c['adapter_reject']}]",
+                f"  classes: {classes_line}",
+                f"  confirmed_format_malformed={sum(v for k, v in classes.items() if k.startswith('syntax-'))}"
+                f" of {c['turns']}  (syntax-* only: real format errors the parser established)",
+                "  undetermined (NOT counted as malformed): span-unprovable, multiple-block,"
+                "  schema-unavailable, unmapped-gate -- see the classes line above",
+                "",
+                "-- 3. recorded on-policy logprobs vs action spans (descriptive, small n) --",
+                f"  shape: len(logprobs[t])==len(ids[t]) for {c['aligned']} turns, {c['misaligned']} mismatch"
+                "  -> TOKEN-COUNT AGREEMENT ONLY; positional correspondence is ASSUMED",
+                f"  turns in statistics: aligned={c['aligned']}  omitted: misaligned={c['misaligned']}"
+                f" no_logprobs={c['no_logprobs_turns']}",
+                f"  tokens_in_statistics={c['aligned_tokens']}"
+                f" tokens_omitted={c['tokens_total'] - c['aligned_tokens']}"
+                f" (misaligned={c['misaligned_tokens']} + no_logprobs={c['no_logprobs_tokens']})",
+                f"  low(<{LOWPROB_THRESHOLD}): {regions_line}",
+                f"  the {classes.get(TOO_LONG, 0)} over-cap turns have PROVEN spans and DO contribute above",
+                "=" * 74,
+            ]
+        )
+    )
     return 0
 
 

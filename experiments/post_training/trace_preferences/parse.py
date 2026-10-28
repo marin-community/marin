@@ -1,4 +1,4 @@
-# Copyright 2026 Baixin Guo (Max)
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 """Loader, span proof and syntax parser for Qwen native tool-call markup.  A parser
 pass is evidence about FORMAT ONLY; contract and limits: README.md.
@@ -47,7 +47,7 @@ class NativeTokenizer:
     """Pinned tokenizer loaded from a local tokenizer.json (never downloads)."""
 
     def __init__(self, tokenizer_json_path: str) -> None:
-        from tokenizers import Tokenizer
+        from tokenizers import Tokenizer  # noqa: PLC0415  # optional dep
 
         self._tokenizer = Tokenizer.from_file(tokenizer_json_path)
 
@@ -100,9 +100,11 @@ def prove_action_span(tokenizer: NativeTokenizer, response_ids: tuple[int, ...])
     post_ids = tokenizer.encode(decoded[match.end() :])
     start, end = len(pre_ids), len(pre_ids) + len(span_ids)
 
-    if not (tuple(response_ids[start:end]) == span_ids
-            and tuple(response_ids[:start]) == pre_ids
-            and tuple(response_ids[end:]) == post_ids):
+    if not (
+        tuple(response_ids[start:end]) == span_ids
+        and tuple(response_ids[:start]) == pre_ids
+        and tuple(response_ids[end:]) == post_ids
+    ):
         return SpanProof(None, span_text, True, False, REASON_SEGMENTATION)
 
     return SpanProof((start, end), span_text, True, True, None)

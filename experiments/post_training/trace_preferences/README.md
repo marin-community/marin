@@ -106,11 +106,12 @@ The **all** row sums only turns that entered the statistics (token-count agreeme
 ## 7. Reproduce
 
 ```bash
-cd experiments/post_training/trace_preferences
+# from the repository root
 export TRACE_PREFS_SAMPLE=/path/to/pf_curriculum_hard.parquet
 export TRACE_PREFS_TOKENIZER=/path/to/tokenizer.json
-python -m pytest test_trace_prefs.py -q      # unit tests
-python analyze_traces.py --parquet "$TRACE_PREFS_SAMPLE" --tokenizer "$TRACE_PREFS_TOKENIZER"
+uv run pytest experiments/post_training/trace_preferences/test_trace_prefs.py -q   # unit tests
+uv run python -m experiments.post_training.trace_preferences.analyze_traces \
+    --parquet "$TRACE_PREFS_SAMPLE" --tokenizer "$TRACE_PREFS_TOKENIZER"
 ```
 
 The sample and tokenizer are **not** in the repo -- download them from the pinned revision above and point the env vars at your copies; paths are passed explicitly and nothing is fetched at import time. Without the env vars the unit tests still pass and the real-data test skips; it must never fail on a fresh checkout. Environment: Python 3.12, **CPU only**; no GPU, no model run, no API calls. Dependencies: `pyarrow`, `tokenizers`.
