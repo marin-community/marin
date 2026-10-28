@@ -236,15 +236,23 @@ def read_anchors(args: argparse.Namespace, tables: SwarmTables) -> dict[str, Anc
 
 
 def read_fit(path: Path) -> ObjectiveFit:
-    """The fit JSON at ``path``; raises ``ValueError`` naming the path when the file is not JSON or not a fit."""
+    """The fit JSON at ``path``; raises ``ValueError`` naming the path when the file is not JSON or not a fit.
+
+    A fit is a JSON object that ``ObjectiveFit.from_json`` reads: it has every field, and each field holds a value of
+    the type the field needs.
+    """
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as error:
         raise ValueError(f"{path} is not JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} is not a fit JSON of mariner fit: its top level is not an object")
     try:
         return ObjectiveFit.from_json(payload)
     except KeyError as error:
         raise ValueError(f"{path} is not a fit JSON of mariner fit: it has no field {error}") from error
+    except (AttributeError, OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f"{path} is not a fit JSON of mariner fit: a field's value cannot be read ({error})") from error
 
 
 def check_epochs(fit: ObjectiveFit, epochs_per_unit_weight: np.ndarray, source: str) -> None:
