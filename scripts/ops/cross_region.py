@@ -49,6 +49,8 @@ GS_RE = re.compile(r"gs://[^\s'\"`]+")
 
 # Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
 LOG_NAMESPACE = "log"
+# Repository-relative Iris config for the cluster whose task logs are analyzed.
+DEFAULT_IRIS_CONFIG = "lib/iris/config/marin.yaml"
 
 DEFAULT_LOOKBACK_HOURS = 12.0
 ROW_BATCH_SIZE = 10_000
@@ -925,8 +927,9 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
 @click.command(help=__doc__)
 @click.option(
     "--config",
-    default="lib/iris/config/marin.yaml",
-    help="Iris cluster config to use. Defaults to lib/iris/config/marin.yaml.",
+    default=DEFAULT_IRIS_CONFIG,
+    show_default=True,
+    help="Iris cluster config to use.",
 )
 @click.option(
     "--outdir",
@@ -950,7 +953,7 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
     help="Optional remote checkpoint directory to use instead of the latest checkpoint.",
 )
 @click.option(
-    "--download-lookback-hours",
+    "--lookback-hours",
     type=float,
     default=DEFAULT_LOOKBACK_HOURS,
     show_default=True,
@@ -977,7 +980,7 @@ def main(
     hours: float,
     end_time: str | None,
     checkpoint_dir: str | None,
-    download_lookback_hours: float,
+    lookback_hours: float,
     summary_json: str | None,
     appendix_csv: str | None,
     report_md: str | None,
@@ -987,7 +990,7 @@ def main(
     out_path.mkdir(parents=True, exist_ok=True)
     logging.info(f"Output directory: {out_path}")
 
-    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path)
+    summary = run_analysis(config, window, lookback_hours, checkpoint_dir, out_path)
 
     summary_json_path = Path(summary_json) if summary_json else out_path / SUMMARY_JSON
     appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / APPENDIX_CSV

@@ -36,6 +36,7 @@ from rigging.timing import Duration
 
 from scripts.ops.cross_region import (
     APPENDIX_CSV,
+    DEFAULT_IRIS_CONFIG,
     DEFAULT_LOOKBACK_HOURS,
     REPORT_MD,
     SUMMARY_JSON,
@@ -48,8 +49,9 @@ LARGE_TIER_USER_THRESHOLD = 10
 MAX_OFFENDERS_IN_MESSAGE = 20
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# The finelog log segments live in us-central2; the job runs there and stages
-# its outputs there so every large read is same-region.
+# The marin cluster's finelog log segments (DEFAULT_IRIS_CONFIG) live in
+# us-central2; the job runs there and stages its outputs there so every large
+# read is same-region.
 LOG_REGION = "us-central2"
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
 JOB_TIMEOUT = Duration.from_seconds(30 * 60)
@@ -58,25 +60,25 @@ REPORT_FILES = (SUMMARY_JSON, REPORT_MD, APPENDIX_CSV)
 JOB_RESOURCES = ResourceSpec(cpu=16, memory="16GB", disk="5GB")
 
 
-def _report_stage(config: str, hours: float, end_time: str, output_dir: str) -> None:
+def _report_stage(hours: float, end_time: str, output_dir: str) -> None:
     """Iris-side entrypoint: scan the logs and upload the report files to ``output_dir``.
 
-    ``config`` is relative to the repository root, which is the job's working directory.
+    DEFAULT_IRIS_CONFIG is relative to the repository root, which is the job's working directory.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     window = parse_window(end_time, hours)
     with tempfile.TemporaryDirectory(prefix="egress-report-") as workdir:
         local = Path(workdir)
-        summary = run_analysis(config, window, DEFAULT_LOOKBACK_HOURS, None, local)
+        summary = run_analysis(DEFAULT_IRIS_CONFIG, window, DEFAULT_LOOKBACK_HOURS, None, local)
         write_reports(summary, local / SUMMARY_JSON, local / APPENDIX_CSV, local / REPORT_MD)
         for name in REPORT_FILES:
             (StoragePath(output_dir) / name).upload_from(str(local / name))
 
 
-def _run_cross_region_on_iris(config: str, hours: float, end_time: str, output_dir: str, run_id: str) -> None:
-    with open_iris_client(config_file=REPO_ROOT / config, workspace=REPO_ROOT) as client:
+def _run_cross_region_on_iris(hours: float, end_time: str, output_dir: str, run_id: str) -> None:
+    with open_iris_client(config_file=REPO_ROOT / DEFAULT_IRIS_CONFIG, workspace=REPO_ROOT) as client:
         job = client.submit(
-            entrypoint=Entrypoint.from_callable(_report_stage, config, hours, end_time, output_dir),
+            entrypoint=Entrypoint.from_callable(_report_stage, hours, end_time, output_dir),
             name=f"egress-report-{run_id}",
             # Disk holds the ~100 MiB controller checkpoint.
             resources=JOB_RESOURCES,
@@ -162,12 +164,6 @@ def _compose_message(
 @click.option("--hours", type=float, default=24.0, help="Analysis window in hours. Defaults to 24.")
 @click.option("--channel", default="internal-discuss", help="Discord channel name.")
 @click.option(
-    "--config",
-    default="lib/iris/config/marin.yaml",
-    show_default=True,
-    help="Iris cluster config, relative to the repository root, for both the job and the logs it scans.",
-)
-@click.option(
     "--staging-dir",
     default=DEFAULT_STAGING_DIR,
     show_default=True,
@@ -178,7 +174,7 @@ def _compose_message(
     default=False,
     help="Skip gist creation and Discord post; print the message that would have been sent.",
 )
-def main(hours: float, channel: str, config: str, staging_dir: str, dry_run: bool) -> None:
+def main(hours: float, channel: str, staging_dir: str, dry_run: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     outdir = Path(tempfile.mkdtemp(prefix="egress-report-"))
     logging.info("Workdir: %s", outdir)
@@ -186,7 +182,7 @@ def main(hours: float, channel: str, config: str, staging_dir: str, dry_run: boo
     now = dt.datetime.now(dt.UTC)
     run_id = now.strftime("%Y%m%d-%H%M%S")
     output_dir = str(StoragePath(staging_dir) / run_id)
-    _run_cross_region_on_iris(config, hours, now.isoformat(), output_dir, run_id)
+    _run_cross_region_on_iris(hours, now.isoformat(), output_dir, run_id)
     summary = _fetch_outputs(output_dir, outdir)
 
     total = summary["cross_region_path_mentions"]
