@@ -7,8 +7,8 @@ fig:mariner-terms,figure,m_mariner_terms,revision_notes/20261023_mariner_terms_f
 fig:r6,figure,r6_learning_curve_per_fold_ratio,experiments/domain_phase_mix/exploratory/two_phase_many/plot_learning_curve_per_fold_ratio_20261002.py --height 2.3,fits
 fig:proposal-predictions,figure,r_proposal_predictions,experiments/domain_phase_mix/exploratory/two_phase_many/plot_proposal_cross_predictions_20261024.py --layout full,validation_3e18;fits
 fig:accuracy,figure,r_accuracy_vs_bpb,revision_notes/20261011_pages7_9/builders/accuracy/fig7_plot_accuracy_vs_bpb.py,ladder_accuracy
-fig:r1,figure,r1_scaling_curves_placeholder,revision_notes/20261011_pages7_9/builders/scaling/fig6_tall.py,ladder;validation_3e18;swarm_qwen3_360m_1p6b
-fig:off-objective,figure,r_on_off_objective,revision_notes/20261025_layout/builders/build_on_off_objective_full.py --layout half_tall,ladder;validation_3e18
+fig:r1,figure,r1_scaling_curves_placeholder,revision_notes/20261027_fig9_fig10_aligned/builders/build_scaling_aligned.py --layout aligned,ladder;validation_3e18;swarm_qwen3_360m_1p6b
+fig:off-objective,figure,r_on_off_objective,revision_notes/20261027_fig9_fig10_aligned/builders/build_on_off_aligned.py --layout aligned --axes-spec revision_notes/20261027_fig9_fig10_aligned/out/fig9/axes_spec.json,ladder;validation_3e18
 fig:a-comparator-paths,figure,a_comparator_paths_full,revision_notes/20260930_figure10_overlay/plot_paths_full.py,validation_3e18;fits
 fig:mixture-epochs,figure,r_mixture_epochs,revision_notes/20261012_fig10_policy_gap/builder/plot_mixture_heatmap_20260921.py --layout side,validation_3e18;partition
 fig:domain-repetition,figure,figure4_cap_policy,revision_notes/20261024_fig9_fig12_simplify/fig12/build_figure_variants.py,domain_sweeps
