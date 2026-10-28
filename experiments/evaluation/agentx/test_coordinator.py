@@ -4,6 +4,7 @@
 """Control-plane interruption regressions; these tests allocate no hardware."""
 
 import dataclasses
+import hashlib
 import io
 import json
 import os
@@ -24,7 +25,7 @@ from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 
 from experiments.evaluation.agentx.artifacts import read_record, retain_artifacts, unpack, write_record
-from experiments.evaluation.agentx.collect import collect_terminal, validate_window
+from experiments.evaluation.agentx.collect import collect_terminal, validate_gang, validate_window
 from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
 from experiments.evaluation.agentx.coordinator import recover_results, resolve_plan, run_points
 from experiments.evaluation.agentx.processes import logged_process
@@ -122,6 +123,21 @@ def test_coordinator_retains_each_terminal_outcome_and_runs_points_serially(save
     completed = list((tmp_path / "retained" / "completed").glob("*.json"))
     assert sorted(len(json.loads(path.read_text())["points"]) for path in completed) == [1, 2]
     assert all(point["receipt"]["status"] == "failed" for point in result["points"])
+
+
+def test_calibration_load_outside_weekly_grid_runs_and_retains_one_point(saved_batch, tmp_path):
+    original, _ = saved_batch
+    plan = resolve_plan(
+        coordinator_plan(original["source"], "h100", "cw-rno2a", "batch", str(tmp_path / "calibration"), 16),
+        original["points"][0]["manifest"]["workload"],
+    )
+    controller = FakeController(plan)
+    with pytest.raises(RuntimeError, match="points failed"):
+        run_points(controller, plan, tmp_path)
+    result = read_record(pending_result(plan["root"]))
+    assert [point["manifest"]["concurrency"] for point in result["points"]] == [16]
+    assert result["points"][0]["job_id"].endswith("/c16")
+    assert len(controller.waited) == 1
 
 
 def test_coordinator_loss_keeps_completed_results_and_manual_recovery_never_submits(saved_batch, tmp_path):
@@ -255,6 +271,56 @@ def test_complete_window_uses_phase_coverage_and_excludes_warmup_errors(exported
     assert result["profiling_requests"] == 1
     assert result["coverage"] == export["metadata"]["metric_duration_coverage"][0]
     assert result["submission_valid"] is True
+
+
+@pytest.mark.parametrize("replaced_follower", [False, True])
+def test_multihost_window_requires_its_original_sixteen_gpu_gang(saved_batch, tmp_path, replaced_follower):
+    original, _ = saved_batch
+    placement = {"nodes": [f"host-{index}" for index in range(4)], "nvlink_domain": "fixture"}
+    plan = resolve_plan(
+        coordinator_plan(original["source"], "gb200", "cw-rno2a", "batch", str(tmp_path / "hero"), 16, placement),
+        original["points"][0]["manifest"]["workload"],
+    )
+    manifest = plan["points"][0]["manifest"]
+    identities = {f"{plan['job_id']}/c16/{index}": f"native-{index}" for index in range(4)}
+    tasks = []
+    leader = tmp_path / "raw" / "point"
+    for index, (task_id, uid) in enumerate(identities.items()):
+        if index == 2 and replaced_follower:
+            uid = "new-native-2"
+        point = leader if index == 0 else tmp_path / f"fixture-{index}" / "point"
+        point.mkdir(parents=True)
+        record = manifest | {
+            "status": "succeeded",
+            "iris_attempt_uid": uid,
+            "iris_node_name": f"host-{index}",
+            "gpu_uuids": [f"gpu-{index}-{gpu}" for gpu in range(4)],
+        }
+        if index == 0:
+            record["gang_attempts"] = identities
+        write_record(str(point / "attempt.json"), record)
+        wire = io.BytesIO()
+        with tarfile.open(fileobj=wire, mode="w") as archive:
+            archive.add(point, arcname="point")
+        data = zstandard.compress(wire.getvalue())
+        archive_path = tmp_path / ("outputs.tar.zst" if index == 0 else f"native-{index}.tar.zst")
+        archive_path.write_bytes(data)
+        task = job_pb2.TaskStatus(task_id=task_id, state=job_pb2.TASK_STATE_SUCCEEDED, current_attempt_id=0)
+        attempt = task.attempts.add(attempt_id=0, attempt_uid=uid, state=job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        attempt.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+        attempt.output_archive.uri = str(archive_path)
+        attempt.output_archive.sha256 = hashlib.sha256(data).hexdigest()
+        tasks.append(task_status_from_proto(task))
+    if replaced_follower:
+        with pytest.raises(ValueError, match="measured window's gang"):
+            validate_gang(tasks, leader, manifest, tmp_path)
+        assert not (leader / "gang.json").exists()
+    else:
+        archives = validate_gang(tasks, leader, manifest, tmp_path)
+        retained = read_record(str(leader / "gang.json"))
+        assert retained["attempts"] == identities
+        assert len({gpu for row in retained["tasks"] for gpu in row["gpu_uuids"]}) == 16
+        assert {item["attempt_uid"] for item in archives} == set(identities.values())
 
 
 @pytest.mark.parametrize("cancelled,valid", [(True, True), (False, False)])

@@ -74,13 +74,13 @@ def prepare_sources(series: dict, bundle: Path) -> dict:
         raise RuntimeError("Corpus session count differs from the reviewed pin")
     tokenizer = Path(
         snapshot_download(
-            series["model"],
-            revision=series["model_revision"],
+            series["tokenizer"],
+            revision=series["tokenizer_revision"],
             ignore_patterns=["*.safetensors", "*.bin", "*.pt", "*.pth", "*.gguf", "*.onnx"],
         )
     )
-    repo_name = "models--" + series["model"].replace("/", "--")
-    destination = bundle / "hf" / "hub" / repo_name / "snapshots" / series["model_revision"]
+    repo_name = "models--" + series["tokenizer"].replace("/", "--")
+    destination = bundle / "hf" / "hub" / repo_name / "snapshots" / series["tokenizer_revision"]
     shutil.copytree(tokenizer, destination, symlinks=False)
     return {
         "dataset": series["dataset"],
@@ -88,8 +88,8 @@ def prepare_sources(series: dict, bundle: Path) -> dict:
         "dataset_sha256": digest,
         "sessions": sessions,
         "filtered_sessions": 0,
-        "tokenizer": series["model"],
-        "tokenizer_revision": series["model_revision"],
+        "tokenizer": series["tokenizer"],
+        "tokenizer_revision": series["tokenizer_revision"],
         "tokenizer_files": {
             path.relative_to(tokenizer).as_posix(): file_digest(path)
             for path in sorted(tokenizer.rglob("*"))

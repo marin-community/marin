@@ -54,7 +54,13 @@ def preparation_recipe(series: dict) -> dict:
     directory = Path(__file__).parent
     return {
         "version": PREPARATION_VERSION,
-        "inputs": {key: series[key] for key in PREPARATION_INPUTS},
+        "inputs": (
+            {key: series[key] for key in PREPARATION_INPUTS}
+            | {
+                "tokenizer": series["tokenizer"],
+                "tokenizer_revision": series["tokenizer_revision"],
+            }
+        ),
         "code_sha256": {
             name: hashlib.sha256((directory / name).read_bytes()).hexdigest() for name in ("prepare.py", "recipe.py")
         },
