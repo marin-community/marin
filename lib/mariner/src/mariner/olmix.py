@@ -36,6 +36,10 @@ FIT_STARTS = 48
 FIT_SEED = 0
 MAX_LOG = 50.0
 SOLVERS = ("CLARABEL", "SCS")
+SOLVER_STATUSES = ("optimal", "optimal_inaccurate")
+# How far a solver's solution may lie outside the simplex and the caps: the accuracy cvxpy asks of SCS (eps_abs and
+# eps_rel 1e-5). The released solves lie 1.1e-10 outside at most, and SCS alone solves them 3.8e-8 outside.
+SOLUTION_TOLERANCE = 1e-5
 # Slack in blocks for floating rounding: a block maximum or a weight this close below a whole block reaches it.
 CAP_ROUNDING_SLACK = 1e-9
 WEIGHT_ROUNDING_SLACK = 1e-12
@@ -136,18 +140,27 @@ def fit_laws(swarm: Swarm, objective: Objective, delta: float = HUBER_DELTA) -> 
     return tuple(fit_log_linear(swarm.weights, swarm.outcomes[task].to_numpy(float), delta) for task in objective.tasks)
 
 
+def constraint_violation(solution: np.ndarray, caps: np.ndarray) -> float:
+    """How far ``solution`` lies outside the simplex and the ``caps``: its largest negative weight, the gap of its sum
+    from one or its largest excess over a cap, whichever is largest; inf when a weight is not finite."""
+    if not np.isfinite(solution).all():
+        return np.inf
+    return float(max(-solution.min(), abs(solution.sum() - 1.0), np.max(solution - caps)))
+
+
 def exact_proposal(
     laws: Sequence[LogLinearLaw], task_weights: np.ndarray, natural: np.ndarray, caps: np.ndarray, kl_reg: float
 ) -> tuple[np.ndarray, float, str]:
     """Olmix's exact proposer: the weights that minimize the laws' weighted prediction plus kl_reg * KL(w || natural).
 
-    The weights range over the simplex with each at most its cap, and the solvers are tried in ``SOLVERS`` order.
-    Returns the solution, clipped at zero and renormalized, the weighted prediction at it without the KL term, and
-    ``"<solver>:<status>"``.
+    The weights range over the simplex with each at most its cap. The solvers are tried in ``SOLVERS`` order, and the
+    first solution that a solver reports optimal (or optimal_inaccurate) and that lies within ``SOLUTION_TOLERANCE``
+    of the constraints (``constraint_violation``) is returned, clipped at zero and renormalized, with the weighted
+    prediction at it without the KL term and ``"<solver>:<status>"``.
 
     Raises:
         ImportError: If cvxpy, which the olmix extra installs, does not import.
-        RuntimeError: If no solver converges.
+        RuntimeError: If no solver returns such a solution; the message gives each solver's status and violation.
     """
     try:
         import cvxpy as cp  # noqa: PLC0415  (optional dependency: the olmix extra)
@@ -163,15 +176,25 @@ def exact_proposal(
         cp.Minimize(predicted + kl_reg * cp.sum(cp.rel_entr(weights, natural))),
         [weights >= 0, cp.sum(weights) == 1, weights <= caps],
     )
+    attempts = []
     for solver in SOLVERS:
         try:
             problem.solve(solver=solver, warm_start=True, verbose=False)
         except cp.error.SolverError:
+            attempts.append(f"{solver} failed")
             continue
-        if problem.status in ("optimal", "optimal_inaccurate"):
-            solution = np.clip(np.asarray(weights.value, float), 0.0, None)
+        if problem.status not in SOLVER_STATUSES:
+            attempts.append(f"{solver} {problem.status}")
+            continue
+        solution = np.asarray(weights.value, float)
+        violation = constraint_violation(solution, caps)
+        if violation <= SOLUTION_TOLERANCE:
+            solution = np.clip(solution, 0.0, None)
             return solution / solution.sum(), float(predicted.value), f"{solver}:{problem.status}"
-    raise RuntimeError("no solver converged")
+        attempts.append(f"{solver} {problem.status} at a point {violation:.3g} outside the constraints")
+    raise RuntimeError(
+        f"no solver found a solution within {SOLUTION_TOLERANCE:g} of the simplex and the caps: {'; '.join(attempts)}"
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------

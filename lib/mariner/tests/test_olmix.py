@@ -106,6 +106,15 @@ def test_olmix_proposal_with_infinite_cap_is_unconstrained():
     assert proposal.counts.tolist() == [2048, 0, 0, 0]  # the law alone puts the whole block on bucket 0
 
 
+@pytest.mark.filterwarnings("ignore:Solution may be inaccurate:UserWarning")  # cvxpy's notice of SCS's status
+def test_olmix_proposal_refuses_solver_solutions_outside_the_caps():
+    # exp(43 w0 - 16 w1) spans 23 orders of magnitude over the simplex. CLARABEL reports "optimal" 1.2e-4 above
+    # bucket 1's cap of 0.4273 and SCS "optimal_inaccurate" 0.5 away from the constraints: neither is a mixture.
+    law = LogLinearLaw(0.0, np.array([43.0, -16.0]), math.nan)
+    with pytest.raises(RuntimeError):
+        propose([law], ONE_TASK, np.array([1.2, 2.2]), cap=0.94, kl=0.01)
+
+
 def test_olmix_proposal_rejects_a_cap_the_block_grid_cannot_fill_before_solving(monkeypatch):
     # At 3 epochs per unit weight, a cap of 1 epoch bounds each of three buckets at a third of the mixture: the bounds
     # sum to one, but each bucket holds at most floor(2048 / 3) = 682 blocks, 2,046 of the 2,048.
