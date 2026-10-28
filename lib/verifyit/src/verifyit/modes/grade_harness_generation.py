@@ -13,6 +13,7 @@ from verifyit.adapters.evalchemy_math import END_OF_TURN_SEQUENCES
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.adapters.harness_native import exact_match
 from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.modes.grade_exact import grade_collection_f1
 from verifyit.spec import HarnessGenerationProfile, HarnessGenerationSpec
 
 INVALID_ANSWER = "[invalid]"
@@ -157,10 +158,13 @@ def _drop_metrics(candidate: str, references: tuple[tuple[str, ...], ...]) -> di
         for span in normalized_spans:
             gold = set(span.split())
             gold_numbers = {token for token in gold if _is_number(token)}
-            overlap = len(predicted & gold)
-            precision = overlap / len(predicted) if predicted else 1.0
-            recall = overlap / len(gold) if gold else 1.0
-            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            f1 = (
+                1.0
+                if not predicted and not gold
+                else grade_collection_f1(
+                    gold, predicted, multiplicity="set", empty_reference="zero", round_digits=None
+                ).reward
+            )
             scores.append(f1 if not gold_numbers or gold_numbers & predicted_numbers else 0.0)
         # The source predicts one span: optimal one-to-one alignment leaves the
         # other gold spans unmatched, and rounds their mean to two decimal places.

@@ -12,6 +12,7 @@ import threading
 from math_verify import parse, verify
 from sympy.core.relational import Relational
 
+from verifyit.adapters.completion import final_text
 from verifyit.adapters.evalchemy_amc import last_boxed_answer
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.grade import Reward, invalid_task, scored
@@ -31,7 +32,6 @@ END_OF_TURN_SEQUENCES = (
     "\nAssistant:",
 )
 CHAT_REQUEST_STOPS = END_OF_TURN_SEQUENCES[:4]
-REASONING_END_MARKERS = ("</think>", "<|end_think|>")
 
 
 def _symbol_free_relation(parsed: list) -> bool:
@@ -41,11 +41,7 @@ def _symbol_free_relation(parsed: list) -> bool:
 
 def final_boxed_answer(response: str) -> str:
     """Extract the source's last box in final content before a task boundary."""
-    end = max(
-        (index + len(marker) for marker in REASONING_END_MARKERS if (index := response.rfind(marker)) >= 0),
-        default=0,
-    )
-    response = response[end:]
+    response = final_text(response)
     stops = [index for stop in END_OF_TURN_SEQUENCES if (index := response.find(stop)) >= 0]
     response = response[: min(stops)] if stops else response
     return last_boxed_answer(response)
