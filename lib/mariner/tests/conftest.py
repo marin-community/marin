@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
 from mariner.model import Anchor, Head, Objective, ObjectiveFit, Shape, Swarm, TaskFit
 
 SYNTHETIC_SEED = 20261028

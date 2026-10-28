@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
-
 from mariner.fit import final_inner_folds, fit_objective
 
 

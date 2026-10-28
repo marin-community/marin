@@ -3,7 +3,6 @@
 
 import numpy as np
 import pytest
-
 from mariner.optimize import MIXTURE_BLOCK_SIZE, propose
 
 

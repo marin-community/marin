@@ -5,7 +5,6 @@ import dataclasses
 import json
 
 import numpy as np
-
 from mariner.fit import fit_objective
 from mariner.model import ObjectiveFit
 
