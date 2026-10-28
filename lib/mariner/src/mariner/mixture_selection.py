@@ -58,6 +58,8 @@ from scipy.optimize import minimize, minimize_scalar, nnls
 from scipy.special import xlogy
 from scipy.stats import spearmanr
 
+from mariner.model import Anchor, Head, Objective, ObjectiveFit, Swarm, TaskFit, design_matrix
+
 # ---------------------------------------------------------------------------------------------------------------
 # Constants of the frozen procedure (every value is the one the paper's runs used)
 # ---------------------------------------------------------------------------------------------------------------
@@ -90,7 +92,6 @@ FOLD_SEED = 20_260_902
 HELDOUT_INNER_SEED = FOLD_SEED + 90_000
 KMEANS_RESTARTS = 50
 
-LOG_CLIP = 30.0  # numerical overflow guard on the linear predictor; not a modeling constant
 DEFICIT_FLOOR = 1e-9
 NNLS_MAXITER_FACTOR = 200
 ACTIVE_TOLERANCE = 1e-10
@@ -118,35 +119,6 @@ PARITY_TOLERANCE = 1e-8
 # ---------------------------------------------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class Swarm:
-    """A proxy swarm: runs x buckets weights, the exposure scale per bucket, and per-task outcomes."""
-
-    runs: tuple[str, ...]
-    buckets: tuple[str, ...]
-    weights: np.ndarray  # (runs, buckets), rows sum to one
-    epochs_per_unit_weight: np.ndarray  # (buckets,) D_tgt / P_i
-    outcomes: pd.DataFrame  # (runs, tasks) with task names as columns
-    calibration: np.ndarray  # (runs,) bool: rows that are calibration data
-
-    @property
-    def exposures(self) -> np.ndarray:
-        return self.weights * self.epochs_per_unit_weight[None, :]
-
-
-@dataclasses.dataclass(frozen=True)
-class Objective:
-    name: str
-    tasks: tuple[str, ...]
-    weights: np.ndarray  # evaluation weights a_t (byte shares or 1/n)
-
-
-@dataclasses.dataclass(frozen=True)
-class Anchor:
-    proportional: float  # the proportional mixture's mean over its repeats
-    repeat_sd: float  # its repeat SD (0 disables the noise margin)
 
 
 def read_swarm(weights_path: Path, outcomes_path: Path, buckets_path: Path) -> Swarm:
@@ -237,26 +209,6 @@ def final_inner_folds(swarm: Swarm, splits: pd.DataFrame | None) -> Folds:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Response functions and design
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def benefit(exposure: np.ndarray, rho: float | np.ndarray, kappa: float | np.ndarray) -> np.ndarray:
-    return -np.expm1(-((np.maximum(rho * exposure, 0.0)) ** kappa))
-
-
-def harm(exposure: np.ndarray, tau: float | np.ndarray) -> np.ndarray:
-    return np.logaddexp(np.log1p(np.maximum(exposure, 0.0)) - tau, 0.0) ** 2
-
-
-def design_matrix(exposures: np.ndarray, shape: dict[str, float]) -> np.ndarray:
-    """Columns: minus the benefit of every bucket, then the harm of every bucket (ridge multiplier one each)."""
-    return np.hstack(
-        [-benefit(exposures, float(shape["rho"]), float(shape["kappa"])), harm(exposures, float(shape["tau"]))]
-    )
-
-
-# ---------------------------------------------------------------------------------------------------------------
 # Floored log-deficit head
 # ---------------------------------------------------------------------------------------------------------------
 
@@ -295,17 +247,6 @@ def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, gamma: float) -> t
     return intercept, coefficients
 
 
-@dataclasses.dataclass(frozen=True)
-class Head:
-    intercept: float
-    coefficients: np.ndarray
-    phi: float
-
-    def predict(self, matrix: np.ndarray) -> np.ndarray:
-        linear = self.intercept + matrix @ self.coefficients
-        return self.phi + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
-
-
 def fit_head(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorSpec) -> Head:
     phi = floor_value(response, spec)
     target = np.log(np.maximum(response - phi, DEFICIT_FLOOR))
@@ -329,43 +270,6 @@ def cv_rmse(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorS
 # ---------------------------------------------------------------------------------------------------------------
 # Per-task fit: grid, nu search, final head
 # ---------------------------------------------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class TaskFit:
-    task: str
-    shape: dict[str, float]
-    gamma: float
-    nu: float
-    flat_profile: bool
-    inner_cv_rmse: float
-    head: Head
-
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "task": self.task,
-            "shape": self.shape,
-            "gamma": self.gamma,
-            "nu": self.nu,
-            "flat_profile": self.flat_profile,
-            "inner_cv_rmse": self.inner_cv_rmse,
-            "intercept": self.head.intercept,
-            "coefficients": self.head.coefficients.tolist(),
-            "phi": self.head.phi,
-        }
-
-    @classmethod
-    def from_json(cls, payload: dict[str, Any]) -> TaskFit:
-        head = Head(float(payload["intercept"]), np.asarray(payload["coefficients"], float), float(payload["phi"]))
-        return cls(
-            str(payload["task"]),
-            {k: float(v) for k, v in payload["shape"].items()},
-            float(payload["gamma"]),
-            float(payload["nu"]),
-            bool(payload["flat_profile"]),
-            float(payload["inner_cv_rmse"]),
-            head,
-        )
 
 
 def select_shape_and_ridge(
@@ -425,57 +329,6 @@ def fit_task(swarm: Swarm, task: str, anchor: Anchor, folds: Folds) -> TaskFit:
 # ---------------------------------------------------------------------------------------------------------------
 # Objective fit: every task, vectorized prediction
 # ---------------------------------------------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class ObjectiveFit:
-    objective: str
-    buckets: tuple[str, ...]
-    epochs_per_unit_weight: np.ndarray
-    weights: np.ndarray  # evaluation weights per task
-    tasks: tuple[TaskFit, ...]
-
-    def _arrays(self) -> tuple[np.ndarray, ...]:
-        rho = np.asarray([t.shape["rho"] for t in self.tasks])
-        kappa = np.asarray([t.shape["kappa"] for t in self.tasks])
-        tau = np.asarray([t.shape["tau"] for t in self.tasks])
-        intercept = np.asarray([t.head.intercept for t in self.tasks])
-        coefficients = np.stack([t.head.coefficients for t in self.tasks])
-        phi = np.asarray([t.head.phi for t in self.tasks])
-        return rho, kappa, tau, intercept, coefficients, phi
-
-    def predict_tasks(self, mixtures: np.ndarray) -> np.ndarray:
-        """Per-task predictions for every mixture row, shape (mixtures, tasks)."""
-        rho, kappa, tau, intercept, coefficients, phi = self._arrays()
-        exposure = np.atleast_2d(mixtures)[:, None, :] * self.epochs_per_unit_weight[None, None, :]
-        columns = np.concatenate(
-            [-benefit(exposure, rho[None, :, None], kappa[None, :, None]), harm(exposure, tau[None, :, None])],
-            axis=2,
-        )
-        linear = intercept[None, :] + np.einsum("nck,ck->nc", columns, coefficients)
-        return phi[None, :] + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
-
-    def predict(self, mixtures: np.ndarray) -> np.ndarray:
-        return self.predict_tasks(mixtures) @ self.weights
-
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "objective": self.objective,
-            "buckets": list(self.buckets),
-            "epochs_per_unit_weight": self.epochs_per_unit_weight.tolist(),
-            "task_weights": self.weights.tolist(),
-            "tasks": [t.to_json() for t in self.tasks],
-        }
-
-    @classmethod
-    def from_json(cls, payload: dict[str, Any]) -> ObjectiveFit:
-        return cls(
-            str(payload["objective"]),
-            tuple(payload["buckets"]),
-            np.asarray(payload["epochs_per_unit_weight"], float),
-            np.asarray(payload["task_weights"], float),
-            tuple(TaskFit.from_json(t) for t in payload["tasks"]),
-        )
 
 
 def fit_objective(
