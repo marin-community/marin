@@ -1,7 +1,8 @@
 # Marin inference performance dashboard
 
-This packages an internal build of the pinned InferenceX-app as a standalone Next.js service at
-`https://performance.oa.dev`. Cloud Run's native IAP gate covers the service and its APIs.
+This leaf packages an internal build of the pinned InferenceX-app as a standalone
+Next.js service. Its Pulumi configuration targets `https://performance.oa.dev`
+and uses Cloud Run's native IAP gate for the service and its APIs.
 The global IAM stack reuses Grafana's viewer grants and adds the existing GitHub Iris
 identity for cache refresh. No anonymous invoker is granted. The web process receives
 only the `inferencex_reader` password. The import Action receives `inferencex_writer`.
@@ -20,23 +21,14 @@ The writer requires its own GitHub source lookup to succeed before database writ
 Retry ingestion when that lookup is unavailable; an import must preserve the original
 source date, commit and link.
 
-This is option B. Its charts, providers, API contracts and database packages remain
-upstream modules. The internal root omits the public header/footer, decoration, star-count
-fetch and site analytics views. Ten per-file overlay patches for public entrypoints are
-removed. Updating the pin requires checking the route selection and the few provider
-imports in the private root. The full app remains the fallback below; no extracted chart
-implementation or separate data pipeline is maintained.
+The internal root omits the public header/footer, decoration, star-count fetch and
+site analytics. Updating the pin requires checking route selection and provider
+imports in that root. The full app remains the fallback described below.
 
-One phase-boundary fix keeps offsets relative when slicing request charts. Adding an
-epoch-nanosecond origin and subtracting it lost precision and dropped the first profiling
-request in a real H100 window. The API retained 351 requests while the histogram showed
-350; the regression uses that window's origin and offset. No measurement is rewritten.
-
-The importer also preserves cache-hit rates derived from an already linked trace when
-an aggregate is imported again. Upstream otherwise overwrote those rates with the
-aggregate's server-counter rates while skipping trace processing. Replaying the real
-C32 artifact changed 52.68% to 57.38%; a SQL regression covers preserving the linked
-trace's rate while still refreshing aggregate-only rows.
+Request-chart phase slicing keeps nanosecond offsets relative to their captured
+origin so the first profiling record remains present. Repeated aggregate imports
+preserve cache-hit metrics already derived from a linked trace. Aggregate-only
+rows still refresh their metrics from the server counters.
 
 The app remains GPLv3; `LICENSE.app` preserves its license. Corresponding source is the
 upstream commit in `settings.json`, the adjacent patch and internal build entrypoints. Keep

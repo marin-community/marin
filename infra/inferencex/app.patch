@@ -311,7 +311,7 @@ index a75f8802..1b5b4993 100644
            },
            startNs: integerSchema,
 diff --git a/packages/app/src/lib/api/api-route-catalog.ts b/packages/app/src/lib/api/api-route-catalog.ts
-index 0956a0d6..d29d0e5f 100644
+index 0956a0d6..b0c629a4 100644
 --- a/packages/app/src/lib/api/api-route-catalog.ts
 +++ b/packages/app/src/lib/api/api-route-catalog.ts
 @@ -1629,7 +1629,10 @@ export const apiContractSourceDigests = [
@@ -322,7 +322,7 @@ index 0956a0d6..d29d0e5f 100644
 +    // Marin Hero step144000 adds a distinct BF16 AgentX model. The generated
 +    // model-name enum includes it; the AgentX cookbook records both Marin keys.
 +    // Existing route parameters, response shapes and translations still apply.
-+    sourceSha256: 'e2227f50996c66f533bcd99d1aec4e9c25f9ddfb0cb19f27613b20ae0d497bb1',
++    sourceSha256: '12fd739c92c9f8250276f4eefd3203d504dd07a50cb30419604899d70d8d0799',
      reviewArea: {
        en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
        zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
@@ -397,6 +397,22 @@ index 72b251b2..dae4489a 100644
    [Model.Muse_Spark_Open]: {
      label: 'Muse Spark Open 816B',
      prefix: 'musespark',
+diff --git a/packages/app/src/lib/catalog/model-architectures.test.ts b/packages/app/src/lib/catalog/model-architectures.test.ts
+index 496db699..65be9cb0 100644
+--- a/packages/app/src/lib/catalog/model-architectures.test.ts
++++ b/packages/app/src/lib/catalog/model-architectures.test.ts
+@@ -22,9 +22,9 @@ import {
+ } from './model-architectures';
+ 
+ describe('MODEL_RELEASE_DATES coverage', () => {
+-  it('has a sourced date for every model except Muse, whose release date is unverified', () => {
++  it('keeps unverified dates absent for Muse and the private Hero export', () => {
+     const missing = MODEL_OPTIONS.filter((model) => !getModelReleaseDate(model));
+-    expect(missing).toEqual([Model.Muse_Spark_Open]);
++    expect(missing.toSorted()).toEqual([Model.Muse_Spark_Open, Model.Hero144k].toSorted());
+   });
+ 
+   it('anchors each model to its weights publication, not its first sweep', () => {
 diff --git a/packages/app/src/lib/compare/compare-slug.test.ts b/packages/app/src/lib/compare/compare-slug.test.ts
 index 11ca8deb..12855f95 100644
 --- a/packages/app/src/lib/compare/compare-slug.test.ts
@@ -473,7 +489,7 @@ index fbb69bb7..6a32c9b9 100644
  
    it('has unique, well-formed slugs', () => {
 diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
-index 6d8b60fb..b18f1de7 100644
+index 6d8b60fb..74a94460 100644
 --- a/packages/constants/src/models.ts
 +++ b/packages/constants/src/models.ts
 @@ -7,6 +7,8 @@
@@ -485,12 +501,11 @@ index 6d8b60fb..b18f1de7 100644
    dsr1: 'DeepSeek-R1-0528',
    gptoss120b: 'gpt-oss-120b',
    llama70b: 'Llama-3.3-70B-Instruct-FP8',
-@@ -126,6 +128,10 @@ export function rowToSequence(row: {
+@@ -126,6 +128,9 @@ export function rowToSequence(row: {
   * earliest date they actually have data for.
   */
  export const MODEL_RELEASE_DATES: Record<string, string> = {
-+  // Permanent step-144000 BF16 export: Marin #10388.
-+  'Marin-Hero-535B-step144000': '2026-09-24',
++  // The private Hero export has no verified public weights-release date.
 +  // https://huggingface.co/open-athena/Marin-Snowball-67B-A2B-v0.1.1/commits/main
 +  'Marin-Snowball-67B-A2B-v0.1.1': '2026-10-22',
    // Newest first. `sweep:` is the model's "Date added" from MODELS.md — the first
