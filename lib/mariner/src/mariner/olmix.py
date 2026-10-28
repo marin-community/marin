@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import numpy as np
 from scipy.optimize import minimize
@@ -34,6 +35,11 @@ from mariner.optimize import (
 HUBER_DELTA = 0.01
 FIT_STARTS = 48
 FIT_SEED = 0
+# The values of log_c that the starts share (fit_log_linear): how many, the fraction of the smallest target at the
+# lowest, and the least exp(log_c) at either end.
+LOG_C_STARTS = 6
+LOWEST_START_FRACTION = 0.25
+LOG_C_START_FLOOR = 1e-3
 MAX_LOG = 50.0
 SOLVERS = ("CLARABEL", "SCS")
 SOLVER_STATUSES = ("optimal", "optimal_inaccurate")
@@ -115,7 +121,11 @@ def fit_log_linear(
         logits = np.clip(x @ params[1:], -MAX_LOG, MAX_LOG)
         return huber_sum(np.exp(params[0]) + np.exp(logits) - y, delta)
 
-    log_c_candidates = np.linspace(np.log(max(np.min(y) * 0.25, 1e-3)), np.log(max(np.median(y), 1e-3)), 6)
+    log_c_candidates = np.linspace(
+        np.log(max(np.min(y) * LOWEST_START_FRACTION, LOG_C_START_FLOOR)),
+        np.log(max(np.median(y), LOG_C_START_FLOOR)),
+        LOG_C_STARTS,
+    )
     initial: list[np.ndarray] = []
     for log_c in log_c_candidates:
         initial.append(np.concatenate([[log_c], np.zeros(x.shape[1])]))
@@ -152,16 +162,24 @@ def constraint_violation(solution: np.ndarray, caps: np.ndarray) -> float:
     return float(max(-solution.min(), abs(solution.sum() - 1.0), np.max(solution - caps)))
 
 
+class ExactSolution(NamedTuple):
+    """The exact proposer's weights, the laws' weighted prediction at them, and the solver that found them."""
+
+    weights: np.ndarray
+    predicted: float  # without the KL penalty
+    solver: str  # "<solver>:<status>", e.g. "CLARABEL:optimal"
+
+
 def exact_proposal(
     laws: Sequence[LogLinearLaw], task_weights: np.ndarray, natural: np.ndarray, caps: np.ndarray, kl_reg: float
-) -> tuple[np.ndarray, float, str]:
+) -> ExactSolution:
     """Olmix's exact proposer: the weights that minimize the laws' weighted prediction plus kl_reg * KL(w || natural).
 
     The weights range over the simplex with each at most its cap. The solvers are tried in ``SOLVERS`` order, and the
     first solution that a solver reports optimal (or optimal_inaccurate), that lies within ``SOLUTION_TOLERANCE`` of
     the constraints (``constraint_violation``) and that, clipped at zero and renormalized, exceeds no cap by more than
     ``SOLUTION_TOLERANCE`` is returned in that form, with the laws' weighted prediction at it without the KL term and
-    ``"<solver>:<status>"``.
+    the solver and its status.
 
     Raises:
         ImportError: If cvxpy, which the olmix extra installs, does not import.
@@ -206,7 +224,7 @@ def exact_proposal(
             )
             continue
         predicted = sum(float(task_weights[i]) * float(law.predict(solution)[0]) for i, law in enumerate(laws))
-        return solution, predicted, f"{solver}:{problem.status}"
+        return ExactSolution(solution, predicted, f"{solver}:{problem.status}")
     raise RuntimeError(
         f"no solver found a solution within {SOLUTION_TOLERANCE:g} of the simplex and the caps: {'; '.join(attempts)}"
     )
@@ -271,5 +289,6 @@ def propose(
     check_cap_and_kl(epochs_per_unit_weight, cap, kl, CAP_ROUNDING_SLACK)
     natural = proportional_mixture(epochs_per_unit_weight)
     caps = bucket_upper_bounds(epochs_per_unit_weight, cap, CAP_ROUNDING_SLACK)
-    continuous, predicted, solver = exact_proposal(laws, objective.weights, natural, caps, kl)
-    return OlmixProposal(quantize_under_cap(continuous, epochs_per_unit_weight, cap), continuous, predicted, solver)
+    solution = exact_proposal(laws, objective.weights, natural, caps, kl)
+    counts = quantize_under_cap(solution.weights, epochs_per_unit_weight, cap)
+    return OlmixProposal(counts, solution.weights, solution.predicted, solution.solver)
