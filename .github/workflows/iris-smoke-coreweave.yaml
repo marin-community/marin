@@ -180,7 +180,7 @@ jobs:
           uv run --package marin-shellbox --extra iris --frozen --group test pytest \
             -c lib/taskcompendium/pyproject.toml lib/shellbox/tests/test_iris_service_group_live.py \
             -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 \
-            --junitxml="$RUNNER_TEMP/shellbox-iris.xml" -v
+            -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/shellbox-iris.xml" -v
 
       - name: Upload Shellbox integration result
         if: always()

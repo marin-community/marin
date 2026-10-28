@@ -61,8 +61,9 @@ secrets must never be used for actor jobs; ordinary factories inject none.
 backend. `ServiceGroupSpec` contains the task's `MachineSpec` and named
 `ServiceSpec` members. Each service has its own machine specification, optional
 image entrypoint/argument overrides, named endpoint ports and a `ReadinessProbe`.
-An omitted override preserves the service image's ENTRYPOINT or CMD. Images must
-already contain their dependencies; group creation does not build or install them.
+With no overrides, the service uses its image's ENTRYPOINT and CMD. Supply both
+fields to specify an exact command. Images must already contain their dependencies;
+group creation does not build or install them.
 
 The Iris factory implements `create_group(spec)`. It creates one CPU-only
 Kubernetes pod under gVisor, with separate container filesystems and a private
@@ -280,6 +281,11 @@ canary; use that workflow for CI deployment rather than an unsynchronized restar
 ## Local backend
 
 `LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
+
+An external `SIGKILL` of the bwrap launcher during its internal startup handshake
+can strand a namespace init before Shellbox receives its identity. The local
+backend cannot guarantee reclamation in that window. Use disposable workers;
+ordinary caller cancellation waits for allocation before reclaiming the sandbox.
 
 ```python
 from pathlib import Path
