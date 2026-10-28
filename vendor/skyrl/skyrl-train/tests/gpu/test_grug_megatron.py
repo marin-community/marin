@@ -666,11 +666,13 @@ def test_cpu_offloaded_optimizer_load_does_not_stage_moments_on_cuda(dtype):
         lr=1e-3,
     )
     for parameter in parameters:
-        parameter.grad = torch.ones_like(parameter)
+        parameter.grad = torch.randn_like(parameter)
     optimizer.step()
     torch.cuda.synchronize()
     saved_weights = [parameter.detach().cpu().clone() for parameter in parameters]
     saved_state = copy.deepcopy(optimizer.state_dict())
+    for parameter in parameters:
+        parameter.grad = torch.randn_like(parameter)
     optimizer.step()
     torch.cuda.synchronize()
     expected = [parameter.detach().cpu().clone() for parameter in parameters]
