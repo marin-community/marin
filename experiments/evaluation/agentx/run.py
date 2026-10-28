@@ -34,6 +34,7 @@ from marin.inference.iris_vllm import (
 )
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.agentx.processes import run_logged
 from experiments.evaluation.agentx.recipe import (
@@ -88,7 +89,7 @@ def checkpoint_config(series: dict, output: Path) -> Path:
         ("export-manifest.json", series["model_revision"]),
         ("config.json", checkpoint["config_sha256"]),
     ):
-        with filesystem.open(f"{prefix}/{name}", "rb") as stream:
+        with filesystem.open(prefix_join(prefix, name), "rb") as stream:
             content = stream.read()
         if hashlib.sha256(content).hexdigest() != expected:
             raise ValueError(f"Hero export changed: {name}")
@@ -151,7 +152,7 @@ def create_server(manifest: PointManifest, output: Path, launch: IrisVllmLaunch 
                 "--seed",
                 str(series["server_seed"]),
                 "--hf-config-path",
-                str(checkpoint_config(series, output)),
+                str(checkpoint_config(series, output).parent),
                 "--hf-overrides",
                 json.dumps(series["hf_overrides"]),
                 "--load-format",
