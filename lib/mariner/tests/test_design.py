@@ -215,6 +215,6 @@ def test_swarm_table_loads_as_a_swarm_after_outcomes_join():
     np.testing.assert_allclose(swarm.outcomes["t1"], 2.0 + 0.02 * rows[:12], rtol=0, atol=1e-12)
 
     # The repeats are rows 12 to 14: t0 1.12, 1.13 and 1.14; t1 2.24, 2.26 and 2.28.
-    anchors = anchors_from_runs(trained[trained["design_kind"] == REPEAT], TASKS)
+    anchors = anchors_from_runs(swarm, trained[trained["design_kind"] == REPEAT], TASKS)
     assert (anchors["t0"].proportional, anchors["t0"].repeat_sd) == pytest.approx((1.13, 0.01))
     assert (anchors["t1"].proportional, anchors["t1"].repeat_sd) == pytest.approx((2.26, 0.02))

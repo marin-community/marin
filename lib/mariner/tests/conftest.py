@@ -108,7 +108,7 @@ def release_snapshot(tmp_path: Path) -> Path:
       (0.5, 0.25, 0.25) and draws half of b2's pool. Fit row k has bpb__t0 = 1 + k / 100; the repeats have t0 (and
       t1) 1.0, 1.1 and 1.2 and u0 2.0, 2.2 and 2.4.
     - ladder: the June proportional run at 3e18 (t0 and t1 5.0, u0 2.6), a copy of repeat_0, a MARINER run at 3e18
-      and a proportional run at 2e19.
+      and a proportional run at 2e19, all at the proportional mixture from whole pools.
     - heldout: h0 (t0 1.0, t1 0.8) and h2 (t0 1.2, t1 1.0) at exposure e0, h1 (t0 1.4, t1 1.2) at e1, which draws
       half of b2's pool, and h3 at e2. bpb__uncheatable records the Uncheatable aggregate (2.0, 2.4, 2.2, 2.6); h3
       has it but no u0, as five of the release's held-out runs do. The table has no bpb__obe_easy.
@@ -156,7 +156,7 @@ def release_snapshot(tmp_path: Path) -> Path:
             {"observation_id": "mariner_3e18", "method": "mariner", "compute_flops": 3e18, "bpb__u0": 1.5},
             {"observation_id": "proportional_2e19", "method": "proportional", "compute_flops": 2e19, "bpb__u0": 1.9},
         ]
-    ).assign(bpb__t0=[5.0, 1.0, 1.5, 1.9], bpb__t1=[5.0, 1.0, 1.5, 1.9])
+    ).assign(bpb__t0=[5.0, 1.0, 1.5, 1.9], bpb__t1=[5.0, 1.0, 1.5, 1.9], **mixture_columns(RELEASE_PROPORTIONAL))
     heldout = pd.DataFrame(
         [
             {"observation_id": "h0", "exposure_id": "e0", **mixture_columns((0.2, 0.3, 0.5)), "bpb__t0": 1.0},

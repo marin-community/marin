@@ -3,12 +3,13 @@
 
 """Loading mariner-data, or one's own run tables, into the procedure's inputs.
 
-A run table has one row per training run: its ``observation_id``, its mixture weights ``w__<bucket_id>`` (summing to
-one), the fraction of each bucket's pool it drew from ``pf__<bucket_id>`` and its BPB on each task ``bpb__<task_id>``.
-A swarm's run table also marks the runs a fit uses (``fit_inclusion``), labels the proportional mixture's fit run
-``baseline_proportional`` (``run_label``) and gives the proportional repeats, which anchor the floors, the
-``design_kind`` ``repeat``. A partition table lists each ``bucket_id`` with its ``pool_tokens``, and a tasks table each
-``task_id`` with its ``objective`` and ``aggregate_weight``. A snapshot of the released dataset is read through its
+A run table has one row per training run: its ``observation_id``, its mixture weights ``w__<bucket_id>`` (nonnegative,
+summing to one), the fraction of each bucket's pool it drew from ``pf__<bucket_id>`` and its BPB on each task
+``bpb__<task_id>``. A swarm's run table also marks the runs a fit uses (``fit_inclusion``, True or False), labels the
+proportional mixture's fit run ``baseline_proportional`` (``run_label``) and gives the proportional repeats, which
+anchor the floors and must train that run's mixture, the ``design_kind`` ``repeat``. A partition table lists each
+``bucket_id`` with its ``pool_tokens``, and a tasks table each ``task_id`` with its ``objective`` and
+``aggregate_weight``. Identifier columns are read as text. A snapshot of the released dataset is read through its
 ``MANIFEST.json``, which gives each table's file and format.
 """
 
@@ -69,10 +70,30 @@ BASELINE = "baseline"
 SAMPLED = "sampled"
 DELETION = "deletion"
 REPEAT = "repeat"
+# The partition and tasks tables' columns.
+BUCKET_ID = "bucket_id"
+POOL_TOKENS = "pool_tokens"
+EPOCHS_PER_UNIT_WEIGHT = "epochs_per_unit_weight"
+TASK_ID = "task_id"
+OBJECTIVE_COLUMN = "objective"
+AGGREGATE_WEIGHT = "aggregate_weight"
+
+# Each table's required columns besides the w__, pf__ and bpb__ ones, and its name in error messages.
+RUN_COLUMNS = (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, FIT_INCLUSION)
+PARTITION_COLUMNS = (BUCKET_ID, POOL_TOKENS)
+TASK_COLUMNS = (TASK_ID, OBJECTIVE_COLUMN, AGGREGATE_WEIGHT)
+RUN_TABLE = "run"
+PARTITION_TABLE = "partition"
+TASKS_TABLE = "tasks"
+# Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
+IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
+SHOWN_VALUES = 5  # distinct values an error message quotes
 
 MANIFEST = "MANIFEST.json"
 COEFFICIENT_PREFIX = "coef__"
-EXPOSURE_MIXTURE_TOLERANCE = 1e-12  # floating rounding; the release's runs at one exposure differ by 4.2e-16 at most
+# Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
+# differ from their calibration run by 3.1e-16 at most.
+EXPOSURE_MIXTURE_TOLERANCE = 1e-12
 DOWNLOAD_PATTERNS = (
     MANIFEST,
     "README.md",
@@ -106,12 +127,19 @@ class Partition:
 
 
 def read_csv(path: Path) -> pd.DataFrame:
-    """``pd.read_csv`` with exact float parsing.
+    """``pd.read_csv`` with exact float parsing, and with the identifier columns the table has read as text.
 
     Pandas' default parser misreads 16,973 values of the released tables this package reads, by up to 921 ulps at
-    small magnitudes.
+    small magnitudes. As text, bucket ids such as ``00`` and numeric observation ids keep their spelling.
     """
-    return pd.read_csv(path, float_precision="round_trip")
+    return pd.read_csv(path, float_precision="round_trip", dtype=dict.fromkeys(IDENTIFIER_COLUMNS, str))
+
+
+def require_columns(table: pd.DataFrame, columns: Sequence[str], name: str) -> None:
+    """Raise ``ValueError`` naming the ``columns`` that ``table``, the table called ``name`` in messages, lacks."""
+    missing = [column for column in columns if column not in table.columns]
+    if missing:
+        raise ValueError(f"the {name} table has no column {', '.join(missing)}")
 
 
 def partition_from_table(table: pd.DataFrame, target_budget: float | None = None) -> Partition:
@@ -120,14 +148,17 @@ def partition_from_table(table: pd.DataFrame, target_budget: float | None = None
     The epochs per unit weight are ``target_budget / pool_tokens`` for a target budget in tokens, else the table's
     ``epochs_per_unit_weight``.
     """
-    pool_tokens = table["pool_tokens"].to_numpy(float)
+    require_columns(table, PARTITION_COLUMNS, PARTITION_TABLE)
+    pool_tokens = table[POOL_TOKENS].to_numpy(float)
     if target_budget is not None:
         epochs = target_budget / pool_tokens
-    elif "epochs_per_unit_weight" in table.columns:
-        epochs = table["epochs_per_unit_weight"].to_numpy(float)
+    elif EPOCHS_PER_UNIT_WEIGHT in table.columns:
+        epochs = table[EPOCHS_PER_UNIT_WEIGHT].to_numpy(float)
     else:
-        raise ValueError("the partition has no epochs_per_unit_weight column; give the target budget in tokens")
-    return Partition(tuple(table["bucket_id"]), pool_tokens, epochs)
+        raise ValueError(
+            f"the {PARTITION_TABLE} table has no {EPOCHS_PER_UNIT_WEIGHT} column; give the target budget in tokens"
+        )
+    return Partition(tuple(table[BUCKET_ID]), pool_tokens, epochs)
 
 
 def read_partition(path: Path, target_budget: float | None = None) -> Partition:
@@ -137,27 +168,30 @@ def read_partition(path: Path, target_budget: float | None = None) -> Partition:
 
 def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:
     """The objective ``name`` of a tasks table: its tasks in table order, weighted by their ``aggregate_weight``."""
-    rows = tasks[tasks["objective"] == name]
+    require_columns(tasks, TASK_COLUMNS, TASKS_TABLE)
+    rows = tasks[tasks[OBJECTIVE_COLUMN] == name]
     if rows.empty:
         raise ValueError(f"no task belongs to objective {name}")
-    return Objective(name, tuple(rows["task_id"]), rows["aggregate_weight"].to_numpy(float))
-
-
-def require_columns(runs: pd.DataFrame, columns: Sequence[str]) -> None:
-    missing = [column for column in columns if column not in runs.columns]
-    if missing:
-        raise ValueError(f"the run table has no column {', '.join(missing)}")
+    return Objective(name, tuple(rows[TASK_ID]), rows[AGGREGATE_WEIGHT].to_numpy(float))
 
 
 def bucket_values(runs: pd.DataFrame, prefix: str, bucket_ids: Sequence[str]) -> np.ndarray:
     columns = [f"{prefix}{bucket}" for bucket in bucket_ids]
-    require_columns(runs, columns)
+    require_columns(runs, columns, RUN_TABLE)
     return runs[columns].to_numpy(float)
 
 
+def flagged_columns(prefix: str, bucket_ids: Sequence[str], flagged: np.ndarray) -> str:
+    """The columns ``<prefix><bucket_id>`` that hold a flagged value; ``flagged`` is (runs, buckets)."""
+    return ", ".join(f"{prefix}{bucket}" for bucket, bad in zip(bucket_ids, flagged.any(axis=0), strict=True) if bad)
+
+
 def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
-    """The runs' weights (runs x buckets); each run's must sum to one within 1e-6."""
+    """The runs' weights (runs x buckets); each must be nonnegative, and each run's must sum to one within 1e-6."""
     weights = bucket_values(runs, WEIGHT_PREFIX, bucket_ids)
+    negative = weights < 0.0
+    if negative.any():
+        raise ValueError(f"weights must be nonnegative: {flagged_columns(WEIGHT_PREFIX, bucket_ids, negative)}")
     unnormalized = ~(np.abs(weights.sum(axis=1) - 1.0) <= WEIGHT_SUM_TOLERANCE)
     if unnormalized.any():
         raise ValueError(
@@ -171,17 +205,16 @@ def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
     fractions = bucket_values(runs, POOL_FRACTION_PREFIX, bucket_ids)
     outside = ~((fractions > 0.0) & (fractions <= 1.0))
     if outside.any():
-        columns = [
-            f"{POOL_FRACTION_PREFIX}{bucket}" for bucket, bad in zip(bucket_ids, outside.any(axis=0), strict=True) if bad
-        ]
-        raise ValueError(f"pool fractions must lie in (0, 1]: {', '.join(columns)}")
+        raise ValueError(
+            f"pool fractions must lie in (0, 1]: {flagged_columns(POOL_FRACTION_PREFIX, bucket_ids, outside)}"
+        )
     return fractions
 
 
 def measured_outcomes(runs: pd.DataFrame, task_ids: Sequence[str]) -> pd.DataFrame:
     """The runs' BPB on ``task_ids`` (runs x tasks, named by task id); every run must have every value."""
     columns = [f"{OUTCOME_PREFIX}{task}" for task in task_ids]
-    require_columns(runs, columns)
+    require_columns(runs, columns, RUN_TABLE)
     outcomes = runs[columns].astype(float)
     missing = outcomes.isna().sum()
     if missing.any():
@@ -193,11 +226,18 @@ def measured_outcomes(runs: pd.DataFrame, task_ids: Sequence[str]) -> pd.DataFra
 def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence[str]) -> Swarm:
     """The fit rows (``fit_inclusion``) of a swarm's run table, in table order, over the partition's buckets.
 
-    The calibration run is the fit row with ``run_label`` ``baseline_proportional``. Raises ``ValueError`` when no fit
-    row has that label, a fit row lacks an outcome of ``task_ids``, a fit row's weights do not sum to one within 1e-6,
-    a bucket's ``w__`` or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
+    The calibration run is the fit row with ``run_label`` ``baseline_proportional``. Raises ``ValueError`` when the
+    table lacks ``observation_id``, ``run_label``, ``design_kind`` or ``fit_inclusion``, ``fit_inclusion`` holds
+    anything but True and False, no fit row has that label, a fit row lacks an outcome of ``task_ids``, a fit row has
+    a negative weight or weights that do not sum to one within 1e-6, a bucket's ``w__`` or ``pf__`` column is missing,
+    or a pool fraction lies outside (0, 1].
     """
-    fit = runs[runs[FIT_INCLUSION]].reset_index(drop=True)
+    require_columns(runs, RUN_COLUMNS, RUN_TABLE)
+    inclusion = runs[FIT_INCLUSION]
+    if not pd.api.types.is_bool_dtype(inclusion):
+        values = ", ".join(map(str, inclusion.unique()[:SHOWN_VALUES]))
+        raise ValueError(f"{FIT_INCLUSION} must be True or False, but it holds {inclusion.dtype} values: {values}")
+    fit = runs[inclusion].reset_index(drop=True)
     calibration = (fit[RUN_LABEL] == CALIBRATION_RUN).to_numpy()
     if not calibration.any():
         raise ValueError(f"no fit row has run_label {CALIBRATION_RUN}, the calibration run")
@@ -212,10 +252,24 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
     )
 
 
-def anchors_from_runs(runs: pd.DataFrame, task_ids: Sequence[str]) -> dict[str, Anchor]:
-    """Each task's anchor over the proportional runs ``runs``: their mean and sample standard deviation (ddof 1)."""
+def anchors_from_runs(swarm: Swarm, runs: pd.DataFrame, task_ids: Sequence[str]) -> dict[str, Anchor]:
+    """Each task's anchor over the proportional runs ``runs``: their mean and sample standard deviation (ddof 1).
+
+    Every run must train the calibration mixture of ``swarm``: its weights and pool fractions must equal the
+    calibration run's within 1e-12. Raises ``ValueError`` naming the runs that do not, or when there are fewer than
+    two runs.
+    """
     if len(runs) < 2:
         raise ValueError(f"the floors need at least two proportional runs for a standard deviation, got {len(runs)}")
+    mixtures = np.hstack([mixture_weights(runs, swarm.buckets), pool_fractions(runs, swarm.buckets)])
+    calibration = np.hstack([swarm.weights, swarm.pool_fractions])[swarm.calibration]
+    other = np.abs(mixtures[:, None, :] - calibration[None, :, :]).max(axis=(1, 2)) > EXPOSURE_MIXTURE_TOLERANCE
+    if other.any():
+        raise ValueError(
+            f"the floors' proportional runs must train the mixture of {CALIBRATION_RUN}, but the weights or pool"
+            f" fractions of {', '.join(map(str, runs[OBSERVATION_ID][other]))} differ from it by more than"
+            f" {EXPOSURE_MIXTURE_TOLERANCE:g}"
+        )
     outcomes = measured_outcomes(runs, task_ids)
     return {task: Anchor(outcomes[task].mean(), outcomes[task].std(ddof=1)) for task in task_ids}
 
@@ -233,7 +287,7 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     weights = mixture_weights(runs, partition.bucket_ids)
     fractions = pool_fractions(runs, partition.bucket_ids)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
-    require_columns(runs, columns)
+    require_columns(runs, columns, RUN_TABLE)
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
     if keys.isna().any():
         raise ValueError(f"{keys.isna().sum()} of {len(runs)} runs have no {keys.name}")
@@ -323,10 +377,11 @@ def release_anchors(root: Path, swarm: str, objective: str) -> dict[str, Anchor]
     reference fit did.
     """
     table = release_runs(root, swarm)
+    task_ids = objective_from_tasks(release_tasks(root), objective).tasks
     runs = table[table[DESIGN_KIND] == REPEAT]
     if (swarm, objective) == (MAIN_SWARM, JUNE_RUN_OBJECTIVE):
         runs = pd.concat([runs, june_run(root, table)])
-    return anchors_from_runs(runs, objective_from_tasks(release_tasks(root), objective).tasks)
+    return anchors_from_runs(swarm_from_runs(table, release_partition(root), task_ids), runs, task_ids)
 
 
 def trained_counts(root: Path, mixture_id: str) -> np.ndarray:
@@ -348,16 +403,16 @@ def released_task_predictions(root: Path, table: str, objective: str) -> pd.Data
     Predicted BPB by observation id (rows) and task id (columns), both in the table's order.
     """
     frame = read_table(root, table)
-    frame = frame[frame["objective"] == objective]
-    wide = frame.pivot(index=OBSERVATION_ID, columns="task_id", values="predicted_bpb")
-    return wide.loc[frame[OBSERVATION_ID].unique(), frame["task_id"].unique()]
+    frame = frame[frame[OBJECTIVE_COLUMN] == objective]
+    wide = frame.pivot(index=OBSERVATION_ID, columns=TASK_ID, values="predicted_bpb")
+    return wide.loc[frame[OBSERVATION_ID].unique(), frame[TASK_ID].unique()]
 
 
 def released_task_parameters(root: Path, swarm: str, objective: str) -> pd.DataFrame:
     """The released per-task parameters (``fits_task_parameters``) of one swarm and objective, indexed by task id."""
     frame = read_table(root, "fits_task_parameters")
-    rows = frame[(frame["swarm"] == swarm) & (frame["objective"] == objective)]
-    return rows.drop(columns=["swarm", "objective"]).set_index("task_id")
+    rows = frame[(frame["swarm"] == swarm) & (frame[OBJECTIVE_COLUMN] == objective)]
+    return rows.drop(columns=["swarm", OBJECTIVE_COLUMN]).set_index(TASK_ID)
 
 
 def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
@@ -366,7 +421,7 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
     Each law's coefficients follow the partition's bucket order.
     """
     frame = read_table(root, "fits_olmix_task_laws")
-    rows = frame[(frame["swarm"] == MAIN_SWARM) & (frame["objective"] == objective)].set_index("task_id")
+    rows = frame[(frame["swarm"] == MAIN_SWARM) & (frame[OBJECTIVE_COLUMN] == objective)].set_index(TASK_ID)
     rows = rows.loc[list(objective_from_tasks(release_tasks(root), objective).tasks)]
     coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids)
     return tuple(
@@ -378,7 +433,7 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
 def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
     """The paper's held-out bank: the ``heldout`` runs that ``fits_heldout_predictions`` predicts for ``objective``."""
     predictions = read_table(root, "fits_heldout_predictions")
-    population = predictions.loc[predictions["objective"] == objective, OBSERVATION_ID]
+    population = predictions.loc[predictions[OBJECTIVE_COLUMN] == objective, OBSERVATION_ID]
     heldout = read_table(root, "heldout")
     return heldout_bank(
         heldout[heldout[OBSERVATION_ID].isin(population)],

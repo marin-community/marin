@@ -90,6 +90,7 @@ DEFECTS = {
     "unnormalized": lambda runs: first_row_set(runs, "w__b0", runs.loc[0, "w__b0"] + 0.01),
     "missing_pool_fraction": lambda runs: runs.drop(columns="pf__b2"),
     "zero_pool_fraction": lambda runs: first_row_set(runs, "pf__b0", 0.0),
+    "integer_fit_inclusion": lambda runs: runs.assign(fit_inclusion=runs["fit_inclusion"].astype(int)),
 }
 
 
@@ -101,6 +102,7 @@ DEFECTS = {
         ("unnormalized", "sum to one"),
         ("missing_pool_fraction", "pf__b2"),
         ("zero_pool_fraction", "pf__b0"),
+        ("integer_fit_inclusion", "fit_inclusion"),
     ],
 )
 def test_swarm_from_runs_rejects_invalid_run_tables(release_snapshot, defect, message):
@@ -111,5 +113,15 @@ def test_swarm_from_runs_rejects_invalid_run_tables(release_snapshot, defect, me
 
 def test_anchors_from_runs_require_two_repeats(release_snapshot):
     runs = read_table(release_snapshot, SWARM_TABLE)
+    swarm = swarm_from_runs(runs, release_partition(release_snapshot), ("t0", "t1"))
     with pytest.raises(ValueError, match="two"):
-        anchors_from_runs(runs[runs["design_kind"] == REPEAT].head(1), ("t0", "t1"))
+        anchors_from_runs(swarm, runs[runs["design_kind"] == REPEAT].head(1), ("t0", "t1"))
+
+
+def test_anchors_from_runs_reject_a_run_of_another_mixture(release_snapshot):
+    runs = read_table(release_snapshot, SWARM_TABLE)
+    # fit_03, a sampled run, labeled as a proportional repeat: its outcomes would move the anchors.
+    runs.loc[runs["observation_id"] == "fit_03", "design_kind"] = REPEAT
+    swarm = swarm_from_runs(runs, release_partition(release_snapshot), ("t0", "t1"))
+    with pytest.raises(ValueError, match="fit_03"):
+        anchors_from_runs(swarm, runs[runs["design_kind"] == REPEAT], ("t0", "t1"))

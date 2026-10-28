@@ -224,7 +224,8 @@ def read_anchors(args: argparse.Namespace, tables: SwarmTables) -> dict[str, Anc
     """The released swarm's anchors, or the mean and SD of the ``repeat`` runs of one's own run table."""
     if args.data is not None:
         return release_anchors(args.data, args.swarm, tables.objective.name)
-    return anchors_from_runs(tables.runs[tables.runs[DESIGN_KIND] == REPEAT], tables.objective.tasks)
+    repeats = tables.runs[tables.runs[DESIGN_KIND] == REPEAT]
+    return anchors_from_runs(tables.swarm, repeats, tables.objective.tasks)
 
 
 def read_fit(path: Path) -> ObjectiveFit:
