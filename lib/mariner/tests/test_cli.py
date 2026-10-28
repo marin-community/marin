@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from mariner.cli import main
+from mariner.cli import INPUT_ERROR_STATUS, main
 from mariner.data import (
     MAIN_SWARM,
     OLMIX_CAP,
@@ -150,15 +150,33 @@ def test_cli_fit_predict_optimize_round_trip_on_own_swarm(tmp_path, synthetic_pr
     assert diagnostics["summary"]["runtime_prediction"] == fit.predict(runtime)[0]
 
 
+def write_generating_fit(path: Path, swarm: Swarm, truth: ObjectiveFit) -> None:
+    """Write the generating model as the fit JSON of ``swarm``'s runs, which optimize requires of its fit."""
+    path.write_text(json.dumps(dataclasses.replace(truth, inner_fold_labels=dict.fromkeys(swarm.runs, 0)).to_json()))
+
+
 def test_cli_optimize_applies_cap_and_kl_penalty(tmp_path, synthetic_problem):
     swarm, objective, anchors, truth = synthetic_problem
     inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
     fit_path, out = tmp_path / "fit.json", tmp_path / "mixture.csv"
-    fit_path.write_text(json.dumps(truth.to_json()))
+    write_generating_fit(fit_path, swarm, truth)
     # Unconstrained, the generating model's optimum puts more than 2 epochs on a bucket (test_optimize).
     assert main(["optimize", "--fit", str(fit_path), *inputs, "--cap", "2", "--kl", "0.01", "--out", str(out)]) == 0
     expected = propose(truth, swarm.weights, cap=2.0, kl=0.01)
     np.testing.assert_array_equal(read_csv(out)["runtime_count"], expected.counts)
+
+
+def test_cli_optimize_refuses_tables_at_another_target_budget(tmp_path, synthetic_problem, capsys):
+    swarm, objective, anchors, truth = synthetic_problem
+    inputs = write_own_swarm(tmp_path, swarm, objective, anchors)
+    fit_path, out = tmp_path / "fit.json", tmp_path / "mixture.csv"
+    write_generating_fit(fit_path, swarm, truth)
+    # The fit's tables at a thousand times its budget, where every bucket materializes a thousand times the epochs.
+    other_budget = [*inputs[:-1], str(1000 * TARGET_BUDGET)]
+    assert main(["optimize", "--fit", str(fit_path), *other_budget, "--out", str(out)]) == INPUT_ERROR_STATUS
+    error = capsys.readouterr().err.splitlines()
+    assert len(error) == 1 and error[0].startswith("mariner optimize: error:")
+    assert not out.exists()
 
 
 def test_cli_predict_names_missing_buckets(tmp_path, synthetic_problem, capsys):

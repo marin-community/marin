@@ -65,12 +65,13 @@ from mariner.data import (
 from mariner.design import STRATIFIED, UNIMAX, proportional, sobol_candidates, stratified, swarm_table, unimax
 from mariner.evaluate import cross_validate, heldout_metrics, selection_metrics
 from mariner.fit import fit_objective
-from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
+from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets
 
 logger = logging.getLogger(__name__)
 
 PREDICTION_TOLERANCE = 1e-6  # agreed: the refit's predictions against the released ones, in BPB
 EXACT = 0.0  # buckets in which a re-derived mixture may differ from the trained one
+EPOCHS_TOLERANCE = 1e-12  # relative: one partition and target budget give the same epochs up to floating rounding
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket
 PREDICTION_PREFIX = "predicted_"
 DIAGNOSTICS_SUFFIX = ".diagnostics.json"
@@ -232,9 +233,22 @@ def read_fit(path: Path) -> ObjectiveFit:
     return ObjectiveFit.from_json(json.loads(path.read_text()))
 
 
-def check_buckets(fit: ObjectiveFit, buckets: Sequence[str], source: str) -> None:
-    if tuple(buckets) != fit.buckets:
-        raise ValueError(f"the buckets of {source} are not the fit's buckets in the fit's order")
+def check_swarm_of_fit(fit: ObjectiveFit, swarm: Swarm) -> None:
+    """Raise ``ValueError`` unless ``swarm`` has the buckets, epochs per unit weight and runs, in order, of ``fit``.
+
+    optimize scores mixtures at the fit's epochs per unit weight and draws its SLSQP starts from the swarm's rows:
+    given tables at another target budget it would ignore that budget, and given another swarm's tables it would
+    start from runs the fit was not fitted on.
+    """
+    check_buckets(fit, swarm.buckets, "the swarm")
+    if not np.allclose(swarm.epochs_per_unit_weight, fit.epochs_per_unit_weight, rtol=EPOCHS_TOLERANCE, atol=0.0):
+        ratio = np.max(np.abs(swarm.epochs_per_unit_weight / fit.epochs_per_unit_weight - 1.0))
+        raise ValueError(
+            f"the swarm's epochs per unit weight differ from the fit's by up to a relative {ratio:.3g}; give the"
+            " partition and target budget that the fit read"
+        )
+    if tuple(map(str, swarm.runs)) != tuple(fit.inner_fold_labels):
+        raise ValueError("the swarm's runs are not the runs of the fit in the fit's order; give the fit's run table")
 
 
 def sibling_path(path: Path, suffix: str) -> Path:
@@ -304,7 +318,7 @@ def run_predict(args: argparse.Namespace) -> int:
 def run_optimize(args: argparse.Namespace) -> int:
     fit = read_fit(args.fit)
     swarm = read_swarm(args, fit.objective).swarm
-    check_buckets(fit, swarm.buckets, "the swarm")
+    check_swarm_of_fit(fit, swarm)
     proposal = optimize.propose(fit, swarm.weights, args.cap, args.kl)
     write_csv(mixture_table(fit.buckets, proposal.continuous, proposal.counts, fit.epochs_per_unit_weight), args.out)
     write_json({"summary": proposal.summary, "starts": proposal.starts}, sibling_path(args.out, DIAGNOSTICS_SUFFIX))
@@ -324,7 +338,9 @@ def run_cross_validate(args: argparse.Namespace) -> int:
 
 def run_evaluate(args: argparse.Namespace) -> int:
     fit = read_fit(args.fit)
-    check_buckets(fit, release_partition(args.data).bucket_ids, "the snapshot's partition")
+    # The held-out runs share the main swarm's model and data scale, so they test only a fit of that swarm.
+    if set(fit.inner_fold_labels) != set(map(str, release_swarm(args.data, MAIN_SWARM, fit.objective).runs)):
+        raise ValueError(f"evaluate scores a fit of the main swarm ({MAIN_SWARM}), and {args.fit} fits other runs")
     print(json.dumps(heldout_metrics(fit, release_heldout_bank(args.data, fit.objective)), indent=2))
     return 0
 
@@ -477,8 +493,16 @@ def argument_parser() -> argparse.ArgumentParser:
     command.add_argument("--out", type=Path, required=True, metavar="CSV", help="out-of-fold predictions to write")
     command.set_defaults(run=run_cross_validate)
 
-    command = commands.add_parser("evaluate", help="score a fit on the paper's held-out runs, as JSON")
-    command.add_argument("--fit", type=Path, required=True, metavar="FIT.json", help="fit JSON of a released objective")
+    command = commands.add_parser(
+        "evaluate", help=f"score a fit of the main swarm ({MAIN_SWARM}) on the paper's held-out runs, as JSON"
+    )
+    command.add_argument(
+        "--fit",
+        type=Path,
+        required=True,
+        metavar="FIT.json",
+        help=f"fit JSON: a fit of the main swarm ({MAIN_SWARM}) for a released objective",
+    )
     command.add_argument("--data", type=Path, required=True, metavar="DIR", help="mariner-data snapshot directory")
     command.set_defaults(run=run_evaluate)
 

@@ -14,6 +14,7 @@ as sum_t a_t f_t(w) with the evaluation's own weights a_t.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -67,6 +68,19 @@ class Objective:
 class Anchor:
     proportional: float  # the proportional mixture's mean over its repeats
     repeat_sd: float  # its repeat SD (0 disables the noise margin)
+
+
+@dataclasses.dataclass(frozen=True)
+class HeldoutBank:
+    """Measured mixtures outside the swarm, one row per exposure; the runs at one exposure are averaged."""
+
+    exposure_ids: tuple[str, ...]
+    buckets: tuple[str, ...]  # the buckets of the weight and pool-fraction columns, in order
+    weights: np.ndarray  # (exposures, buckets)
+    pool_fractions: np.ndarray  # (exposures, buckets)
+    measured: pd.DataFrame  # (exposures, tasks) each task's mean over the exposure's runs; task names as columns
+    measured_objective: np.ndarray  # (exposures,) the objective's mean over the exposure's runs
+    runs: np.ndarray  # (exposures,) the number of runs at each exposure
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -211,3 +225,21 @@ class ObjectiveFit:
             tuple(TaskFit.from_json(t) for t in payload["tasks"]),
             {str(run): int(label) for run, label in payload["inner_fold_labels"].items()},
         )
+
+
+def check_buckets(fit: ObjectiveFit, buckets: Sequence[str], source: str) -> None:
+    """Raise ``ValueError`` unless ``buckets``, those of ``source``, are the fit's buckets in the fit's order.
+
+    The message names the fit's buckets that ``source`` lacks and the buckets it adds, or, when it has the fit's
+    buckets, those it orders differently.
+    """
+    if tuple(buckets) == fit.buckets:
+        return
+    lacks = [bucket for bucket in fit.buckets if bucket not in buckets]
+    adds = [bucket for bucket in buckets if bucket not in fit.buckets]
+    if lacks or adds:
+        detail = f"it lacks {', '.join(lacks) or 'none'} and adds {', '.join(adds) or 'none'}"
+    else:
+        moved = [bucket for bucket, other in zip(fit.buckets, buckets, strict=True) if bucket != other]
+        detail = f"it orders {', '.join(moved)} differently"
+    raise ValueError(f"the buckets of {source} are not the fit's buckets in the fit's order: {detail}")

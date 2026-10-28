@@ -23,24 +23,12 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from mariner.fit import FOLD_SEED, INNER_FOLDS, Folds, block_labels, fit_objective, folds_from_labels, pin_calibration
-from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
+from mariner.model import Anchor, HeldoutBank, Objective, ObjectiveFit, Swarm, check_buckets
 
 OUTER_FOLDS = 5
 OUTER_REPEAT_SEED_STEP = 100
 INNER_REPEAT_SEED_STEP = 10_000
 INNER_FOLD_SEED_STEP = 100
-
-
-@dataclasses.dataclass(frozen=True)
-class HeldoutBank:
-    """Measured mixtures outside the swarm, one row per exposure; the runs at one exposure are averaged."""
-
-    exposure_ids: tuple[str, ...]
-    weights: np.ndarray  # (exposures, buckets)
-    pool_fractions: np.ndarray  # (exposures, buckets)
-    measured: pd.DataFrame  # (exposures, tasks) each task's mean over the exposure's runs; task names as columns
-    measured_objective: np.ndarray  # (exposures,) the objective's mean over the exposure's runs
-    runs: np.ndarray  # (exposures,) the number of runs at each exposure
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,7 +49,8 @@ class Split:
 def outer_splits(swarm: Swarm, repeats: int) -> tuple[Split, ...]:
     """The paper's outer folds of ``swarm`` for ``repeats`` repeats, in repeat then fold order.
 
-    The calibration runs train in every split, and no split tests or validates them.
+    The calibration runs train in every split, and no split tests or validates them. Raises ``ValueError`` when a
+    fold would test no run because its mixture block holds only calibration runs.
     """
     if repeats < 1:
         raise ValueError(f"cross-validation needs at least one repeat, got {repeats}")
@@ -73,6 +62,10 @@ def outer_splits(swarm: Swarm, repeats: int) -> tuple[Split, ...]:
             np.flatnonzero(swarm.calibration),
         )
         for fold in range(OUTER_FOLDS):
+            if not np.any(outer == fold):
+                raise ValueError(
+                    f"outer fold {fold} of repeat {repeat} tests no run: its mixture block holds only calibration runs"
+                )
             train = rows[outer != fold]
             inner = pin_calibration(
                 block_labels(
@@ -143,7 +136,12 @@ def selection_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, 
 
 
 def heldout_metrics(fit: ObjectiveFit, bank: HeldoutBank) -> dict[str, float]:
-    """``selection_metrics`` of the fit's predictions at the bank's exposures against their measured objective."""
+    """``selection_metrics`` of the fit's predictions at the bank's exposures against their measured objective.
+
+    Raises ``ValueError`` when the bank's buckets are not the fit's in the fit's order, it measures other tasks than
+    the fit predicts, or an exposure has no measured objective.
+    """
+    check_buckets(fit, bank.buckets, "the held-out bank")
     if set(bank.measured.columns) != {task.task for task in fit.tasks}:
         raise ValueError(f"the bank measures other tasks than the fit of {fit.objective} predicts")
     unmeasured = [

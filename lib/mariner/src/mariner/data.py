@@ -25,8 +25,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from mariner.evaluate import HeldoutBank
-from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, Objective, Swarm
+from mariner.model import WEIGHT_SUM_TOLERANCE, Anchor, HeldoutBank, Objective, Swarm
 from mariner.olmix import LogLinearLaw
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
@@ -312,6 +311,7 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
         measured_objective = measured.to_numpy() @ objective.weights
     return HeldoutBank(
         exposure_ids=tuple(map(str, keys.iloc[first])),
+        buckets=partition.bucket_ids,
         weights=weights[first],
         pool_fractions=fractions[first],
         measured=measured,
