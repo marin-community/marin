@@ -157,13 +157,11 @@ class ControllerJob:
         self.submission = kwargs
         return self
 
-    def tasks(self):
-        return [
-            SimpleNamespace(
-                task_id=JobName.from_wire("/test/job/0"),
-                status=lambda: SimpleNamespace(state=TaskState.RUNNING),
-            )
-        ]
+    def task(self, task_index: int):
+        return SimpleNamespace(
+            task_id=JobName.from_wire("/test/job").task(task_index),
+            status=lambda: SimpleNamespace(state=TaskState.RUNNING, error_message=""),
+        )
 
     def cancel(self):
         self.cancelled = True

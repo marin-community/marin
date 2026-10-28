@@ -15,7 +15,7 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
-from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials
+from harbor.environments.runtime import host_backend_credentials
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
@@ -72,9 +72,19 @@ class InstalledAgentSettings(BaseModel):
 
 
 class InstalledAgentRuntime:
-    def __init__(self, settings: InstalledAgentSettings, backend: AgentInferenceBackend, max_output_tokens: int):
+    def __init__(
+        self,
+        settings: InstalledAgentSettings,
+        backend: AgentInferenceBackend,
+        max_output_tokens: int,
+        *,
+        daytona_api_url: str,
+        daytona_target: str | None,
+    ):
         self.settings = settings
         self.backend = backend
+        self.daytona_api_url = daytona_api_url
+        self.daytona_target = daytona_target
         self.limits = NativeAPILimits(backend.model_name, backend.max_model_len, max_output_tokens)
         self.resources = AsyncExitStack()
         self.port: int | None = None
@@ -142,8 +152,6 @@ class InstalledAgentRuntime:
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
         daytona_api_key = os.environ.get(key_env or "DAYTONA_API_KEY")
-        daytona_api_url = os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL)
-        daytona_target = os.environ.get("DAYTONA_TARGET")
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
@@ -162,8 +170,8 @@ class InstalledAgentRuntime:
         async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
             with host_backend_credentials(
                 daytona_api_key=daytona_api_key,
-                daytona_api_url=daytona_api_url,
-                daytona_target=daytona_target,
+                daytona_api_url=self.daytona_api_url,
+                daytona_target=self.daytona_target,
             ):
                 return await self.run_original_trial(complete, lowered=lowered, session_id=session_id, config=config)
 
