@@ -28,12 +28,15 @@ from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_judge import validate_judge_spec
+from verifyit.modes.grade_math_judge import validate_math_judge
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
     GotestSpec,
     JudgeSpec,
     JunitSpec,
+    MathJudgeSpec,
     PytestSpec,
     ScriptSpec,
     Spec,
@@ -568,6 +571,16 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
     """Build the verifyit specification; in-process modes also pass their mode's validation."""
     try:
         _require_finite_json(grader.parameters)
+        if grader.mode in {"judge", "math-judge"}:
+            if "mode" in grader.parameters:
+                raise ValueError("Verifier parameters must not override the mode")
+            spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+            if isinstance(spec, MathJudgeSpec):
+                validate_math_judge(spec)
+            else:
+                assert isinstance(spec, JudgeSpec)
+                validate_judge_spec(spec)
+            return spec
         if grader.environment is None:
             return candidate_spec(grader.mode, grader.parameters)
         if "mode" in grader.parameters:
@@ -634,12 +647,12 @@ Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator
 
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
-    return isinstance(grader, VerifyitGrader) and grader.environment is None
+    return isinstance(grader, VerifyitGrader) and grader.environment is None and not grades_with_judge(grader)
 
 
 def grades_with_judge(grader: Grader) -> bool:
     """Whether the grader is a verifyit judge, which grades the answer through a judge service."""
-    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec)
+    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec | MathJudgeSpec)
 
 
 def grader_workspace(grader: Grader) -> str:

@@ -1,0 +1,6923 @@
+{
+  "harness_revision": "6d642546f4688648fced259eb3302efd36ece5af",
+  "cases": [
+    {
+      "name": "mmlu",
+      "shots": 5,
+      "document": {
+        "question": " Which café? ",
+        "subject": "abstract_algebra",
+        "choices": [
+          "café",
+          "tea",
+          "A longer answer",
+          "water"
+        ],
+        "answer": 0
+      },
+      "pool": [
+        {
+          "question": "Example 0:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 1:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 2:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 3:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 4:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 5:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 6:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 7:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 8:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 9:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 10:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 11:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 12:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 13:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 14:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 15:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 16:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 17:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 18:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 19:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 20:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 21:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 22:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 23:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 24:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 25:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 26:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 27:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 28:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 29:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        }
+      ],
+      "specs": [
+        {
+          "task": "mmlu",
+          "source": {
+            "dataset": "cais/mmlu",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " A",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " B",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " C",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " D",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:mmlu",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "question": " Which café? ",
+            "subject": "abstract_algebra",
+            "choices": [
+              "café",
+              "tea",
+              "A longer answer",
+              "water"
+            ],
+            "answer": 0
+          },
+          "target": 0,
+          "namespace": "mmlu",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "mmlu",
+          "source": {
+            "dataset": "cais/mmlu",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " A",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " B",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " C",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nExample 0:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 1:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 2:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 3:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nExample 4:  Which café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer: A\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " D",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:mmlu",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "question": " Which café? ",
+            "subject": "abstract_algebra",
+            "choices": [
+              "café",
+              "tea",
+              "A longer answer",
+              "water"
+            ],
+            "answer": 0
+          },
+          "target": 0,
+          "namespace": "mmlu",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        }
+      ],
+      "config_sha256": "f026cc8918a0a4a422af4286e22889de6f423483671975fdd5429c96c0d0d9ef"
+    },
+    {
+      "name": "arc_challenge",
+      "shots": 25,
+      "document": {
+        "id": "fixture",
+        "question": "Which café?",
+        "choices": {
+          "text": [
+            "café",
+            "a longer answer",
+            "tea"
+          ],
+          "label": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "answerKey": "A"
+      },
+      "pool": [
+        {
+          "id": "fixture",
+          "question": "Example 0: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 1: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 2: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 3: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 4: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 5: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 6: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 7: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 8: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 9: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 10: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 11: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 12: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 13: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 14: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 15: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 16: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 17: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 18: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 19: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 20: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 21: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 22: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 23: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 24: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 25: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 26: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 27: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 28: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 29: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": "A"
+        }
+      ],
+      "specs": [
+        {
+          "task": "arc_challenge",
+          "source": {
+            "dataset": "allenai/ai2_arc",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 18: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 9: Which café?\nAnswer: café\n\nQuestion: Example 29: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 28: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 18: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 9: Which café?\nAnswer: café\n\nQuestion: Example 29: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 28: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 18: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 9: Which café?\nAnswer: café\n\nQuestion: Example 29: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 28: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:arc_challenge",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            "answerKey": "A"
+          },
+          "target": 0,
+          "namespace": "arc_challenge",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "arc_challenge",
+          "source": {
+            "dataset": "allenai/ai2_arc",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 15: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 8: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 4: Which café?\nAnswer: café\n\nQuestion: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 20: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 15: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 8: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 4: Which café?\nAnswer: café\n\nQuestion: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 20: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Example 3: Which café?\nAnswer: café\n\nQuestion: Example 27: Which café?\nAnswer: café\n\nQuestion: Example 0: Which café?\nAnswer: café\n\nQuestion: Example 16: Which café?\nAnswer: café\n\nQuestion: Example 15: Which café?\nAnswer: café\n\nQuestion: Example 7: Which café?\nAnswer: café\n\nQuestion: Example 2: Which café?\nAnswer: café\n\nQuestion: Example 21: Which café?\nAnswer: café\n\nQuestion: Example 17: Which café?\nAnswer: café\n\nQuestion: Example 14: Which café?\nAnswer: café\n\nQuestion: Example 23: Which café?\nAnswer: café\n\nQuestion: Example 19: Which café?\nAnswer: café\n\nQuestion: Example 26: Which café?\nAnswer: café\n\nQuestion: Example 1: Which café?\nAnswer: café\n\nQuestion: Example 8: Which café?\nAnswer: café\n\nQuestion: Example 13: Which café?\nAnswer: café\n\nQuestion: Example 25: Which café?\nAnswer: café\n\nQuestion: Example 22: Which café?\nAnswer: café\n\nQuestion: Example 10: Which café?\nAnswer: café\n\nQuestion: Example 4: Which café?\nAnswer: café\n\nQuestion: Example 24: Which café?\nAnswer: café\n\nQuestion: Example 5: Which café?\nAnswer: café\n\nQuestion: Example 11: Which café?\nAnswer: café\n\nQuestion: Example 12: Which café?\nAnswer: café\n\nQuestion: Example 20: Which café?\nAnswer: café\n\nQuestion: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:arc_challenge",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            "answerKey": "A"
+          },
+          "target": 0,
+          "namespace": "arc_challenge",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "682621c26ae24b1065a2d732460a55a8ef2b9f2544574431666c9309a9efd7bd"
+    },
+    {
+      "name": "arc_easy",
+      "shots": 0,
+      "document": {
+        "id": "fixture",
+        "question": "Which café?",
+        "choices": {
+          "text": [
+            "café",
+            "a longer answer",
+            "tea"
+          ],
+          "label": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "answerKey": "1"
+      },
+      "pool": [
+        {
+          "id": "fixture",
+          "question": "Example 0: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 1: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 2: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 3: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 4: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 5: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 6: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 7: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 8: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 9: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 10: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 11: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 12: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 13: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 14: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 15: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 16: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 17: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 18: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 19: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 20: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 21: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 22: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 23: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 24: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 25: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 26: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 27: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 28: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        },
+        {
+          "id": "fixture",
+          "question": "Example 29: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "answerKey": "1"
+        }
+      ],
+      "specs": [
+        {
+          "task": "arc_easy",
+          "source": {
+            "dataset": "allenai/ai2_arc",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:arc_easy",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "1",
+                "2",
+                "3"
+              ]
+            },
+            "answerKey": "1"
+          },
+          "target": 0,
+          "namespace": "arc_easy",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "arc_easy",
+          "source": {
+            "dataset": "allenai/ai2_arc",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Which café?\nAnswer:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:arc_easy",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "1",
+                "2",
+                "3"
+              ]
+            },
+            "answerKey": "1"
+          },
+          "target": 0,
+          "namespace": "arc_easy",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "96da1d9efe1df88659481cedc13985cb347dc068554a2eae561303fa39bfab3f"
+    },
+    {
+      "name": "hellaswag",
+      "shots": 10,
+      "document": {
+        "ctx_a": "A person [title] starts",
+        "ctx_b": "hE STANDS [aside]",
+        "activity_label": "Making tea",
+        "endings": [
+          "café",
+          "a longer answer",
+          "[foo] tea",
+          "water"
+        ],
+        "label": "0"
+      },
+      "pool": [
+        {
+          "ctx_a": "Example 0: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 1: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 2: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 3: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 4: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 5: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 6: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 7: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 8: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 9: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 10: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 11: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 12: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 13: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 14: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 15: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 16: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 17: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 18: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 19: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 20: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 21: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 22: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 23: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 24: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 25: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 26: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 27: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 28: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        },
+        {
+          "ctx_a": "Example 29: A person [title] starts",
+          "ctx_b": "hE STANDS [aside]",
+          "activity_label": "Making tea",
+          "endings": [
+            "café",
+            "a longer answer",
+            "[foo] tea",
+            "water"
+          ],
+          "label": "0"
+        }
+      ],
+      "specs": [
+        {
+          "task": "hellaswag",
+          "source": {
+            "dataset": "Rowan/hellaswag",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 24: A person. starts He stands  café\n\nMaking tea: Example 14: A person. starts He stands  café\n\nMaking tea: Example 3: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 2: A person. starts He stands  café\n\nMaking tea: Example 18: A person. starts He stands  café\n\nMaking tea: Example 1: A person. starts He stands  café\n\nMaking tea: Example 21: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 24: A person. starts He stands  café\n\nMaking tea: Example 14: A person. starts He stands  café\n\nMaking tea: Example 3: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 2: A person. starts He stands  café\n\nMaking tea: Example 18: A person. starts He stands  café\n\nMaking tea: Example 1: A person. starts He stands  café\n\nMaking tea: Example 21: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 24: A person. starts He stands  café\n\nMaking tea: Example 14: A person. starts He stands  café\n\nMaking tea: Example 3: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 2: A person. starts He stands  café\n\nMaking tea: Example 18: A person. starts He stands  café\n\nMaking tea: Example 1: A person. starts He stands  café\n\nMaking tea: Example 21: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": "  tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 24: A person. starts He stands  café\n\nMaking tea: Example 14: A person. starts He stands  café\n\nMaking tea: Example 3: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 2: A person. starts He stands  café\n\nMaking tea: Example 18: A person. starts He stands  café\n\nMaking tea: Example 1: A person. starts He stands  café\n\nMaking tea: Example 21: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " water",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:hellaswag",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "ctx_a": "A person [title] starts",
+            "ctx_b": "hE STANDS [aside]",
+            "activity_label": "Making tea",
+            "endings": [
+              "café",
+              "a longer answer",
+              "[foo] tea",
+              "water"
+            ],
+            "label": "0",
+            "query": "Making tea: A person. starts He stands ",
+            "choices": [
+              "café",
+              "a longer answer",
+              " tea",
+              "water"
+            ],
+            "gold": 0
+          },
+          "target": 0,
+          "namespace": "hellaswag",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "hellaswag",
+          "source": {
+            "dataset": "Rowan/hellaswag",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 7: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 28: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: Example 11: A person. starts He stands  café\n\nMaking tea: Example 20: A person. starts He stands  café\n\nMaking tea: Example 19: A person. starts He stands  café\n\nMaking tea: Example 15: A person. starts He stands  café\n\nMaking tea: Example 22: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 7: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 28: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: Example 11: A person. starts He stands  café\n\nMaking tea: Example 20: A person. starts He stands  café\n\nMaking tea: Example 19: A person. starts He stands  café\n\nMaking tea: Example 15: A person. starts He stands  café\n\nMaking tea: Example 22: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 7: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 28: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: Example 11: A person. starts He stands  café\n\nMaking tea: Example 20: A person. starts He stands  café\n\nMaking tea: Example 19: A person. starts He stands  café\n\nMaking tea: Example 15: A person. starts He stands  café\n\nMaking tea: Example 22: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": "  tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Making tea: Example 7: A person. starts He stands  café\n\nMaking tea: Example 0: A person. starts He stands  café\n\nMaking tea: Example 28: A person. starts He stands  café\n\nMaking tea: Example 25: A person. starts He stands  café\n\nMaking tea: Example 27: A person. starts He stands  café\n\nMaking tea: Example 11: A person. starts He stands  café\n\nMaking tea: Example 20: A person. starts He stands  café\n\nMaking tea: Example 19: A person. starts He stands  café\n\nMaking tea: Example 15: A person. starts He stands  café\n\nMaking tea: Example 22: A person. starts He stands  café\n\nMaking tea: A person. starts He stands ",
+              "generation": {},
+              "continuation": " water",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:hellaswag",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "ctx_a": "A person [title] starts",
+            "ctx_b": "hE STANDS [aside]",
+            "activity_label": "Making tea",
+            "endings": [
+              "café",
+              "a longer answer",
+              "[foo] tea",
+              "water"
+            ],
+            "label": "0",
+            "query": "Making tea: A person. starts He stands ",
+            "choices": [
+              "café",
+              "a longer answer",
+              " tea",
+              "water"
+            ],
+            "gold": 0
+          },
+          "target": 0,
+          "namespace": "hellaswag",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "e9ef8ac3fed02bf283777d946ae76cbf906152e9c92533c9794e5a9dad78d1cf"
+    },
+    {
+      "name": "boolq",
+      "shots": 0,
+      "document": {
+        "question": "is this a café",
+        "passage": "This café serves tea.",
+        "label": 1,
+        "idx": 4
+      },
+      "pool": [
+        {
+          "question": "is this a café",
+          "passage": "Example 0: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 1: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 2: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 3: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 4: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 5: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 6: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 7: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 8: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 9: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 10: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 11: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 12: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 13: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 14: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 15: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 16: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 17: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 18: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 19: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 20: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 21: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 22: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 23: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 24: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 25: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 26: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 27: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 28: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        },
+        {
+          "question": "is this a café",
+          "passage": "Example 29: This café serves tea.",
+          "label": 1,
+          "idx": 4
+        }
+      ],
+      "specs": [
+        {
+          "task": "boolq",
+          "source": {
+            "dataset": "aps/super_glue",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "This café serves tea.\nQuestion: is this a café?\nAnswer:",
+              "generation": {},
+              "continuation": " no",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "This café serves tea.\nQuestion: is this a café?\nAnswer:",
+              "generation": {},
+              "continuation": " yes",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:boolq",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "question": "is this a café",
+            "passage": "This café serves tea.",
+            "label": 1,
+            "idx": 4
+          },
+          "target": 1,
+          "namespace": "boolq",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "boolq",
+          "source": {
+            "dataset": "aps/super_glue",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "This café serves tea.\nQuestion: is this a café?\nAnswer:",
+              "generation": {},
+              "continuation": " no",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "This café serves tea.\nQuestion: is this a café?\nAnswer:",
+              "generation": {},
+              "continuation": " yes",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:boolq",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "question": "is this a café",
+            "passage": "This café serves tea.",
+            "label": 1,
+            "idx": 4
+          },
+          "target": 1,
+          "namespace": "boolq",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "1956532a93f62ed476665d09a4b8c19e701534433bcdc4b56cd6f867876a47de"
+    },
+    {
+      "name": "piqa",
+      "shots": 0,
+      "document": {
+        "goal": "Pick a drink.",
+        "sol1": " café",
+        "sol2": "a longer answer",
+        "label": 0
+      },
+      "pool": [
+        {
+          "goal": "Example 0: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 1: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 2: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 3: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 4: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 5: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 6: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 7: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 8: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 9: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 10: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 11: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 12: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 13: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 14: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 15: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 16: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 17: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 18: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 19: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 20: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 21: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 22: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 23: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 24: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 25: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 26: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 27: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 28: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        },
+        {
+          "goal": "Example 29: Pick a drink.",
+          "sol1": " café",
+          "sol2": "a longer answer",
+          "label": 0
+        }
+      ],
+      "specs": [
+        {
+          "task": "piqa",
+          "source": {
+            "dataset": "baber/piqa",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Pick a drink.\nAnswer:",
+              "generation": {},
+              "continuation": "  café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Pick a drink.\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:piqa",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "goal": "Pick a drink.",
+            "sol1": " café",
+            "sol2": "a longer answer",
+            "label": 0
+          },
+          "target": 0,
+          "namespace": "piqa",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "piqa",
+          "source": {
+            "dataset": "baber/piqa",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Pick a drink.\nAnswer:",
+              "generation": {},
+              "continuation": "  café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Question: Pick a drink.\nAnswer:",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:piqa",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "goal": "Pick a drink.",
+            "sol1": " café",
+            "sol2": "a longer answer",
+            "label": 0
+          },
+          "target": 0,
+          "namespace": "piqa",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "e874f7956ccac325b888d4a5dc600bad867b79fba2bd358fe8761ab8263270fb"
+    },
+    {
+      "name": "openbookqa",
+      "shots": 0,
+      "document": {
+        "id": "fixture",
+        "question_stem": "Which café?",
+        "choices": {
+          "text": [
+            "café",
+            "a longer answer",
+            "tea"
+          ],
+          "label": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "answerKey": " A"
+      },
+      "pool": [
+        {
+          "id": "fixture",
+          "question_stem": "Example 0: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 1: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 2: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 3: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 4: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 5: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 6: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 7: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 8: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 9: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 10: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 11: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 12: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 13: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 14: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 15: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 16: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 17: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 18: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 19: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 20: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 21: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 22: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 23: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 24: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 25: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 26: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 27: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 28: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        },
+        {
+          "id": "fixture",
+          "question_stem": "Example 29: Which café?",
+          "choices": {
+            "text": [
+              "café",
+              "a longer answer",
+              "tea"
+            ],
+            "label": [
+              "A",
+              "B",
+              "C"
+            ]
+          },
+          "answerKey": " A"
+        }
+      ],
+      "specs": [
+        {
+          "task": "openbookqa",
+          "source": {
+            "dataset": "allenai/openbookqa",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:openbookqa",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question_stem": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            "answerKey": " A"
+          },
+          "target": 0,
+          "namespace": "openbookqa",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "openbookqa",
+          "source": {
+            "dataset": "allenai/openbookqa",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " café",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " a longer answer",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Which café?",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:openbookqa",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "id": "fixture",
+            "question_stem": "Which café?",
+            "choices": {
+              "text": [
+                "café",
+                "a longer answer",
+                "tea"
+              ],
+              "label": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            "answerKey": " A"
+          },
+          "target": 0,
+          "namespace": "openbookqa",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0,
+            "acc_norm,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0,
+            "acc_norm,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "13ac2df0c7d5f73e5a12dccc704048ca28b8123980fa0b8258eef937284f4735"
+    },
+    {
+      "name": "winogrande",
+      "shots": 5,
+      "document": {
+        "sentence": "The café gave the tea to _ because they were thirsty.",
+        "option1": "Alice",
+        "option2": "Bob",
+        "answer": "2"
+      },
+      "pool": [
+        {
+          "sentence": "Example 0: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 1: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 2: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 3: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 4: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 5: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 6: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 7: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 8: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 9: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 10: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 11: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 12: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 13: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 14: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 15: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 16: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 17: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 18: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 19: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 20: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 21: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 22: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 23: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 24: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 25: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 26: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 27: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 28: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        },
+        {
+          "sentence": "Example 29: The café gave the tea to _ because they were thirsty.",
+          "option1": "Alice",
+          "option2": "Bob",
+          "answer": "2"
+        }
+      ],
+      "specs": [
+        {
+          "task": "winogrande",
+          "source": {
+            "dataset": "allenai/winogrande",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Example 24: The café gave the tea to Bob because they were thirsty.\n\nExample 14: The café gave the tea to Bob because they were thirsty.\n\nExample 3: The café gave the tea to Bob because they were thirsty.\n\nExample 0: The café gave the tea to Bob because they were thirsty.\n\nExample 2: The café gave the tea to Bob because they were thirsty.\n\nThe café gave the tea to Alice",
+              "generation": {},
+              "continuation": " because they were thirsty.",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Example 24: The café gave the tea to Bob because they were thirsty.\n\nExample 14: The café gave the tea to Bob because they were thirsty.\n\nExample 3: The café gave the tea to Bob because they were thirsty.\n\nExample 0: The café gave the tea to Bob because they were thirsty.\n\nExample 2: The café gave the tea to Bob because they were thirsty.\n\nThe café gave the tea to Bob",
+              "generation": {},
+              "continuation": " because they were thirsty.",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:winogrande",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "sentence": "The café gave the tea to _ because they were thirsty.",
+            "option1": "Alice",
+            "option2": "Bob",
+            "answer": "2"
+          },
+          "target": "because they were thirsty.",
+          "namespace": "winogrande",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "winogrande",
+          "source": {
+            "dataset": "allenai/winogrande",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Example 1: The café gave the tea to Bob because they were thirsty.\n\nExample 21: The café gave the tea to Bob because they were thirsty.\n\nExample 22: The café gave the tea to Bob because they were thirsty.\n\nExample 2: The café gave the tea to Bob because they were thirsty.\n\nExample 3: The café gave the tea to Bob because they were thirsty.\n\nThe café gave the tea to Alice",
+              "generation": {},
+              "continuation": " because they were thirsty.",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Example 1: The café gave the tea to Bob because they were thirsty.\n\nExample 21: The café gave the tea to Bob because they were thirsty.\n\nExample 22: The café gave the tea to Bob because they were thirsty.\n\nExample 2: The café gave the tea to Bob because they were thirsty.\n\nExample 3: The café gave the tea to Bob because they were thirsty.\n\nThe café gave the tea to Bob",
+              "generation": {},
+              "continuation": " because they were thirsty.",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:winogrande",
+            "reference": {
+              "repeats": [
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1
+              ]
+            }
+          },
+          "doc": {
+            "sentence": "The café gave the tea to _ because they were thirsty.",
+            "option1": "Alice",
+            "option2": "Bob",
+            "answer": "2"
+          },
+          "target": "because they were thirsty.",
+          "namespace": "winogrande",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        }
+      ],
+      "config_sha256": "7a73c28f1c760f1f54b4185f21f8df5927c1fe7278a8520f38ee03cc7f40d9e7"
+    },
+    {
+      "name": "truthfulqa_mc2",
+      "shots": 0,
+      "document": {
+        "question": "Which drinks are served in a café?",
+        "mc2_targets": {
+          "choices": [
+            "coffee",
+            "tea",
+            "a car"
+          ],
+          "labels": [
+            1,
+            1,
+            0
+          ]
+        },
+        "mc1_targets": {
+          "choices": [
+            "coffee",
+            "a car"
+          ],
+          "labels": [
+            1,
+            0
+          ]
+        }
+      },
+      "pool": [
+        {
+          "question": "Example 0: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 1: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 2: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 3: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 4: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 5: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 6: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 7: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 8: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 9: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 10: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 11: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 12: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 13: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 14: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 15: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 16: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 17: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 18: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 19: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 20: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 21: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 22: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 23: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 24: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 25: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 26: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 27: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 28: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "question": "Example 29: Which drinks are served in a café?",
+          "mc2_targets": {
+            "choices": [
+              "coffee",
+              "tea",
+              "a car"
+            ],
+            "labels": [
+              1,
+              1,
+              0
+            ]
+          },
+          "mc1_targets": {
+            "choices": [
+              "coffee",
+              "a car"
+            ],
+            "labels": [
+              1,
+              0
+            ]
+          }
+        }
+      ],
+      "specs": [
+        {
+          "task": "truthfulqa_mc2",
+          "source": {
+            "dataset": "truthfulqa/truthful_qa",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " coffee",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " a car",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:truthfulqa_mc2",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "question": "Which drinks are served in a café?",
+            "mc2_targets": {
+              "choices": [
+                "coffee",
+                "tea",
+                "a car"
+              ],
+              "labels": [
+                1,
+                1,
+                0
+              ]
+            },
+            "mc1_targets": {
+              "choices": [
+                "coffee",
+                "a car"
+              ],
+              "labels": [
+                1,
+                0
+              ]
+            }
+          },
+          "target": 0,
+          "namespace": "truthfulqa_mc2",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "truthfulqa_mc2",
+          "source": {
+            "dataset": "truthfulqa/truthful_qa",
+            "split": "validation",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " coffee",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "Q: What is human life expectancy in the United States?\nA: Human life expectancy in the United States is 78 years.\n\nQ: Who was president of the United States in 1955?\nA: Dwight D. Eisenhower was president of the United States in 1955.\n\nQ: Which party did he belong to?\nA: He belonged to the Republican Party.\n\nQ: What is the square root of banana?\nA: I have no comment.\n\nQ: How does a telescope work?\nA: Telescopes use lenses or mirrors to focus light and make objects appear closer.\n\nQ: Where were the 1992 Olympics held?\nA: The 1992 Olympics were held in Barcelona, Spain.\n\nQ: Which drinks are served in a café?\nA:",
+              "generation": {},
+              "continuation": " a car",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:truthfulqa_mc2",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2
+              ]
+            }
+          },
+          "doc": {
+            "question": "Which drinks are served in a café?",
+            "mc2_targets": {
+              "choices": [
+                "coffee",
+                "tea",
+                "a car"
+              ],
+              "labels": [
+                1,
+                1,
+                0
+              ]
+            },
+            "mc1_targets": {
+              "choices": [
+                "coffee",
+                "a car"
+              ],
+              "labels": [
+                1,
+                0
+              ]
+            }
+          },
+          "target": 0,
+          "namespace": "truthfulqa_mc2",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.9950983109503272
+          },
+          "reducer_inputs": {
+            "acc,none": 0.9950983109503272
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.6666666666666666
+          },
+          "reducer_inputs": {
+            "acc,none": 0.6666666666666666
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -10000.0,
+              false
+            ],
+            [
+              -10001.0,
+              false
+            ],
+            [
+              -10003.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.9648809730406603
+          },
+          "reducer_inputs": {
+            "acc,none": 0.9648809730406603
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.9950983109503272
+          },
+          "reducer_inputs": {
+            "acc,none": 0.9950983109503272
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.6666666666666666
+          },
+          "reducer_inputs": {
+            "acc,none": 0.6666666666666666
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -10000.0,
+              false
+            ],
+            [
+              -10001.0,
+              false
+            ],
+            [
+              -10003.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.9648809730406603
+          },
+          "reducer_inputs": {
+            "acc,none": 0.9648809730406603
+          }
+        }
+      ],
+      "config_sha256": "7b019ede382b38c218dcb1914f7b9bd7010f61b981ac6b36612ebd53ad5a48da"
+    },
+    {
+      "name": "lambada_openai",
+      "shots": 0,
+      "document": {
+        "text": "The café served tea"
+      },
+      "pool": [
+        {
+          "text": "Example 0: The café served tea"
+        },
+        {
+          "text": "Example 1: The café served tea"
+        },
+        {
+          "text": "Example 2: The café served tea"
+        },
+        {
+          "text": "Example 3: The café served tea"
+        },
+        {
+          "text": "Example 4: The café served tea"
+        },
+        {
+          "text": "Example 5: The café served tea"
+        },
+        {
+          "text": "Example 6: The café served tea"
+        },
+        {
+          "text": "Example 7: The café served tea"
+        },
+        {
+          "text": "Example 8: The café served tea"
+        },
+        {
+          "text": "Example 9: The café served tea"
+        },
+        {
+          "text": "Example 10: The café served tea"
+        },
+        {
+          "text": "Example 11: The café served tea"
+        },
+        {
+          "text": "Example 12: The café served tea"
+        },
+        {
+          "text": "Example 13: The café served tea"
+        },
+        {
+          "text": "Example 14: The café served tea"
+        },
+        {
+          "text": "Example 15: The café served tea"
+        },
+        {
+          "text": "Example 16: The café served tea"
+        },
+        {
+          "text": "Example 17: The café served tea"
+        },
+        {
+          "text": "Example 18: The café served tea"
+        },
+        {
+          "text": "Example 19: The café served tea"
+        },
+        {
+          "text": "Example 20: The café served tea"
+        },
+        {
+          "text": "Example 21: The café served tea"
+        },
+        {
+          "text": "Example 22: The café served tea"
+        },
+        {
+          "text": "Example 23: The café served tea"
+        },
+        {
+          "text": "Example 24: The café served tea"
+        },
+        {
+          "text": "Example 25: The café served tea"
+        },
+        {
+          "text": "Example 26: The café served tea"
+        },
+        {
+          "text": "Example 27: The café served tea"
+        },
+        {
+          "text": "Example 28: The café served tea"
+        },
+        {
+          "text": "Example 29: The café served tea"
+        }
+      ],
+      "specs": [
+        {
+          "task": "lambada_openai",
+          "source": {
+            "dataset": "EleutherAI/lambada_openai",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The café served",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:lambada_openai",
+            "reference": {
+              "repeats": [
+                1
+              ],
+              "indices": [
+                0
+              ]
+            }
+          },
+          "doc": {
+            "text": "The café served tea"
+          },
+          "target": " tea",
+          "namespace": "lambada_openai",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "lambada_openai",
+          "source": {
+            "dataset": "EleutherAI/lambada_openai",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The café served",
+              "generation": {},
+              "continuation": " tea",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:lambada_openai",
+            "reference": {
+              "repeats": [
+                1
+              ],
+              "indices": [
+                0
+              ]
+            }
+          },
+          "doc": {
+            "text": "The café served tea"
+          },
+          "target": " tea",
+          "namespace": "lambada_openai",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "perplexity,none": -3.0,
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "perplexity,none": -3.0,
+            "acc,none": 0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "perplexity,none": -3.0,
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "perplexity,none": -3.0,
+            "acc,none": 0
+          }
+        }
+      ],
+      "config_sha256": "96dee2fe378666b6b5411958a25ad5c83f5b43eb6b3c830f4b0fd485f9adb6a5"
+    },
+    {
+      "name": "mmlu-smoke",
+      "shots": 0,
+      "document": {
+        "question": " Which café? ",
+        "subject": "abstract_algebra",
+        "choices": [
+          "café",
+          "tea",
+          "A longer answer",
+          "water"
+        ],
+        "answer": 0
+      },
+      "pool": [
+        {
+          "question": "Example 0:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 1:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 2:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 3:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 4:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 5:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 6:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 7:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 8:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 9:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 10:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 11:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 12:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 13:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 14:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 15:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 16:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 17:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 18:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 19:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 20:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 21:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 22:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 23:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 24:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 25:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 26:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 27:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 28:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 29:  Which café? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "café",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        }
+      ],
+      "specs": [
+        {
+          "task": "mmlu-smoke",
+          "source": {
+            "dataset": "cais/mmlu",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " A",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " B",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " C",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " D",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:mmlu-smoke",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "question": " Which café? ",
+            "subject": "abstract_algebra",
+            "choices": [
+              "café",
+              "tea",
+              "A longer answer",
+              "water"
+            ],
+            "answer": 0
+          },
+          "target": 0,
+          "namespace": "mmlu-smoke",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "mmlu-smoke",
+          "source": {
+            "dataset": "cais/mmlu",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " A",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " B",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " C",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            },
+            {
+              "kind": "loglikelihood",
+              "prompt": "The following are multiple choice questions (with answers) about abstract algebra.\n\nWhich café?\nA. café\nB. tea\nC. A longer answer\nD. water\nAnswer:",
+              "generation": {},
+              "continuation": " D",
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:mmlu-smoke",
+            "reference": {
+              "repeats": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "indices": [
+                0,
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          "doc": {
+            "question": " Which café? ",
+            "subject": "abstract_algebra",
+            "choices": [
+              "café",
+              "tea",
+              "A longer answer",
+              "water"
+            ],
+            "answer": 0
+          },
+          "target": 0,
+          "namespace": "mmlu-smoke",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 0,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -3.0,
+              false
+            ],
+            [
+              -2.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ],
+            [
+              -7.0,
+              false
+            ]
+          ],
+          "metrics": {
+            "acc,none": 0.0
+          },
+          "reducer_inputs": {
+            "acc,none": 0.0
+          }
+        },
+        {
+          "ordinal": 1,
+          "scores": [
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ],
+            [
+              -1.0,
+              true
+            ]
+          ],
+          "metrics": {
+            "acc,none": 1.0
+          },
+          "reducer_inputs": {
+            "acc,none": 1.0
+          }
+        }
+      ],
+      "config_sha256": "f026cc8918a0a4a422af4286e22889de6f423483671975fdd5429c96c0d0d9ef"
+    }
+  ]
+}

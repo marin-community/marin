@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The RL data catalog: every dataset declaration, keyed by name."""
+"""The task catalog: training and evaluation dataset declarations, keyed by name."""
 
-from experiments.post_training.task_curation.datasets import structure_closure, unconverted
+from experiments.post_training.task_curation.datasets import evalchemy, structure_closure, unconverted
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 def all_sources() -> dict[str, RlDataSource]:
     sources = [
+        *evalchemy.sources(),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),

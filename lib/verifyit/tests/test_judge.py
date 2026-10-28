@@ -10,7 +10,17 @@ from pathlib import Path
 import pytest
 from verifyit.grade import InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
-from verifyit.spec import Constraint, EmptyOutputPolicy, JudgeSpec, parse_spec, render_spec
+from verifyit.modes.grade_math_judge import grade_math_judge_candidate
+from verifyit.spec import (
+    Constraint,
+    EmptyOutputPolicy,
+    JudgeSpec,
+    MathJudgeSpec,
+    MathProfile,
+    MathSpec,
+    parse_spec,
+    render_spec,
+)
 
 # The dataset's own reference answer, apostrophe included: the gate must fold case, spacing and
 # punctuation without mangling non-ASCII text.
@@ -22,6 +32,53 @@ BOXED_RESPONSE = f"The victim state may act only in the narrow case described.\n
 SPACED_RESPONSE = REFERENCE.lower().replace("attack and", "attack   and").rstrip(".")
 QUESTION = "Under the narrow interpretation of Article 51 of the UN Charter, when may force be used?"
 ENV_VARS = ("VERIFYIT_JUDGE_BASE_URL", "VERIFYIT_JUDGE_API_KEY", "VERIFYIT_JUDGE_MODEL")
+
+
+def _math_judge_spec() -> MathJudgeSpec:
+    return MathJudgeSpec(
+        math=MathSpec(expected="2", alternatives=("3",), profile=MathProfile.EVALCHEMY_OLYMPIAD),
+        judge=JudgeSpec(
+            references=('["2", "3"]',),
+            rubric="labels",
+            exact_gate=False,
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
+            label_scan="whole",
+            label_case="upper",
+            max_completion_tokens=2048,
+        ),
+    )
+
+
+@pytest.mark.parametrize("response, expected", [(r"\boxed{3}", 1), ("no box", 0), ("", 0)])
+def test_math_judge_roundtrip_preserves_local_decisions_without_an_endpoint(unconfigured_judge, response, expected):
+    spec = parse_spec(render_spec(_math_judge_spec()))
+    assert isinstance(spec, MathJudgeSpec)
+    verdict = grade_math_judge_candidate(spec, response, runtime=None)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
+
+
+@pytest.mark.parametrize("reply,expected", [("correct", 1), (" INCORRECT\n", 0), ("Not_Attempted", 0)])
+def test_math_judge_sends_extracted_first_box_and_parses_whole_label(fake_judge, reply, expected):
+    fake_judge.replies = [reply]
+    spec = parse_spec(render_spec(_math_judge_spec()))
+    assert isinstance(spec, MathJudgeSpec)
+    verdict = grade_math_judge_candidate(spec, r"\boxed{4} then \boxed{2}")
+    assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
+    assert verdict.detail["extracted"] == "4"
+    assert fake_judge.requests[0]["messages"] == [
+        {
+            "role": "user",
+            "content": 'Reference: ["2", "3"]\nCandidate: 4',
+        }
+    ]
+    assert fake_judge.requests[0]["temperature"] == 0
+
+
+def test_math_judge_malformed_reply_is_an_error(fake_judge):
+    fake_judge.replies = ["Probably correct"]
+    with pytest.raises(RuntimeError, match="malformed"):
+        grade_math_judge_candidate(_math_judge_spec(), r"\boxed{4}")
 
 
 class FakeJudgeServer(ThreadingHTTPServer):

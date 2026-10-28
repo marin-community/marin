@@ -20,13 +20,18 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import statistics
 import string
+import time
 import unicodedata
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
@@ -55,6 +60,7 @@ from verifyit.spec import (
     Constraint,
     EmptyOutputPolicy,
     ExactSpec,
+    JudgeCompletionPolicy,
     JudgeRuntimeSource,
     JudgeSpec,
     Spec,
@@ -67,6 +73,8 @@ MODEL_ENV = "VERIFYIT_JUDGE_MODEL"
 ATTEMPTS = 2
 REASONING_LIMIT = 400
 CONTEXT_LIMIT = 60_000
+RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_TransportResult = TypeVar("_TransportResult")
 
 REFERENCE_PROMPT = """You are an impartial grader for open-ended short-answer questions. Compare the \
 candidate response with the reference answer(s) below. Judge the substantive answer only: ignore \
@@ -109,10 +117,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class JudgeConnection:
-    """Per-call endpoint credentials, kept outside serialized task specifications."""
+    """Per-call endpoint credentials, kept outside serialized task specifications.
+
+    ``default_model=None`` permits the environment fallback for generic callers.
+    An explicit string supplies that fallback; an empty string disables it.
+    """
 
     base_url: str
     api_key: str = field(repr=False)
+    default_model: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,16 @@ class _ScoreResult:
     attempts: tuple[_CompletionAttempt, ...]
 
 
+@dataclass(frozen=True)
+class _LabelCompletion:
+    text: str
+    incomplete: bool
+    response_model: str | None
+    response_id: str | None
+    finish_reason: str | None
+    transport_attempts: tuple[dict[str, Any], ...] = ()
+
+
 def grade(
     spec: Spec,
     tests_dir: Path,
@@ -151,6 +174,17 @@ def grade(
 
 
 def _validate_spec(spec: JudgeSpec) -> _ValidatedJudgeSpec:
+    if not isinstance(spec.completion_policy, JudgeCompletionPolicy):
+        raise InvalidTask("Unknown judge completion policy")
+    if type(spec.transport_attempts) is not int or spec.transport_attempts < 1:
+        raise InvalidTask("Judge transport attempts must be positive")
+    if (
+        isinstance(spec.transport_budget, bool)
+        or not isinstance(spec.transport_budget, (int, float))
+        or not math.isfinite(spec.transport_budget)
+        or spec.transport_budget <= 0
+    ):
+        raise InvalidTask("Judge transport budget must be finite and positive")
     if not isinstance(spec.api, str) or spec.api not in {"chat_completions", "responses"}:
         raise InvalidTask("judge api must be chat_completions or responses")
     if spec.api == "responses" and spec.rubric != RUBRIC_LABELS:
@@ -246,11 +280,13 @@ def grade_judge_candidate(
                 gate_text,
             )
             if exact.reward == 1.0:
+                metrics = {"metrics": spec.label_metrics[spec.exact_gate_label]} if spec.label_metrics else {}
                 return scored(
                     float(spec.label_scores[spec.exact_gate_label]),
                     gate="exact",
                     verdict=spec.exact_gate_label,
                     exact_verdict=exact.detail,
+                    **metrics,
                 )
     if spec.rubric == RUBRIC_REFERENCE:
         normalized = normalize(boxed_answer(candidate))
@@ -289,6 +325,18 @@ def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
     normalized_labels = [label.upper() if spec.label_case == "upper" else label for label in spec.label_scores]
     if len(set(normalized_labels)) != len(normalized_labels):
         raise InvalidTask("verdict labels collide after case normalization")
+    if spec.label_metrics and set(spec.label_metrics) != set(spec.label_scores):
+        raise InvalidTask("label metrics must cover every declared verdict")
+    for metrics in spec.label_metrics.values():
+        if (
+            not isinstance(metrics, dict)
+            or not metrics
+            or any(
+                not isinstance(name, str) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                for name, value in metrics.items()
+            )
+        ):
+            raise InvalidTask("label metrics require named finite observations")
     used = set()
     for template in (spec.system_prompt, spec.prompt_template):
         try:
@@ -335,12 +383,26 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
     labels = {
         label.upper() if spec.label_case == "upper" else label: score for label, score in spec.label_scores.items()
     }
+    label_metrics = {
+        label.upper() if spec.label_case == "upper" else label: values for label, values in spec.label_metrics.items()
+    }
     for index, budget in enumerate(budgets):
-        content, incomplete = _label_completion(spec, client, model, messages, budget)
-        if incomplete:
+        completion = _label_completion(spec, client, model, messages, budget)
+        detail: dict[str, Any] = {
+            "model": model,
+            "requested_model": model,
+            "response_model": completion.response_model,
+            "response_id": completion.response_id,
+            "finish_reason": completion.finish_reason,
+            "transport_attempts": completion.transport_attempts,
+            "completion": completion.text,
+            "judge_request": {"model": model, "messages": messages, "max_completion_tokens": budget, "temperature": 0.0},
+        }
+        if completion.incomplete:
             if index + 1 < len(budgets):
                 continue
-            raise RuntimeError("judge completion is incomplete")
+            raise GradingInfraError("judge completion is incomplete", **detail)
+        content = completion.text
         answer = _answer_text(content, spec.strip_reasoning_blocks, unfinished_error="judge has unfinished reasoning")
         if spec.label_case == "upper":
             answer = answer.upper()
@@ -356,43 +418,61 @@ def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: opena
                 if (label in completed_lines if spec.label_scan == "lines" else label in answer)
             }
         if final not in labels or observed != {final}:
-            raise RuntimeError("judge returned malformed or contradictory verdict labels")
-        return scored(float(labels[final]), model=model, verdict=final, reasoning=_reasoning(answer), completion=content)
+            raise GradingInfraError("judge returned malformed or contradictory verdict labels", **detail)
+        detail.update(verdict=final, reasoning=_reasoning(answer))
+        if label_metrics:
+            detail["metrics"] = label_metrics[final]
+        return scored(float(labels[final]), **detail)
     raise RuntimeError("judge exhausted completion budgets")
 
 
 def _label_completion(
     spec: JudgeSpec, client: openai.OpenAI, model: str, messages: list, budget: int
-) -> tuple[str, bool]:
+) -> _LabelCompletion:
     if spec.api == "chat_completions":
         options: dict[str, Any] = {"reasoning_effort": spec.reasoning_effort} if spec.reasoning_effort else {}
-        response = _chat_completion(
-            client,
-            model=model,
-            messages=messages,
-            temperature=0.0,
-            timeout=spec.request_timeout,
-            max_completion_tokens=budget,
-            **options,
+        request = {"model": model, "messages": messages, "temperature": 0.0, "max_completion_tokens": budget, **options}
+        response, attempts = _judge_transport(
+            spec,
+            lambda timeout: _chat_completion(client, timeout=timeout, **request),
+            request,
         )
+        if spec.completion_policy is JudgeCompletionPolicy.CONTENT:
+            choice = response.choices[0]
+            return _LabelCompletion(
+                choice.message.content or "",
+                False,
+                response.model,
+                response.id,
+                choice.finish_reason,
+                attempts,
+            )
         choice = _completion_choice(response)
         if choice.finish_reason == "length":
-            return "", True
-        return _completed_text(choice), False
+            return _LabelCompletion(
+                choice.message.content or "", True, response.model, response.id, choice.finish_reason, attempts
+            )
+        return _LabelCompletion(
+            _completed_text(choice), False, response.model, response.id, choice.finish_reason, attempts
+        )
     options = {"reasoning": {"effort": spec.reasoning_effort}} if spec.reasoning_effort else {}
-    response = client.responses.with_raw_response.create(
-        model=model,
-        input=messages if spec.system_prompt else messages[0]["content"],
-        max_output_tokens=budget,
-        timeout=spec.request_timeout,
+    request = {
+        "model": model,
+        "input": messages if spec.system_prompt else messages[0]["content"],
+        "max_output_tokens": budget,
         **options,
+    }
+    response, attempts = _judge_transport(
+        spec,
+        lambda timeout: client.responses.with_raw_response.create(timeout=timeout, **request),
+        request,
     )
     payload = json.loads(response.http_response.text, object_pairs_hook=unique_object)
     json.dumps(payload, allow_nan=False)
     if not isinstance(payload, dict) or payload.get("error") is not None:
         raise RuntimeError("judge transport returned an error")
     if payload.get("status") == "incomplete" and payload.get("incomplete_details") == {"reason": "max_output_tokens"}:
-        return "", True
+        return _LabelCompletion("", True, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
     if payload.get("status") != "completed" or payload.get("incomplete_details") is not None:
         raise RuntimeError("judge response is incomplete")
     output = payload.get("output")
@@ -413,7 +493,81 @@ def _label_completion(
     text = block.get("text")
     if block.get("type") != "output_text" or not isinstance(text, str) or not text.strip():
         raise RuntimeError("judge output is empty or contains a refusal")
-    return text, False
+    return _LabelCompletion(text, False, payload.get("model"), payload.get("id"), payload.get("status"), attempts)
+
+
+def _retry_after(error: openai.APIStatusError) -> float:
+    value = error.response.headers.get("Retry-After")
+    if value is None:
+        return 0.0
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            return max(0.0, (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError):
+            return 0.0
+
+
+def _judge_transport(
+    spec: JudgeSpec,
+    call: Callable[[float], _TransportResult],
+    request: dict[str, Any],
+) -> tuple[_TransportResult, tuple[dict[str, Any], ...]]:
+    """Retry only transient provider failures; semantic label parsing happens afterward.
+
+    The source uses capped exponential full jitter and a Retry-After minimum.
+    Only response bodies, statuses and retry reasons enter evidence, never headers.
+    """
+    deadline = time.monotonic() + spec.transport_budget
+    attempts: list[dict[str, Any]] = []
+    for index in range(spec.transport_attempts):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise GradingInfraError(
+                "Judge transport budget exhausted", transport_attempts=attempts, judge_request=request
+            )
+        try:
+            result = call(min(spec.request_timeout, remaining))
+        except (openai.APIConnectionError, openai.APIStatusError) as error:
+            status = error.status_code if isinstance(error, openai.APIStatusError) else None
+            reason = (
+                "timeout"
+                if isinstance(error, openai.APITimeoutError)
+                else "connection" if status is None else f"http_{status}"
+            )
+            record: dict[str, Any] = {
+                "attempt": index + 1,
+                "outcome": "failed",
+                "status": status,
+                "reason": reason,
+                "body": error.response.text if isinstance(error, openai.APIStatusError) else None,
+            }
+            attempts.append(record)
+            retryable = status is None or status in RETRYABLE_STATUSES
+            remaining = deadline - time.monotonic()
+            if not retryable or index + 1 == spec.transport_attempts or remaining <= 0:
+                raise GradingInfraError(
+                    str(error),
+                    transport_attempts=attempts,
+                    judge_request=request,
+                    requested_model=request["model"],
+                ) from error
+            minimum = _retry_after(error) if isinstance(error, openai.APIStatusError) else 0.0
+            delay = max(random.uniform(0, min(2 ** min(index, 4), 10)), minimum)
+            record["retry_delay"] = min(delay, remaining)
+            if delay >= remaining:
+                raise GradingInfraError(
+                    "Judge Retry-After exceeds the remaining transport budget",
+                    transport_attempts=attempts,
+                    judge_request=request,
+                    requested_model=request["model"],
+                ) from error
+            time.sleep(delay)
+            continue
+        attempts.append({"attempt": index + 1, "outcome": "succeeded"})
+        return result, tuple(attempts)
+    raise AssertionError("Validated judge transport must make an attempt")
 
 
 def _context(spec: JudgeSpec, tests_dir: Path) -> str:
@@ -453,7 +607,12 @@ def normalize(text: str) -> str:
 
 def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai.OpenAI, str]:
     base_url = connection.base_url.strip() if connection else os.environ.get(BASE_URL_ENV, "").strip()
-    model = spec.model.strip() or os.environ.get(MODEL_ENV, "").strip()
+    fallback = (
+        connection.default_model
+        if connection is not None and connection.default_model is not None
+        else os.environ.get(MODEL_ENV, "")
+    )
+    model = spec.model.strip() or fallback.strip()
     if not base_url:
         raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:

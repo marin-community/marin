@@ -20,6 +20,7 @@ dependencies = [
     "marin-finestore",
     "marin-iris",
     "marin-rigging[prometheus]",
+    "marin-rolloutengine",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
@@ -67,7 +68,7 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
-    "marin-verifyit[math,reasoning-gym,schema]",
+    "marin-verifyit[math,reasoning-gym,schema,instructions]",
     "marin-taskcompendium[pipeline]",
     "universal-pathlib",
     # for scaling law plotting tests

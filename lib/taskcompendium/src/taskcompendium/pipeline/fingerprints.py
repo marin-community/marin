@@ -23,6 +23,13 @@ REVIEW_STAGE_REVISION = "4"
 def _value_identity(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        kind = type(value)
+        return {
+            "module": kind.__module__,
+            "name": kind.__qualname__,
+            "parameters": {field.name: _value_identity(getattr(value, field.name)) for field in fields(value)},
+        }
     if callable(value) and not isinstance(value, type):
         return callable_identity(value)
     if isinstance(value, dict):

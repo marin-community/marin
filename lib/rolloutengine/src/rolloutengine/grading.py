@@ -23,7 +23,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import JudgeSpec
+from verifyit.spec import JudgeSpec, MathJudgeSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -34,16 +34,24 @@ def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
     """The spec's judge connection, or else one from ``VERIFYIT_JUDGE_BASE_URL`` and ``VERIFYIT_JUDGE_API_KEY``.
 
     TaskCompendium's host judge path calls verifyit with ``runtime=None``, which needs an explicit connection, so
-    the engine reads the environment here. The judge model comes from ``JudgeSpec.model`` or ``VERIFYIT_JUDGE_MODEL``.
+    the engine reads the environment here. The judge model comes from ``JudgeSpec.model``, the explicit
+    connection's default model, or ``VERIFYIT_JUDGE_MODEL`` for environment-configured callers.
     """
     grader = spec.task.grader
     assert isinstance(grader, VerifyitGrader)
-    judge = verifyit_spec(grader)
+    verifier = verifyit_spec(grader)
+    judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
     assert isinstance(judge, JudgeSpec)
-    if not (judge.model.strip() or os.environ.get(MODEL_ENV, "").strip()):
+    connection = spec.judge_connection
+    fallback = (
+        connection.default_model
+        if connection is not None and connection.default_model is not None
+        else os.environ.get(MODEL_ENV, "")
+    )
+    if not (judge.model.strip() or fallback.strip()):
         raise ValueError(f"A judge grader needs JudgeSpec.model or {MODEL_ENV}")
-    if spec.judge_connection is not None:
-        return spec.judge_connection
+    if connection is not None:
+        return connection
     base_url = os.environ.get(BASE_URL_ENV, "").strip()
     if not base_url:
         raise ValueError(f"A judge grader needs TaskRolloutSpec.judge_connection or {BASE_URL_ENV}")

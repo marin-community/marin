@@ -15,10 +15,12 @@ from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
+from verifyit.modes.grade_math_judge import grade_math_judge_candidate
 from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
+    MathJudgeSpec,
     NumericSpec,
     PredictedActionSpec,
     Spec,
@@ -177,7 +179,7 @@ def grade_remote_judge_answer(
     if not isinstance(grader, VerifyitGrader):
         raise TypeError(f"Remote judge grading requires a verifyit grader, not {grader.kind}")
     verifier = verifyit_spec(grader)
-    if not isinstance(verifier, JudgeSpec):
+    if not isinstance(verifier, JudgeSpec | MathJudgeSpec):
         raise TypeError(f"Remote judge grading requires a judge verifier, not {grader.mode}")
     require_submission_compatibility(task)
     try:
@@ -201,13 +203,23 @@ def grade_remote_judge_answer(
     if not candidate.strip() and verifier.empty_output is EmptyOutputPolicy.ZERO:
         return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
-    if verifier.context and verifier.context not in resources:
-        return GradeResult(Outcome.INVALID_TASK, None, f"judge context {verifier.context!r} is not in task resources")
-    context = resources.get(verifier.context, b"").decode(errors="replace")
+    judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
+    if judge.context and judge.context not in resources:
+        return GradeResult(Outcome.INVALID_TASK, None, f"judge context {judge.context!r} is not in task resources")
+    context = resources.get(judge.context, b"").decode(errors="replace")
     try:
-        verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
+        if isinstance(verifier, MathJudgeSpec):
+            verdict = grade_math_judge_candidate(
+                verifier, candidate, connection=connection, runtime=None, context=context
+            )
+        else:
+            verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
     except InvalidTask as error:
         return GradeResult(Outcome.INVALID_TASK, None, str(error))
-    except (APIError, GradingInfraError, RuntimeError, OSError) as error:
+    except GradingInfraError as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error), detail=error.detail)
+    except APIError as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error), detail={"provider_error": error.body})
+    except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     return grade_result(verifier, verdict)

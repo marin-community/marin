@@ -3,6 +3,7 @@
 
 """The core types: model requests and turns, rollout records and events, exceptions, and the task rollout spec."""
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -68,6 +69,20 @@ class TokenUsage:
 
     prompt_tokens: int
     completion_tokens: int
+
+
+class ModelResponseError(ValueError):
+    """An unusable endpoint response retained as JSON-safe failure evidence."""
+
+    def __init__(self, message: str, *, response: dict[str, Any]):
+        super().__init__(message)
+        self.response = response
+        self.response_json: str | None = None
+        try:
+            json.dumps(response, allow_nan=False)
+        except ValueError:
+            self.response_json = json.dumps(response, allow_nan=True)
+            self.response = json.loads(self.response_json, parse_constant=lambda _value: None)
 
 
 @dataclass(frozen=True)

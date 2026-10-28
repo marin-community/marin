@@ -1,0 +1,82 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Evalchemy's final-box extraction and math-verify/Minerva comparison protocol.
+
+Adopted from Marin's Evalchemy fork and lm-evaluation-harness v0.4.12 (MIT).
+Keep source stops separate from the smaller set safe to send to a chat endpoint.
+"""
+
+import threading
+
+from math_verify import parse, verify
+from sympy.core.relational import Relational
+
+from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
+from verifyit.grade import Reward, invalid_task, scored
+
+END_OF_TURN_SEQUENCES = (
+    "<|im_end|>",
+    "<|eot_id|>",
+    "<|end_of_text|>",
+    "<|endoftext|>",
+    "</s>",
+    "\nYou are an AI assistant",
+    "\nQuestion:",
+    "\nQ:",
+    "\n[Question]",
+    "\nUser:",
+    "\nuser\n",
+    "\nAssistant:",
+)
+CHAT_REQUEST_STOPS = END_OF_TURN_SEQUENCES[:4]
+REASONING_END_MARKERS = ("</think>", "<|end_think|>")
+
+
+def _symbol_free_relation(parsed: list) -> bool:
+    values = [value for value in parsed if not isinstance(value, str)]
+    return bool(values) and all(isinstance(value, Relational) and not value.free_symbols for value in values)
+
+
+def final_boxed_answer(response: str) -> str:
+    """Extract the source's last box in final content before a task boundary."""
+    end = max(
+        (index + len(marker) for marker in REASONING_END_MARKERS if (index := response.rfind(marker)) >= 0),
+        default=0,
+    )
+    response = response[end:]
+    stops = [index for stop in END_OF_TURN_SEQUENCES if (index := response.find(stop)) >= 0]
+    response = response[: min(stops)] if stops else response
+    if r"\boxed " in response:
+        return response.split(r"\boxed ")[-1].split("$")[0]
+    start = response.rfind(r"\boxed")
+    if start < 0:
+        return ""
+    depth = 0
+    for index in range(start, len(response)):
+        if response[index] == "{":
+            depth += 1
+        elif response[index] == "}":
+            depth -= 1
+            if depth == 0:
+                boxed = response[start : index + 1]
+                return boxed[len(r"\boxed{") : -1] if boxed.startswith(r"\boxed{") else ""
+    return ""
+
+
+def grade_boxed_math(expected: str, response: str) -> Reward:
+    """Grade the complete final response under Evalchemy's boxed math protocol."""
+    if not expected.strip():
+        return invalid_task("Boxed math requires a nonempty reference")
+    candidate = final_boxed_answer(response)
+    if not candidate:
+        return scored(0, extracted=candidate, expected=expected)
+    timeout = 5 if threading.current_thread() is threading.main_thread() else 0
+    reference = parse(r"\boxed{" + expected + "}", parsing_timeout=timeout)
+    prediction = parse(r"\boxed{" + candidate + "}", parsing_timeout=timeout)
+    if reference and prediction:
+        relations = _symbol_free_relation(reference) and _symbol_free_relation(prediction)
+        match = not relations and bool(verify(gold=reference, target=prediction, timeout_seconds=timeout))
+    else:
+        match = is_equiv(normalize_final_answer(candidate), normalize_final_answer(expected))
+    return scored(float(match), extracted=candidate, expected=expected)

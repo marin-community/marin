@@ -214,6 +214,10 @@ def validate_math(spec: MathSpec) -> None:
         raise InvalidTask("allow_additive_constant must be boolean")
     if not isinstance(spec.profile, MathProfile) or not isinstance(spec.math_type, MathType):
         raise InvalidTask("unknown math parsing profile or math_type")
+    if not isinstance(spec.alternatives, tuple) or any(not isinstance(answer, str) for answer in spec.alternatives):
+        raise InvalidTask("math alternatives must be a tuple of reference strings")
+    if spec.alternatives and spec.profile is not MathProfile.EVALCHEMY_OLYMPIAD:
+        raise InvalidTask("alternative references require the Olympiad math profile")
 
 
 def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
@@ -276,6 +280,18 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
 
 
 def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
+    if spec.profile is MathProfile.EVALCHEMY_AMC:
+        from verifyit.adapters.evalchemy_amc import grade_amc  # noqa: PLC0415
+
+        return grade_amc(spec.expected, candidate)
+    if spec.profile is MathProfile.EVALCHEMY_OLYMPIAD:
+        from verifyit.adapters.evalchemy_olympiad import grade_olympiad  # noqa: PLC0415
+
+        return grade_olympiad((spec.expected, *spec.alternatives), candidate)
+    if spec.profile is MathProfile.EVALCHEMY:
+        from verifyit.adapters.evalchemy_math import grade_boxed_math  # noqa: PLC0415
+
+        return grade_boxed_math(spec.expected, candidate)
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
@@ -313,7 +329,12 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 def math_answer(spec: MathSpec, text: str) -> str:
     """The math content of an answer: all of it for the raw profile, else its last box or last line."""
-    if spec.profile is MathProfile.RAW:
+    if spec.profile in (
+        MathProfile.RAW,
+        MathProfile.EVALCHEMY,
+        MathProfile.EVALCHEMY_AMC,
+        MathProfile.EVALCHEMY_OLYMPIAD,
+    ):
         return text
     if BOXED in text:
         return extract_boxed(text) or ""

@@ -22,6 +22,7 @@ from taskcompendium.models import (
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
+from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
     Continuation,
@@ -183,7 +184,7 @@ async def test_a_response_without_usage_is_a_model_failure():
         await engine.run_task(spec, server.model())
 
     assert caught.value.rollout.failure == RolloutFailure(
-        "ValueError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
+        "ModelResponseError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
     )
 
 
@@ -233,3 +234,28 @@ async def test_assistant_prefix_rejects_reasoning_parsed_by_a_chat_endpoint(chan
     finally:
         await model.client.close()
     assert caught.value.rollout.failure.exception_type == "ValueError"
+
+
+async def test_exact_chat_preserves_source_conversation_without_appending_submission_instructions():
+    server = ChatServer([completion({"content": "12"})])
+    task = arithmetic_task(
+        context=ConversationInput(
+            events=(
+                TextMessage(role="system", content="Preserve this system instruction."),
+                TextMessage(role="user", content="  What is six plus six?\nAnswer:"),
+            )
+        )
+    )
+    model = server.model()
+    try:
+        result = await RolloutEngine({}, {EXACT_CHAT_HARNESS: ExactChatHarness()}).run_task(
+            rollout_spec(task, harness=EXACT_CHAT_HARNESS, trace=TraceMode.MESSAGES), model
+        )
+    finally:
+        await model.client.close()
+    assert server.requests[0]["messages"] == [
+        {"role": "system", "content": "Preserve this system instruction."},
+        {"role": "user", "content": "  What is six plus six?\nAnswer:"},
+    ]
+    assert result.grade.status is Outcome.GRADED
+    assert result.grade.reward == 1

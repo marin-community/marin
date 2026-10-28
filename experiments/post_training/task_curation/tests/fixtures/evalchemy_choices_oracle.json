@@ -1,0 +1,1155 @@
+{
+  "evaluator": "Marin 623134de90723e7f189036da005067f36817b6e7 vendor/evalchemy",
+  "files": {
+    "eval/chat_benchmarks/GPQADiamond/eval_instruct.py": "0941158e77794304e7532182d09801a59a4d4a32b41bb5397458b1f4119286ac",
+    "eval/chat_benchmarks/GPQADiamond/testing_utils.py": "51812e0a4b97d881bc47720e9124cdb0f462098b441bc440e3727f3af8488d2a",
+    "eval/chat_benchmarks/MMLUPro/eval_instruct.py": "95c242b6a764bf4165e56095c62e9bdb7c896e6a3b7d83d673f0ac0a862f0957",
+    "eval/chat_benchmarks/MMLUPro/initial_prompt.txt": "d7337806b4d84eef7a86bcb20bf3d64b65e72736c1603e16d08cadebac436f0a",
+    "eval/graders/mmlu.py": "ff13c6cc805c9dc6cf0fc9ab8c8586cb21d61878e3b62dbc6954ddeb4dabcb32",
+    "eval/graders/math_specs.py": "8f233cae3d5494e2a33d1d0c7d90a1c72afc65afd3544569d5779ed49d1c368b",
+    "eval/sources/common.py": "cbbe298d28f5315e8b41f4f272b2c95ae2a1dcee44d610e6a31632a707cc80a9"
+  },
+  "options": {
+    "seed": 7,
+    "max_tokens": 64,
+    "context_length": 100000,
+    "encode": "UTF-8 byte sequence"
+  },
+  "cases": [
+    {
+      "name": "GPQADiamond",
+      "rows": [
+        {
+          "Question": "Question 0",
+          "Correct Answer": "correct",
+          "Incorrect Answer 1": "wrong one",
+          "Incorrect Answer 2": "wrong two",
+          "Incorrect Answer 3": "wrong three"
+        },
+        {
+          "Question": "Question 1",
+          "Correct Answer": "correct",
+          "Incorrect Answer 1": "wrong one",
+          "Incorrect Answer 2": "wrong two",
+          "Incorrect Answer 3": "wrong three"
+        },
+        {
+          "Question": "Question 2",
+          "Correct Answer": "correct",
+          "Incorrect Answer 1": "wrong one",
+          "Incorrect Answer 2": "wrong two",
+          "Incorrect Answer 3": "wrong three"
+        },
+        {
+          "Question": "Question 3",
+          "Correct Answer": "correct",
+          "Incorrect Answer 1": "wrong one",
+          "Incorrect Answer 2": "wrong two",
+          "Incorrect Answer 3": "wrong three"
+        }
+      ],
+      "specs": [
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 0\nOptions: A) wrong two, B) wrong three, C) correct, D) wrong one\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 7
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 0",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) correct, D) wrong one",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 0,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 0\nOptions: A) wrong two, B) wrong three, C) correct, D) wrong one\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 8
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 0",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) correct, D) wrong one",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 1,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 0\nOptions: A) wrong two, B) wrong three, C) correct, D) wrong one\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 9
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 0",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) correct, D) wrong one",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 2,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 1\nOptions: A) correct, B) wrong three, C) wrong one, D) wrong two\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 7
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 1",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) correct, B) wrong three, C) wrong one, D) wrong two",
+            "answer": "A"
+          },
+          "target": "A",
+          "namespace": "default",
+          "trial": 0,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 1\nOptions: A) correct, B) wrong three, C) wrong one, D) wrong two\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 8
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 1",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) correct, B) wrong three, C) wrong one, D) wrong two",
+            "answer": "A"
+          },
+          "target": "A",
+          "namespace": "default",
+          "trial": 1,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 1\nOptions: A) correct, B) wrong three, C) wrong one, D) wrong two\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 9
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 1",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) correct, B) wrong three, C) wrong one, D) wrong two",
+            "answer": "A"
+          },
+          "target": "A",
+          "namespace": "default",
+          "trial": 2,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 2,
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 2\nOptions: A) wrong one, B) wrong two, C) correct, D) wrong three\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 7
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 2",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong one, B) wrong two, C) correct, D) wrong three",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 0,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 2,
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 2\nOptions: A) wrong one, B) wrong two, C) correct, D) wrong three\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 8
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 2",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong one, B) wrong two, C) correct, D) wrong three",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 1,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 2,
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 2\nOptions: A) wrong one, B) wrong two, C) correct, D) wrong three\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 9
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 2",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong one, B) wrong two, C) correct, D) wrong three",
+            "answer": "C"
+          },
+          "target": "C",
+          "namespace": "default",
+          "trial": 2,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 3,
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 3\nOptions: A) wrong two, B) wrong three, C) wrong one, D) correct\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 7
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 3",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) wrong one, D) correct",
+            "answer": "D"
+          },
+          "target": "D",
+          "namespace": "default",
+          "trial": 0,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 3,
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 3\nOptions: A) wrong two, B) wrong three, C) wrong one, D) correct\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 8
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 3",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) wrong one, D) correct",
+            "answer": "D"
+          },
+          "target": "D",
+          "namespace": "default",
+          "trial": 1,
+          "tags": {}
+        },
+        {
+          "task": "GPQADiamond",
+          "source": {
+            "dataset": "Idavidrein/gpqa",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 3,
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Question 3\nOptions: A) wrong two, B) wrong three, C) wrong one, D) correct\nAnswer:"
+                }
+              ],
+              "generation": {
+                "do_sample": true,
+                "temperature": 0.7,
+                "max_gen_toks": 64,
+                "seed": 9
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": true
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "letter_choice",
+            "reference": {}
+          },
+          "doc": {
+            "Question": "Question 3",
+            "Correct Answer": "correct",
+            "Incorrect Answer 1": "wrong one",
+            "Incorrect Answer 2": "wrong two",
+            "Incorrect Answer 3": "wrong three",
+            "multiple_choice_string": "A) wrong two, B) wrong three, C) wrong one, D) correct",
+            "answer": "D"
+          },
+          "target": "D",
+          "namespace": "default",
+          "trial": 2,
+          "tags": {}
+        }
+      ],
+      "grade_cases": [
+        {
+          "response": "\\boxed{A}",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "A"
+            ]
+          }
+        },
+        {
+          "response": "Answer: c. Later B.",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "B"
+            ]
+          }
+        },
+        {
+          "response": "<think>A</think>Final: D",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "D"
+            ]
+          }
+        },
+        {
+          "response": "",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              ""
+            ]
+          }
+        },
+        {
+          "response": "No answer.",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "No answer"
+            ]
+          }
+        },
+        {
+          "response": "D/",
+          "target": "C",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "D"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "MMLUPro",
+      "rows": [
+        {
+          "question_id": 5,
+          "category": "math",
+          "question": "Choose the even integer.",
+          "options": [
+            "one",
+            "N/A",
+            "two",
+            "three"
+          ],
+          "answer": "B",
+          "cot_content": ""
+        },
+        {
+          "question_id": 6,
+          "category": "law",
+          "question": "Choose the legal document.",
+          "options": [
+            "rock",
+            "statute"
+          ],
+          "answer": "B",
+          "cot_content": ""
+        }
+      ],
+      "specs": [
+        {
+          "task": "MMLUPro",
+          "source": {
+            "dataset": "TIGER-Lab/MMLU-Pro",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 5,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 2\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 3\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 4\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 5\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "max_gen_toks": 64
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "mmlu_choice",
+            "reference": {}
+          },
+          "doc": {
+            "question_id": 5,
+            "category": "math",
+            "question": "Choose the even integer.",
+            "options": [
+              "one",
+              "two",
+              "three"
+            ],
+            "answer": "B",
+            "cot_content": ""
+          },
+          "target": "B",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "category": "math"
+          }
+        },
+        {
+          "task": "MMLUPro",
+          "source": {
+            "dataset": "TIGER-Lab/MMLU-Pro",
+            "split": "test",
+            "revision": null
+          },
+          "source_id": 6,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "The following are multiple choice questions (with answers) about law. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 0\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the legal document.\nOptions:\nA. rock\nB. statute\nAnswer: Let's think step by step."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "max_gen_toks": 64
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": 100000,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "mmlu_choice",
+            "reference": {}
+          },
+          "doc": {
+            "question_id": 6,
+            "category": "law",
+            "question": "Choose the legal document.",
+            "options": [
+              "rock",
+              "statute"
+            ],
+            "answer": "B",
+            "cot_content": ""
+          },
+          "target": "B",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "category": "law"
+          }
+        }
+      ],
+      "grade_cases": [
+        {
+          "response": "B. This is valid.",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "B"
+            ]
+          }
+        },
+        {
+          "response": "b. This is valid.",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "response": "The ANSWER IS (c). Later B.",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "C"
+            ]
+          }
+        },
+        {
+          "response": "aNsWeR: d. Later mention B.",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "D"
+            ]
+          }
+        },
+        {
+          "response": "Answer: A. Answer: B.",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "A"
+            ]
+          }
+        },
+        {
+          "response": "<think>answer is A</think>Answer: B",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "B"
+            ]
+          }
+        },
+        {
+          "response": "",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "response": "J",
+          "target": "B",
+          "grade": {
+            "metrics": {
+              "accuracy": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "J"
+            ]
+          }
+        }
+      ],
+      "fewshot_rows": [
+        {
+          "question_id": 0,
+          "category": "law",
+          "question": "Support 0",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 1,
+          "category": "math",
+          "question": "Support 1",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 2,
+          "category": "math",
+          "question": "Support 2",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 3,
+          "category": "math",
+          "question": "Support 3",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 4,
+          "category": "math",
+          "question": "Support 4",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 5,
+          "category": "math",
+          "question": "Support 5",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 6,
+          "category": "math",
+          "question": "Support 6",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        }
+      ],
+      "variants": [
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step.",
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step.",
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 2\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step.",
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 2\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 3\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step.",
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 2\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 3\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 4\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step.",
+        "The following are multiple choice questions (with answers) about math. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.\n\n\n\nQuestion:\nSupport 1\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 2\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 3\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 4\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nSupport 5\nOptions:\nA. first\nB. second\nAnswer: Let's think step by step. The answer is (A).\n\nQuestion:\nChoose the even integer.\nOptions:\nA. one\nB. two\nC. three\nAnswer: Let's think step by step."
+      ]
+    }
+  ]
+}

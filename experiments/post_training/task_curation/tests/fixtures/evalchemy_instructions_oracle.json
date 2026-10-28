@@ -1,0 +1,3040 @@
+{
+  "source": "Marin 623134de90723e7f189036da005067f36817b6e7 Evalchemy and pinned lm-evaluation-harness v0.4.12",
+  "files": {
+    "ifeval.yaml": "3d8a3eb32de03f6a23ac87b46951d972a4ec7cb137e753365c0271594e38f84b",
+    "instructions.py": "7a15273280373268d5c1e2a31102d988fa694789b71260a24f198380b5c86cad",
+    "grader.py": "3e49aff46e3b49ac059e1c6a34ed195f19c0f61710d3d90175a777aaa2ca285c"
+  },
+  "cases": [
+    {
+      "name": "ifeval",
+      "rows": [
+        {
+          "key": 1,
+          "prompt": "Return JSON containing apple.",
+          "instruction_id_list": [
+            "detectable_format:json_format",
+            "keywords:existence"
+          ],
+          "kwargs": [
+            {},
+            {
+              "keywords": [
+                "apple"
+              ]
+            }
+          ]
+        },
+        {
+          "key": 2,
+          "prompt": "Use at least six words.",
+          "instruction_id_list": [
+            "length_constraints:number_words"
+          ],
+          "kwargs": [
+            {
+              "num_words": 6,
+              "relation": "at least"
+            }
+          ]
+        },
+        {
+          "key": 3,
+          "prompt": "First repeat the request.",
+          "instruction_id_list": [
+            "combination:repeat_prompt"
+          ],
+          "kwargs": [
+            {
+              "prompt_to_repeat": "First repeat the request."
+            }
+          ]
+        }
+      ],
+      "specs": [
+        {
+          "task": "ifeval",
+          "source": {
+            "dataset": "google/IFEval",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 0,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": "Return JSON containing apple.",
+              "generation": {
+                "until": [],
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 1280
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:ifeval",
+            "reference": {
+              "repeats": [
+                1
+              ],
+              "indices": [
+                0
+              ]
+            }
+          },
+          "doc": {
+            "key": 1,
+            "prompt": "Return JSON containing apple.",
+            "instruction_id_list": [
+              "detectable_format:json_format",
+              "keywords:existence"
+            ],
+            "kwargs": [
+              {
+                "keywords": null,
+                "num_words": null,
+                "relation": null,
+                "prompt_to_repeat": null
+              },
+              {
+                "keywords": [
+                  "apple"
+                ],
+                "num_words": null,
+                "relation": null,
+                "prompt_to_repeat": null
+              }
+            ]
+          },
+          "target": 0,
+          "namespace": "ifeval",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "ifeval",
+          "source": {
+            "dataset": "google/IFEval",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": "Use at least six words.",
+              "generation": {
+                "until": [],
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 1280
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:ifeval",
+            "reference": {
+              "repeats": [
+                1
+              ],
+              "indices": [
+                0
+              ]
+            }
+          },
+          "doc": {
+            "key": 2,
+            "prompt": "Use at least six words.",
+            "instruction_id_list": [
+              "length_constraints:number_words"
+            ],
+            "kwargs": [
+              {
+                "keywords": null,
+                "num_words": 6,
+                "relation": "at least",
+                "prompt_to_repeat": null
+              }
+            ]
+          },
+          "target": 0,
+          "namespace": "ifeval",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "ifeval",
+          "source": {
+            "dataset": "google/IFEval",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 2,
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": "First repeat the request.",
+              "generation": {
+                "until": [],
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 1280
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {},
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "lm_eval:ifeval",
+            "reference": {
+              "repeats": [
+                1
+              ],
+              "indices": [
+                0
+              ]
+            }
+          },
+          "doc": {
+            "key": 3,
+            "prompt": "First repeat the request.",
+            "instruction_id_list": [
+              "combination:repeat_prompt"
+            ],
+            "kwargs": [
+              {
+                "keywords": null,
+                "num_words": null,
+                "relation": null,
+                "prompt_to_repeat": "First repeat the request."
+              }
+            ]
+          },
+          "target": 0,
+          "namespace": "ifeval",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              ""
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.5,
+              "prompt_level_loose_acc,none": 1.0,
+              "inst_level_loose_acc,none": 1.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  true
+                ],
+                "prompt_level_loose_acc,none": true,
+                "inst_level_loose_acc,none": [
+                  true,
+                  true
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                true
+              ],
+              "prompt_level_loose_acc,none": true,
+              "inst_level_loose_acc,none": [
+                true,
+                true
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.5,
+              "prompt_level_loose_acc": 1.0,
+              "inst_level_loose_acc": 1.0
+            },
+            "filtered_resps": [
+              "Preface\n{\"answer\": \"apple\"}\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "don't re-enter café 42"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "First repeat the request. Done."
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Preface\nHelloWorld\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "level level level level level level level level level level "
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "quartz zephyr"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "the and of to"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "dfd631e6bc099ac490453736b652a194ada231362cba851950b5e9293cb6605e",
+              "prompt_hash": "a20f9eed0ddf84ec72894fa47a4e5b119fcaab0aeb48e6e2d5765d0174d1b5aa",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false,
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false,
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false,
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false,
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Hello world. 😀"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              ""
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Preface\n{\"answer\": \"apple\"}\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 1.0,
+              "inst_level_strict_acc,none": 1.0,
+              "prompt_level_loose_acc,none": 1.0,
+              "inst_level_loose_acc,none": 1.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": true,
+                "inst_level_strict_acc,none": [
+                  true
+                ],
+                "prompt_level_loose_acc,none": true,
+                "inst_level_loose_acc,none": [
+                  true
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": true,
+              "inst_level_strict_acc,none": [
+                true
+              ],
+              "prompt_level_loose_acc,none": true,
+              "inst_level_loose_acc,none": [
+                true
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 1.0,
+              "inst_level_strict_acc": 1.0,
+              "prompt_level_loose_acc": 1.0,
+              "inst_level_loose_acc": 1.0
+            },
+            "filtered_resps": [
+              "don't re-enter café 42"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "First repeat the request. Done."
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Preface\nHelloWorld\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 1.0,
+              "inst_level_strict_acc,none": 1.0,
+              "prompt_level_loose_acc,none": 1.0,
+              "inst_level_loose_acc,none": 1.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": true,
+                "inst_level_strict_acc,none": [
+                  true
+                ],
+                "prompt_level_loose_acc,none": true,
+                "inst_level_loose_acc,none": [
+                  true
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": true,
+              "inst_level_strict_acc,none": [
+                true
+              ],
+              "prompt_level_loose_acc,none": true,
+              "inst_level_loose_acc,none": [
+                true
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 1.0,
+              "inst_level_strict_acc": 1.0,
+              "prompt_level_loose_acc": 1.0,
+              "inst_level_loose_acc": 1.0
+            },
+            "filtered_resps": [
+              "level level level level level level level level level level "
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "quartz zephyr"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "the and of to"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "f8ac6eba8c8bcde60e6df19c42738d8b77517bdfba8f7cebd7b2c5009d459bfd",
+              "prompt_hash": "76998c2b4c4b42cef93b03af6705a00841c448c63c58cb9a037d39cd7710637c",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Hello world. 😀"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              ""
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Preface\n{\"answer\": \"apple\"}\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "don't re-enter café 42"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 1.0,
+              "inst_level_strict_acc,none": 1.0,
+              "prompt_level_loose_acc,none": 1.0,
+              "inst_level_loose_acc,none": 1.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": true,
+                "inst_level_strict_acc,none": [
+                  true
+                ],
+                "prompt_level_loose_acc,none": true,
+                "inst_level_loose_acc,none": [
+                  true
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": true,
+              "inst_level_strict_acc,none": [
+                true
+              ],
+              "prompt_level_loose_acc,none": true,
+              "inst_level_loose_acc,none": [
+                true
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 1.0,
+              "inst_level_strict_acc": 1.0,
+              "prompt_level_loose_acc": 1.0,
+              "inst_level_loose_acc": 1.0
+            },
+            "filtered_resps": [
+              "First repeat the request. Done."
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Preface\nHelloWorld\nEnd"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "level level level level level level level level level level "
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "quartz zephyr"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "the and of to"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "prompt_level_strict_acc,none": 0.0,
+              "inst_level_strict_acc,none": 0.0,
+              "prompt_level_loose_acc,none": 0.0,
+              "inst_level_loose_acc,none": 0.0
+            },
+            "audit": {
+              "filter": "none",
+              "doc_hash": "89fed81418cfc531b7ac37f0ec9f3efb016c75692f301524d765c2ef74a98470",
+              "prompt_hash": "87dd3051e4e3a015b156df995bee9c6f76429921b4d883554316613827592eff",
+              "target_hash": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+              "reducer_inputs": {
+                "prompt_level_strict_acc,none": false,
+                "inst_level_strict_acc,none": [
+                  false
+                ],
+                "prompt_level_loose_acc,none": false,
+                "inst_level_loose_acc,none": [
+                  false
+                ]
+              }
+            },
+            "weights": {},
+            "reducer_inputs": {
+              "prompt_level_strict_acc,none": false,
+              "inst_level_strict_acc,none": [
+                false
+              ],
+              "prompt_level_loose_acc,none": false,
+              "inst_level_loose_acc,none": [
+                false
+              ]
+            },
+            "sample_metrics": {
+              "prompt_level_strict_acc": 0.0,
+              "inst_level_strict_acc": 0.0,
+              "prompt_level_loose_acc": 0.0,
+              "inst_level_loose_acc": 0.0
+            },
+            "filtered_resps": [
+              "Hello world. 😀"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "IFBench",
+      "rows": [
+        {
+          "key": 1,
+          "prompt": "Use no whitespace and ten palindromes.",
+          "instruction_id_list": [
+            "format:no_whitespace",
+            "words:palindrome"
+          ],
+          "kwargs": [
+            {},
+            {}
+          ]
+        },
+        {
+          "key": 2,
+          "prompt": "Use four words.",
+          "instruction_id_list": [
+            "count:word_count_range"
+          ],
+          "kwargs": [
+            {
+              "min_words": 4,
+              "max_words": 4
+            }
+          ]
+        },
+        {
+          "key": 3,
+          "prompt": "Use few stop words.",
+          "instruction_id_list": [
+            "ratio:stop_words"
+          ],
+          "kwargs": [
+            {
+              "percentage": 0.5
+            }
+          ]
+        },
+        {
+          "key": 4,
+          "prompt": "Use emoji at every sentence end.",
+          "instruction_id_list": [
+            "format:emoji"
+          ],
+          "kwargs": [
+            {}
+          ]
+        }
+      ],
+      "specs": [
+        {
+          "task": "IFBench",
+          "source": {
+            "dataset": "allenai/IFBench_test",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 1,
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Use no whitespace and ten palindromes."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0,
+                "max_gen_toks": 1024
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "instructions",
+            "reference": {
+              "protocol": "ifbench"
+            }
+          },
+          "doc": {
+            "key": 1,
+            "prompt": "Use no whitespace and ten palindromes.",
+            "instruction_id_list": [
+              "format:no_whitespace",
+              "words:palindrome"
+            ],
+            "kwargs": [
+              {},
+              {}
+            ]
+          },
+          "target": [
+            "format:no_whitespace",
+            "words:palindrome"
+          ],
+          "namespace": "default",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "IFBench",
+          "source": {
+            "dataset": "allenai/IFBench_test",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 2,
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Use four words."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0,
+                "max_gen_toks": 1024
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "instructions",
+            "reference": {
+              "protocol": "ifbench"
+            }
+          },
+          "doc": {
+            "key": 2,
+            "prompt": "Use four words.",
+            "instruction_id_list": [
+              "count:word_count_range"
+            ],
+            "kwargs": [
+              {
+                "min_words": 4,
+                "max_words": 4
+              }
+            ]
+          },
+          "target": [
+            "count:word_count_range"
+          ],
+          "namespace": "default",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "IFBench",
+          "source": {
+            "dataset": "allenai/IFBench_test",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 3,
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Use few stop words."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0,
+                "max_gen_toks": 1024
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "instructions",
+            "reference": {
+              "protocol": "ifbench"
+            }
+          },
+          "doc": {
+            "key": 3,
+            "prompt": "Use few stop words.",
+            "instruction_id_list": [
+              "ratio:stop_words"
+            ],
+            "kwargs": [
+              {
+                "percentage": 0.5
+              }
+            ]
+          },
+          "target": [
+            "ratio:stop_words"
+          ],
+          "namespace": "default",
+          "trial": null,
+          "tags": {}
+        },
+        {
+          "task": "IFBench",
+          "source": {
+            "dataset": "allenai/IFBench_test",
+            "split": "train",
+            "revision": null
+          },
+          "source_id": 4,
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Use emoji at every sentence end."
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0,
+                "max_gen_toks": 1024
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "instructions",
+            "reference": {
+              "protocol": "ifbench"
+            }
+          },
+          "doc": {
+            "key": 4,
+            "prompt": "Use emoji at every sentence end.",
+            "instruction_id_list": [
+              "format:emoji"
+            ],
+            "kwargs": [
+              {}
+            ]
+          },
+          "target": [
+            "format:emoji"
+          ],
+          "namespace": "default",
+          "trial": null,
+          "tags": {}
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.5,
+              "loose_per_type:format": 1.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                true,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.5,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 1.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.5,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                true
+              ],
+              "loose_instruction_pass": [
+                false,
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "strict_per_type:words": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0,
+              "loose_per_type:words": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false,
+                false
+              ],
+              "loose_instruction_pass": [
+                false,
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 2,
+              "strict_per_type:format": 1,
+              "strict_per_type:words": 1,
+              "loose_instruction_accuracy": 2,
+              "loose_per_type:format": 1,
+              "loose_per_type:words": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:count": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:count": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:count": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:count": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 1,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:count": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:count": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:count": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:count": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:ratio": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:ratio": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:ratio": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:ratio": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:ratio": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:ratio": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:ratio": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:ratio": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:ratio": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:ratio": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:ratio": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:ratio": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:ratio": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:ratio": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:ratio": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:ratio": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 2,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:ratio": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:ratio": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:ratio": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:ratio": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "Preface\n{\"answer\": \"apple\"}\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "don't re-enter café 42",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "First repeat the request. Done.",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "Preface\nHelloWorld\nEnd",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "level level level level level level level level level level ",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "quartz zephyr",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "the and of to",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 0.0,
+              "strict_instruction_accuracy": 0.0,
+              "strict_per_type:format": 0.0,
+              "loose_prompt_accuracy": 0.0,
+              "loose_instruction_accuracy": 0.0,
+              "loose_per_type:format": 0.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                false
+              ],
+              "loose_instruction_pass": [
+                false
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "Hello world. 😀",
+          "grade": {
+            "metrics": {
+              "strict_prompt_accuracy": 1.0,
+              "strict_instruction_accuracy": 1.0,
+              "strict_per_type:format": 1.0,
+              "loose_prompt_accuracy": 1.0,
+              "loose_instruction_accuracy": 1.0,
+              "loose_per_type:format": 1.0
+            },
+            "audit": {
+              "strict_instruction_pass": [
+                true
+              ],
+              "loose_instruction_pass": [
+                true
+              ]
+            },
+            "weights": {
+              "strict_instruction_accuracy": 1,
+              "strict_per_type:format": 1,
+              "loose_instruction_accuracy": 1,
+              "loose_per_type:format": 1
+            },
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": null
+          }
+        }
+      ]
+    }
+  ]
+}

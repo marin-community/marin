@@ -2446,6 +2446,15 @@ wheels = [
 ]
 
 [[package]]
+name = "emoji"
+version = "2.16.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/01/a25a9c13e2f8945d06b219e08e88a5dd8a504ad1a79f872f25d6814f498c/emoji-2.16.0.tar.gz", hash = "sha256:ff9e9b1c48389ef78ed1787e7693c555e84e6bb9bac16be1fd65e1616dbf80c8", size = 617905, upload-time = "2026-09-16T19:47:57.051Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/8a/75e3177f374877b19dd3112820b071836ad1100f9f58424630b4783519bc/emoji-2.16.0-py3-none-any.whl", hash = "sha256:c4230d80640def9071599ff56b1b5950fe13a2a94c0da98c5deab12431b24330", size = 610912, upload-time = "2026-09-16T19:47:55.507Z" },
+]
+
+[[package]]
 name = "equinox"
 version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3654,6 +3663,38 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5f/f7/abb373e5757eaec4b922b92f97ec8d6d7e057cf06778247604fbc4e7c3f3/idna-3.19.tar.gz", hash = "sha256:5e0811a4383b21dc5838069f801c4fb62113b7447663d2530d2bd6e77b49bf15", size = 215237, upload-time = "2026-08-18T05:14:24.27Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl", hash = "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4", size = 68550, upload-time = "2026-08-18T05:14:22.343Z" },
+]
+
+[[package]]
+name = "ijson"
+version = "3.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/61/4066af787ed25bfca02c3edd2d7fd489b1b5ca27b54b400b187e5f2865e7/ijson-3.6.0.tar.gz", hash = "sha256:ec8f9265524e724905ecf00bdd061c374baaa8d5045ef50425695fb06efb45f5", size = 70134, upload-time = "2026-10-12T20:40:00.165Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/6e/5eb9158664f5495b118b064843735d07f6fe4a69f6bd7df8a9c99eda8a95/ijson-3.6.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:91c2b3877f02ddb0f557ca88254491d14053a6d91703ea2338542f7b576a6e82", size = 88705, upload-time = "2026-10-12T20:38:38.91Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/0e/078bf891755f16cae6e36e080cee238b461ee00581b22ec61678fcd961f9/ijson-3.6.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:914a87f45cc84f40863f9613f325c9b7824b4061ef75aaeb6897eaf885269ffe", size = 60664, upload-time = "2026-10-12T20:38:39.86Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/bc/d3f35bb0376d7ad68a59370bec2903ed3cc2e9b86fb6c566092f2bcc9629/ijson-3.6.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:55f8b704afdbda7fde2d317afd6af8638938c81d467ca46d0b8bcb6cf998ac7c", size = 60503, upload-time = "2026-10-12T20:38:41.203Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/a7/e80582a4665007fce3a87c60a4ee2c521296ded4edb2d1f4db871e655343/ijson-3.6.0-cp312-cp312-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:a8569bdbb524d9fe76518bc62438a3eefe0d36fb380bb4d98e738017a6624f9b", size = 139358, upload-time = "2026-10-12T20:38:42.094Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/20/d0da64fe537fb1aba9c7b09381f8155ce8ddfbd30cff1a5ee47757e0217f/ijson-3.6.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1e592cd601f91424428e7cbce11f7ab0d5430253a81e60f8a69981fb1136c77c", size = 150977, upload-time = "2026-10-12T20:38:43.274Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/43/2d8abf1ff74ed9a0372021e61e9fc660f850e0cde9aced66ca1b97da77b0/ijson-3.6.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c14d568d31a322e8ed7e9735f6e355608a23cc6ff4b5da843515089dae4cbf5f", size = 150188, upload-time = "2026-10-12T20:38:44.5Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/92/5705d9f96dfca5f740917944d78c67783fb449651291e4b641e455dbbcfb/ijson-3.6.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:8ee59d754e28247c5ef631ca013a70ca705f292a46e65b59b78f7a4b7f59871a", size = 151832, upload-time = "2026-10-12T20:38:45.518Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/3e/3cfe4c16b28f2d562ef80091c13dccb173f6aa3eec47964396718b5786bf/ijson-3.6.0-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:bb9f6c27fdda6d43993b25a49ca7903979c4c29bd6722b3dbf4e7061794e9cbc", size = 143236, upload-time = "2026-10-12T20:38:46.502Z" },
+    { url = "https://files.pythonhosted.org/packages/be/0b/10970b82f7be5d95105e71465944024f4268fb679cff0cbbdd28982ea5c2/ijson-3.6.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3c88c4ddccb99a4c30aa0a6adff91bcaeb7467650c0e6a50585b5f51deeb1146", size = 152035, upload-time = "2026-10-12T20:38:47.509Z" },
+    { url = "https://files.pythonhosted.org/packages/71/e9/f5320a29c955e6011a960e8cea9c57457a066c18974988a5a7d688ffe701/ijson-3.6.0-cp312-cp312-win32.whl", hash = "sha256:967318686d689286f32794e01fa11c2181e7fbf43940e016f3056f8d5643d055", size = 52666, upload-time = "2026-10-12T20:38:48.447Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/37/b4e779fe248ea1587f2166cab9cc993e1e159fda0ca8f9bc998a378f2e9a/ijson-3.6.0-cp312-cp312-win_amd64.whl", hash = "sha256:d5aceb2da334db519c5bb7be0d043f357493554bda2a480eea3e2fe78352ab0c", size = 54818, upload-time = "2026-10-12T20:38:49.329Z" },
+    { url = "https://files.pythonhosted.org/packages/74/dd/b044efbfe19669b42f1c04e6ea137fc51c6927c4826c74166485f99f1c80/ijson-3.6.0-cp312-cp312-win_arm64.whl", hash = "sha256:370ea402f105c3cf89783ad6add670a24aa03949392db5f0614420566e4914b8", size = 54007, upload-time = "2026-10-12T20:38:50.243Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/32/7b69dae1a6059acc0f7efcb29fc0c67dc3ca41844c2be5b9c084000cb05b/ijson-3.6.0-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:4333247a212d997d8b58555b135c8d28f68cf43218fadc28bf28f3ffafaae676", size = 88711, upload-time = "2026-10-12T20:38:51.12Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/90/334b244eb96332941bb7b7accbf7e151759d09638a125e2989971de62253/ijson-3.6.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:5ab7107ca09caa5af5d94a859065a168b2b56d5822db34ef93bd7b31f088039a", size = 60663, upload-time = "2026-10-12T20:38:51.989Z" },
+    { url = "https://files.pythonhosted.org/packages/85/99/822714bb2eb6d2060a55c4cde96e9beac7ce1e410ed300e026e63fcf76bc/ijson-3.6.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:fb87bee137e396e1d8c7e759bf072db5cc9b8c4e730e3b388d71cd710fa3fc11", size = 60500, upload-time = "2026-10-12T20:38:52.839Z" },
+    { url = "https://files.pythonhosted.org/packages/57/4c/ccc9199e531184a273dd40bdc6386d538d8d81eeb0cf2f1aeb9430aab889/ijson-3.6.0-cp313-cp313-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:4e9b0b97de6c1cebd501b3cc165e080d6c6309a43b5d6c3ce3e76b6c938b2ad7", size = 139167, upload-time = "2026-10-12T20:38:53.889Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/fd/711c7a403d7a06998a7a5c28adc6569621b30e4e50e905baf91cfdb9c6de/ijson-3.6.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:82683a1946b6af5084711fc1032ef64423215eb965ab4df539b683664eebe049", size = 150995, upload-time = "2026-10-12T20:38:54.92Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/7f/685e0fa8f2151dda3fec9bc1022912c0f3f1426f48abb9d66e7c88d1918a/ijson-3.6.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3cdf857bf286c5e4854eacb6434a9c1006fbc1c44c58ff79293ccaca95ec7b82", size = 150203, upload-time = "2026-10-12T20:38:56.139Z" },
+    { url = "https://files.pythonhosted.org/packages/de/5f/2a89c15efe82d3f3a2e71a39e26e2b8c9eeaea60c64825627cdd4a0de6e4/ijson-3.6.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:0dd543c0d5e5c8ec9e1570cbe805c57271b1f272e57c86794b226e2a03466cec", size = 152226, upload-time = "2026-10-12T20:38:57.043Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/ed/667189c5011d8aa9d83a1d915a3b27761fc073ca4f32ce5d05f40c21c623/ijson-3.6.0-cp313-cp313-musllinux_1_2_i686.whl", hash = "sha256:fa6a0f303792fd89bbeb2e5ff4e53ee2c5c9d59bf2bed49dcd98adf413178f4e", size = 143368, upload-time = "2026-10-12T20:38:58.056Z" },
+    { url = "https://files.pythonhosted.org/packages/08/6f/2cbef04ee0a62cb67c16a7d06d87a76c46cab5616d3210f70b44d43f81d7/ijson-3.6.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:2e19a3c7b0dc3dcaf2bda1c8033d021aec8b7e862b33e903d79b944eea96d389", size = 152532, upload-time = "2026-10-12T20:38:59.026Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/53/275d65be7a2759545c56db094631e16439304ebc53df983a971c51319396/ijson-3.6.0-cp313-cp313-win32.whl", hash = "sha256:65e65a6e28d95edafa2c99dae7f7c1a5c3403bf5bb62bc6eb919fefff5298dad", size = 52665, upload-time = "2026-10-12T20:38:59.928Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/c3/412985e2c0aae4a33dcfea4b2f6406b66cc7501d24c2ad0993152df1d9f2/ijson-3.6.0-cp313-cp313-win_amd64.whl", hash = "sha256:cf855a688dd80570e6daaa67afc84a950acf9c6ba9c3526096957614d21db1bd", size = 54816, upload-time = "2026-10-12T20:39:01.024Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/30/200e1b1a04c5f0626f8fc09e21efdcf55fb16ca6ba0d8c42b97050488ca3/ijson-3.6.0-cp313-cp313-win_arm64.whl", hash = "sha256:6a7a242aca8e03261c59290be66f428cef6b0a1b4d4a7596aa33fe113faf15f3", size = 54007, upload-time = "2026-10-12T20:39:01.912Z" },
 ]
 
 [[package]]
@@ -6030,6 +6071,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
+
+[[package]]
 name = "latex2sympy2-extended"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6292,6 +6342,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-levanter", extra = ["serve"] },
     { name = "marin-rigging", extra = ["prometheus"] },
+    { name = "marin-rolloutengine" },
     { name = "marin-zephyr" },
     { name = "markdownify" },
     { name = "mcp" },
@@ -6369,7 +6420,7 @@ dev = [
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
-    { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
+    { name = "marin-verifyit", extra = ["instructions", "math", "reasoning-gym", "schema"] },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
@@ -6416,7 +6467,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
-    { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
+    { name = "marin-verifyit", extra = ["instructions", "math", "reasoning-gym", "schema"] },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -6462,6 +6513,7 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["prometheus"], editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "markdownify", specifier = ">=0.14.1" },
     { name = "mcp", specifier = ">=2" },
@@ -6510,7 +6562,7 @@ dev = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
-    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema", "instructions"], editable = "lib/verifyit" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.2.0" },
@@ -6557,7 +6609,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
-    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema", "instructions"], editable = "lib/verifyit" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -7758,10 +7810,12 @@ dependencies = [
 [package.optional-dependencies]
 pipeline = [
     { name = "datasets" },
+    { name = "ijson" },
     { name = "marin-finestore" },
     { name = "marin-zephyr" },
     { name = "numpy" },
     { name = "pyarrow" },
+    { name = "tiktoken" },
 ]
 
 [package.dev-dependencies]
@@ -7775,6 +7829,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "ijson", marker = "extra == 'pipeline'", specifier = ">=3.3" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "lib/finestore" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
@@ -7783,6 +7838,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomlkit", specifier = ">=0.13" },
 ]
 provides-extras = ["pipeline"]
@@ -7854,12 +7910,24 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "emoji" },
+    { name = "immutabledict" },
     { name = "jsonschema" },
+    { name = "langdetect" },
     { name = "math-verify" },
+    { name = "nltk" },
     { name = "openai" },
     { name = "pyyaml" },
     { name = "reasoning-gym" },
+    { name = "syllapy" },
     { name = "sympy" },
+]
+instructions = [
+    { name = "emoji" },
+    { name = "immutabledict" },
+    { name = "langdetect" },
+    { name = "nltk" },
+    { name = "syllapy" },
 ]
 judge = [
     { name = "openai" },
@@ -7886,16 +7954,21 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "emoji", marker = "extra == 'instructions'" },
+    { name = "immutabledict", marker = "extra == 'instructions'" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "lib/verifyit" },
+    { name = "langdetect", marker = "extra == 'instructions'" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym", "instructions"], marker = "extra == 'all'", editable = "lib/verifyit" },
     { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
+    { name = "nltk", marker = "extra == 'instructions'", specifier = ">=3.9.1" },
     { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
+    { name = "syllapy", marker = "extra == 'instructions'" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
     { name = "tomli-w", specifier = ">=1.2" },
 ]
-provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "instructions", "all"]
 
 [package.metadata.requires-dev]
 test = [
@@ -12038,6 +12111,15 @@ wheels = [
 ]
 
 [[package]]
+name = "syllapy"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/0c/32605cf1126804f5422c7b3266b8e4f77fdfc561fd1cb4cbbeb69eabe281/syllapy-0.8.0.tar.gz", hash = "sha256:8dbf266909fa8b62d3c16425200326809244253532631d774d2465663c4e7436", size = 28073, upload-time = "2026-08-01T17:48:16.31Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/04/31e44d11ce517ac39b87d0746bdd492f4c80770795b9a9e10c8eea722ffb/syllapy-0.8.0-py3-none-any.whl", hash = "sha256:eea0a65665ad6c980686785af3e588cfcc8d359d5975ba67b18dea9cef6b0425", size = 24882, upload-time = "2026-08-01T17:48:14.955Z" },
+]
+
+[[package]]
 name = "sympy"
 version = "1.13.3"
 source = { registry = "https://pypi.org/simple" }
@@ -12274,6 +12356,32 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e", size = 21274, upload-time = "2025-03-13T13:49:23.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb", size = 18638, upload-time = "2025-03-13T13:49:21.846Z" },
+]
+
+[[package]]
+name = "tiktoken"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "regex" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/66/62/167a842aa0429d45f5e797354fd4343a96f6043d67d0513c675c7b8d36e6/tiktoken-0.14.0.tar.gz", hash = "sha256:231dec90efcdccf1b565a1416107736f1e09b1a08fe736ef9d6363e626d03874", size = 38898, upload-time = "2026-08-17T19:49:49.514Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/da/e273746b9d24a63c776bc60fba914351573ad9c575b52601eb5e60632564/tiktoken-0.14.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:8e947aefe98ef74cce94923f90e48c98fe34eb1ec0a6bfdfadfc5a96359bfc36", size = 1094408, upload-time = "2026-08-17T19:48:49.269Z" },
+    { url = "https://files.pythonhosted.org/packages/69/9f/fe6b1aca23331aa5271df5a4bd07bf68a7059254d47faee1b8272592a777/tiktoken-0.14.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d6cebe67765569df3dafac8474e4eccf5c19d24140492567a5e58a11445732a4", size = 1038499, upload-time = "2026-08-17T19:48:50.666Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/35/e9f47647c9e163bd1de30fe1a491669b7248cfc67b7404c35c009a701e1a/tiktoken-0.14.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:7db45b98e94adf4173a5cd7422b150999a7ee11ff847783a14f6e1b80cc38cb6", size = 1186355, upload-time = "2026-08-17T19:48:51.93Z" },
+    { url = "https://files.pythonhosted.org/packages/51/11/9976ad86980a00cdef05e730a0127a2578a1bc6d11644d8d47246de2eb26/tiktoken-0.14.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:7896eea257fe497a2b7134474d909156c6744ce8da35bce88011a960e008aa0d", size = 1204197, upload-time = "2026-08-17T19:48:53.18Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/9c/7035b0bcfaa68d1ee4803fc5be5214ad865669b05bd20e7105ae8a18afc6/tiktoken-0.14.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b950248272f1b303dc32986396e2dccfa10cf6d1e83ec8f0bba1776660305482", size = 1250635, upload-time = "2026-08-17T19:48:54.392Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/1d/69cabf18bed7f4366da076735816abce0d4db3fae491ae338a6612128777/tiktoken-0.14.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3de75343041a1c57333b1e707ac8a9769738241d7d6a55d39e12cf84548337c6", size = 1316085, upload-time = "2026-08-17T19:48:55.525Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/bd/a2e884fb1402cba5be08836590320012b2d8ada0e2eef9911a64df4bcd2d/tiktoken-0.14.0-cp312-cp312-win_amd64.whl", hash = "sha256:087538c080e5ff421abd3a0785ed63c5111d06af98e6cd0d374dbe5969147ca3", size = 941208, upload-time = "2026-08-17T19:48:56.938Z" },
+    { url = "https://files.pythonhosted.org/packages/50/53/ee1453623bf65f019328721ccb6587846d2c5b7b82f34e73ca09101f072e/tiktoken-0.14.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:e9c5fe393aab56469f04e432ff851216d3def3436cf5f07e442a240164bf500f", size = 1094198, upload-time = "2026-08-17T19:48:57.955Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/5f/6448cfe278c3664ba9ec5b5ac08344341f7dc3d42888476e215a14eda2be/tiktoken-0.14.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:cbe2cc3bba939bcdaf103e03df9d5039d33887080b315624be28ec69059e5f94", size = 1038820, upload-time = "2026-08-17T19:48:59.015Z" },
+    { url = "https://files.pythonhosted.org/packages/69/3b/d67eac1bcce9dee3abe23aff5e3ded3116bbebaf67b80a0811c06d3806fc/tiktoken-0.14.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:2157f52e4b4d7ac5ecc7457b3716834706e7ef9a46f5144029bfeb7cf71f4e06", size = 1186175, upload-time = "2026-08-17T19:49:00.068Z" },
+    { url = "https://files.pythonhosted.org/packages/37/62/cae690d9783146b0f81f564ada0f8f611de68178c0c9c7e1e969f0516b48/tiktoken-0.14.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:26e60f6a956ee171ab728b37b8439905d7ea1db435c30f9822f291e9861c861d", size = 1203884, upload-time = "2026-08-17T19:49:01.163Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/1e/633e30237b94e383cf814145499079f3bb9cdd4aeafc1bc42e01b0f810a6/tiktoken-0.14.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:380873f330b741c4435574f37edb20813d04603ace2d53e0a63560e1fec83010", size = 1250980, upload-time = "2026-08-17T19:49:02.274Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/56/4c12f07b812f84206f38d723eb1ebfdd34bad9309b5dbc0bee6bbcff4cbf/tiktoken-0.14.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:3fd7c14b1cb45b486c39fc9b3443bb341f3e2fc7e6f31247f3435a5836651632", size = 1315434, upload-time = "2026-08-17T19:49:03.434Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/e0/c65603f0c44811def666d3fbf611bf2af3b5e1ef613e06c19411419830b3/tiktoken-0.14.0-cp313-cp313-win_amd64.whl", hash = "sha256:90a762670c7f968184723769a06ed51f5cf5ce5dcd1e30164f25c72d85c2d1f1", size = 940883, upload-time = "2026-08-17T19:49:04.583Z" },
 ]
 
 [[package]]

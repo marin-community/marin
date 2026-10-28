@@ -1,0 +1,4011 @@
+{
+  "evalchemy_revision": "623134de90723e7f189036da005067f36817b6e7",
+  "source_revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
+  "source_files": {
+    "eval/chat_benchmarks/NUPA-Loose/eval_instruct.py": "69b4230b001db2c97eb8f4f1a52fd8310318fdbe6a525fb85f175aec62dcf655",
+    "eval/chat_benchmarks/NUPA-Loose/scorer.py": "34506b1baa270f3833eedb7962ec753c2425fa7a49269cec97acc6d090a3e21f",
+    "eval/chat_benchmarks/NUPA5K-Loose/panel.py": "9acc2141dbee443219f7a4f83c6396a406ed77bd4b2766196a31732b95449763"
+  },
+  "nested_source": {
+    "to_float_Fraction_none_Float": {
+      "21": [
+        "Convert to float: 1/2 = 0.5",
+        "Convert to float: 99/10 = 9.9"
+      ],
+      "1": [
+        "Convert to float: 1/1 = 1.0"
+      ]
+    },
+    "add_Integer_Integer_Integer": {
+      "3": [
+        "Add: 120 + 3 = 123",
+        "Add: 120 + 3 = 123",
+        "Add: 10 + 2 = 12",
+        "Add: 12 + 0 = 12"
+      ],
+      "4": [
+        "Add: 100 + 23 = 123",
+        "Add: 100 + 0 = 100"
+      ]
+    },
+    "truediv_Fraction_Fraction_Fraction": {
+      "2": [
+        "Divide: 1/1 / 2/1 = 1/2",
+        "Divide: 3/4 / 1/2 = 3/2"
+      ]
+    },
+    "to_scient_Integer_ScientificNotation": {
+      "61": [
+        "Scientific: 50400 = 5.04e4",
+        "Scientific: 0.000504 = 5.04e-4"
+      ],
+      "20": [
+        "Scientific: 1000 = 1.0e3"
+      ]
+    },
+    "get_digit_Integer_int": {
+      "3": [
+        "Get a digit from 123: 2 = 2",
+        "Get a digit from 123: 1 = 1"
+      ]
+    }
+  },
+  "panel_manifest": [
+    {
+      "task_name": "add_Integer_Integer_Integer",
+      "digit": 3,
+      "sha256": "1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a"
+    },
+    {
+      "task_name": "add_Integer_Integer_Integer",
+      "digit": 4,
+      "sha256": "31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6"
+    },
+    {
+      "task_name": "get_digit_Integer_int",
+      "digit": 3,
+      "sha256": "4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8"
+    },
+    {
+      "task_name": "to_float_Fraction_none_Float",
+      "digit": 1,
+      "sha256": "6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe"
+    },
+    {
+      "task_name": "to_float_Fraction_none_Float",
+      "digit": 21,
+      "sha256": "2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce"
+    },
+    {
+      "task_name": "to_scient_Integer_ScientificNotation",
+      "digit": 20,
+      "sha256": "5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60"
+    },
+    {
+      "task_name": "to_scient_Integer_ScientificNotation",
+      "digit": 61,
+      "sha256": "70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35"
+    },
+    {
+      "task_name": "truediv_Fraction_Fraction_Fraction",
+      "digit": 2,
+      "sha256": "dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3"
+    },
+    {
+      "task_name": "add_Integer_Integer_Integer",
+      "digit": 3,
+      "sha256": "1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3"
+    },
+    {
+      "task_name": "add_Integer_Integer_Integer",
+      "digit": 4,
+      "sha256": "c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b"
+    },
+    {
+      "task_name": "get_digit_Integer_int",
+      "digit": 3,
+      "sha256": "d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d"
+    },
+    {
+      "task_name": "to_float_Fraction_none_Float",
+      "digit": 21,
+      "sha256": "e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c"
+    }
+  ],
+  "cases": [
+    {
+      "name": "NUPA-Loose",
+      "records": [
+        {
+          "id": "test:to_float_Fraction_none_Float:21:000000",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 21,
+          "length_bucket": "XL",
+          "prompt": "Convert to float: 1/2 =",
+          "answer": "0.5"
+        },
+        {
+          "id": "test:to_float_Fraction_none_Float:21:000001",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 21,
+          "length_bucket": "XL",
+          "prompt": "Convert to float: 99/10 =",
+          "answer": "9.9"
+        },
+        {
+          "id": "test:to_float_Fraction_none_Float:1:000000",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 1,
+          "length_bucket": "S",
+          "prompt": "Convert to float: 1/1 =",
+          "answer": "1.0"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:3:000000",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 12 + 0 =",
+          "answer": "12"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:3:000001",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 120 + 3 =",
+          "answer": "123"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:3:000002",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 10 + 2 =",
+          "answer": "12"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:3:000003",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 120 + 3 =",
+          "answer": "123"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:4:000000",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 4,
+          "length_bucket": "S",
+          "prompt": "Add: 100 + 23 =",
+          "answer": "123"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:4:000001",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 4,
+          "length_bucket": "S",
+          "prompt": "Add: 100 + 0 =",
+          "answer": "100"
+        },
+        {
+          "id": "test:truediv_Fraction_Fraction_Fraction:2:000000",
+          "task_name": "truediv_Fraction_Fraction_Fraction",
+          "operation": "truediv",
+          "answer_format": "Fraction",
+          "digit": 2,
+          "length_bucket": "S",
+          "prompt": "Divide: 1/1 / 2/1 =",
+          "answer": "1/2"
+        },
+        {
+          "id": "test:truediv_Fraction_Fraction_Fraction:2:000001",
+          "task_name": "truediv_Fraction_Fraction_Fraction",
+          "operation": "truediv",
+          "answer_format": "Fraction",
+          "digit": 2,
+          "length_bucket": "S",
+          "prompt": "Divide: 3/4 / 1/2 =",
+          "answer": "3/2"
+        },
+        {
+          "id": "test:to_scient_Integer_ScientificNotation:61:000000",
+          "task_name": "to_scient_Integer_ScientificNotation",
+          "operation": "to_scient",
+          "answer_format": "ScientificNotation",
+          "digit": 61,
+          "length_bucket": "XL",
+          "prompt": "Scientific: 0.000504 =",
+          "answer": "5.04e-4"
+        },
+        {
+          "id": "test:to_scient_Integer_ScientificNotation:61:000001",
+          "task_name": "to_scient_Integer_ScientificNotation",
+          "operation": "to_scient",
+          "answer_format": "ScientificNotation",
+          "digit": 61,
+          "length_bucket": "XL",
+          "prompt": "Scientific: 50400 =",
+          "answer": "5.04e4"
+        },
+        {
+          "id": "test:to_scient_Integer_ScientificNotation:20:000000",
+          "task_name": "to_scient_Integer_ScientificNotation",
+          "operation": "to_scient",
+          "answer_format": "ScientificNotation",
+          "digit": 20,
+          "length_bucket": "M",
+          "prompt": "Scientific: 1000 =",
+          "answer": "1.0e3"
+        },
+        {
+          "id": "test:get_digit_Integer_int:3:000000",
+          "task_name": "get_digit_Integer_int",
+          "operation": "get_digit",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Get a digit from 123: 2 =",
+          "answer": "2"
+        },
+        {
+          "id": "test:get_digit_Integer_int:3:000001",
+          "task_name": "get_digit_Integer_int",
+          "operation": "get_digit",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Get a digit from 123: 1 =",
+          "answer": "1"
+        }
+      ],
+      "specs": [
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:21:000000",
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 1/2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:21:000000",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 21,
+            "length_bucket": "XL",
+            "prompt": "Convert to float: 1/2 =",
+            "answer": "0.5"
+          },
+          "target": "0.5",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "XL",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:21:000001",
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 99/10 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:21:000001",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 21,
+            "length_bucket": "XL",
+            "prompt": "Convert to float: 99/10 =",
+            "answer": "9.9"
+          },
+          "target": "9.9",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "XL",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:1:000000",
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 1/1 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:1:000000",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 1,
+            "length_bucket": "S",
+            "prompt": "Convert to float: 1/1 =",
+            "answer": "1.0"
+          },
+          "target": "1.0",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "S",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:000000",
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 12 + 0 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:000000",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 12 + 0 =",
+            "answer": "12"
+          },
+          "target": "12",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:000001",
+          "ordinal": 4,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 120 + 3 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:000001",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 120 + 3 =",
+            "answer": "123"
+          },
+          "target": "123",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:000002",
+          "ordinal": 5,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 10 + 2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:000002",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 10 + 2 =",
+            "answer": "12"
+          },
+          "target": "12",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:000003",
+          "ordinal": 6,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 120 + 3 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:000003",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 120 + 3 =",
+            "answer": "123"
+          },
+          "target": "123",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:4:000000",
+          "ordinal": 7,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 100 + 23 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:4:000000",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 4,
+            "length_bucket": "S",
+            "prompt": "Add: 100 + 23 =",
+            "answer": "123"
+          },
+          "target": "123",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:4:000001",
+          "ordinal": 8,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 100 + 0 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:4:000001",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 4,
+            "length_bucket": "S",
+            "prompt": "Add: 100 + 0 =",
+            "answer": "100"
+          },
+          "target": "100",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:truediv_Fraction_Fraction_Fraction:2:000000",
+          "ordinal": 9,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Divide: 1/1 / 2/1 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Fraction"
+            }
+          },
+          "doc": {
+            "id": "test:truediv_Fraction_Fraction_Fraction:2:000000",
+            "task_name": "truediv_Fraction_Fraction_Fraction",
+            "operation": "truediv",
+            "answer_format": "Fraction",
+            "digit": 2,
+            "length_bucket": "S",
+            "prompt": "Divide: 1/1 / 2/1 =",
+            "answer": "1/2"
+          },
+          "target": "1/2",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "truediv_Fraction_Fraction_Fraction",
+            "bucket": "S",
+            "task_bucket": "truediv_Fraction_Fraction_Fraction/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:truediv_Fraction_Fraction_Fraction:2:000001",
+          "ordinal": 10,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Divide: 3/4 / 1/2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Fraction"
+            }
+          },
+          "doc": {
+            "id": "test:truediv_Fraction_Fraction_Fraction:2:000001",
+            "task_name": "truediv_Fraction_Fraction_Fraction",
+            "operation": "truediv",
+            "answer_format": "Fraction",
+            "digit": 2,
+            "length_bucket": "S",
+            "prompt": "Divide: 3/4 / 1/2 =",
+            "answer": "3/2"
+          },
+          "target": "3/2",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "truediv_Fraction_Fraction_Fraction",
+            "bucket": "S",
+            "task_bucket": "truediv_Fraction_Fraction_Fraction/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_scient_Integer_ScientificNotation:61:000000",
+          "ordinal": 11,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Scientific: 0.000504 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "ScientificNotation"
+            }
+          },
+          "doc": {
+            "id": "test:to_scient_Integer_ScientificNotation:61:000000",
+            "task_name": "to_scient_Integer_ScientificNotation",
+            "operation": "to_scient",
+            "answer_format": "ScientificNotation",
+            "digit": 61,
+            "length_bucket": "XL",
+            "prompt": "Scientific: 0.000504 =",
+            "answer": "5.04e-4"
+          },
+          "target": "5.04e-4",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_scient_Integer_ScientificNotation",
+            "bucket": "XL",
+            "task_bucket": "to_scient_Integer_ScientificNotation/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_scient_Integer_ScientificNotation:61:000001",
+          "ordinal": 12,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Scientific: 50400 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "ScientificNotation"
+            }
+          },
+          "doc": {
+            "id": "test:to_scient_Integer_ScientificNotation:61:000001",
+            "task_name": "to_scient_Integer_ScientificNotation",
+            "operation": "to_scient",
+            "answer_format": "ScientificNotation",
+            "digit": 61,
+            "length_bucket": "XL",
+            "prompt": "Scientific: 50400 =",
+            "answer": "5.04e4"
+          },
+          "target": "5.04e4",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_scient_Integer_ScientificNotation",
+            "bucket": "XL",
+            "task_bucket": "to_scient_Integer_ScientificNotation/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_scient_Integer_ScientificNotation:20:000000",
+          "ordinal": 13,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Scientific: 1000 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "ScientificNotation"
+            }
+          },
+          "doc": {
+            "id": "test:to_scient_Integer_ScientificNotation:20:000000",
+            "task_name": "to_scient_Integer_ScientificNotation",
+            "operation": "to_scient",
+            "answer_format": "ScientificNotation",
+            "digit": 20,
+            "length_bucket": "M",
+            "prompt": "Scientific: 1000 =",
+            "answer": "1.0e3"
+          },
+          "target": "1.0e3",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_scient_Integer_ScientificNotation",
+            "bucket": "M",
+            "task_bucket": "to_scient_Integer_ScientificNotation/bucket:M"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:get_digit_Integer_int:3:000000",
+          "ordinal": 14,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Get a digit from 123: 2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:get_digit_Integer_int:3:000000",
+            "task_name": "get_digit_Integer_int",
+            "operation": "get_digit",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Get a digit from 123: 2 =",
+            "answer": "2"
+          },
+          "target": "2",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "get_digit_Integer_int",
+            "bucket": "S",
+            "task_bucket": "get_digit_Integer_int/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:get_digit_Integer_int:3:000001",
+          "ordinal": 15,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Get a digit from 123: 1 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:get_digit_Integer_int:3:000001",
+            "task_name": "get_digit_Integer_int",
+            "operation": "get_digit",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Get a digit from 123: 1 =",
+            "answer": "1"
+          },
+          "target": "1",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "get_digit_Integer_int",
+            "bucket": "S",
+            "task_bucket": "get_digit_Integer_int/bucket:S"
+          }
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "0.5",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "0.5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "\\boxed{0.5}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "0.5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "The answer is 0.5",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "0.5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "<|start_think|>wrong<|end_think|>0.5",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "0.5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "I think the answer is 0.5",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "9.90"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "The final answer is: 0.5",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "0.5"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "\\boxed{12}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "The answer is 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "<|start_think|>wrong<|end_think|>12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "I think the answer is 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "9"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "123"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "The final answer is: 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "1/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "\\boxed{1/2}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "The answer is 1/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "<|start_think|>wrong<|end_think|>1/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "I think the answer is 1/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "123/456"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "response": "The final answer is: 1/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "\\boxed{5.04e-4}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "The answer is 5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "<|start_think|>wrong<|end_think|>5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "I think the answer is 5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 1.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e04"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 4.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "response": "The final answer is: 5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "NUPA5K-Loose",
+      "records": [
+        {
+          "id": "test:add_Integer_Integer_Integer:3:1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 12 + 0 =",
+          "answer": "12",
+          "source_sha256": "1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:4:31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 4,
+          "length_bucket": "S",
+          "prompt": "Add: 100 + 0 =",
+          "answer": "100",
+          "source_sha256": "31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6"
+        },
+        {
+          "id": "test:get_digit_Integer_int:3:4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8",
+          "task_name": "get_digit_Integer_int",
+          "operation": "get_digit",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Get a digit from 123: 1 =",
+          "answer": "1",
+          "source_sha256": "4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8"
+        },
+        {
+          "id": "test:to_float_Fraction_none_Float:1:6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 1,
+          "length_bucket": "S",
+          "prompt": "Convert to float: 1/1 =",
+          "answer": "1.0",
+          "source_sha256": "6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe"
+        },
+        {
+          "id": "test:to_float_Fraction_none_Float:21:2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 21,
+          "length_bucket": "XL",
+          "prompt": "Convert to float: 1/2 =",
+          "answer": "0.5",
+          "source_sha256": "2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce"
+        },
+        {
+          "id": "test:to_scient_Integer_ScientificNotation:20:5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60",
+          "task_name": "to_scient_Integer_ScientificNotation",
+          "operation": "to_scient",
+          "answer_format": "ScientificNotation",
+          "digit": 20,
+          "length_bucket": "M",
+          "prompt": "Scientific: 1000 =",
+          "answer": "1.0e3",
+          "source_sha256": "5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60"
+        },
+        {
+          "id": "test:to_scient_Integer_ScientificNotation:61:70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35",
+          "task_name": "to_scient_Integer_ScientificNotation",
+          "operation": "to_scient",
+          "answer_format": "ScientificNotation",
+          "digit": 61,
+          "length_bucket": "XL",
+          "prompt": "Scientific: 0.000504 =",
+          "answer": "5.04e-4",
+          "source_sha256": "70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35"
+        },
+        {
+          "id": "test:truediv_Fraction_Fraction_Fraction:2:dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3",
+          "task_name": "truediv_Fraction_Fraction_Fraction",
+          "operation": "truediv",
+          "answer_format": "Fraction",
+          "digit": 2,
+          "length_bucket": "S",
+          "prompt": "Divide: 3/4 / 1/2 =",
+          "answer": "3/2",
+          "source_sha256": "dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:3:1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Add: 120 + 3 =",
+          "answer": "123",
+          "source_sha256": "1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3"
+        },
+        {
+          "id": "test:add_Integer_Integer_Integer:4:c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b",
+          "task_name": "add_Integer_Integer_Integer",
+          "operation": "add",
+          "answer_format": "Integer",
+          "digit": 4,
+          "length_bucket": "S",
+          "prompt": "Add: 100 + 23 =",
+          "answer": "123",
+          "source_sha256": "c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b"
+        },
+        {
+          "id": "test:get_digit_Integer_int:3:d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d",
+          "task_name": "get_digit_Integer_int",
+          "operation": "get_digit",
+          "answer_format": "Integer",
+          "digit": 3,
+          "length_bucket": "S",
+          "prompt": "Get a digit from 123: 2 =",
+          "answer": "2",
+          "source_sha256": "d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d"
+        },
+        {
+          "id": "test:to_float_Fraction_none_Float:21:e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c",
+          "task_name": "to_float_Fraction_none_Float",
+          "operation": "to_float",
+          "answer_format": "Float",
+          "digit": 21,
+          "length_bucket": "XL",
+          "prompt": "Convert to float: 99/10 =",
+          "answer": "9.9",
+          "source_sha256": "e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c"
+        }
+      ],
+      "specs": [
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a",
+          "ordinal": 0,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 12 + 0 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 12 + 0 =",
+            "answer": "12",
+            "source_sha256": "1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a"
+          },
+          "target": "12",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:4:31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6",
+          "ordinal": 1,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 100 + 0 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:4:31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 4,
+            "length_bucket": "S",
+            "prompt": "Add: 100 + 0 =",
+            "answer": "100",
+            "source_sha256": "31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6"
+          },
+          "target": "100",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:get_digit_Integer_int:3:4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8",
+          "ordinal": 2,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Get a digit from 123: 1 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:get_digit_Integer_int:3:4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8",
+            "task_name": "get_digit_Integer_int",
+            "operation": "get_digit",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Get a digit from 123: 1 =",
+            "answer": "1",
+            "source_sha256": "4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8"
+          },
+          "target": "1",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "get_digit_Integer_int",
+            "bucket": "S",
+            "task_bucket": "get_digit_Integer_int/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:1:6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe",
+          "ordinal": 3,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 1/1 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:1:6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 1,
+            "length_bucket": "S",
+            "prompt": "Convert to float: 1/1 =",
+            "answer": "1.0",
+            "source_sha256": "6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe"
+          },
+          "target": "1.0",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "S",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:21:2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce",
+          "ordinal": 4,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 1/2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:21:2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 21,
+            "length_bucket": "XL",
+            "prompt": "Convert to float: 1/2 =",
+            "answer": "0.5",
+            "source_sha256": "2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce"
+          },
+          "target": "0.5",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "XL",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_scient_Integer_ScientificNotation:20:5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60",
+          "ordinal": 5,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Scientific: 1000 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "ScientificNotation"
+            }
+          },
+          "doc": {
+            "id": "test:to_scient_Integer_ScientificNotation:20:5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60",
+            "task_name": "to_scient_Integer_ScientificNotation",
+            "operation": "to_scient",
+            "answer_format": "ScientificNotation",
+            "digit": 20,
+            "length_bucket": "M",
+            "prompt": "Scientific: 1000 =",
+            "answer": "1.0e3",
+            "source_sha256": "5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60"
+          },
+          "target": "1.0e3",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_scient_Integer_ScientificNotation",
+            "bucket": "M",
+            "task_bucket": "to_scient_Integer_ScientificNotation/bucket:M"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_scient_Integer_ScientificNotation:61:70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35",
+          "ordinal": 6,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Scientific: 0.000504 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "ScientificNotation"
+            }
+          },
+          "doc": {
+            "id": "test:to_scient_Integer_ScientificNotation:61:70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35",
+            "task_name": "to_scient_Integer_ScientificNotation",
+            "operation": "to_scient",
+            "answer_format": "ScientificNotation",
+            "digit": 61,
+            "length_bucket": "XL",
+            "prompt": "Scientific: 0.000504 =",
+            "answer": "5.04e-4",
+            "source_sha256": "70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35"
+          },
+          "target": "5.04e-4",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_scient_Integer_ScientificNotation",
+            "bucket": "XL",
+            "task_bucket": "to_scient_Integer_ScientificNotation/bucket:XL"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:truediv_Fraction_Fraction_Fraction:2:dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3",
+          "ordinal": 7,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Divide: 3/4 / 1/2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Fraction"
+            }
+          },
+          "doc": {
+            "id": "test:truediv_Fraction_Fraction_Fraction:2:dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3",
+            "task_name": "truediv_Fraction_Fraction_Fraction",
+            "operation": "truediv",
+            "answer_format": "Fraction",
+            "digit": 2,
+            "length_bucket": "S",
+            "prompt": "Divide: 3/4 / 1/2 =",
+            "answer": "3/2",
+            "source_sha256": "dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3"
+          },
+          "target": "3/2",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "truediv_Fraction_Fraction_Fraction",
+            "bucket": "S",
+            "task_bucket": "truediv_Fraction_Fraction_Fraction/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:3:1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3",
+          "ordinal": 8,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 120 + 3 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:3:1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Add: 120 + 3 =",
+            "answer": "123",
+            "source_sha256": "1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3"
+          },
+          "target": "123",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:add_Integer_Integer_Integer:4:c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b",
+          "ordinal": 9,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Add: 100 + 23 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:add_Integer_Integer_Integer:4:c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b",
+            "task_name": "add_Integer_Integer_Integer",
+            "operation": "add",
+            "answer_format": "Integer",
+            "digit": 4,
+            "length_bucket": "S",
+            "prompt": "Add: 100 + 23 =",
+            "answer": "123",
+            "source_sha256": "c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b"
+          },
+          "target": "123",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "add_Integer_Integer_Integer",
+            "bucket": "S",
+            "task_bucket": "add_Integer_Integer_Integer/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:get_digit_Integer_int:3:d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d",
+          "ordinal": 10,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Get a digit from 123: 2 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Integer"
+            }
+          },
+          "doc": {
+            "id": "test:get_digit_Integer_int:3:d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d",
+            "task_name": "get_digit_Integer_int",
+            "operation": "get_digit",
+            "answer_format": "Integer",
+            "digit": 3,
+            "length_bucket": "S",
+            "prompt": "Get a digit from 123: 2 =",
+            "answer": "2",
+            "source_sha256": "d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d"
+          },
+          "target": "2",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "get_digit_Integer_int",
+            "bucket": "S",
+            "task_bucket": "get_digit_Integer_int/bucket:S"
+          }
+        },
+        {
+          "task": "NUPA5K-Loose",
+          "source": {
+            "dataset": "HaotongYang/NUPA_text",
+            "split": "test",
+            "revision": "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
+          },
+          "source_id": "test:to_float_Fraction_none_Float:21:e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c",
+          "ordinal": 11,
+          "requests": [
+            {
+              "kind": "generate_until",
+              "prompt": [
+                {
+                  "role": "user",
+                  "content": "Convert to float: 99/10 ="
+                }
+              ],
+              "generation": {
+                "do_sample": false,
+                "temperature": 0.0,
+                "max_gen_toks": 256
+              },
+              "continuation": null,
+              "previous_turn": null,
+              "context_length": null,
+              "chat_template": {},
+              "metadata": {
+                "source_do_sample": false
+              },
+              "prompt_format": null,
+              "output_token_cap": null
+            }
+          ],
+          "grader": {
+            "name": "nupa",
+            "reference": {
+              "format": "Float"
+            }
+          },
+          "doc": {
+            "id": "test:to_float_Fraction_none_Float:21:e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c",
+            "task_name": "to_float_Fraction_none_Float",
+            "operation": "to_float",
+            "answer_format": "Float",
+            "digit": 21,
+            "length_bucket": "XL",
+            "prompt": "Convert to float: 99/10 =",
+            "answer": "9.9",
+            "source_sha256": "e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c"
+          },
+          "target": "9.9",
+          "namespace": "default",
+          "trial": null,
+          "tags": {
+            "task": "to_float_Fraction_none_Float",
+            "bucket": "XL",
+            "task_bucket": "to_float_Fraction_none_Float/bucket:XL"
+          }
+        }
+      ],
+      "grades": [
+        {
+          "ordinal": 0,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "\\boxed{12}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "The answer is 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "<|start_think|>wrong<|end_think|>12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "I think the answer is 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "9"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "123"
+            ]
+          }
+        },
+        {
+          "ordinal": 0,
+          "response": "The final answer is: 12",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "12"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "1.0",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "\\boxed{1.0}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "The answer is 1.0",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "<|start_think|>wrong<|end_think|>1.0",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "I think the answer is 1.0",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "9.90"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.5,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.5,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "response": "The final answer is: 1.0",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 3.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "1.0e3",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0e3"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "\\boxed{1.0e3}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0e3"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "The answer is 1.0e3",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0e3"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "<|start_think|>wrong<|end_think|>1.0e3",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0e3"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "I think the answer is 1.0e3",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 3.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 3.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 3.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.3333333333333333,
+              "dlength": 2.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e04"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.3333333333333333,
+              "dlength": 1.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "5.04e4"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 3.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "response": "The final answer is: 1.0e3",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "1.0e3"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "3/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "3/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "\\boxed{3/2}",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "3/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "The answer is 3/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "3/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "<|start_think|>wrong<|end_think|>3/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "3/2"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "I think the answer is 3/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "1,234",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "9.90",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "5.04E+04",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "5.04e-4",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.0,
+              "dlength": 2.0,
+              "format_valid_rate": 0.0,
+              "no_answer_rate": 1.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              null
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "123/456",
+          "grade": {
+            "metrics": {
+              "exact_match": 0.0,
+              "digit_match": 0.5,
+              "dlength": 4.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "123/456"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "response": "The final answer is: 3/2",
+          "grade": {
+            "metrics": {
+              "exact_match": 1.0,
+              "digit_match": 1.0,
+              "dlength": 0.0,
+              "format_valid_rate": 1.0,
+              "no_answer_rate": 0.0
+            },
+            "audit": {},
+            "weights": {},
+            "reducer_inputs": {},
+            "sample_metrics": null,
+            "filtered_resps": [
+              "3/2"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

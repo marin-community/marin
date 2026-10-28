@@ -470,6 +470,9 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    # Canonical upstream instruction checkers; wrappers remain checked.
+    "lib/verifyit/src/verifyit/adapters/ifeval/**",
+    "lib/verifyit/src/verifyit/adapters/ifbench/**",
     "vendor/skyrl/**",
     "vendor/evalchemy/**",
     "vendor/harbor/**",

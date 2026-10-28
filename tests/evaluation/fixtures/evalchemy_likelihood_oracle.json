@@ -1,0 +1,199 @@
+{
+  "source": "lm-evaluation-harness v0.4.12 installed in pinned Evalchemy environment",
+  "files": {
+    "model.py": "4b98863889c17ffa7a7d391e83264fde0aa76f6883ef2e863065728b126508f8",
+    "openai_completions.py": "317c1d2dd8ee443cae57d1ff182251b3302de3638f1a655fab19eb9f84eb20a4"
+  },
+  "vocabulary": {
+    "Context": [
+      10
+    ],
+    "Context answer": [
+      10,
+      20
+    ],
+    "Context \tanswer": [
+      10,
+      31,
+      32
+    ],
+    "café": [
+      40
+    ],
+    "café naïve": [
+      40,
+      41
+    ],
+    "answer": [
+      20
+    ],
+    "Long context": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "Long context answer": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      20
+    ]
+  },
+  "context_size": 4,
+  "prefix_token_id": 99,
+  "pair_cases": [
+    {
+      "context": "Context ",
+      "continuation": "answer",
+      "prefix": [
+        10
+      ],
+      "target": [
+        20
+      ],
+      "prompt_ids": [
+        10,
+        20
+      ],
+      "context_tokens": 1
+    },
+    {
+      "context": "Context \t",
+      "continuation": "answer",
+      "prefix": [
+        10
+      ],
+      "target": [
+        31,
+        32
+      ],
+      "prompt_ids": [
+        10,
+        31,
+        32
+      ],
+      "context_tokens": 1
+    },
+    {
+      "context": "café ",
+      "continuation": "naïve",
+      "prefix": [
+        40
+      ],
+      "target": [
+        41
+      ],
+      "prompt_ids": [
+        40,
+        41
+      ],
+      "context_tokens": 1
+    },
+    {
+      "context": "",
+      "continuation": "answer",
+      "prefix": [
+        99
+      ],
+      "target": [
+        20
+      ],
+      "prompt_ids": [
+        99,
+        20
+      ],
+      "context_tokens": 1
+    },
+    {
+      "context": "Long context ",
+      "continuation": "answer",
+      "prefix": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "target": [
+        20
+      ],
+      "prompt_ids": [
+        4,
+        5,
+        20
+      ],
+      "context_tokens": 2
+    }
+  ],
+  "score_cases": [
+    {
+      "response": {
+        "choices": [
+          {
+            "index": 0,
+            "logprobs": {
+              "token_logprobs": [
+                null,
+                -0.2,
+                -0.7,
+                -50.0
+              ],
+              "top_logprobs": [
+                null,
+                {
+                  "x": -0.2
+                },
+                {
+                  "y": -0.1
+                },
+                {
+                  "z": -50.0
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "context_tokens": 1,
+      "result": [
+        -0.8999999999999999,
+        false
+      ]
+    },
+    {
+      "response": {
+        "choices": [
+          {
+            "index": 0,
+            "logprobs": {
+              "token_logprobs": [
+                null,
+                -0.2,
+                -0.2
+              ],
+              "top_logprobs": [
+                null,
+                {
+                  "x": -0.2,
+                  "y": -0.2
+                },
+                {
+                  "z": -0.2
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "context_tokens": 1,
+      "result": [
+        -0.2,
+        true
+      ]
+    }
+  ]
+}
