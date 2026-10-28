@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from collections.abc import Awaitable, Callable
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
@@ -152,6 +153,8 @@ async def _render_chat_prompt(
     tokenize: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
     render_request: dict[str, Any],
     continuation: ChatContinuation | None,
+    *,
+    decode: Callable[[list[int]], str],
 ) -> tuple[list[dict[str, Any]], list[int]]:
     async def render(request: dict[str, Any], current_continuation: ChatContinuation | None) -> list[int] | None:
         if current_continuation is None:
@@ -159,6 +162,7 @@ async def _render_chat_prompt(
         return await render_exact_chat_continuation(
             tokenize,
             request,
+            decode=decode,
             assistant_message_index=current_continuation["assistant_message_index"],
             served_prefix_token_ids=current_continuation["served_prefix_token_ids"],
         )
@@ -302,7 +306,16 @@ class DirectModelClient:
                 "headers": {},
             }
             with rollout_phase("tokenize"):
-                messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
+                messages, prompt_ids = await _render_chat_prompt(
+                    self._client.tokenize,
+                    render_request,
+                    continuation,
+                    decode=partial(
+                        self._client.tokenizer.decode,
+                        skip_special_tokens=False,
+                        clean_up_tokenization_spaces=False,
+                    ),
+                )
             requested_tokens = (
                 [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
             )

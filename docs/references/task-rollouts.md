@@ -593,6 +593,10 @@ The model callable accepts `ModelRequest` and returns `ModelTurn` with a parsed 
 `ModelRequest.messages` contains public messages. After the first turn, `ModelRequest.continuation` holds the
 earlier served tokens, which the next prompt must keep unchanged, and the index of the assistant message where
 they end. The transport tokenizes only the messages after that index and appends their tokens.
+Before those tokens, SkyRL's transport appends whatever the served tokens lack of the closer that the template
+renders for a content-only assistant turn, plus any whitespace the template renders after that closer. It searches
+for that closer only within the current assistant turn, after the shared history and header. It rejects the
+continuation when the turn lacks the closer or when anything other than whitespace follows it.
 If `Prompt.token_ids` or the `token_ids` of `reply` is set, `ModelRequest.prompt_token_ids` carries that exact
 prompt to the model transport, and the request has no continuation. The returned turn must report the same
 prompt tokens. Under `TraceMode.EXACT_TOKENS`, the pinned tokens of a `reply` must start with the served
