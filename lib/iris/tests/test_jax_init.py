@@ -26,8 +26,9 @@ from iris.env_resources import _read_iris_resource_proto
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.jax.init import initialize_jax, resolve_coordinator_port
 
-INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
-RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
+JOB_ENDPOINT_NAME = f"jax_coordinator-{JobName.from_string('/testuser/testjob').to_safe_token()}"
+INITIAL_ATTEMPT_ENDPOINT_NAME = f"{JOB_ENDPOINT_NAME}-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = f"{JOB_ENDPOINT_NAME}-attempt-3"
 
 
 @dataclass
@@ -244,6 +245,52 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert jax_args == ("10.0.0.9:8476", 16, 9)
     assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+
+
+@pytest.mark.parametrize("supervised", [True, False], ids=["supervised", "multitask"])
+@patch("jax.distributed.initialize")
+@patch("iris.jax.init.iris_ctx")
+@patch("iris.jax.init.get_job_info")
+def test_initialize_jax_isolates_sibling_jobs_and_retries(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    supervised: bool,
+) -> None:
+    worlds = [("train-a", 0, 12001), ("train-b", 0, 12002), ("train-a", 3, 12003)]
+    context = FakeContext()
+    mock_iris_ctx.return_value = context
+    if supervised:
+        monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "2")
+        monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+        monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+    else:
+        monkeypatch.delenv("IRIS_MULTIGPU_PROCESS_COUNT", raising=False)
+
+    for child, attempt, port in worlds:
+        info = _make_job_info(num_tasks=1 if supervised else 2, attempt_id=attempt)
+        info.task_id = JobName.from_string(f"/testuser/root/{child}/0")
+        info.ports = {"jax": port}
+        mock_get_job_info.return_value = info
+        initialize_jax()
+
+    for name, address in context.registry.registered:
+        context.resolver.results_by_name[name] = ResolveResult(
+            name=name, endpoints=[ResolvedEndpoint(url=address, actor_id=address)]
+        )
+
+    if supervised:
+        monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "1")
+        monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "1")
+    for child, attempt, port in worlds:
+        task_index = 0 if supervised else 1
+        info = _make_job_info(num_tasks=1 if supervised else 2, attempt_id=attempt)
+        info.task_id = JobName.from_string(f"/testuser/root/{child}/{task_index}")
+        mock_get_job_info.return_value = info
+        initialize_jax()
+        jax_args, _ = mock_jax_init.call_args
+        assert jax_args == (f"10.0.0.1:{port}", 2, 1)
 
 
 @pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
