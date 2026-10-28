@@ -21,7 +21,7 @@ from mariner.evaluate import heldout_metrics
 from mariner.fit import final_inner_folds, fit_objective, fit_task
 from mariner.optimize import propose
 
-# Agreed tolerances. The released Qwen3 fit used epoch multipliers a relative 5.0e-7 above the dataset's exact
+# The released Qwen3 fit used epoch multipliers a relative 5.0e-7 above the dataset's exact
 # D_tgt / P_i, which is the whole gap; the archived swarms were refitted on the dataset's own multipliers.
 PREDICTION_TOLERANCE = 1e-6
 MAIN_SWARM_TOLERANCES = {"nu": 1e-5, "phi": 2.5e-6, "inner_cv_rmse": 2e-8}

@@ -117,6 +117,12 @@ def design_matrix(exposures: np.ndarray, shape: Shape) -> np.ndarray:
 
 @dataclasses.dataclass(frozen=True)
 class Head:
+    """A task's fitted head, which predicts ``phi + exp(intercept + matrix @ coefficients)``.
+
+    The coefficients are the benefit amplitudes alpha_t and then the harm amplitudes beta_t, on the columns of
+    ``design_matrix``. The linear predictor is clipped at -30 and 30 before the exponential.
+    """
+
     intercept: float
     coefficients: np.ndarray
     phi: float
@@ -128,6 +134,12 @@ class Head:
 
 @dataclasses.dataclass(frozen=True)
 class TaskFit:
+    """One task's fit: its response shape, ridge weight ``gamma``, floor multiplier ``nu`` and head.
+
+    ``flat_profile`` is true when the search on log ``nu`` ended within 10% of its upper bound, so that ``nu`` took
+    the default 1.5. ``inner_cv_rmse`` is the inner cross-validation RMSE in BPB at the final ``nu``.
+    """
+
     task: str
     shape: Shape
     gamma: float
@@ -168,6 +180,12 @@ class TaskFit:
 
 @dataclasses.dataclass(frozen=True)
 class ObjectiveFit:
+    """A fitted objective: one ``TaskFit`` per task, summed with the objective's evaluation weights.
+
+    It predicts at mixtures over ``buckets``, in that order, at the epochs per unit weight of the swarm it was fitted
+    on, and it records the inner fold that validated each of that swarm's runs.
+    """
+
     objective: str
     buckets: tuple[str, ...]
     epochs_per_unit_weight: np.ndarray

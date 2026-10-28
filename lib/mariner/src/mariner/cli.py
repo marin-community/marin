@@ -69,7 +69,9 @@ from mariner.model import Anchor, Objective, ObjectiveFit, Swarm, check_buckets
 
 logger = logging.getLogger(__name__)
 
-PREDICTION_TOLERANCE = 1e-6  # agreed: the refit's predictions against the released ones, in BPB
+# BPB: the released fits used epoch multipliers a relative 5.0e-7 above D_tgt / P_i, which moves their
+# predictions by up to 3.0e-7.
+PREDICTION_TOLERANCE = 1e-6
 EXACT = 0.0  # buckets in which a re-derived mixture may differ from the trained one
 EPOCHS_TOLERANCE = 1e-12  # relative: one partition and target budget give the same epochs up to floating rounding
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket

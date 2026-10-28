@@ -53,6 +53,12 @@ def require_cvxpy() -> None:
 
 @dataclasses.dataclass(frozen=True)
 class LogLinearLaw:
+    """A task's Olmix law, which predicts ``exp(log_c) + exp(w @ coefficients)`` at weights ``w``.
+
+    ``huber_loss`` is the fit's Huber loss over the runs it was fitted on. ``predict`` clips both exponents at -50
+    and 50.
+    """
+
     log_c: float
     coefficients: np.ndarray
     huber_loss: float
@@ -76,6 +82,17 @@ def fit_log_linear(
     seed: int = FIT_SEED,
     starts: int = FIT_STARTS,
 ) -> LogLinearLaw:
+    """The log-linear law of ``targets`` at ``weights`` with the least Huber loss (``delta``), by multistart L-BFGS-B.
+
+    The starts take six values of ``log_c``, evenly spaced from log(max(min(y) / 4, 1e-3)) to log(max(median(y),
+    1e-3)), each with zero coefficients and with ``starts // 6 - 1`` draws of standard normal coefficients from a
+    generator seeded with ``seed``. The fit with the least loss wins; a start whose optimizer reports failure counts
+    only while no fit has been kept.
+
+    Raises:
+        ValueError: If a target is not positive.
+        RuntimeError: If no start reaches a finite loss.
+    """
     x = np.asarray(weights, dtype=float)
     y = np.asarray(targets, dtype=float)
     if np.any(y <= 0.0):
@@ -116,8 +133,16 @@ def fit_laws(swarm: Swarm, objective: Objective, delta: float = HUBER_DELTA) -> 
 def exact_proposal(
     laws: Sequence[LogLinearLaw], task_weights: np.ndarray, natural: np.ndarray, caps: np.ndarray, kl_reg: float
 ) -> tuple[np.ndarray, float, str]:
-    """Olmix's exact proposer: minimize the weighted mean prediction plus kl_reg * KL(w || natural) on the
-    capped simplex."""
+    """Olmix's exact proposer: the weights that minimize the laws' weighted prediction plus kl_reg * KL(w || natural).
+
+    The weights range over the simplex with each at most its cap, and the solvers are tried in ``SOLVERS`` order.
+    Returns the solution, clipped at zero and renormalized, the weighted prediction at it without the KL term, and
+    ``"<solver>:<status>"``.
+
+    Raises:
+        ImportError: If cvxpy, which the olmix extra installs, does not import.
+        RuntimeError: If no solver converges.
+    """
     try:
         import cvxpy as cp  # noqa: PLC0415  (optional dependency: the olmix extra)
     except ImportError as error:

@@ -19,7 +19,9 @@ from mariner.data import (
 )
 from mariner.olmix import LogLinearLaw, OlmixProposal, fit_laws, propose
 
-LAW_TOLERANCE = 1e-9  # agreed: refitted laws against fits_olmix_task_laws
+# The refit repeats the released laws' fit on the same runs (measured gap 0); the margin is for floating-point
+# differences between platforms.
+LAW_TOLERANCE = 1e-9
 
 
 def matched_proposal(snapshot: Path, objective: str, laws: Sequence[LogLinearLaw]) -> OlmixProposal:

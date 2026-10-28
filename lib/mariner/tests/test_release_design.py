@@ -6,7 +6,7 @@ import pytest
 from mariner.data import PAPER_TARGET_BUDGET, SWARMS, WEIGHT_PREFIX, read_table, release_partition
 from mariner.design import proportional, removals, stratified, unimax
 
-BASELINE_TOLERANCE = 1e-15  # agreed: the designed baselines against the released rows; the largest gap is 5.8e-16
+BASELINE_TOLERANCE = 1e-15  # rounding: the designs repeat the released rows' arithmetic, 5.8e-16 apart at most
 UNIMAX_BUDGET_FRACTION = 0.8
 UNIMAX_MAX_EPOCHS = 1.0
 

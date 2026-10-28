@@ -40,8 +40,10 @@ FRESH_SEED = 7
 FRESH_MIXTURES = 20
 MIXTURE_COLUMNS = ["bucket", "continuous_weight", "runtime_count", "runtime_weight", "materialized_epochs"]
 UNCHEATABLE_HELDOUT_EXPOSURES = 408
-LAW_TOLERANCE = 1e-9  # agreed: refitted Olmix laws against fits_olmix_task_laws
-BASELINE_TOLERANCE = 1e-15  # agreed: designed baselines against the released rows
+# The refit repeats the released laws' fit on the same runs (measured gap 0); the margin is for floating-point
+# differences between platforms.
+LAW_TOLERANCE = 1e-9
+BASELINE_TOLERANCE = 1e-15  # rounding: the designs repeat the released rows' arithmetic, 5.8e-16 apart at most
 BASELINES = ["baseline_proportional", "baseline_unimax", "baseline_stratified"]
 
 

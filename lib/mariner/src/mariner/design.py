@@ -10,8 +10,8 @@ repeats are not fit rows; they anchor the floors. The paper's D-optimal selectio
 recipe, so every candidate is a run. After training, one adds ``observation_id`` and the ``bpb__<task_id>`` outcomes,
 and ``mariner.data.swarm_from_runs`` reads the table.
 
-The candidates port the research code's ``sobol_weight_configs`` for one phase, and UniMax its
-``compute_unimax_weights`` (both in ``experiments/domain_phase_mix``).
+The candidates port ``sobol_weight_configs`` for one phase, and UniMax ``compute_unimax_weights``, from the
+research code on the ``calvin/swarm-olmo3-regmix-test`` branch of marin-community/marin.
 """
 
 from __future__ import annotations
@@ -65,7 +65,8 @@ def sobol_mixtures(n_buckets: int, seed: int, min_weight: float) -> Iterator[np.
     A point ``u`` becomes ``-log(u)`` normalized to sum to one, with weights below ``min_weight`` set to zero and the
     rest renormalized (the uniform mixture when every weight is below it).
     """
-    # seed=<int> seeds NumPy's legacy RandomState; rng=<int> would seed a Generator and draw a different sequence.
+    # seed=<int> draws from default_rng(<int>) itself; rng=<int> would spawn a child of that generator first and
+    # draw another sequence.
     sobol = qmc.Sobol(d=n_buckets, scramble=True, seed=seed)
     exponent = FIRST_BLOCK_EXPONENT
     drawn = 0

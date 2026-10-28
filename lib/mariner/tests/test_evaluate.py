@@ -25,7 +25,8 @@ PERTURBED_RUN = 7
 # repeat's pooled out-of-fold predictions. Uncheatable takes about 65 s; OlmoBaseEval Easy, about 8 minutes.
 TABLE_10_MODEL = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
 TABLE_10_OBJECTIVE = "uncheatable"
-TABLE_10_TOLERANCE = 1e-6  # the plan's prediction tolerance
+# The prediction tolerance: the metrics are computed from predictions that match the research fit's within it.
+TABLE_10_TOLERANCE = 1e-6
 TABLE_10_COLUMNS = {  # selection_metrics key -> fits_surrogate_benchmark column
     "rmse": "rmse",
     "spearman": "spearman",
