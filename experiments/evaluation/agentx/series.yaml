@@ -50,4 +50,4 @@ profiles:
     memory: "768GB"
     disk: "1TB"
     cluster: "cw-rno2a"
-    concurrencies: [8, 32]
+    concurrencies: [32, 64]
