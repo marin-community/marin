@@ -77,6 +77,15 @@ def test_heldout_bank_rejects_an_exposure_whose_runs_differ(release_snapshot, ch
         heldout_bank(runs, release_partition(release_snapshot), objective)
 
 
+@pytest.mark.parametrize("blank", [math.nan, "", " "], ids=["missing", "empty", "whitespace"])
+def test_heldout_bank_rejects_a_run_without_an_exposure_id(release_snapshot, blank):
+    runs = read_table(release_snapshot, "heldout")
+    runs.loc[runs["observation_id"] == "h3", "exposure_id"] = blank
+    objective = objective_from_tasks(release_tasks(release_snapshot), "obe_easy")
+    with pytest.raises(ValueError, match="exposure_id"):
+        heldout_bank(runs, release_partition(release_snapshot), objective)
+
+
 def first_row_set(runs: pd.DataFrame, column: str, value: float) -> pd.DataFrame:
     """``runs`` with ``column`` set to ``value`` in its first row, the fit row fit_00."""
     changed = runs.copy()

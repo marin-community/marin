@@ -354,9 +354,10 @@ def anchors_from_runs(swarm: Swarm, runs: pd.DataFrame, task_ids: Sequence[str])
 def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective) -> HeldoutBank:
     """Held-out runs as a bank of exposures, in order of first appearance.
 
-    The runs that share an ``exposure_id`` (each run alone when the table has no such column) form one exposure, and
-    must share their weights and pool fractions within 1e-12. An exposure's measured value of a task is the mean over
-    its runs that have one, NaN when none has. Its measured objective is the mean of its runs'
+    The runs that share an ``exposure_id`` (each run alone, by its ``observation_id``, when the table has no such
+    column) form one exposure, and must share their weights and pool fractions within 1e-12. No run may leave that key
+    blank (missing, empty or only whitespace). An exposure's measured value of a task is the mean over its runs that
+    have one, NaN when none has. Its measured objective is the mean of its runs'
     ``bpb__<objective name>`` when the table has that column, which can record the objective for a run without
     per-task values; otherwise it is the task means weighted by the objective.
     """
@@ -366,8 +367,11 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
     require_columns(runs, columns, HELDOUT_TABLE)
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
-    if keys.isna().any():
-        raise ValueError(f"{keys.isna().sum()} of {len(runs)} runs have no {keys.name}")
+    blank = blank_identifier_mask(keys)
+    if blank.any():
+        raise ValueError(
+            f"{blank.sum()} of {len(runs)} runs have no {keys.name}; an identifier must not be empty or whitespace"
+        )
     exposure, _ = pd.factorize(keys)  # each run's exposure, numbered in order of first appearance
     first = keys.drop_duplicates().index.to_numpy()
     deviation = np.maximum(
