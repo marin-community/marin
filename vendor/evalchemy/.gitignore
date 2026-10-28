@@ -14,3 +14,6 @@
 !/tests/graders/data/humaneval_grader_benchmark.jsonl
 !/tests/graders/data/math_grader_benchmark.jsonl
 !/tests/contracts/fixtures/hf-other/**/*.jsonl
+
+# NLTK data that IFBench's checkers download when first imported.
+/eval/chat_benchmarks/IFBench/.nltk_data/
