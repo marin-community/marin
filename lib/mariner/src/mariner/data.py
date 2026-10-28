@@ -25,6 +25,7 @@ import pandas as pd
 
 from mariner.evaluate import HeldoutBank
 from mariner.model import Anchor, Objective, Swarm
+from mariner.olmix import LogLinearLaw
 from mariner.optimize import MIXTURE_BLOCK_SIZE
 
 DATASET_REPO = "marin-community/mariner-data"  # the published location; check at publication
@@ -37,6 +38,9 @@ REPEAT = "repeat"
 JUNE_RUN_FLOPS = 3e18
 JUNE_RUN_OBJECTIVE = "uncheatable"  # the one objective whose main-swarm anchors include the June run
 TRAINED_MARINER = {"uncheatable": "mix_4c2c8b25f9e6d5ca", "obe_easy": "mix_dcbcb8cd4cfc72df"}
+# The matched Olmix mixture trained for each objective, with the KL weight that proposed it under the epoch cap.
+TRAINED_OLMIX = {"uncheatable": ("mix_645a3bf43226a443", 0.05), "obe_easy": ("mix_40fb2116404045a4", 0.005)}
+OLMIX_CAP = 4.0
 
 MANIFEST = "MANIFEST.json"
 OBSERVATION_ID = "observation_id"
@@ -44,6 +48,7 @@ EXPOSURE_ID = "exposure_id"
 WEIGHT_PREFIX = "w__"
 POOL_FRACTION_PREFIX = "pf__"
 OUTCOME_PREFIX = "bpb__"
+COEFFICIENT_PREFIX = "coef__"
 WEIGHT_SUM_TOLERANCE = 1e-6
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12  # floating rounding; the release's runs at one exposure differ by 4.2e-16 at most
 DOWNLOAD_PATTERNS = (
@@ -326,6 +331,21 @@ def released_task_parameters(root: Path, swarm: str, objective: str) -> pd.DataF
     frame = read_table(root, "fits_task_parameters")
     rows = frame[(frame["swarm"] == swarm) & (frame["objective"] == objective)]
     return rows.drop(columns=["swarm", "objective"]).set_index("task_id")
+
+
+def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
+    """The main swarm's released Olmix laws (``fits_olmix_task_laws``) for ``objective``, in the tasks table's order.
+
+    Each law's coefficients follow the partition's bucket order.
+    """
+    frame = read_table(root, "fits_olmix_task_laws")
+    rows = frame[(frame["swarm"] == MAIN_SWARM) & (frame["objective"] == objective)].set_index("task_id")
+    rows = rows.loc[list(objective_from_tasks(release_tasks(root), objective).tasks)]
+    coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids)
+    return tuple(
+        LogLinearLaw(float(log_c), task_coefficients, float(huber_loss))
+        for log_c, task_coefficients, huber_loss in zip(rows["log_c"], coefficients, rows["huber_loss"], strict=True)
+    )
 
 
 def release_heldout_bank(root: Path, objective: str) -> HeldoutBank:
