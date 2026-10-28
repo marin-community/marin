@@ -51,8 +51,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
 
+from mariner.evaluate import bank_metrics
 from mariner.fit import final_inner_folds, fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
 from mariner.olmix import FIT_SEED, FIT_STARTS, HUBER_DELTA, exact_proposal, fit_log_linear
@@ -117,23 +117,6 @@ def read_anchors(path: Path, objective: str) -> dict[str, Anchor]:
     table = pd.read_csv(path)
     table = table[table["objective"].eq(objective)]
     return {str(r.component): Anchor(float(r.proportional_bpb), float(r.repeat_sd)) for r in table.itertuples()}
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Evaluation on a held-out bank
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def bank_metrics(predicted: np.ndarray, measured: np.ndarray) -> dict[str, float]:
-    pick = int(np.argmin(predicted))
-    return {
-        "rows": float(len(measured)),
-        "regret_at_1": float(measured[pick] - measured.min()),
-        "selected_rank": float(np.sum(measured <= measured[pick])),
-        "optimism_at_pick": float(measured[pick] - predicted[pick]),
-        "rmse": float(np.sqrt(np.mean((predicted - measured) ** 2))),
-        "spearman": float(spearmanr(predicted, measured).correlation),
-    }
 
 
 # ---------------------------------------------------------------------------------------------------------------
