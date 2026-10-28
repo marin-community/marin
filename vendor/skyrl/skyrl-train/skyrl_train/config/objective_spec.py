@@ -23,8 +23,8 @@ from marinskyrl.runtime_options import (
     PREFERENCE_PAIR_ENV_CLASS,
     AdvantageEstimator,
     PolicyLossType,
+    ftpo_requested,
 )
-
 
 class KLEstimator(StrEnum):
     K1 = "k1"
@@ -167,6 +167,25 @@ def off_policy_correction(algorithm: DictConfig) -> OffPolicyCorrection:
     if rules:
         raise ValueError("off_policy_correction_rules requires off_policy_correction=custom")
     return load_correction("none" if name is None else str(name))
+
+
+def score_centering_tis_cap(algorithm: DictConfig) -> float:
+    """Return the single token truncation cap supported by PPO score centering."""
+    rules = off_policy_correction(algorithm).rules
+    if len(rules) != 1 or not isinstance(rules[0], TokenRule) or rules[0].action is not CorrectionAction.TRUNCATE:
+        raise ValueError("score centering requires exactly one token-level TIS truncation rule")
+    assert rules[0].high is not None
+    return float(rules[0].high)
+
+
+def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
+    policy = cfg.trainer.policy
+    return (
+        cfg.trainer.strategy == "megatron"
+        and policy.sequence_parallel_size == 1
+        and policy.megatron_config.tensor_model_parallel_size == 1
+        and (cfg.trainer.use_sample_packing or policy.megatron_config.context_parallel_size == 1)
+    )
 
 
 @dataclass(frozen=True)
@@ -318,6 +337,24 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     correction = off_policy_correction(algorithm)
     plan = compile_distillation_plan_from_config(cfg)
     topk = plan is not None and plan.objective is not DistillationObjectiveKind.SAMPLED_REVERSE_KL
+    candidates = algorithm.score_centering_top_k
+    if isinstance(candidates, bool) or not isinstance(candidates, int) or candidates <= 0:
+        raise ValueError("score_centering_top_k must be a positive integer")
+    if algorithm.get("score_centering_enabled", False):
+        score_centering_tis_cap(algorithm)
+        if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
+            raise ValueError("score centering requires regular PPO without distillation or auxiliary FTPO")
+        if not _score_centering_megatron_supported(cfg):
+            raise ValueError(
+                "score centering requires Megatron with tensor and sequence parallel size one; "
+                "context parallelism requires sample packing"
+            )
+        if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+            raise ValueError("score centering requires local vLLM behavior top-K capture")
+        if cfg.generator.sampling_params.logprobs not in (None, 0, candidates):
+            raise ValueError(
+                f"score centering captures {candidates} candidates; sampling_params.logprobs must be 0, null or {candidates}"
+            )
     policy_trains = not (topk and plan.reward_mode is DistillationRewardMode.REPLACE)
     if correction.rules:
         if not policy_trains:

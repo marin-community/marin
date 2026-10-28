@@ -181,6 +181,8 @@ def create_ray_wrapped_inference_engines_from_config(
             engine_init_kwargs["weight_transfer_config"] = {"backend": "runai_streamer"}
 
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
+    if cfg.trainer.algorithm.get("score_centering_enabled", False):
+        requested_logprobs.append(cfg.trainer.algorithm.score_centering_top_k)
     for callback in cfg.trainer.get("callbacks") or []:
         if callback.get("type") == "evaluation":
             requested_logprobs.extend(

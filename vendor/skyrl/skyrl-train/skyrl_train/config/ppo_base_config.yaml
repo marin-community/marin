@@ -221,6 +221,9 @@ trainer:
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
+    # Add PPO/TIS score centering. Candidate capture is independent of sampling top_k.
+    score_centering_enabled: false
+    score_centering_top_k: 128
     tis_splice: true
     tis_lcs_alert_threshold: 0.005
     enable_token_reward_channel: false
