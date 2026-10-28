@@ -258,9 +258,10 @@ def mixture_weights(table: pd.DataFrame, bucket_ids: Sequence[str], name: str) -
         )
     unnormalized = ~(np.abs(weights.sum(axis=1) - 1.0) <= WEIGHT_SUM_TOLERANCE)
     if unnormalized.any():
+        count = int(unnormalized.sum())
+        noun = "row" if count == 1 else "rows"
         raise ValueError(
-            f"the weights of {unnormalized.sum()} of {len(table)} rows of the {name} table do not sum to one within"
-            f" {WEIGHT_SUM_TOLERANCE:g}"
+            f"the weights of {count} {noun} of the {name} table do not sum to one within {WEIGHT_SUM_TOLERANCE:g}"
         )
     return weights
 
