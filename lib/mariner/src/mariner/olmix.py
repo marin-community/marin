@@ -215,7 +215,7 @@ def quantize_under_cap(weights: np.ndarray, epochs_per_unit_weight: np.ndarray, 
             f"the weights must be nonnegative and sum to one within {WEIGHT_SUM_TOLERANCE:g}:"
             f" their minimum is {weights.min():g} and their sum {weights.sum():.12g}"
         )
-    maximum = block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap), CAP_ROUNDING_SLACK)
+    maximum = block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap, CAP_ROUNDING_SLACK), CAP_ROUNDING_SLACK)
     if maximum.sum() < MIXTURE_BLOCK_SIZE:
         raise ValueError(f"an epoch cap of {cap:g} holds {maximum.sum()} of the {MIXTURE_BLOCK_SIZE} blocks")
     # Weights that sum to one within the tolerance floor to at most the whole block, so remaining is never negative.
@@ -254,6 +254,6 @@ def propose(
         raise ValueError(f"{len(laws)} laws for the {len(objective.tasks)} tasks of {objective.name}")
     check_cap_and_kl(epochs_per_unit_weight, cap, kl, CAP_ROUNDING_SLACK)
     natural = proportional_mixture(epochs_per_unit_weight)
-    caps = bucket_upper_bounds(epochs_per_unit_weight, cap)
+    caps = bucket_upper_bounds(epochs_per_unit_weight, cap, CAP_ROUNDING_SLACK)
     continuous, predicted, solver = exact_proposal(laws, objective.weights, natural, caps, kl)
     return OlmixProposal(quantize_under_cap(continuous, epochs_per_unit_weight, cap), continuous, predicted, solver)

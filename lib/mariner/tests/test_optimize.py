@@ -56,6 +56,19 @@ def test_propose_rejects_cap_that_cannot_fill_a_mixture(synthetic_problem):
         propose(truth, swarm.weights, cap=0.01)
 
 
+def test_propose_takes_a_cap_whose_block_maxima_just_fill_the_grid():
+    # At these epochs, a cap of 0.27 epochs bounds the two buckets at 1,823 and 225 blocks, the whole grid, but the
+    # weight bounds, 1823 / 2048 less an ulp and 225 / 2048, sum to one less an ulp.
+    cap = 0.27
+    epochs = cap * MIXTURE_BLOCK_SIZE / np.array([1823.0, 225.0])
+    assert np.minimum(1.0, cap / epochs).sum() < 1
+    head = Head(math.log(0.3), np.full(4, 0.2), 0.8)
+    task = TaskFit("t0", Shape(1.0, 1.0, 2.0), 0.0, 1.0, False, 0.0, head)
+    fit = ObjectiveFit("o", ("b0", "b1"), epochs, np.ones(1), (task,), {})
+    swarm_weights = np.random.default_rng(0).dirichlet(np.ones(2), size=8)
+    assert propose(fit, swarm_weights, cap=cap).counts.tolist() == [1823, 225]
+
+
 def test_propose_rejects_a_cap_the_block_grid_cannot_fill_before_solving(monkeypatch):
     # At 3 epochs per unit weight, a cap of 1 epoch bounds each of three buckets at a third of the mixture: the bounds
     # sum to one, but each bucket holds at most floor(2048 / 3) = 682 blocks, 2,046 of the 2,048.

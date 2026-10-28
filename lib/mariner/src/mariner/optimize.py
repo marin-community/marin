@@ -105,16 +105,20 @@ def proportional_mixture(epochs_per_unit_weight: np.ndarray) -> np.ndarray:
     return natural / natural.sum()
 
 
-def bucket_upper_bounds(epochs_per_unit_weight: np.ndarray, cap: float | None) -> np.ndarray:
+def bucket_upper_bounds(epochs_per_unit_weight: np.ndarray, cap: float | None, slack: float) -> np.ndarray:
     """Per-bucket weight bounds: the simplex alone (``cap`` None, the procedure) or an epoch cap, min(1, cap / epochs).
 
+    ``slack`` is the rounding's slack in blocks (``block_maxima``): bounds whose sum falls short of one by floating
+    roundoff still hold a complete mixture when their block maxima fill the 2,048-block grid.
+
     Raises:
-        ValueError: If the cap's bounds sum to less than one, so that no complete mixture satisfies them.
+        ValueError: If the cap's bounds hold fewer than the grid's 2,048 blocks even with ``slack`` blocks added to
+            each bucket, so that no complete mixture satisfies them.
     """
     if cap is None:
         return np.ones(len(epochs_per_unit_weight))
     upper = np.minimum(1.0, cap / epochs_per_unit_weight)
-    if upper.sum() < 1:
+    if (upper * MIXTURE_BLOCK_SIZE + slack).sum() < MIXTURE_BLOCK_SIZE:
         raise ValueError(f"an epoch cap of {cap:g} cannot hold a complete mixture")
     return upper
 
@@ -128,8 +132,8 @@ def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: 
     """Raise ``ValueError`` unless the epoch cap and the KL weight admit a proposal; proposers call it before solving.
 
     ``kl`` must be finite and nonnegative. ``cap`` is None (no cap) or a number of epochs, inf included, whose weight
-    bounds (``bucket_upper_bounds``) sum to at least one and whose block maxima, computed as the rounding computes
-    them with its ``slack`` (``block_maxima``), hold the 2,048 blocks of a mixture.
+    bounds (``bucket_upper_bounds``) hold a mixture on the 2,048-block grid: their block maxima, computed as the
+    rounding computes them with its ``slack`` (``block_maxima``), sum to 2,048 or more.
     """
     if not (np.isfinite(kl) and kl >= 0.0):
         raise ValueError(f"the KL weight must be finite and nonnegative, got {kl:g}")
@@ -137,7 +141,7 @@ def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: 
         return
     if np.isnan(cap):
         raise ValueError(f"the epoch cap must be a positive number of epochs or inf, got {cap:g}")
-    blocks = int(block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap), slack).sum())
+    blocks = int(block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap, slack), slack).sum())
     if blocks < MIXTURE_BLOCK_SIZE:
         raise ValueError(f"an epoch cap of {cap:g} holds {blocks} of the {MIXTURE_BLOCK_SIZE} blocks")
 
@@ -155,7 +159,7 @@ def continuous_optimum(
     Each restart keeps the better of its first-pass and polished endpoints by ``endpoint_rank``, the polish on a tie.
     """
     natural = proportional_mixture(fit.epochs_per_unit_weight)
-    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap)
+    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap, BLOCK_MAXIMUM_SLACK)
     indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
     starts = [project_start(row, upper, natural) for row in (natural, *swarm_weights[indices])]
     records, solutions = [], []
@@ -231,7 +235,8 @@ def runtime_policy(
     The exchange search minimizes the objective plus the KL penalty; the summary reports the fit's predictions,
     without the penalty, at the continuous optimum and at the counts' mixture.
     """
-    maximum = block_maxima(bucket_upper_bounds(fit.epochs_per_unit_weight, cap), BLOCK_MAXIMUM_SLACK)
+    upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap, BLOCK_MAXIMUM_SLACK)
+    maximum = block_maxima(upper, BLOCK_MAXIMUM_SLACK)
     natural = proportional_mixture(fit.epochs_per_unit_weight)
 
     def predict(rows: np.ndarray) -> np.ndarray:

@@ -115,6 +115,16 @@ def test_olmix_proposal_refuses_solver_solutions_outside_the_caps():
         propose([law], ONE_TASK, np.array([1.2, 2.2]), cap=0.94, kl=0.01)
 
 
+def test_olmix_proposal_takes_a_cap_whose_block_maxima_just_fill_the_grid():
+    # At these epochs, a cap of 0.27 epochs bounds the two buckets at 1,823 and 225 blocks, the whole grid, but the
+    # weight bounds, 1823 / 2048 less an ulp and 225 / 2048, sum to one less an ulp.
+    cap = 0.27
+    epochs = cap * MIXTURE_BLOCK_SIZE / np.array([1823.0, 225.0])
+    assert np.minimum(1.0, cap / epochs).sum() < 1
+    law = LogLinearLaw(math.log(FLOOR), COEFFICIENTS[:2], math.nan)
+    assert propose([law], ONE_TASK, epochs, cap=cap, kl=0.01).counts.tolist() == [1823, 225]
+
+
 def test_olmix_proposal_rejects_a_cap_the_block_grid_cannot_fill_before_solving(monkeypatch):
     # At 3 epochs per unit weight, a cap of 1 epoch bounds each of three buckets at a third of the mixture: the bounds
     # sum to one, but each bucket holds at most floor(2048 / 3) = 682 blocks, 2,046 of the 2,048.
