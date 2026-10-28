@@ -119,6 +119,16 @@ def extract_served_tools(prompt_text: str) -> list[dict] | None:
     return tools or None
 
 
+def declared_schema(served_tools: list[dict]) -> dict[str, set[str]]:
+    """Served function name -> the parameter names it declares."""
+    declared: dict[str, set[str]] = {}
+    for tool in served_tools:
+        fn = tool.get("function", tool)
+        if fn.get("name"):
+            declared[fn["name"]] = set(((fn.get("parameters") or {}).get("properties")) or {})
+    return declared
+
+
 def function_block_status(text: str, served_tools: list[dict] | None) -> str:
     """One status for one native function block.
 
@@ -147,11 +157,7 @@ def function_block_status(text: str, served_tools: list[dict] | None) -> str:
     if served_tools is None:
         return STATUS_SCHEMA_UNAVAILABLE
 
-    declared: dict[str, set[str]] = {}
-    for tool in served_tools:
-        fn = tool.get("function", tool)
-        if fn.get("name"):
-            declared[fn["name"]] = set(((fn.get("parameters") or {}).get("properties")) or {})
+    declared = declared_schema(served_tools)
     if openers[0] not in declared:
         return STATUS_UNKNOWN_FUNCTION
     if any(name not in declared[openers[0]] for name in param_names):

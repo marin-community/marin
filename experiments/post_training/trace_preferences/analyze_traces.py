@@ -40,6 +40,13 @@ CLEAN = "clean-parsable-action"
 # Format is checkable but the served schema needed to judge function/parameter
 # declarations was absent in that turn's prefix. Not malformed, not schema-valid.
 SCHEMA_UNAVAILABLE = "schema-unavailable"
+# Prefix of the only classes that are confirmed malformed format errors.
+SYNTAX_PREFIX = "syntax-"
+
+# Token regions used by the logprob statistics and by the report.
+ACTION_SPAN = "action-span"
+VERIFIED_NON_ACTION = "verified-non-action"
+UNVERIFIED_TURN = "unverified-turn"
 
 # The span-proof gate that blocked a turn -> the class it is counted under.
 # These are UNDETERMINED, not proven model format errors.
@@ -55,13 +62,8 @@ def _schema_key(served_tools: list[dict] | None):
     """Canonical, hashable summary of a served schema for equality comparison."""
     if not served_tools:
         return None
-    out = set()
-    for tool in served_tools:
-        fn = tool.get("function", tool)
-        if fn.get("name"):
-            props = set(((fn.get("parameters") or {}).get("properties")) or {})
-            out.add((fn["name"], frozenset(props)))
-    return frozenset(out)
+    declared = parse.declared_schema(served_tools)
+    return frozenset((name, frozenset(params)) for name, params in declared.items())
 
 
 def classify_turn(text: str, proof, served_tools) -> str:
@@ -83,7 +85,7 @@ def classify_turn(text: str, proof, served_tools) -> str:
         return CLEAN
     if status == parse.STATUS_SCHEMA_UNAVAILABLE:
         return SCHEMA_UNAVAILABLE
-    return f"syntax-{status}"
+    return f"{SYNTAX_PREFIX}{status}"
 
 
 def scan_turns(tok, pf) -> tuple:
@@ -172,9 +174,7 @@ def scan_turns(tok, pf) -> tuple:
             c["aligned_tokens"] += len(ids)
             for i, v in enumerate(lp):
                 region = (
-                    "unverified-turn"
-                    if span is None
-                    else "action-span" if span[0] <= i < span[1] else "verified-non-action"
+                    UNVERIFIED_TURN if span is None else ACTION_SPAN if span[0] <= i < span[1] else VERIFIED_NON_ACTION
                 )
                 tot[region] += 1
                 if v < LOWPROB_THRESHOLD:
@@ -189,13 +189,14 @@ def main() -> int:
     args = ap.parse_args()
 
     pq_path = Path(args.parquet)
-    c, classes, roles, low, tot = scan_turns(parse.NativeTokenizer(args.tokenizer), pq.ParquetFile(str(pq_path)))
+    tok_path = Path(args.tokenizer)
+    c, classes, roles, low, tot = scan_turns(parse.NativeTokenizer(str(tok_path)), pq.ParquetFile(str(pq_path)))
 
     roles_line = ", ".join(f"{k}={v}" for k, v in sorted(roles.items()))
     classes_line = "  ".join(f"{k}={v}" for k, v in sorted(classes.items(), key=lambda x: -x[1]))
     regions_line = "  ".join(
         f"{r}={low[r]}/{tot[r]}={100 * low[r] / tot[r]:.3f}%"
-        for r in ("action-span", "verified-non-action", "unverified-turn")
+        for r in (ACTION_SPAN, VERIFIED_NON_ACTION, UNVERIFIED_TURN)
         if tot[r]
     )
 
@@ -205,7 +206,10 @@ def main() -> int:
                 "=" * 74,
                 "TRACE -> PREFERENCE : SCREENING (local CPU, no model run)",
                 f"  dataset   {DATASET_ID}@{DATASET_REVISION}",
-                f"  tokenizer {parse.PINNED_TOKENIZER_ID}@{parse.PINNED_TOKENIZER_REVISION[:7]}",
+                f"  tokenizer_expected {parse.PINNED_TOKENIZER_ID}@{parse.PINNED_TOKENIZER_REVISION[:7]}"
+                "  (identity NOT verified against the file below)",
+                f"  tokenizer_file {tok_path}",
+                f"  tokenizer_sha256 {hashlib.sha256(tok_path.read_bytes()).hexdigest()}",
                 f"  parquet   {pq_path}",
                 f"  sha256    {hashlib.sha256(pq_path.read_bytes()).hexdigest()}",
                 f"  rows={c['rows']} turns={c['turns']} operator_cap={MAX_ACTION_TOKENS}",
@@ -226,8 +230,8 @@ def main() -> int:
                 f"    [rows_mismatch={c['row_mismatch']} agree={c['agree']}/{c['turns']} disagree={c['disagree']}"
                 f" unmapped={c['unmapped']} adapter_reject_turns={c['adapter_reject']}]",
                 f"  classes: {classes_line}",
-                f"  confirmed_format_malformed={sum(v for k, v in classes.items() if k.startswith('syntax-'))}"
-                f" of {c['turns']}  (syntax-* only: real format errors the parser established)",
+                f"  confirmed_format_malformed={sum(v for k, v in classes.items() if k.startswith(SYNTAX_PREFIX))}"
+                f" of {c['turns']}  ({SYNTAX_PREFIX}* only: real format errors the parser established)",
                 "  undetermined (NOT counted as malformed): span-unprovable, multiple-block,"
                 "  schema-unavailable, unmapped-gate -- see the classes line above",
                 "",

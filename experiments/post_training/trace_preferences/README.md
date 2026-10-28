@@ -1,15 +1,3 @@
----
-last_modified:
-  agent: Aster (WorkBuddy)
-  model: session default
-  timestamp: 2026-10-27T15:45:00+08:00
-  task_id: marin-10042-r15-reviewer-delivery
-  change: >-
-    Reviewer-facing rewrite. The heuristic split of the post-action messages and
-    the local correction narrative are removed; the logprob correspondence is
-    stated as token-count agreement with positional correspondence assumed.
----
-
 # Trace -> Preference: Screening Findings (Marin #10042)
 
 **Feasibility screening only.** Nothing is trained, no representativeness is claimed, no execution quality is ranked.

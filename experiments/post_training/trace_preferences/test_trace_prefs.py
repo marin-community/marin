@@ -131,8 +131,8 @@ def test_real_sample_reproduces_the_readme_numbers():
     assert c["no_logprobs_turns"] == 0
     assert c["tokens_total"] == c["aligned_tokens"]  # nothing omitted from stats
     # No confirmed malformed format errors in this sample, and nothing mislabeled:
-    assert all(not k.startswith("syntax-") for k in classes)
-    assert sum(v for k, v in classes.items() if k.startswith("syntax-")) == 0
+    assert all(not k.startswith(analyze_traces.SYNTAX_PREFIX) for k in classes)
+    assert sum(v for k, v in classes.items() if k.startswith(analyze_traces.SYNTAX_PREFIX)) == 0
     assert dict(classes) == {
         "clean-parsable-action": 91,
         "action-exceeds-max-tokens": 32,
@@ -153,21 +153,25 @@ def test_function_block_status_no_schema_is_schema_unavailable():
 def test_schema_unavailable_turn_is_not_counted_as_malformed():
     from experiments.post_training.trace_preferences.analyze_traces import (  # noqa: PLC0415  # optional dep
         SCHEMA_UNAVAILABLE,
+        SYNTAX_PREFIX,
         classify_turn,
     )
 
     proof = parse.SpanProof((0, len(ACTION)), ACTION, True, True, None)
     cls = classify_turn(ACTION, proof, None)
     assert cls == SCHEMA_UNAVAILABLE
-    assert not cls.startswith("syntax-")  # must not inflate "confirmed malformed"
+    assert not cls.startswith(SYNTAX_PREFIX)  # must not inflate "confirmed malformed"
 
 
 def test_confirmed_syntax_error_counts_as_malformed():
-    from experiments.post_training.trace_preferences.analyze_traces import classify_turn  # noqa: PLC0415  # optional dep
+    from experiments.post_training.trace_preferences.analyze_traces import (  # noqa: PLC0415  # optional dep
+        SYNTAX_PREFIX,
+        classify_turn,
+    )
 
     bad = ACTION.replace("<parameter=command>", "<parameter=nope>", 1)
     assert parse.function_block_status(bad, TOOLS) == parse.STATUS_UNDECLARED_PARAMETER
     # The proof's span_text must carry the malformed block, not the clean ACTION.
     proof = parse.SpanProof((0, len(bad)), bad, True, True, None)
     cls = classify_turn(bad, proof, TOOLS)
-    assert cls.startswith("syntax-")  # the only category that is "confirmed malformed"
+    assert cls.startswith(SYNTAX_PREFIX)  # the only category that is "confirmed malformed"
