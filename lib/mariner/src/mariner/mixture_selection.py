@@ -8,20 +8,19 @@ weights, and minimize the aggregate over the target-feasible mixtures. It was ex
 code path and reproduces that code's fits on the calibration-pinned protocol to 1e-8 and its materialized policies
 exactly (``tests/test_parity.py``).
 
-Procedure (paper Section 4; symbols in the paper: gamma_t is ``kappa`` here, kappa in the paper is the Weibull
-``power``):
+Procedure (paper Section 4):
 
 1. Materialized epochs: E_i(w) = w_i * (D_tgt / P_i), the number of passes over bucket i at weight w_i.
 2. Per task t, a floored log-deficit surrogate on the shared response functions
-   f_t(w) = phi_t + exp(c_t - sum_i alpha_ti b(E_i) + sum_i beta_ti h(E_i)), alpha, beta >= 0,
-   b(E) = 1 - exp(-(rate E)^power), h(E) = softplus(log(1 + E) - threshold)^2.
-3. The floor phi_t = anchor_t - max(kappa_t (anchor_t - min_r y_rt), 3 sigma_t), with the proportional mixture's
+   f_t(w) = phi_t + exp(c_t - sum_i alpha_ti b_t(E_i) + sum_i beta_ti h_t(E_i)), alpha, beta >= 0,
+   b_t(E) = 1 - exp(-(rho_t E)^kappa_t), h_t(E) = softplus(log(1 + E) - tau_t)^2.
+3. The floor phi_t = anchor_t - max(nu_t (anchor_t - min_r y_rt), 3 sigma_t), with the proportional mixture's
    mean and repeat SD as anchor and sigma. The head is fitted by nonnegative least squares on the log-deficit
-   log(y - phi_t) with centered, unscaled columns and ridge rows; the shape (rate, power, threshold) and ridge come
-   from a fixed grid by mixture-blocked inner cross-validation of the predictions in BPB at a provisional kappa of
-   2.5; kappa_t by a bounded scalar search on log kappa in [1, 6] of the same inner-CV error, with a boundary rule:
-   when the search ends within 10% of the log upper bound, kappa_t is set to 1.5 (a conservative default chosen
-   on development data, not a curvature test).
+   log(y - phi_t) with centered, unscaled columns and ridge weight gamma_t; the shape (rho_t, kappa_t, tau_t) and
+   gamma_t come from a fixed grid by mixture-blocked inner cross-validation of the predictions in BPB at a
+   provisional nu of 2.5; nu_t by a bounded scalar search on log nu in [1, 6] of the same inner-CV error, with a
+   boundary rule: when the search ends within 10% of the log upper bound, nu_t is set to 1.5 (a conservative
+   default chosen on development data, not a curvature test).
 4. Aggregate sum_t a_t f_t(w), minimized by SLSQP from several feasible starts over the simplex (an epoch cap is
    optional and not part of the procedure: the reported optima are unconstrained), polished, then rounded to the
    sampler grid of 2,048 blocks with an exchange search. SLSQP finds a local minimizer; the multistart is the only
@@ -70,23 +69,18 @@ EXPOSURE_REFERENCE_TOKENS = 6_325_183_647_689  # D_tgt: the production budget wh
 CALIBRATION_MARKER = "baseline_proportional"  # swarm run(s) that anchor the floors; never scored out of fold
 CALIBRATION_LABEL = -1
 
-SHAPE_RATES = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0)
-SHAPE_POWERS = (0.3, 0.5, 0.7, 1.0)
-SHAPE_THRESHOLDS = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
-RIDGE_GRID = (0.0, 1e-3, 1e-2, 0.1, 1.0)
-SHAPES = tuple(
-    {"rate": rate, "power": power, "threshold": threshold}
-    for rate in SHAPE_RATES
-    for power in SHAPE_POWERS
-    for threshold in SHAPE_THRESHOLDS
-)
+RHO_GRID = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0)
+KAPPA_GRID = (0.3, 0.5, 0.7, 1.0)
+TAU_GRID = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+GAMMA_GRID = (0.0, 1e-3, 1e-2, 0.1, 1.0)
+SHAPES = tuple({"rho": rho, "kappa": kappa, "tau": tau} for rho in RHO_GRID for kappa in KAPPA_GRID for tau in TAU_GRID)
 
-KAPPA_PROVISIONAL = 2.5  # the multiplier at which the shape and ridge are scored
-KAPPA_BOUNDS = (1.0, 6.0)
-KAPPA_SEARCH_EVALUATIONS = 24
-KAPPA_SEARCH_XATOL = 0.02
+NU_PROVISIONAL = 2.5  # the multiplier at which the shape and ridge are scored
+NU_BOUNDS = (1.0, 6.0)
+NU_SEARCH_EVALUATIONS = 24
+NU_SEARCH_XATOL = 0.02
 FLAT_PROFILE_FRACTION = 0.1
-FLAT_PROFILE_KAPPA = 1.5
+NU_DEFAULT = 1.5
 NOISE_MARGIN_SDS = 3.0
 INFINITE_CV_PENALTY = 1e3
 
@@ -133,19 +127,19 @@ class Swarm:
     runs: tuple[str, ...]
     buckets: tuple[str, ...]
     weights: np.ndarray  # (runs, buckets), rows sum to one
-    inventory: np.ndarray  # (buckets,) epochs per unit weight = D_tgt / P_i
+    epochs_per_unit_weight: np.ndarray  # (buckets,) D_tgt / P_i
     outcomes: pd.DataFrame  # (runs, tasks) with task names as columns
     calibration: np.ndarray  # (runs,) bool: rows that are calibration data
 
     @property
     def exposures(self) -> np.ndarray:
-        return self.weights * self.inventory[None, :]
+        return self.weights * self.epochs_per_unit_weight[None, :]
 
 
 @dataclasses.dataclass(frozen=True)
 class Objective:
     name: str
-    components: tuple[str, ...]
+    tasks: tuple[str, ...]
     weights: np.ndarray  # evaluation weights a_t (byte shares or 1/n)
 
 
@@ -159,9 +153,9 @@ def read_swarm(weights_path: Path, outcomes_path: Path, buckets_path: Path) -> S
     buckets_table = pd.read_csv(buckets_path)
     buckets = tuple(str(b) for b in buckets_table["bucket"])
     if "epochs_per_unit_weight" in buckets_table:
-        inventory = buckets_table["epochs_per_unit_weight"].to_numpy(float)
+        epochs_per_unit_weight = buckets_table["epochs_per_unit_weight"].to_numpy(float)
     else:
-        inventory = EXPOSURE_REFERENCE_TOKENS / buckets_table["pool_tokens"].to_numpy(float)
+        epochs_per_unit_weight = EXPOSURE_REFERENCE_TOKENS / buckets_table["pool_tokens"].to_numpy(float)
     weights_table = pd.read_csv(weights_path)
     outcomes_table = pd.read_csv(outcomes_path)
     if list(weights_table["run"]) != list(outcomes_table["run"]):
@@ -175,7 +169,7 @@ def read_swarm(weights_path: Path, outcomes_path: Path, buckets_path: Path) -> S
     else:
         calibration = np.asarray([CALIBRATION_MARKER in r for r in runs])
     outcomes = outcomes_table.drop(columns=["run"]).astype(float)
-    return Swarm(runs, buckets, weights, inventory, outcomes, calibration)
+    return Swarm(runs, buckets, weights, epochs_per_unit_weight, outcomes, calibration)
 
 
 def read_objectives(path: Path) -> dict[str, Objective]:
@@ -247,18 +241,18 @@ def final_inner_folds(swarm: Swarm, splits: pd.DataFrame | None) -> Folds:
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def benefit(exposure: np.ndarray, rate: float | np.ndarray, power: float | np.ndarray) -> np.ndarray:
-    return -np.expm1(-((np.maximum(rate * exposure, 0.0)) ** power))
+def benefit(exposure: np.ndarray, rho: float | np.ndarray, kappa: float | np.ndarray) -> np.ndarray:
+    return -np.expm1(-((np.maximum(rho * exposure, 0.0)) ** kappa))
 
 
-def harm(exposure: np.ndarray, threshold: float | np.ndarray) -> np.ndarray:
-    return np.logaddexp(np.log1p(np.maximum(exposure, 0.0)) - threshold, 0.0) ** 2
+def harm(exposure: np.ndarray, tau: float | np.ndarray) -> np.ndarray:
+    return np.logaddexp(np.log1p(np.maximum(exposure, 0.0)) - tau, 0.0) ** 2
 
 
 def design_matrix(exposures: np.ndarray, shape: dict[str, float]) -> np.ndarray:
     """Columns: minus the benefit of every bucket, then the harm of every bucket (ridge multiplier one each)."""
     return np.hstack(
-        [-benefit(exposures, float(shape["rate"]), float(shape["power"])), harm(exposures, float(shape["threshold"]))]
+        [-benefit(exposures, float(shape["rho"]), float(shape["kappa"])), harm(exposures, float(shape["tau"]))]
     )
 
 
@@ -271,7 +265,7 @@ def design_matrix(exposures: np.ndarray, shape: dict[str, float]) -> np.ndarray:
 class FloorSpec:
     anchor: float  # NaN: the training median
     noise_sd: float
-    kappa: float
+    nu: float
     noise_margin_sds: float = NOISE_MARGIN_SDS
 
 
@@ -280,18 +274,18 @@ def floor_value(response: np.ndarray, spec: FloorSpec) -> float:
     gap = anchor - float(np.min(response))
     if gap <= 0.0:
         gap = max(float(np.std(response)), 1e-3 * abs(anchor), 1e-6)
-    return anchor - max(spec.kappa * gap, spec.noise_margin_sds * spec.noise_sd)
+    return anchor - max(spec.nu * gap, spec.noise_margin_sds * spec.noise_sd)
 
 
-def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, ridge: float) -> tuple[float, np.ndarray]:
+def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, gamma: float) -> tuple[float, np.ndarray]:
     """Centered nonnegative least squares with a free intercept and ridge rows, on the QR-reduced system."""
     width = matrix.shape[1]
     design_mean = matrix.mean(axis=0)
     target_mean = float(target.mean())
     rows = matrix - design_mean[None, :]
     rhs = target - target_mean
-    if ridge > 0.0:
-        rows = np.vstack([rows, np.diag(np.full(width, math.sqrt(ridge)))])
+    if gamma > 0.0:
+        rows = np.vstack([rows, np.diag(np.full(width, math.sqrt(gamma)))])
         rhs = np.concatenate([rhs, np.zeros(width)])
     if rows.shape[0] > 2 * width:
         orthogonal, triangular = np.linalg.qr(rows, mode="reduced")
@@ -305,25 +299,25 @@ def nonnegative_solve(matrix: np.ndarray, target: np.ndarray, ridge: float) -> t
 class Head:
     intercept: float
     coefficients: np.ndarray
-    floor: float
+    phi: float
 
     def predict(self, matrix: np.ndarray) -> np.ndarray:
         linear = self.intercept + matrix @ self.coefficients
-        return self.floor + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
+        return self.phi + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
 
 
-def fit_head(matrix: np.ndarray, response: np.ndarray, ridge: float, spec: FloorSpec) -> Head:
-    floor = floor_value(response, spec)
-    target = np.log(np.maximum(response - floor, DEFICIT_FLOOR))
-    intercept, coefficients = nonnegative_solve(matrix, target, ridge)
-    return Head(float(intercept), np.asarray(coefficients, dtype=float), floor)
+def fit_head(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorSpec) -> Head:
+    phi = floor_value(response, spec)
+    target = np.log(np.maximum(response - phi, DEFICIT_FLOOR))
+    intercept, coefficients = nonnegative_solve(matrix, target, gamma)
+    return Head(float(intercept), np.asarray(coefficients, dtype=float), phi)
 
 
-def cv_rmse(matrix: np.ndarray, response: np.ndarray, ridge: float, spec: FloorSpec, folds: Folds) -> float:
+def cv_rmse(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorSpec, folds: Folds) -> float:
     error = 0.0
     count = 0
     for train, validation in folds:
-        head = fit_head(matrix[train], response[train], ridge, spec)
+        head = fit_head(matrix[train], response[train], gamma, spec)
         prediction = head.predict(matrix[validation])
         if not np.isfinite(prediction).all():
             return float("inf")
@@ -333,41 +327,41 @@ def cv_rmse(matrix: np.ndarray, response: np.ndarray, ridge: float, spec: FloorS
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Per-task fit: grid, kappa search, final head
+# Per-task fit: grid, nu search, final head
 # ---------------------------------------------------------------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
 class TaskFit:
-    component: str
+    task: str
     shape: dict[str, float]
-    ridge: float
-    kappa: float
+    gamma: float
+    nu: float
     flat_profile: bool
     inner_cv_rmse: float
     head: Head
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "component": self.component,
+            "task": self.task,
             "shape": self.shape,
-            "ridge": self.ridge,
-            "kappa": self.kappa,
+            "gamma": self.gamma,
+            "nu": self.nu,
             "flat_profile": self.flat_profile,
             "inner_cv_rmse": self.inner_cv_rmse,
             "intercept": self.head.intercept,
             "coefficients": self.head.coefficients.tolist(),
-            "floor": self.head.floor,
+            "phi": self.head.phi,
         }
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> TaskFit:
-        head = Head(float(payload["intercept"]), np.asarray(payload["coefficients"], float), float(payload["floor"]))
+        head = Head(float(payload["intercept"]), np.asarray(payload["coefficients"], float), float(payload["phi"]))
         return cls(
-            str(payload["component"]),
+            str(payload["task"]),
             {k: float(v) for k, v in payload["shape"].items()},
-            float(payload["ridge"]),
-            float(payload["kappa"]),
+            float(payload["gamma"]),
+            float(payload["nu"]),
             bool(payload["flat_profile"]),
             float(payload["inner_cv_rmse"]),
             head,
@@ -381,51 +375,51 @@ def select_shape_and_ridge(
     best: tuple[float, int, int] | None = None
     for shape_index, shape in enumerate(SHAPES):
         matrix = design_matrix(exposures, shape)
-        for ridge_index, ridge in enumerate(RIDGE_GRID):
-            candidate = (cv_rmse(matrix, response, ridge, spec, folds), shape_index, ridge_index)
+        for gamma_index, gamma in enumerate(GAMMA_GRID):
+            candidate = (cv_rmse(matrix, response, gamma, spec, folds), shape_index, gamma_index)
             if best is None or candidate < best:
                 best = candidate
     if best is None or not math.isfinite(best[0]):
         raise ValueError("no finite inner-CV candidate")
-    score, shape_index, ridge_index = best
-    return dict(SHAPES[shape_index]), RIDGE_GRID[ridge_index], score
+    score, shape_index, gamma_index = best
+    return dict(SHAPES[shape_index]), GAMMA_GRID[gamma_index], score
 
 
-def search_kappa(
-    matrix: np.ndarray, response: np.ndarray, ridge: float, anchor: Anchor, folds: Folds
+def search_nu(
+    matrix: np.ndarray, response: np.ndarray, gamma: float, anchor: Anchor, folds: Folds
 ) -> tuple[float, bool, float]:
-    """Bounded scalar search on log kappa; flat profiles (argmin near the upper bound) get the default."""
-    low, high = KAPPA_BOUNDS
+    """Bounded scalar search on log nu; flat profiles (argmin near the upper bound) get the default."""
+    low, high = NU_BOUNDS
 
-    def objective(log_kappa: float) -> float:
-        spec = FloorSpec(anchor.proportional, anchor.repeat_sd, math.exp(log_kappa))
-        value = cv_rmse(matrix, response, ridge, spec, folds)
+    def objective(log_nu: float) -> float:
+        spec = FloorSpec(anchor.proportional, anchor.repeat_sd, math.exp(log_nu))
+        value = cv_rmse(matrix, response, gamma, spec, folds)
         return value if math.isfinite(value) else INFINITE_CV_PENALTY
 
     search = minimize_scalar(
         objective,
         bounds=(math.log(low), math.log(high)),
         method="bounded",
-        options={"maxiter": KAPPA_SEARCH_EVALUATIONS, "xatol": KAPPA_SEARCH_XATOL},
+        options={"maxiter": NU_SEARCH_EVALUATIONS, "xatol": NU_SEARCH_XATOL},
     )
-    kappa, score = float(math.exp(search.x)), float(search.fun)
-    flat = math.log(kappa) >= (1 - FLAT_PROFILE_FRACTION) * math.log(high)
+    nu, score = float(math.exp(search.x)), float(search.fun)
+    flat = math.log(nu) >= (1 - FLAT_PROFILE_FRACTION) * math.log(high)
     if flat:
-        kappa = FLAT_PROFILE_KAPPA
-        score = objective(math.log(kappa))
-    return kappa, flat, score
+        nu = NU_DEFAULT
+        score = objective(math.log(nu))
+    return nu, flat, score
 
 
-def fit_task(swarm: Swarm, component: str, anchor: Anchor, folds: Folds) -> TaskFit:
+def fit_task(swarm: Swarm, task: str, anchor: Anchor, folds: Folds) -> TaskFit:
     """Fit one task on every run of the swarm; ``folds`` index the swarm's rows."""
     exposures = swarm.exposures
-    response = swarm.outcomes[component].to_numpy(float)
-    provisional = FloorSpec(anchor.proportional, anchor.repeat_sd, KAPPA_PROVISIONAL)
-    shape, ridge, _ = select_shape_and_ridge(exposures, response, provisional, folds)
+    response = swarm.outcomes[task].to_numpy(float)
+    provisional = FloorSpec(anchor.proportional, anchor.repeat_sd, NU_PROVISIONAL)
+    shape, gamma, _ = select_shape_and_ridge(exposures, response, provisional, folds)
     matrix = design_matrix(exposures, shape)
-    kappa, flat, score = search_kappa(matrix, response, ridge, anchor, folds)
-    head = fit_head(matrix, response, ridge, FloorSpec(anchor.proportional, anchor.repeat_sd, kappa))
-    return TaskFit(component, shape, ridge, kappa, flat, score, head)
+    nu, flat, score = search_nu(matrix, response, gamma, anchor, folds)
+    head = fit_head(matrix, response, gamma, FloorSpec(anchor.proportional, anchor.repeat_sd, nu))
+    return TaskFit(task, shape, gamma, nu, flat, score, head)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -437,29 +431,29 @@ def fit_task(swarm: Swarm, component: str, anchor: Anchor, folds: Folds) -> Task
 class ObjectiveFit:
     objective: str
     buckets: tuple[str, ...]
-    inventory: np.ndarray
+    epochs_per_unit_weight: np.ndarray
     weights: np.ndarray  # evaluation weights per task
     tasks: tuple[TaskFit, ...]
 
     def _arrays(self) -> tuple[np.ndarray, ...]:
-        rate = np.asarray([t.shape["rate"] for t in self.tasks])
-        power = np.asarray([t.shape["power"] for t in self.tasks])
-        threshold = np.asarray([t.shape["threshold"] for t in self.tasks])
+        rho = np.asarray([t.shape["rho"] for t in self.tasks])
+        kappa = np.asarray([t.shape["kappa"] for t in self.tasks])
+        tau = np.asarray([t.shape["tau"] for t in self.tasks])
         intercept = np.asarray([t.head.intercept for t in self.tasks])
         coefficients = np.stack([t.head.coefficients for t in self.tasks])
-        floor = np.asarray([t.head.floor for t in self.tasks])
-        return rate, power, threshold, intercept, coefficients, floor
+        phi = np.asarray([t.head.phi for t in self.tasks])
+        return rho, kappa, tau, intercept, coefficients, phi
 
     def predict_tasks(self, mixtures: np.ndarray) -> np.ndarray:
         """Per-task predictions for every mixture row, shape (mixtures, tasks)."""
-        rate, power, threshold, intercept, coefficients, floor = self._arrays()
-        exposure = np.atleast_2d(mixtures)[:, None, :] * self.inventory[None, None, :]
+        rho, kappa, tau, intercept, coefficients, phi = self._arrays()
+        exposure = np.atleast_2d(mixtures)[:, None, :] * self.epochs_per_unit_weight[None, None, :]
         columns = np.concatenate(
-            [-benefit(exposure, rate[None, :, None], power[None, :, None]), harm(exposure, threshold[None, :, None])],
+            [-benefit(exposure, rho[None, :, None], kappa[None, :, None]), harm(exposure, tau[None, :, None])],
             axis=2,
         )
         linear = intercept[None, :] + np.einsum("nck,ck->nc", columns, coefficients)
-        return floor[None, :] + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
+        return phi[None, :] + np.exp(np.clip(linear, -LOG_CLIP, LOG_CLIP))
 
     def predict(self, mixtures: np.ndarray) -> np.ndarray:
         return self.predict_tasks(mixtures) @ self.weights
@@ -468,7 +462,7 @@ class ObjectiveFit:
         return {
             "objective": self.objective,
             "buckets": list(self.buckets),
-            "epochs_per_unit_weight": self.inventory.tolist(),
+            "epochs_per_unit_weight": self.epochs_per_unit_weight.tolist(),
             "task_weights": self.weights.tolist(),
             "tasks": [t.to_json() for t in self.tasks],
         }
@@ -492,17 +486,17 @@ def fit_objective(
     log: Callable[[str], None] | None = None,
 ) -> ObjectiveFit:
     tasks = []
-    for component in objective.components:
-        if component not in anchors:
-            raise ValueError(f"no anchor for {component}")
-        fit = fit_task(swarm, component, anchors[component], folds)
+    for task in objective.tasks:
+        if task not in anchors:
+            raise ValueError(f"no anchor for {task}")
+        fit = fit_task(swarm, task, anchors[task], folds)
         if log is not None:
             log(
-                f"{component}: shape {fit.shape} ridge {fit.ridge} kappa {fit.kappa:.3f}"
+                f"{task}: shape {fit.shape} gamma {fit.gamma} nu {fit.nu:.3f}"
                 f"{' (flat)' if fit.flat_profile else ''} cv {fit.inner_cv_rmse:.5f}"
             )
         tasks.append(fit)
-    return ObjectiveFit(objective.name, swarm.buckets, swarm.inventory, objective.weights, tuple(tasks))
+    return ObjectiveFit(objective.name, swarm.buckets, swarm.epochs_per_unit_weight, objective.weights, tuple(tasks))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -567,15 +561,15 @@ def optimize_start(
 def bucket_upper_bounds(fit: ObjectiveFit, cap: float | None) -> np.ndarray:
     """Per-bucket weight bounds: the simplex alone (``cap`` None, the procedure) or an optional epoch cap."""
     if cap is None:
-        return np.ones(len(fit.inventory))
-    return np.minimum(1.0, cap / fit.inventory)
+        return np.ones(len(fit.epochs_per_unit_weight))
+    return np.minimum(1.0, cap / fit.epochs_per_unit_weight)
 
 
 def continuous_optimum(
     fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished."""
-    natural = 1.0 / fit.inventory
+    natural = 1.0 / fit.epochs_per_unit_weight
     natural = natural / natural.sum()
     upper = bucket_upper_bounds(fit, cap)
     indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
@@ -650,7 +644,7 @@ def runtime_policy(
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and predictions."""
     maximum = np.floor(bucket_upper_bounds(fit, cap) * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
-    natural = 1.0 / fit.inventory
+    natural = 1.0 / fit.epochs_per_unit_weight
     natural = natural / natural.sum()
 
     def predict(rows: np.ndarray) -> np.ndarray:
@@ -670,7 +664,7 @@ def runtime_policy(
         "continuous_prediction": float(predict(weights)[0]),
         "runtime_prediction": float(predict(runtime)[0]),
         "exchange_steps": float(steps),
-        "max_materialized_epoch": float((runtime * fit.inventory).max()),
+        "max_materialized_epoch": float((runtime * fit.epochs_per_unit_weight).max()),
     }
 
 
@@ -733,7 +727,7 @@ def fit_log_linear(
     return LogLinearLaw(float(best_params[0]), best_params[1:], best_loss)
 
 
-def olmix_exact_proposal(
+def exact_proposal(
     laws: Sequence[LogLinearLaw], task_weights: np.ndarray, natural: np.ndarray, caps: np.ndarray, kl_reg: float
 ) -> tuple[np.ndarray, float, str]:
     """Olmix's exact proposer: minimize the weighted mean prediction plus kl_reg * KL(w || natural) on the
@@ -831,7 +825,7 @@ def command_optimize(args: argparse.Namespace) -> None:
             "continuous_weight": weights,
             "runtime_count": counts,
             "runtime_weight": counts / MIXTURE_BLOCK_SIZE,
-            "materialized_epochs": counts / MIXTURE_BLOCK_SIZE * fit.inventory,
+            "materialized_epochs": counts / MIXTURE_BLOCK_SIZE * fit.epochs_per_unit_weight,
         }
     )
     table.to_csv(args.out, index=False)
@@ -859,17 +853,17 @@ def command_evaluate(args: argparse.Namespace) -> None:
 def command_olmix(args: argparse.Namespace) -> None:
     swarm, objectives, _, _, _ = _default_inputs(args)
     objective = objectives[args.objective]
-    laws = [fit_log_linear(swarm.weights, swarm.outcomes[c].to_numpy(float), args.delta) for c in objective.components]
-    natural = 1.0 / swarm.inventory
+    laws = [fit_log_linear(swarm.weights, swarm.outcomes[c].to_numpy(float), args.delta) for c in objective.tasks]
+    natural = 1.0 / swarm.epochs_per_unit_weight
     natural = natural / natural.sum()
-    caps = np.minimum(1.0, args.cap / swarm.inventory)
-    solution, predicted, status = olmix_exact_proposal(laws, objective.weights, natural, caps, args.kl)
+    caps = np.minimum(1.0, args.cap / swarm.epochs_per_unit_weight)
+    solution, predicted, status = exact_proposal(laws, objective.weights, natural, caps, args.kl)
     pd.DataFrame(
-        {"bucket": swarm.buckets, "weight": solution, "materialized_epochs": solution * swarm.inventory}
+        {"bucket": swarm.buckets, "weight": solution, "materialized_epochs": solution * swarm.epochs_per_unit_weight}
     ).to_csv(args.out, index=False)
     laws_json = [
-        {"component": c, "log_c": law.log_c, "coefficients": law.coefficients.tolist(), "huber_loss": law.huber_loss}
-        for c, law in zip(objective.components, laws, strict=True)
+        {"task": c, "log_c": law.log_c, "coefficients": law.coefficients.tolist(), "huber_loss": law.huber_loss}
+        for c, law in zip(objective.tasks, laws, strict=True)
     ]
     record = {
         "objective": args.objective,
@@ -880,7 +874,7 @@ def command_olmix(args: argparse.Namespace) -> None:
         "seed": OLMIX_FIT_SEED,
         "solver": status,
         "predicted": predicted,
-        "max_epochs": float((solution * swarm.inventory).max()),
+        "max_epochs": float((solution * swarm.epochs_per_unit_weight).max()),
         "laws": laws_json,
     }
     Path(args.out).with_suffix(".json").write_text(json.dumps(record, indent=1))
@@ -902,9 +896,7 @@ def self_test() -> None:
         fit = fit_objective(swarm, objectives[name], read_anchors(DATA / "anchors.csv", name), folds)
         reference = pd.read_csv(DATA / f"reference_swarm_predictions_{name}.csv")
         error = float(
-            np.max(
-                np.abs(fit.predict_tasks(swarm.weights) - reference[list(objectives[name].components)].to_numpy(float))
-            )
+            np.max(np.abs(fit.predict_tasks(swarm.weights) - reference[list(objectives[name].tasks)].to_numpy(float)))
         )
         bank = pd.read_csv(DATA / f"heldout_bank_{name}.csv")
         reference_bank = pd.read_csv(DATA / f"reference_bank_predictions_{name}.csv")
@@ -912,7 +904,7 @@ def self_test() -> None:
             np.max(
                 np.abs(
                     fit.predict_tasks(bank[list(swarm.buckets)].to_numpy(float))
-                    - reference_bank[list(objectives[name].components)].to_numpy(float)
+                    - reference_bank[list(objectives[name].tasks)].to_numpy(float)
                 )
             )
         )
