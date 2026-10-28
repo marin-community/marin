@@ -107,6 +107,8 @@ def saved_batch(tmp_path):
         "head_sha": "1" * 40,
     }
     submission = coordinator_plan(source, "h100", "cw-rno2a", "batch", str(tmp_path / "retained"), None)
+    # Exercise loss between two explicit fixture points independently of weekly calibration choices.
+    submission["concurrencies"] = [8, 32]
     plan = resolve_plan(submission, {"key": "fixture", "archive_sha256": "a" * 64})
     return plan, str(tmp_path / "submission.json")
 
@@ -128,15 +130,15 @@ def test_coordinator_retains_each_terminal_outcome_and_runs_points_serially(save
 def test_calibration_load_outside_weekly_grid_runs_and_retains_one_point(saved_batch, tmp_path):
     original, _ = saved_batch
     plan = resolve_plan(
-        coordinator_plan(original["source"], "h100", "cw-rno2a", "batch", str(tmp_path / "calibration"), 16),
+        coordinator_plan(original["source"], "h100", "cw-rno2a", "batch", str(tmp_path / "calibration"), 17),
         original["points"][0]["manifest"]["workload"],
     )
     controller = FakeController(plan)
     with pytest.raises(RuntimeError, match="points failed"):
         run_points(controller, plan, tmp_path)
     result = read_record(pending_result(plan["root"]))
-    assert [point["manifest"]["concurrency"] for point in result["points"]] == [16]
-    assert result["points"][0]["job_id"].endswith("/c16")
+    assert [point["manifest"]["concurrency"] for point in result["points"]] == [17]
+    assert result["points"][0]["job_id"].endswith("/c17")
     assert len(controller.waited) == 1
 
 
