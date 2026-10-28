@@ -1,0 +1,206 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Mixture optimization of a fitted objective.
+
+The aggregate sum_t a_t f_t(w) is minimized by SLSQP over the simplex from several feasible starts (the proportional
+mixture and four seeded swarm rows), polished, then rounded to the sampler grid of 2,048 blocks with an exchange
+search. SLSQP finds a local minimizer; the multistart is the only guard against local optima. An epoch cap and a KL
+penalty toward the proportional mixture are optional and not part of the procedure: the reported optima are
+unconstrained.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import numpy as np
+from scipy.optimize import minimize
+from scipy.special import xlogy
+
+from mariner.model import ObjectiveFit
+
+# ---------------------------------------------------------------------------------------------------------------
+# Constants of the frozen procedure (every value is the one the paper's runs used)
+# ---------------------------------------------------------------------------------------------------------------
+
+START_SEED = 20_260_906
+PANEL_STARTS = 4
+OPTIMIZER_OPTIONS = {"maxiter": 500, "ftol": 1e-11, "eps": 1e-8}
+POLISH_OPTIONS = {"maxiter": 2000, "ftol": 1e-10, "eps": 1e-6}
+PROJECTION_OPTIONS = {"maxiter": 200, "ftol": 1e-13}
+FEASIBILITY_TOLERANCE = 1e-7
+ENDPOINT_FEASIBILITY_TOLERANCE = 10 * FEASIBILITY_TOLERANCE
+MIXTURE_BLOCK_SIZE = 2_048
+MAX_EXCHANGE_STEPS = 4 * MIXTURE_BLOCK_SIZE
+REFINE_TOLERANCE = 1e-13
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Mixture optimization: SLSQP from feasible starts, then rounding to the sampler grid
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def project_start(weights: np.ndarray, upper: np.ndarray, feasible: np.ndarray) -> np.ndarray:
+    """Euclidean projection onto the capped simplex by a convex quadratic solve."""
+    if np.max(weights - upper) <= 1e-12 and weights.min() >= 0 and abs(weights.sum() - 1) <= 1e-12:
+        return weights.copy()
+    result = minimize(
+        lambda candidate: 0.5 * float(np.square(candidate - weights).sum()),
+        feasible,
+        jac=lambda candidate: candidate - weights,
+        bounds=list(zip(np.zeros(len(upper)), upper, strict=True)),
+        constraints={"type": "eq", "fun": lambda c: c.sum() - 1, "jac": lambda c: np.ones_like(c)},
+        method="SLSQP",
+        options=PROJECTION_OPTIONS,
+    )
+    if not result.success or max(abs(result.x.sum() - 1), -result.x.min(), np.max(result.x - upper)) > 1e-10:
+        raise ValueError(f"start projection failed: {result.message}")
+    return result.x
+
+
+def categorical_kl(weights: np.ndarray, natural: np.ndarray) -> float:
+    return float(xlogy(weights, weights / natural).sum())
+
+
+def optimize_start(
+    predict: Callable[[np.ndarray], np.ndarray],
+    start: np.ndarray,
+    natural: np.ndarray,
+    upper: np.ndarray,
+    kl: float,
+    options: dict[str, Any],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    def objective(weights: np.ndarray) -> float:
+        return float(predict(weights[None])[0]) + kl * categorical_kl(weights, natural)
+
+    result = minimize(
+        objective,
+        start,
+        method="SLSQP",
+        bounds=list(zip(np.zeros(len(upper)), upper, strict=True)),
+        constraints={"type": "eq", "fun": lambda w: w.sum() - 1, "jac": lambda w: np.ones_like(w)},
+        options=options,
+    )
+    violation = float(max(abs(result.x.sum() - 1), -result.x.min(), np.max(result.x - upper)))
+    weights = project_start(result.x, upper, natural)
+    value = objective(weights)
+    if not np.isfinite(value):
+        raise ValueError("continuous optimizer produced a nonfinite objective")
+    return weights, {
+        "objective": value,
+        "raw_feasibility_violation": violation,
+        "success": bool(result.success),
+        "iterations": int(result.nit),
+    }
+
+
+def bucket_upper_bounds(fit: ObjectiveFit, cap: float | None) -> np.ndarray:
+    """Per-bucket weight bounds: the simplex alone (``cap`` None, the procedure) or an optional epoch cap."""
+    if cap is None:
+        return np.ones(len(fit.epochs_per_unit_weight))
+    return np.minimum(1.0, cap / fit.epochs_per_unit_weight)
+
+
+def continuous_optimum(
+    fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished."""
+    natural = 1.0 / fit.epochs_per_unit_weight
+    natural = natural / natural.sum()
+    upper = bucket_upper_bounds(fit, cap)
+    indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
+    starts = [project_start(row, upper, natural) for row in (natural, *swarm_weights[indices])]
+    records, solutions = [], []
+    for index, start in enumerate(starts):
+        weights, diagnostics = optimize_start(fit.predict, start, natural, upper, kl, OPTIMIZER_OPTIONS)
+        records.append({"start": index, **diagnostics})
+        solutions.append(weights)
+    for index, start in enumerate(list(solutions)):
+        weights, diagnostics = optimize_start(fit.predict, start, natural, upper, kl, POLISH_OPTIONS)
+        if diagnostics["objective"] <= records[index]["objective"]:
+            solutions[index] = weights
+            records[index] = {"start": index, **diagnostics, "polished": True}
+    feasible = [i for i, row in enumerate(records) if row["raw_feasibility_violation"] <= ENDPOINT_FEASIBILITY_TOLERANCE]
+    if not feasible:
+        raise ValueError("no restart ended feasibly")
+    best = min(feasible, key=lambda i: records[i]["objective"])
+    for row in records:
+        row["selected"] = row["start"] == best
+    return solutions[best], records
+
+
+def constrained_counts(weights: np.ndarray, maximum_counts: np.ndarray) -> np.ndarray:
+    target = np.asarray(weights, dtype=float) * MIXTURE_BLOCK_SIZE
+    counts = np.minimum(np.floor(target).astype(np.int64), maximum_counts)
+    remaining = MIXTURE_BLOCK_SIZE - int(counts.sum())
+    while remaining:
+        available = np.flatnonzero(counts < maximum_counts)
+        if len(available) == 0:
+            raise ValueError("the epoch cap cannot support a complete mixture block")
+        deficit = target[available] - counts[available]
+        counts[int(available[int(np.argmax(deficit))])] += 1
+        remaining -= 1
+    return counts
+
+
+def refine_counts(
+    predict: Callable[[np.ndarray], np.ndarray], initial: np.ndarray, maximum: np.ndarray
+) -> tuple[np.ndarray, int]:
+    """Improving one-block exchanges on the sampler grid until none lowers the objective."""
+    current = np.asarray(initial, dtype=np.int64).copy()
+    current_value = float(predict((current / MIXTURE_BLOCK_SIZE)[None, :])[0])
+    for step in range(MAX_EXCHANGE_STEPS):
+        donors = np.flatnonzero(current > 0)
+        receivers = np.flatnonzero(current < maximum)
+        proposals, moves = [], []
+        for donor in donors:
+            for receiver in receivers:
+                if donor == receiver:
+                    continue
+                proposal = current.copy()
+                proposal[donor] -= 1
+                proposal[receiver] += 1
+                proposals.append(proposal)
+                moves.append((donor, receiver))
+        if not proposals:
+            return current, step
+        values = predict(np.asarray(proposals, dtype=float) / MIXTURE_BLOCK_SIZE)
+        choice = int(np.argmin(values))
+        if float(values[choice]) >= current_value - REFINE_TOLERANCE:
+            return current, step
+        donor, receiver = moves[choice]
+        current[donor] -= 1
+        current[receiver] += 1
+        current_value = float(values[choice])
+    raise RuntimeError(f"exchange refinement exceeded {MAX_EXCHANGE_STEPS} steps")
+
+
+def runtime_policy(
+    fit: ObjectiveFit, weights: np.ndarray, cap: float | None = None, kl: float = 0.0
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Round a continuous optimum to block counts (under the optional cap) and refine; returns counts and predictions."""
+    maximum = np.floor(bucket_upper_bounds(fit, cap) * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
+    natural = 1.0 / fit.epochs_per_unit_weight
+    natural = natural / natural.sum()
+
+    def predict(rows: np.ndarray) -> np.ndarray:
+        rows = np.atleast_2d(rows)
+        value = fit.predict(rows)
+        if kl:
+            safe = np.maximum(rows, 1e-300)
+            value = value + kl * np.sum(np.where(rows > 0, rows * np.log(safe / natural[None, :]), 0.0), axis=1)
+        return value
+
+    initial = constrained_counts(weights, maximum)
+    counts, steps = refine_counts(predict, initial, maximum)
+    runtime = counts / MIXTURE_BLOCK_SIZE
+    if int(counts.sum()) != MIXTURE_BLOCK_SIZE or counts.min() < 0 or np.any(counts > maximum):
+        raise ValueError("invalid refined runtime allocation")
+    return counts, {
+        "continuous_prediction": float(predict(weights)[0]),
+        "runtime_prediction": float(predict(runtime)[0]),
+        "exchange_steps": float(steps),
+        "max_materialized_epoch": float((runtime * fit.epochs_per_unit_weight).max()),
+    }
