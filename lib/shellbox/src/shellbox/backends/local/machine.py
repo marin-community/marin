@@ -555,8 +555,9 @@ class LocalMachine:
                 self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
             async with asyncio.timeout(PROBE_TIMEOUT):
                 while True:
-                    information.seek(0)
-                    payload = information.read()
+                    # The inherited file description shares bwrap's write
+                    # offset; seeking here can corrupt its multi-write JSON.
+                    payload = os.pread(information.fileno(), os.fstat(information.fileno()).st_size, 0)
                     if payload:
                         try:
                             status = json.loads(payload)
