@@ -84,9 +84,10 @@ RUN_COLUMNS = (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, FIT_INCLUSION)
 PARTITION_COLUMNS = (BUCKET_ID, POOL_TOKENS)
 TASK_COLUMNS = (TASK_ID, OBJECTIVE_COLUMN, AGGREGATE_WEIGHT)
 RUN_TABLE = "run"
+# The snapshot's MANIFEST.json names these three tables too.
 PARTITION_TABLE = "partition"
 TASKS_TABLE = "tasks"
-HELDOUT_TABLE = "heldout"  # the held-out runs' table, in the snapshot's MANIFEST.json and in messages
+HELDOUT_TABLE = "heldout"
 # Read as text, so that bucket ids such as 00 and numeric observation ids keep their spelling.
 IDENTIFIER_COLUMNS = (BUCKET_ID, TASK_ID, OBJECTIVE_COLUMN, OBSERVATION_ID, RUN_LABEL, DESIGN_KIND, EXPOSURE_ID)
 MISSING_NOTE = "pandas reads empty cells and tokens such as NA, N/A, null, None and nan as missing"
@@ -420,11 +421,11 @@ def read_table(root: Path, name: str) -> pd.DataFrame:
 
 
 def release_partition(root: Path) -> Partition:
-    return partition_from_table(read_table(root, "partition"))
+    return partition_from_table(read_table(root, PARTITION_TABLE))
 
 
 def release_tasks(root: Path) -> pd.DataFrame:
-    return read_table(root, "tasks")
+    return read_table(root, TASKS_TABLE)
 
 
 def release_runs(root: Path, swarm: str) -> pd.DataFrame:
