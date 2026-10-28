@@ -23,12 +23,10 @@ import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
 from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
-from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
+from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS, EmergingOptimizerEntry
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
-
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megatron_grug_route
-
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
@@ -51,6 +49,35 @@ def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
 
 
 HybridDeviceOptimizer._update_fp32_params_by_new_state = _update_fp32_params_by_new_state
+
+
+def _register_load_state_dict_hooks(self: HybridDeviceOptimizer) -> None:
+    """Load moments directly onto the device and dtype used by each sub-optimizer."""
+
+    def pre_load(optimizer, state_dict):
+        # MCore 0.18 only substitutes reduced-precision parameters here. FP32 CUDA
+        # shards therefore pull all CPU-offloaded moments onto CUDA during Torch's
+        # load_state_dict cast, before MCore can move them back to CPU.
+        optimizer.state = {optimizer.param_to_inner_param[param]: state for param, state in optimizer.state.items()}
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.param_to_inner_param[param] for param in group["params"]]
+        return state_dict
+
+    def post_load(optimizer):
+        optimizer.state = {
+            optimizer.inner_param_to_orig_param[param]: state for param, state in optimizer.state.items()
+        }
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.inner_param_to_orig_param[param] for param in group["params"]]
+        optimizer._init_sub_optimizers()
+        optimizer._sync_hdo_param_groups_to_sub_optimizers()
+        optimizer._sync_hdo_state_to_sub_optimizers()
+
+    self.register_load_state_dict_pre_hook(pre_load)
+    self.register_load_state_dict_post_hook(post_load)
+
+
+HybridDeviceOptimizer._register_load_state_dict_hooks = _register_load_state_dict_hooks
 
 
 def _grug_muonh_extra(optim_config: Mapping) -> dict:

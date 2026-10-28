@@ -113,9 +113,12 @@ def run_spec(
     model: ArtifactStep[LevanterCheckpoint],
     run_data: ArtifactStep,
     teachers: dict[Task, TeacherModel],
+    resume_from: str | None = None,
 ) -> SkyRLSpec:
     repo, revision = FAMILY_TOKENIZER_REVISIONS["grug"]
     recipe = skyrl_recipe(run, teachers)
+    if resume_from is not None:
+        recipe["trainer"].update(resume_mode="from_path", resume_path=resume_from)
     name = user_owned_name(f"checkpoints/phase1a/{run.name}")
     return SkyRLSpec(
         name=name,
@@ -193,6 +196,9 @@ def selected_runs(
 @click.option("--expert-x", type=teacher_model, help="E_X as REPO@REVISION or s3://EXPORT@sha256:ID.")
 @click.option("--expert-r", type=teacher_model, help="E_R as REPO@REVISION or s3://EXPORT@sha256:ID.")
 @click.option("--b-teacher", type=teacher_model, help="B as PATH@REVISION, the procedure nulls' teacher.")
+@click.option(
+    "--resume-from", help="Full optimizer checkpoint global_step directory; requires exactly one selected run."
+)
 @rl_build_options
 def main(
     stage: str,
@@ -207,12 +213,15 @@ def main(
     expert_x: TeacherModel | None,
     expert_r: TeacherModel | None,
     b_teacher: TeacherModel | None,
+    resume_from: str | None,
 ) -> list[ArtifactStep[SkyRLRun]]:
     model = ArtifactStep.adopt(user_owned_name("models/phase1a-snowball-b"), b_version, b_uri, kind=LevanterCheckpoint)
     run_data = ArtifactStep.adopt(user_owned_name("documents/phase1a-run-data"), run_data_version, run_data_uri)
     configure_coreweave_s3()  # S3 teacher pins are read at launch; a no-op inside a CoreWeave pod
     pool = {Task.X: expert_x, Task.R: expert_r, Task.GENERAL: b_teacher}
     runs = selected_runs(stage, learning_rate, methods, conditions, seeds)
+    if resume_from is not None and len(runs) != 1:
+        raise click.UsageError("--resume-from requires exactly one selected run")
     for task in {task for run in runs if run.method is Method.M4 for task in run.tasks}:
         if pool[task] is None:
             raise click.UsageError(f"the selected M4 runs score {task} and need its teacher")
@@ -220,7 +229,7 @@ def main(
     steps = []
     for run in runs:
         teachers = {task: pool[task] for task in run.tasks} if run.method is Method.M4 else {}
-        spec = run_spec(run, model=model, run_data=run_data, teachers=teachers)
+        spec = run_spec(run, model=model, run_data=run_data, teachers=teachers, resume_from=resume_from)
         steps.append(skyrl_step(spec, execution(CLUSTER), export_hf=True))
     return steps
 

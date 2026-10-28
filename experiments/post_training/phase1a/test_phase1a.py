@@ -186,6 +186,7 @@ def matched(path):
         "router_telemetry": cfg.trainer.router_telemetry.enabled,
         "strategy": cfg.trainer.strategy,
         "env_class": cfg.environment.env_class,
+        "resume": [cfg.trainer.resume_mode, cfg.trainer.resume_path],
     }
 
 print(json.dumps([matched(path) for path in sys.argv[1:]]))
@@ -193,7 +194,8 @@ print(json.dumps([matched(path) for path in sys.argv[1:]]))
 
 
 @pytest.mark.timeout(300)  # A cold cache installs the independently locked launcher.
-def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
+@pytest.mark.parametrize("resume_from", [None, "s3://bucket/previous-run/checkpoints/global_step_10"])
+def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resume_from):
     model = ArtifactStep.adopt("models/phase1a-test-b", "2026.10.23", "s3://bucket/b", kind=LevanterCheckpoint)
     data = ArtifactStep.adopt("documents/phase1a-test-data", "2026.10.23", "s3://bucket/data")
     cells = [(condition, 1) for condition in PHASE1A_CONDITIONS] + [(Condition.PROCEDURE_NULL, 0)]
@@ -203,7 +205,7 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
             for method in Method:
                 run = RunPlan(method, condition, seed, 2e-6)
                 teachers = {task: TEACHERS[task] for task in run.tasks} if method is Method.M4 else {}
-                spec = run_spec(run, model=model, run_data=data, teachers=teachers)
+                spec = run_spec(run, model=model, run_data=data, teachers=teachers, resume_from=resume_from)
                 step = skyrl_step(spec, execution(CLUSTER), export_hf=True)
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
                 path = tmp_path / f"{run.name}.yaml"
@@ -219,6 +221,7 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
         assert m1.pop("env_class") == "fixed_completion" and m4.pop("env_class") == "prompt_only"
         assert m1 == m4, condition
         assert m4["order"] == [False, None]
+        assert m4["resume"] == (["latest", None] if resume_from is None else ["from_path", resume_from])
         assert m4["optimizer"] == ["AdamW", 2e-6, [0.9, 0.999], 0.0, 1.0, 5, "constant_with_warmup"]
 
 
