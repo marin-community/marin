@@ -434,11 +434,11 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,
-                        version="lm-eval-0.4.12-vendor-native-v1",
+                        version="lm-eval-0.4.12-vendor-native-v2",
                         operation="text_generation",
                         sampling=Sampling(
                             temperature=0,
-                            top_p=1,
+                            top_p=None,
                             top_k=None,
                             max_tokens=None,
                             stop=GSM8K_REQUEST_STOPS if profile == "gsm8k" else COMPLETION_REQUEST_STOPS,

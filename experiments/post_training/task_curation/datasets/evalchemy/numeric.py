@@ -9,7 +9,6 @@ from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sa
 from taskcompendium.importers.evaluation_nupa import convert_nupa, nupa_item, read_nupa_panel, read_nupa_sample
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
-from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
 
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
@@ -59,14 +58,14 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,
-                        version="maintained-nupa-loose-v2",
+                        version="maintained-nupa-loose-v3",
                         operation="chat_generation",
                         sampling=Sampling(
                             temperature=0,
-                            top_p=1,
+                            top_p=None,
                             top_k=None,
                             max_tokens=256,
-                            stop=CHAT_REQUEST_STOPS,
+                            stop=(),
                             chat_template_kwargs={},
                         ),
                         trials=TrialPolicy(count=1, seed=None),

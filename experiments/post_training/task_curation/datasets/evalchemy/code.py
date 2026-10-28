@@ -151,11 +151,11 @@ def python_source(
             ),
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="shellbox-command-code-v4",
+                version="source-sampling-code-v5",
                 operation="text_generation" if completion else "chat_generation",
                 sampling=Sampling(
                     temperature=0.2 if sampled else 0,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),

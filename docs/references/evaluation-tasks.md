@@ -91,6 +91,13 @@ panel retains its 73,664-token cap.
 The source row limit precedes trial expansion. AIME's ten trials therefore remain
 ten trials for each selected source row.
 
+Sampling preserves omitted source options. In particular, `top_p: null` leaves
+the request field absent so the served model's generation configuration applies;
+it does not mean `top_p: 1`. Empty source stops add no stop strings. Record the
+served generation defaults alongside its revision. The old CLI could strip source
+temperature and seed when applying empty global overrides. This driver honors
+the dataset protocol; compare old runs with explicit matching controls.
+
 ```bash
 OPENAI_API_KEY=unused uv run --package marin-core --group test python \
   -m experiments.evaluation.task_driver \

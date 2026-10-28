@@ -19,6 +19,10 @@ from marin.evaluation.selection import SELECTIONS_TABLE, select_cases
 from marin.evaluation.task_driver import EvaluationRunConfig, ModelIdentity, run_evaluation
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import WhitespaceSplit
+from transformers import PreTrainedTokenizerFast
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.evalchemy.long_context import sources
@@ -40,6 +44,7 @@ class WordTokenizer:
         *,
         tokenize: bool,
         add_generation_prompt: bool,
+        return_dict: bool = False,
         **kwargs: Any,
     ) -> list[int]:
         self.chat_calls.append(
@@ -294,6 +299,32 @@ def test_graphwalks_filters_before_limit_and_retains_reference_dependent_budgets
     assert (after_limit.prompt_tokens, after_limit.reference_tokens, after_limit.max_tokens) == (None, None, None)
     assert any(call["messages"] == [{"role": "user", "content": rows[2]["prompt"]}] for call in tokenizer.chat_calls)
     assert all(call["kwargs"] == {"enable_thinking": True} for call in tokenizer.chat_calls)
+
+
+def test_graphwalks_counts_huggingface_chat_tokens_before_admitting_a_prompt(graph_corpus):
+    backend = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    backend.pre_tokenizer = WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        chat_template="{% for message in messages %}{{ message['content'] }} {% endfor %}",
+    )
+    root, protocol, _, _ = graph_corpus
+    decisions = list(
+        select_cases(
+            root,
+            protocol,
+            dataset_id="huggingface-graphs",
+            context_window=10000,
+            max_tokens=8300,
+            limit=None,
+            tokenizer=tokenizer,
+        )
+    )
+    assert [decision.record.source_ordinal for decision in decisions if decision.case is not None] == [2, 3]
+    assert decisions[0].record.prompt_tokens == 2000
+    assert decisions[0].record.reason == "context_window"
+    assert decisions[4].record.reason == "context_prefix"
 
 
 @pytest.mark.asyncio

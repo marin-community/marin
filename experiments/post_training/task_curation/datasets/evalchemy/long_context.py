@@ -147,11 +147,11 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
             ),
             EvaluationProtocol(
                 benchmark=name,
-                version="1",
+                version="2",
                 operation="chat_generation",
                 sampling=Sampling(
                     temperature=0,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=4096,
                     stop=(),
@@ -198,11 +198,11 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                 ),
                 EvaluationProtocol(
                     benchmark="GraphWalks",
-                    version="1",
+                    version="2",
                     operation="chat_generation",
                     sampling=Sampling(
                         temperature=0,
-                        top_p=1,
+                        top_p=None,
                         top_k=None,
                         max_tokens=131072,
                         stop=(),

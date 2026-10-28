@@ -66,7 +66,7 @@ from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Se
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.10.28.2"
+DRIVER_REVISION = "2026.10.28.4"
 
 
 class RunModel(BaseModel):
@@ -131,10 +131,11 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
         extra["top_k"] = sampling.top_k
     options: dict[str, Any] = {
         "temperature": sampling.temperature,
-        "top_p": sampling.top_p,
         "max_tokens": min(config.max_tokens, sampling.max_tokens or config.max_tokens),
         "extra_body": extra,
     }
+    if sampling.top_p is not None:
+        options["top_p"] = sampling.top_p
     if sampling.stop:
         options["stop"] = list(sampling.stop)
     seed = protocol.trials.seed_for(trial) if config.seed is None else config.seed + trial

@@ -20,7 +20,6 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
-from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
 from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalProfile, IfevalSpec
 
 from experiments.post_training.task_curation.datasets.evalchemy.instruction_environments import (
@@ -108,14 +107,14 @@ def instruction_source(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="maintained-instructions-v3",
+                version="maintained-instructions-v4",
                 operation="text_generation" if profile is IfevalProfile.HARNESS else "chat_generation",
                 sampling=Sampling(
                     temperature=0,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
-                    stop=() if profile is IfevalProfile.HARNESS else CHAT_REQUEST_STOPS,
+                    stop=(),
                     chat_template_kwargs={} if profile is IfevalProfile.HARNESS else {"enable_thinking": False},
                 ),
                 trials=TrialPolicy(count=1, seed=None),

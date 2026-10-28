@@ -120,7 +120,8 @@ class EvaluationItem(EvaluationModel):
 
 class Sampling(EvaluationModel):
     temperature: float = Field(ge=0)
-    top_p: float = Field(gt=0, le=1)
+    top_p: float | None = Field(gt=0, le=1)
+    """None preserves the served model's generation default."""
     top_k: int | None
     max_tokens: int | None = Field(gt=0)
     """None uses the explicit run's model budget; the resolved budget is saved with the run."""

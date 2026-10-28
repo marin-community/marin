@@ -517,7 +517,7 @@ def _judge_transport(
     """Retry only transient provider failures; semantic label parsing happens afterward.
 
     The source uses capped exponential full jitter and a Retry-After minimum.
-    The retry budget never shortens the configured single-request timeout.
+    The total budget allows the full first-request timeout; retries share what remains.
     Only response bodies, statuses and retry reasons enter evidence, never headers.
     """
     deadline = time.monotonic() + max(spec.transport_budget, spec.request_timeout)

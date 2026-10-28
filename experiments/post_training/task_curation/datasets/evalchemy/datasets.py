@@ -58,11 +58,11 @@ def math_dataset(
             recipe,
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="1",
+                version="source-sampling-v2",
                 operation="chat_generation",
                 sampling=Sampling(
                     temperature=temperature,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=None,
                     stop=CHAT_REQUEST_STOPS,

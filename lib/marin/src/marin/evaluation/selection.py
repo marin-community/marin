@@ -112,7 +112,11 @@ def prompt_tokens(
         messages = [{**message, "content": message["content"][:prefix_chars]}]
     return len(
         tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=True, **protocol.sampling.chat_template_kwargs
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=False,
+            **protocol.sampling.chat_template_kwargs,
         )
     )
 

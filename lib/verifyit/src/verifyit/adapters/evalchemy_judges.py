@@ -92,7 +92,7 @@ C: NOT_ATTEMPTED
 
 Just return the letters "A", "B", or "C", with no text around it."""  # noqa: E501 - exact upstream prompt
 
-FINANCE_JUDGE_TEMPLATE = """You are an expert and precise grader. Determine whether the candidate answer is equivalent to any reference answer for the question.
+EQUIVALENCE_JUDGE_TEMPLATE = """You are an expert and precise grader. Determine whether the candidate answer is equivalent to any reference answer for the question.
 
 Use these labels:
 - correct: The candidate matches a reference in substance. Accept algebraically equivalent expressions, equivalent unit conversions, harmless formatting differences, and small numerical rounding differences. Units must describe the same physical dimension and quantity.
@@ -151,7 +151,7 @@ def financebench_spec(question: str, answer: str) -> JudgeSpec:
         classification_spec(
             question,
             json.dumps([answer], ensure_ascii=False),
-            FINANCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
+            EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
                 "{candidate_answer}", "{candidate}"
             ),
             ("correct", "incorrect", "not_attempted"),

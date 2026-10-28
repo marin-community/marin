@@ -22,7 +22,6 @@ from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse, RawRow
-from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
 from verifyit.spec import EmptyOutputPolicy, McqProfile, McqSpec
 from zephyr.readers import load_parquet
 
@@ -174,14 +173,14 @@ def choice_dataset(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="maintained-generated-choice-v2",
+                version="maintained-generated-choice-v3",
                 operation="chat_generation",
                 sampling=Sampling(
                     temperature=temperature,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=None,
-                    stop=CHAT_REQUEST_STOPS,
+                    stop=(),
                     chat_template_kwargs={"enable_thinking": True},
                 ),
                 trials=TrialPolicy(count=trials, seed=0 if temperature else None),

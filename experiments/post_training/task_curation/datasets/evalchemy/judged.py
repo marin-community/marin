@@ -22,7 +22,6 @@ from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse, RawRow
 from verifyit.adapters.evalchemy_judges import financebench_spec, simpleqa_spec
-from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
 
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
@@ -105,14 +104,14 @@ def judged_source(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="maintained-classification-v4",
+                version="maintained-classification-v5",
                 operation="chat_generation",
                 sampling=Sampling(
                     temperature=0,
-                    top_p=1,
+                    top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
-                    stop=CHAT_REQUEST_STOPS,
+                    stop=(),
                     chat_template_kwargs={"enable_thinking": benchmark != "FinanceBench"},
                 ),
                 trials=TrialPolicy(count=1, seed=None),

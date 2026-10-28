@@ -13,8 +13,9 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
+from verifyit.adapters.evalchemy_judges import EQUIVALENCE_JUDGE_TEMPLATE
 from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
-from verifyit.adapters.evalchemy_olympiad import JUDGE_PROMPT, reference_answers
+from verifyit.adapters.evalchemy_olympiad import reference_answers
 from verifyit.spec import JudgeSpec, MathJudgeSpec, MathProfile, MathSpec
 
 from experiments.post_training.task_curation.datasets.evalchemy.datasets import (
@@ -63,10 +64,19 @@ def convert_olympiad(row: RawRow, _context: ConversionContext, *, judged: bool) 
                 question=row.data["problem"],
                 rubric="labels",
                 exact_gate=False,
-                prompt_template=JUDGE_PROMPT.replace("{reference_answers}", "{reference}").replace(
+                prompt_template=EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
                     "{candidate_answer}", "{candidate}"
                 ),
                 label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
+                label_metrics={
+                    label: {
+                        "accuracy": float(label == "correct"),
+                        "incorrect": float(label == "incorrect"),
+                        "not_attempted": float(label == "not_attempted"),
+                        "judge_failed": 0.0,
+                    }
+                    for label in ("correct", "incorrect", "not_attempted")
+                },
                 label_scan="whole",
                 label_case="upper",
                 max_completion_tokens=2048,
@@ -107,7 +117,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="1",
+                version="olympiad-observations-v2" if judged else "1",
                 operation="chat_generation",
                 sampling=Sampling(
                     temperature=0.7 if judged else 0,
