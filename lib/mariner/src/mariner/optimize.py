@@ -12,6 +12,7 @@ unconstrained.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from typing import Any
 
@@ -204,3 +205,30 @@ def runtime_policy(
         "exchange_steps": float(steps),
         "max_materialized_epoch": float((runtime * fit.epochs_per_unit_weight).max()),
     }
+
+
+@dataclasses.dataclass(frozen=True)
+class Proposal:
+    """A proposed mixture on the sampler grid, the continuous optimum it rounds, and the optimizer's diagnostics."""
+
+    counts: np.ndarray  # (buckets,) blocks of the 2,048-block grid
+    continuous: np.ndarray  # (buckets,) the continuous optimum
+    summary: dict[str, float]  # predictions before and after rounding, exchange steps, largest materialized epoch
+    starts: list[dict[str, Any]]  # one record per SLSQP start
+
+    @property
+    def weights(self) -> np.ndarray:
+        return self.counts / MIXTURE_BLOCK_SIZE
+
+
+def propose(fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = None, kl: float = 0.0) -> Proposal:
+    """The fitted objective's optimum (``continuous_optimum``) rounded to the sampler grid (``runtime_policy``).
+
+    ``cap`` bounds every bucket's materialized epochs and ``kl`` weights a KL penalty toward the proportional
+    mixture; both are optional and not part of the procedure.
+    """
+    if bucket_upper_bounds(fit, cap).sum() < 1:
+        raise ValueError(f"epoch cap {cap} cannot hold a complete mixture")
+    continuous, starts = continuous_optimum(fit, swarm_weights, cap, kl)
+    counts, summary = runtime_policy(fit, continuous, cap, kl)
+    return Proposal(counts, continuous, summary, starts)

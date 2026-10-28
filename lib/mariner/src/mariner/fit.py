@@ -20,11 +20,10 @@ import math
 from collections.abc import Callable
 
 import numpy as np
-import pandas as pd
 from scipy.optimize import minimize_scalar, nnls
 from sklearn.cluster import KMeans
 
-from mariner.model import Anchor, Head, Objective, ObjectiveFit, Swarm, TaskFit, design_matrix
+from mariner.model import Anchor, Head, Objective, ObjectiveFit, Shape, Swarm, TaskFit, design_matrix
 
 # ---------------------------------------------------------------------------------------------------------------
 # Constants of the frozen procedure (every value is the one the paper's runs used)
@@ -36,7 +35,7 @@ RHO_GRID = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0)
 KAPPA_GRID = (0.3, 0.5, 0.7, 1.0)
 TAU_GRID = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
 GAMMA_GRID = (0.0, 1e-3, 1e-2, 0.1, 1.0)
-SHAPES = tuple({"rho": rho, "kappa": kappa, "tau": tau} for rho in RHO_GRID for kappa in KAPPA_GRID for tau in TAU_GRID)
+SHAPES = tuple(Shape(rho, kappa, tau) for rho in RHO_GRID for kappa in KAPPA_GRID for tau in TAU_GRID)
 
 NU_PROVISIONAL = 2.5  # the multiplier at which the shape and ridge are scored
 NU_BOUNDS = (1.0, 6.0)
@@ -82,27 +81,33 @@ def folds_from_labels(rows: np.ndarray, labels: np.ndarray, folds: int) -> Folds
     return tuple((rows[labels != index], rows[labels == index]) for index in range(folds))
 
 
-def final_inner_folds(swarm: Swarm, splits: pd.DataFrame | None) -> Folds:
-    """Inner folds of the final fit on every run: from a splits table (fold -1 rows) or recomputed."""
-    rows = np.arange(len(swarm.runs))
-    if splits is not None:
-        table = splits[splits["fold"].eq(-1) & splits["repeat"].eq(0)].sort_values("row")
-        if list(table["row"]) != list(rows):
-            raise ValueError("splits table must list every run once for fold -1")
-        labels = table["inner_fold"].to_numpy(int)
-        if not set(np.unique(labels)) <= set(range(INNER_FOLDS)) | {CALIBRATION_LABEL}:
-            raise ValueError("inner fold labels must be 0..INNER_FOLDS-1 or the calibration label")
-        if np.any(labels[swarm.calibration] != CALIBRATION_LABEL):
-            raise ValueError("calibration rows must carry the calibration label (never validated)")
-        if np.any(labels[~swarm.calibration] == CALIBRATION_LABEL):
-            raise ValueError("only calibration rows may carry the calibration label")
-        if any(np.sum(labels == index) == 0 for index in range(INNER_FOLDS)):
-            raise ValueError("every inner fold must validate at least one run")
-    else:
-        labels = pin_calibration(
-            block_labels(swarm.weights, INNER_FOLDS, FINAL_FIT_FOLD_SEED), np.flatnonzero(swarm.calibration)
-        )
-    return folds_from_labels(rows, labels, INNER_FOLDS)
+def labels_from_folds(folds: Folds, runs: int) -> np.ndarray:
+    """The fold that validates each of the ``runs`` rows; CALIBRATION_LABEL for rows that no fold validates."""
+    labels = np.full(runs, CALIBRATION_LABEL)
+    for index, (_train, validation) in enumerate(folds):
+        labels[validation] = index
+    recovered = folds_from_labels(np.arange(runs), labels, len(folds))
+    for (train, validation), (expected_train, expected_validation) in zip(folds, recovered, strict=True):
+        if not (
+            np.array_equal(np.sort(train), expected_train) and np.array_equal(np.sort(validation), expected_validation)
+        ):
+            raise ValueError("folds must validate each run at most once and train on every run they do not validate")
+    return labels
+
+
+def final_inner_fold_labels(swarm: Swarm) -> np.ndarray:
+    """The final fit's inner fold of every run, recomputed from the swarm's weights; calibration runs get -1."""
+    labels = pin_calibration(
+        block_labels(swarm.weights, INNER_FOLDS, FINAL_FIT_FOLD_SEED), np.flatnonzero(swarm.calibration)
+    )
+    if any(not np.any(labels == index) for index in range(INNER_FOLDS)):
+        raise ValueError("an inner fold validates no run: its mixture block holds only calibration runs")
+    return labels
+
+
+def final_inner_folds(swarm: Swarm) -> Folds:
+    """Inner folds of the final fit on every run (``final_inner_fold_labels``)."""
+    return folds_from_labels(np.arange(len(swarm.runs)), final_inner_fold_labels(swarm), INNER_FOLDS)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -171,7 +176,7 @@ def cv_rmse(matrix: np.ndarray, response: np.ndarray, gamma: float, spec: FloorS
 
 def select_shape_and_ridge(
     exposures: np.ndarray, response: np.ndarray, spec: FloorSpec, folds: Folds
-) -> tuple[dict[str, float], float, float]:
+) -> tuple[Shape, float, float]:
     """Exhaustive inner-CV search over the shape and ridge grids; ties go to the earlier grid entry."""
     best: tuple[float, int, int] | None = None
     for shape_index, shape in enumerate(SHAPES):
@@ -183,7 +188,7 @@ def select_shape_and_ridge(
     if best is None or not math.isfinite(best[0]):
         raise ValueError("no finite inner-CV candidate")
     score, shape_index, gamma_index = best
-    return dict(SHAPES[shape_index]), GAMMA_GRID[gamma_index], score
+    return SHAPES[shape_index], GAMMA_GRID[gamma_index], score
 
 
 def search_nu(
@@ -232,9 +237,19 @@ def fit_objective(
     swarm: Swarm,
     objective: Objective,
     anchors: dict[str, Anchor],
-    folds: Folds,
+    folds: Folds | None = None,
     log: Callable[[str], None] | None = None,
 ) -> ObjectiveFit:
+    """Fit every task of ``objective`` on every run of ``swarm``.
+
+    ``folds`` index the swarm's rows; ``None``, the procedure, recomputes the final fit's inner folds. The fit
+    records the folds it used as each run's label, keyed by observation id.
+    """
+    if folds is None:
+        folds = final_inner_folds(swarm)
+    inner_fold_labels = dict(zip(swarm.runs, labels_from_folds(folds, len(swarm.runs)).tolist(), strict=True))
+    if len(inner_fold_labels) != len(swarm.runs):
+        raise ValueError("the swarm's observation ids must be unique")
     tasks = []
     for task in objective.tasks:
         if task not in anchors:
@@ -246,4 +261,6 @@ def fit_objective(
                 f"{' (flat)' if fit.flat_profile else ''} cv {fit.inner_cv_rmse:.5f}"
             )
         tasks.append(fit)
-    return ObjectiveFit(objective.name, swarm.buckets, swarm.epochs_per_unit_weight, objective.weights, tuple(tasks))
+    return ObjectiveFit(
+        objective.name, swarm.buckets, swarm.epochs_per_unit_weight, objective.weights, tuple(tasks), inner_fold_labels
+    )
