@@ -165,7 +165,8 @@ def exact_proposal(
 
     Raises:
         ImportError: If cvxpy, which the olmix extra installs, does not import.
-        RuntimeError: If no solver returns such a solution; the message gives each solver's status and outcome.
+        RuntimeError: If no solver returns such a solution; the message gives each solver's status and outcome, or the
+            error it raised.
     """
     try:
         import cvxpy as cp  # noqa: PLC0415  (optional dependency: the olmix extra)
@@ -185,8 +186,8 @@ def exact_proposal(
     for solver in SOLVERS:
         try:
             problem.solve(solver=solver, warm_start=True, verbose=False)
-        except cp.error.SolverError:
-            attempts.append(f"{solver} failed")
+        except cp.error.SolverError as error:
+            attempts.append(f"{solver} failed: {error}")
             continue
         if problem.status not in SOLVER_STATUSES:
             attempts.append(f"{solver} {problem.status}")
