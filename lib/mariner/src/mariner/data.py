@@ -290,16 +290,17 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
 
     The calibration run is the fit row with ``run_label`` ``baseline_proportional``. Raises ``ValueError`` when the
     table lacks ``observation_id``, ``run_label``, ``design_kind`` or ``fit_inclusion``, a row leaves one of the first
-    three blank, two rows share an ``observation_id``, ``fit_inclusion`` holds anything but True and False, no fit row
-    has that label, a fit row lacks an outcome of ``task_ids`` or has one that is not positive and finite, a fit row
-    has a weight that is not finite and nonnegative or weights that do not sum to one within 1e-6, a bucket's ``w__``
-    or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
+    three blank, two rows share an ``observation_id``, ``fit_inclusion`` holds anything but True and False (a missing
+    value included), no fit row has that label, a fit row lacks an outcome of ``task_ids`` or has one that is not
+    positive and finite, a fit row has a weight that is not finite and nonnegative or weights that do not sum to one
+    within 1e-6, a bucket's ``w__`` or ``pf__`` column is missing, or a pool fraction lies outside (0, 1].
     """
     require_columns(runs, RUN_COLUMNS, RUN_TABLE)
     require_identifiers(runs, (OBSERVATION_ID, RUN_LABEL, DESIGN_KIND), RUN_TABLE)
     require_unique(runs[OBSERVATION_ID], f"in the {RUN_TABLE} table")
     inclusion = runs[FIT_INCLUSION]
-    if not pd.api.types.is_bool_dtype(inclusion):
+    # is_bool_dtype holds for pandas' nullable boolean dtype, whose missing values the mask below would leave out.
+    if not pd.api.types.is_bool_dtype(inclusion) or inclusion.isna().any():
         values = shown_values(inclusion.unique())
         raise ValueError(f"{FIT_INCLUSION} must be True or False, but it holds {inclusion.dtype} values: {values}")
     fit = runs[inclusion].reset_index(drop=True)

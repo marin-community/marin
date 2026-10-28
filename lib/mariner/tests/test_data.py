@@ -84,6 +84,13 @@ def first_row_set(runs: pd.DataFrame, column: str, value: float) -> pd.DataFrame
     return changed
 
 
+def with_missing_fit_inclusion(runs: pd.DataFrame) -> pd.DataFrame:
+    """``runs`` with ``fit_inclusion`` as pandas' nullable boolean, missing in its first row, the fit row fit_00."""
+    inclusion = pd.array(runs["fit_inclusion"], dtype="boolean")
+    inclusion[0] = pd.NA
+    return runs.assign(fit_inclusion=inclusion)
+
+
 DEFECTS = {
     "no_calibration": lambda runs: runs.replace({"run_label": {CALIBRATION_RUN: "baseline_other"}}),
     "missing_outcome": lambda runs: first_row_set(runs, "bpb__t0", math.nan),
@@ -91,6 +98,7 @@ DEFECTS = {
     "missing_pool_fraction": lambda runs: runs.drop(columns="pf__b2"),
     "zero_pool_fraction": lambda runs: first_row_set(runs, "pf__b0", 0.0),
     "integer_fit_inclusion": lambda runs: runs.assign(fit_inclusion=runs["fit_inclusion"].astype(int)),
+    "missing_fit_inclusion": with_missing_fit_inclusion,
     "duplicate_observation_id": lambda runs: runs.replace({"observation_id": {"fit_03": "fit_02"}}),
     "blank_observation_id": lambda runs: first_row_set(runs, "observation_id", math.nan),
 }
@@ -105,6 +113,7 @@ DEFECTS = {
         ("missing_pool_fraction", "pf__b2"),
         ("zero_pool_fraction", "pf__b0"),
         ("integer_fit_inclusion", "fit_inclusion"),
+        ("missing_fit_inclusion", "fit_inclusion"),
         ("duplicate_observation_id", "fit_02"),
         ("blank_observation_id", "observation_id"),
     ],
