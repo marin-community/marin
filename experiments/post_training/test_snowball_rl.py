@@ -98,10 +98,27 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             """
 import json, sys
 from cloud.iris.launch_config import load_launch_config
+from skyrl_train.inference_engines.utils import get_vllm_sampling_params
+from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 configs = [load_launch_config(path) for path in sys.argv[1:]]
 for index, config in enumerate(configs):
     trainer, generator = config.skyrl.trainer, config.skyrl.generator
     name = config.run.id
+    if "train-long-" in name:
+        evaluation = get_vllm_sampling_params(generator.eval_sampling_params)
+        if evaluation["logprobs"] is not None:
+            evaluation["logprobs"] = True
+        apply_openai_sampling(evaluation, dict(generator.sampling_params), True)
+        training = get_vllm_sampling_params(generator.sampling_params)
+        training.update(logprobs=True, min_tokens=0)
+        apply_openai_sampling(training, dict(generator.sampling_params), True)
+        training["min_tokens"] = 1
+        try:
+            apply_openai_sampling(training, dict(generator.sampling_params), True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("training distribution validation accepted min_tokens=1")
     if "speed-short-" in name or "data-short-" in name or "/eval/panel-910" in name:
         assert config.runtime.entrypoint == "skyrl_train.entrypoints.main_generate"
         assert config.iris.allocation.num_nodes == 1
