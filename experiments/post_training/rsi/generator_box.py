@@ -99,21 +99,23 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
         if not types:
             logger.info("%s cites no Reasoning Gym task of a seed type; it makes no tasks", idea.capability_id)
             return
-        try:
-            for name in types:
+        capability = f"{CAPABILITY_TAG_PREFIX}{idea.capability_id}"
+        for name in types:
+            try:
                 async with slots:
                     pairs = await generator(config.client, typed_idea(idea, examples[name]), config.instances_per_type)
-                kept = [(question, entry) for question, entry in pairs if valid(name, question, entry)]
-                logger.info("%s, %s: %d of %d instances are valid", idea.capability_id, name, len(kept), len(pairs))
-                capability = f"{CAPABILITY_TAG_PREFIX}{idea.capability_id}"
-                for k, (question, entry) in enumerate(kept):
-                    task_id = f"{name}.generator-{k}"
-                    made.put_nowait(
-                        synthesized(entry_task(config.templates[name], name, task_id, question, entry, capability), idea)
-                    )
-        except Exception:
-            # One idea whose program fails, for example at a model outage, does not stop the loop.
-            logger.exception("The generator of %s failed", idea.capability_id)
+            except Exception:
+                # A program that GLM fails to write, for example at a cut reply, stops neither the idea's other
+                # types nor the loop.
+                logger.exception("The generator of %s, %s failed", idea.capability_id, name)
+                continue
+            kept = [(question, entry) for question, entry in pairs if valid(name, question, entry)]
+            logger.info("%s, %s: %d of %d instances are valid", idea.capability_id, name, len(kept), len(pairs))
+            for k, (question, entry) in enumerate(kept):
+                task_id = f"{name}.generator-{k}"
+                made.put_nowait(
+                    synthesized(entry_task(config.templates[name], name, task_id, question, entry, capability), idea)
+                )
 
     async def run_all() -> None:
         running: set[asyncio.Task[None]] = set()
