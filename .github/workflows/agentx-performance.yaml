@@ -8,7 +8,7 @@ on:
       profile:
         type: choice
         options: [both, h100, gb200]
-        default: both
+        default: h100
       concurrency:
         description: Concurrent AgentX users, or all weekly loads
         type: string
@@ -29,7 +29,7 @@ on:
   workflow_call:
     inputs:
       state_root: {type: string, default: ''}
-      profile: {type: string, default: both}
+      profile: {type: string, default: h100}
       concurrency: {type: string, default: all}
       target_cluster: {type: string, default: cw-rno2a}
       priority: {type: string, default: batch}
@@ -55,7 +55,7 @@ jobs:
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
-      PROFILE: ${{ inputs.profile || 'both' }}
+      PROFILE: ${{ inputs.profile || 'h100' }}
       POINT: ${{ inputs.concurrency || 'all' }}
       TARGET_CLUSTER: ${{ inputs.target_cluster || 'cw-rno2a' }}
       PRIORITY: ${{ inputs.priority || 'batch' }}

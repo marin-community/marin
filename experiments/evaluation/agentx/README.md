@@ -10,10 +10,12 @@ Coordinator loss can require manual recovery.
 [hero.yaml](hero.yaml) fixes the Hero step144000 BF16 export on sixteen GB200s.
 Both use AgentX 1.0.12, all 393 official `062126-256k` sessions, a
 262,144-token context, BF16/native KV and one-hour profiling windows.
-The pinned preset owns replay, warmup and cache-busting; seed 42
+The pinned preset owns replay, warmup and cache-busting; AgentX seed 42
 and the 1% measured-request error ceiling remain explicit. Each point and retry
-starts a fresh server through `VllmEnvironment`, with managed compilation caching
-and CUDA graphs. AgentX collects request and server metrics; Marin's extra metrics
+starts a fresh server through `VllmEnvironment`, with managed compilation caching.
+Snowball's native logs confirm CUDA graph capture. Hero's ShortConv implementation
+sets `cudagraph_mode=NONE`, including with `enforce_eager=false`.
+AgentX collects request and server metrics; Marin's extra metrics
 and NCCL collectors default off.
 
 | Profile | Hosts × GPUs | Native TP / DP / EP / PP | Model identity |
@@ -31,6 +33,50 @@ explicitly. Hero's isolated environment uses the published ARM constraints plus
 fixed S3-loader dependencies, with repository UV overrides disabled. Each attempt
 freezes its wheel, dependency ABI and source identity. Selecting Hero's release
 does not change Marin's shared runtime default or Snowball's recipe.
+
+## Snowball calibration
+
+The 2026-10-28 H100 calibration selects resident-session concurrencies
+`[64, 128, 256]`: below the bend, at the bend and above it. Each value below is
+a separate fresh deployment with a full one-hour profiling window. The links
+open the explicit collection Actions, whose artifacts retain the original
+submission commit, native attempt, raw trace and processed aggregate.
+
+| Concurrency | Output tokens/s/GPU, each run | Profiling successes / errors, each run |
+| --- | --- | --- |
+| 8 | [40.14996](https://github.com/marin-community/marin/actions/runs/40633833787) | 1282 / 0 |
+| 16 | [68.68441](https://github.com/marin-community/marin/actions/runs/40641669311) | 2296 / 2 |
+| 32 | [90.36982](https://github.com/marin-community/marin/actions/runs/40684131564) | 3025 / 1 |
+| 64 | [108.29325](https://github.com/marin-community/marin/actions/runs/40684135804) | 3833 / 0 |
+| 128 | [134.55371](https://github.com/marin-community/marin/actions/runs/40696525912), [134.95887](https://github.com/marin-community/marin/actions/runs/40728980006), [135.33159](https://github.com/marin-community/marin/actions/runs/40743123733) | 5406 / 0, 5419 / 0, 5446 / 0 |
+| 256 | [109.69015](https://github.com/marin-community/marin/actions/runs/40712952732), [111.76721](https://github.com/marin-community/marin/actions/runs/40757943142), [110.18407](https://github.com/marin-community/marin/actions/runs/40773289445) | 4949 / 3, 4969 / 1, 4913 / 1 |
+
+The elbow is the smallest tested load within 5% of the best repeatable mean.
+This is our selection heuristic. C128 averages 134.94806 output tokens/s/GPU;
+its observed range is 0.58% of that mean. C256 averages 110.54714, with a
+1.88% range. C64 and C256 are 19.75% and 18.08% below the C128 mean. These
+gaps support reusing C64 and stopping the doubling sweep at C256. Latency
+does not constrain this throughput selection; the aggregates retain it.
+
+Across the six C128/C256 runs, recorded serving commands, runtime versions,
+parallelism, collectors and workload-cache identity match. Only the AgentX
+concurrency changes. AgentX uses seed 42; Snowball's unchanged server uses
+its default seed 0 and enables prefix caching. Native logs confirm graph
+capture. A later explicit runtime pin changes recipe metadata while selecting
+the same `01911be` wheel and Torch version; earlier identities remain intact.
+
+The C128/C256 client samplers cover the profiling windows. The client stayed
+below half a CPU core, with no observed CPU throttling. C64 has no client-load
+sample. Its throughput gap is much larger than the repeated-point variation.
+The one-hour protocol completes different request-length mixtures at different
+loads; preserve those distributions when comparing points. Some server counters
+reset during profiling. Use request-derived throughput for this selection;
+counter-derived rates do not establish the cause of the decline.
+
+The dashboard's frontier filter can hide C256 because it is dominated. Disable
+the optimal/frontier filter (`i_optimal=0`) to inspect the complete curve.
+Individual repeats remain in run history. Hero's retained C8/C16/C32 results
+are provisional; its calibration and weekly-load selection are deferred.
 
 ## Normal use
 
@@ -50,16 +96,20 @@ H100 uses `cw-rno2a` or `cw-us-east-02a`; GB200 uses `cw-us-east-08a`.
 Admission and credentials must be checked before
 activation. Weekly execution requires the GitHub repository variable
 `AGENTX_WEEKLY_ENABLED=true`; leave it disabled until manual acceptance passes.
+Submissions default to Snowball. Scheduled execution selects Snowball's three
+weekly loads. Hero calibration and weekly-load selection remain deferred.
 
 Hero also requires `placement_uri`, an object-storage JSON receipt with the
-currently spare NVLink domain and its `nodes` list. Before each allocation,
+currently spare NVLink domain and its `nodes` list. The required JSON field is
+`{"nodes": ["CURRENT_NODE_1", "CURRENT_NODE_2", "CURRENT_NODE_3", "CURRENT_NODE_4"]}`;
+replace all four names with the freshly verified nodes. Before each allocation,
 inspect live nodes and GPU jobs, including Hero training probes. Save the check
 time, cluster, domain, allowed nodes and inventory digest with the receipt.
 Historical rack identity does not establish current spare capacity.
 
 ```sh
 gh workflow run agentx-performance.yaml -R marin-community/marin \
-  -f profile=gb200 -f concurrency=all -f priority=batch \
+  -f profile=gb200 -f concurrency=16 -f priority=batch \
   -f placement_uri=s3://BUCKET/PREFIX/current-spare-placement.json
 ```
 
@@ -68,8 +118,8 @@ node outside the verified list before loading weights. Verify the actual four
 admitted nodes against current training placement and cancel the owned job if
 that check fails. The deployed controller has no named-domain selector, so a
 current operator receipt remains necessary. Submitting `both` without this
-receipt fails before either profile starts. Scheduled Hero execution therefore
-needs a reviewed placement-input procedure before activation.
+receipt fails before either profile starts. Hero's retained `[8, 32]` grid is a
+development default. It has no calibrated weekly selection.
 
 Iris allows 48 hours in queue and five hours per GPU attempt, including setup.
 Its native budgets allow one failure retry and three preemption retries. CPU
@@ -127,8 +177,9 @@ use `MARIN_TEMP_PREFIX=s3://marin-us-east-08a`.
 The run record preserves native TP/DP/EP. Upstream result metadata uses
 `TP = native TP × DP`, giving eight H100s or sixteen GB200s for normalization.
 The pinned processor's `IS_MULTINODE` input selects separate prefill/decode pools.
-Hero uses its combined-pool path and retains that exact processor output beside
-the trace. The collector annotates only the final physical `is_multinode` marker.
+Hero passes `IS_MULTINODE=false` for its combined pool and retains that exact
+processor output beside the trace. The collector annotates the final output
+`is_multinode=true` to describe Hero's physical four-host placement.
 
 Every Hero host records its node, four GPU UUIDs and native attempt UID. The
 leader records all four running UIDs before profiling and checks them afterward.

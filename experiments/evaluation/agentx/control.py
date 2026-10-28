@@ -168,7 +168,9 @@ def main() -> None:
     for command in commands.values():
         command.add_argument("--root", required=True)
     for name in ("submit", "observe", "cancel", "recover"):
-        commands[name].add_argument("--profile", choices=["h100", "gb200", "both"], default="both")
+        commands[name].add_argument(
+            "--profile", choices=["h100", "gb200", "both"], default="h100" if name == "submit" else "both"
+        )
     for name in ("observe", "cancel", "recover"):
         commands[name].add_argument("--run-id", type=int, required=True)
         commands[name].add_argument("--run-attempt", type=int, default=1)

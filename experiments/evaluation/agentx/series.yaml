@@ -67,4 +67,5 @@ profiles:
     memory: "768GB"
     disk: "1TB"
     cluster: "cw-rno2a"
-    concurrencies: [8, 32]
+    # Measured below elbow / elbow / higher load; see README calibration.
+    concurrencies: [64, 128, 256]
