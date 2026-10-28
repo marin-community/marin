@@ -1,4 +1,4 @@
-# Snowball AgentX performance
+# AgentX throughput benchmarks
 
 GitHub submits one non-spot Iris CPU coordinator per hardware profile. It prepares
 AgentX's workload, measures GPU points serially and processes each valid result with
@@ -6,13 +6,26 @@ unmodified InferenceX. A separate collection Action delivers artifacts to the
 [existing importer](https://github.com/marin-community/marin/pull/10646).
 Coordinator loss can require manual recovery.
 
-[series.yaml](series.yaml) fixes Snowball v0.1.1, AgentX 1.0.12, all 393 official
-`062126-256k` sessions, 262,144-token context, BF16/native KV, one-hour windows and
-concurrency 8/32. The pinned preset owns replay, warmup and cache-busting; seed 42
+[series.yaml](series.yaml) fixes Snowball v0.1.1 on eight H100s.
+[hero.yaml](hero.yaml) fixes the Hero step144000 BF16 export on sixteen GB200s.
+Both use AgentX 1.0.12, all 393 official `062126-256k` sessions, a
+262,144-token context, BF16/native KV and one-hour profiling windows.
+The pinned preset owns replay, warmup and cache-busting; seed 42
 and the 1% measured-request error ceiling remain explicit. Each point and retry
 starts a fresh server through `VllmEnvironment`, with managed compilation caching
 and CUDA graphs. AgentX collects request and server metrics; Marin's extra metrics
 and NCCL collectors default off.
+
+| Profile | Hosts × GPUs | Native TP / DP / EP / PP | Model identity |
+| --- | --- | --- | --- |
+| `h100` | 1 × 8 H100 | 1 / 8 / 8 / 1 | Snowball v0.1.1 at `59852d6f07261722bbec1edb6ab148317156b58e` |
+| `gb200` | 4 × 4 GB200 | 1 / 16 / 16 / 1 | Hero step144000; export manifest SHA256 `b20fdd303eb6ff8993ae5b5d7add14d65787e70981c056fea6de9dea62acfae1` |
+
+Hero's export URI, config digest and immutable tokenizer revision are in
+`hero.yaml`. Its 262K HF overrides follow the
+[recorded performance-only serving recipe](https://github.com/marin-community/marin/issues/10388).
+These measurements do not assess long-context answer quality. Both profiles use
+Marin's adopted released vLLM stack; each attempt freezes its complete identity.
 
 ## Normal use
 
@@ -26,11 +39,32 @@ gh workflow run agentx-performance.yaml -R marin-community/marin \
   -f profile=h100 -f concurrency=all -f target_cluster=cw-rno2a -f priority=batch
 ```
 
-H100 uses one eight-GPU node in `cw-rno2a` or `cw-us-east-02a`; GB200 uses four GPUs
-in `cw-us-east-08a`. Verify GB200 capacity lies outside Hero's training allocation
-before using that profile. Admission and credentials must be checked before
+`concurrency=all` uses that profile's configured weekly loads. A positive integer
+selects one calibration load, including values outside those defaults.
+H100 uses `cw-rno2a` or `cw-us-east-02a`; GB200 uses `cw-us-east-08a`.
+Admission and credentials must be checked before
 activation. Weekly execution requires the GitHub repository variable
 `AGENTX_WEEKLY_ENABLED=true`; leave it disabled until manual acceptance passes.
+
+Hero also requires `placement_uri`, an object-storage JSON receipt with the
+currently spare NVLink domain and its `nodes` list. Before each allocation,
+inspect live nodes and GPU jobs, including Hero training probes. Save the check
+time, cluster, domain, allowed nodes and inventory digest with the receipt.
+Historical rack identity does not establish current spare capacity.
+
+```sh
+gh workflow run agentx-performance.yaml -R marin-community/marin \
+  -f profile=gb200 -f concurrency=all -f priority=batch \
+  -f placement_uri=s3://BUCKET/PREFIX/current-spare-placement.json
+```
+
+Iris places the four-host gang within one NVLink domain. Each worker rejects a
+node outside the verified list before loading weights. Verify the actual four
+admitted nodes against current training placement and cancel the owned job if
+that check fails. The deployed controller has no named-domain selector, so a
+current operator receipt remains necessary. Submitting `both` without this
+receipt fails before either profile starts. Scheduled Hero execution therefore
+needs a reviewed placement-input procedure before activation.
 
 Iris allows 48 hours in queue and five hours per GPU attempt, including setup.
 Its native budgets allow one failure retry and three preemption retries. CPU
@@ -50,7 +84,7 @@ See [Iris operations](../../../lib/iris/OPS.md#job-management) for job inspectio
 
 ## Pins and workload cache
 
-Edit the reviewed pins in `series.yaml`. Regenerate `requirements-harness.txt`
+Edit the reviewed pins in `series.yaml` or `hero.yaml`. Regenerate `requirements-harness.txt`
 with `uv pip compile --python 3.12` from the selected `agentx-harness` version.
 Regenerate processor pins from the reviewed Git package reference:
 
@@ -83,8 +117,19 @@ marin-env env MARIN_TEMP_PREFIX=s3://marin-rno2a \
 Use the execution region's scratch prefix elsewhere. Missing pointers or blobs
 rebuild on CPU. Pinned source unavailability fails preparation. Each point freezes
 its publication URI and digest; results retain lineage after cached bytes expire.
+For Hero preparation, add `--series experiments/evaluation/agentx/hero.yaml` and
+use `MARIN_TEMP_PREFIX=s3://marin-us-east-08a`.
 The run record preserves native TP/DP/EP. Upstream result metadata uses
-`TP = native TP × DP`, giving eight H100s or four GB200s for normalization.
+`TP = native TP × DP`, giving eight H100s or sixteen GB200s for normalization.
+The pinned processor's `IS_MULTINODE` input selects separate prefill/decode pools.
+Hero uses its combined-pool path and retains that exact processor output beside
+the trace. The collector annotates only the final physical `is_multinode` marker.
+
+Every Hero host records its node, four GPU UUIDs and native attempt UID. The
+leader records all four running UIDs before profiling and checks them afterward.
+Collection requires the same four successful attempts, four distinct allowed
+nodes and sixteen distinct GPUs. A replaced follower invalidates the whole
+window; partial windows are never combined across retries.
 
 ## Recovery and delivery
 
