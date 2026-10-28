@@ -118,7 +118,9 @@ def process_point(point: Path, manifest: PointManifest, artifacts: Path) -> None
         "KV_OFFLOADING": "none",
         "SPEC_DECODING": "none",
         "DISAGG": "false",
-        "IS_MULTINODE": str(hardware["hosts"] > 1).lower(),
+        # In the pinned processor this selects separate prefill/decode pools.
+        # Both Marin profiles use one combined TP/DP/EP group across their hosts.
+        "IS_MULTINODE": "false",
         "IMAGE": f"marin-vllm:{release['version']}@{release['source_commit']}",
         "RECIPE_FINGERPRINT": manifest["recipe_fingerprint"],
     }
@@ -145,6 +147,12 @@ def process_point(point: Path, manifest: PointManifest, artifacts: Path) -> None
     result = json.loads((aggregate / "agg.json").read_text())
     if result["num_gpus"] != count:
         raise ValueError("Processor GPU normalization differs from the actual allocated device count")
+    if hardware["hosts"] > 1:
+        # Keep the unmodified processor output; only add the factual physical-host
+        # marker consumed independently by the app's combined-pool topology mapper.
+        shutil.copy2(aggregate / "agg.json", raw / "processor-aggregate.json")
+        result["is_multinode"] = True
+        (aggregate / "agg.json").write_text(json.dumps(result, indent=2))
 
 
 def current_attempt(task: TaskStatus) -> AttemptStatus | None:
