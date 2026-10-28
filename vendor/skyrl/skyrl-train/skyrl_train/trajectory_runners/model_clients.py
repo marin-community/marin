@@ -162,6 +162,7 @@ async def _render_chat_prompt(
             request,
             assistant_message_index=current_continuation["assistant_message_index"],
             served_prefix_token_ids=current_continuation["served_prefix_token_ids"],
+            continue_final_message=current_continuation.get("continue_final_message", False),
         )
 
     messages = render_request["json"]["messages"]
@@ -217,9 +218,7 @@ class DirectModelClient:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
         requested_tokens = [
-            int(options[key])
-            for key in ("max_completion_tokens", "max_output_tokens")
-            if options.get(key) is not None
+            int(options[key]) for key in ("max_completion_tokens", "max_output_tokens") if options.get(key) is not None
         ]
         token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
         if token_budget is not None:
@@ -305,7 +304,9 @@ class DirectModelClient:
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
             requested_tokens = (
-                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
+                []
+                if chat_options.get("max_completion_tokens") is None
+                else [int(chat_options["max_completion_tokens"])]
             )
             token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
             if token_budget is not None:

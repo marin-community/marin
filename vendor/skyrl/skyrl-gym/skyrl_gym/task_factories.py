@@ -13,6 +13,7 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 from taskcompendium.grading_result import GradeResult
 
+from skyrl_gym.identity_repair.conversation import ScriptedConversationSession
 from skyrl_gym.answer_tasks import (
     grade_aime,
     grade_cat_count,
@@ -119,6 +120,7 @@ def episode_factories(*, executor: Executor | None = None) -> dict[str, EpisodeF
             name: partial(AnswerTaskSession, grader=grader, executor=executor)
             for name, grader in answer_graders.items()
         },
+        "scripted_conversation": ScriptedConversationSession,
         "gsm8k_multi_turn": MathTaskSession,
         "search": partial(SearchTaskSession, executor=executor),
         "searchcode": partial(SearchCodeTaskSession, executor=executor),

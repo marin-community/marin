@@ -105,3 +105,38 @@ Require successful training and export jobs, evidence that the fresh job
 loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
+
+## Experimental teacher-repair GRPO
+
+`trainer.algorithm.policy_loss_type=mixed_policy_grpo` applies PPO clipping to
+student tokens and the shaped ratio `r / (r + gamma)` to teacher tokens, where
+`r = current_student_probability / recorded_teacher_probability`. Configure `gamma` through
+`trainer.algorithm.mixed_policy.gamma`; this objective requires `token_mean`
+reduction and `use_kl_loss=false`. The per-token `behavior_sources` channel
+identifies teacher tokens as 1 and student tokens as 0. Student off-policy
+correction is not applied a second time to teacher tokens.
+
+The optional `identity_repair` configuration supplies a pinned teacher model,
+a versioned fact manifest, requested facts for each task and turn, and a
+structured semantic judge. Its schema lives in
+`vendor/skyrl/marinskyrl/identity_repair.py`. Training groups contain two original
+student trajectories and two teacher-repair or student-fallback trajectories.
+Fallbacks are new student samples when no repair is available or a repair is rejected.
+A repair rewinds to a detected claim's clause, continues the current turn with
+the teacher, then resumes the student on scripted user follow-ups. Shared
+prefixes are masked in the policy loss for both paired trajectories. Repairs
+requiring replay of tool observations are rejected; branch-local tool execution
+is not implemented.
+
+Teacher sampling requires temperature 1 without top-p or top-k truncation.
+Retained trajectories record behavior log probabilities, source flags, and
+reward evidence. `trainer.policy.update_samples_per_tensor` enables bounded
+weight-change measurements on Megatron workers; these are sampled statistics,
+not full-model norms.
+
+This objective remains experimental. Small student-to-teacher ratios suppress
+the teacher gradient; the shared exponential helper also clamps log ratios to
+[-20, 20], producing zero gradients outside that range. The identity pilots did
+not improve held-out identity behavior. See the
+[experiment evidence](https://github.com/marin-community/marin/issues/10491#issuecomment-6385546376)
+before treating this as a training recipe.

@@ -5,6 +5,7 @@ import io as stdlib_io
 import json
 import math
 import os
+import pickle
 import re
 import shutil
 import threading
@@ -12,7 +13,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from jaxtyping import Float
-from pathlib import Path
 import ray
 from ray import ObjectRef
 import torch
@@ -71,7 +71,7 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
-from skyrl_train.config.objective_spec import off_policy_correction
+from skyrl_train.config.objective_spec import mixed_policy_requested, off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
     boundary_route_metrics,
@@ -1674,7 +1674,11 @@ class RayPPOTrainer:
             if rollout_logprobs is None:
                 raise ValueError("off_policy_correction requires rollout_logprobs")
             result = compute_correction(
-                training_input["action_log_probs"], rollout_logprobs, training_input["loss_mask"], correction
+                training_input["action_log_probs"],
+                rollout_logprobs,
+                training_input["loss_mask"],
+                correction,
+                behavior_sources=training_input.get("behavior_sources"),
             )
             training_input["correction_weights"] = result.weights
             self.all_metrics.update(result.metrics)
@@ -2188,17 +2192,13 @@ class RayPPOTrainer:
         token_level_shaping = trajectory_batch.get("token_level_shaping", None) if enable_token_reward_channel else None
         response_span_tags = trajectory_batch.get("response_span_tags", None) if enable_token_reward_channel else None
         loop_advantages = trajectory_batch.get("loop_advantages")
+        behavior_sources = (
+            trajectory_batch.get("behavior_sources", None)
+            if mixed_policy_requested(self.cfg.trainer.algorithm)
+            else None
+        )
 
-        (
-            sequences_tensor,
-            attention_masks_tensor,
-            response_masks_tensor,
-            rewards_tensor,
-            loss_masks_tensor,
-            rollout_logprobs_tensor,
-            token_level_shaping_tensor,
-            response_span_tags_tensor,
-        ) = convert_prompts_responses_to_batch_tensors(
+        collated = convert_prompts_responses_to_batch_tensors(
             self.tokenizer,
             prompt_ids,
             response_ids,
@@ -2207,7 +2207,17 @@ class RayPPOTrainer:
             logprobs,
             token_level_shaping,
             response_span_tags,
+            behavior_sources,
         )
+        sequences_tensor = collated.sequences
+        attention_masks_tensor = collated.attention_mask
+        response_masks_tensor = collated.action_mask
+        rewards_tensor = collated.rewards
+        loss_masks_tensor = collated.loss_masks
+        rollout_logprobs_tensor = collated.logprobs
+        token_level_shaping_tensor = collated.token_level_shaping
+        response_span_tags_tensor = collated.response_span_tags
+        behavior_sources_tensor = collated.behavior_sources
         if (
             rollout_logprobs_required(
                 self.cfg.trainer.algorithm,
@@ -2346,16 +2356,7 @@ class RayPPOTrainer:
                     response if repair is None else response[: repair.response_position] + list(repair.repair_token_ids)
                     for response, repair in zip(response_ids, closure_targets.repairs, strict=True)
                 ]
-                (
-                    sequences_tensor,
-                    attention_masks_tensor,
-                    response_masks_tensor,
-                    rewards_tensor,
-                    learner_loss_masks,
-                    learner_logprobs,
-                    _,
-                    _,
-                ) = convert_prompts_responses_to_batch_tensors(
+                collated = convert_prompts_responses_to_batch_tensors(
                     self.tokenizer,
                     prompt_ids,
                     response_ids,
@@ -2380,6 +2381,12 @@ class RayPPOTrainer:
                     None,
                     None,
                 )
+                sequences_tensor = collated.sequences
+                attention_masks_tensor = collated.attention_mask
+                response_masks_tensor = collated.action_mask
+                rewards_tensor = collated.rewards
+                learner_loss_masks = collated.loss_masks
+                learner_logprobs = collated.logprobs
                 width = response_masks_tensor.shape[1]
                 candidates = candidates[:, :width]
                 chosen = chosen[:, :width]
@@ -2444,6 +2451,8 @@ class RayPPOTrainer:
             training_input["token_level_shaping"] = token_level_shaping_tensor
         if response_span_tags_tensor is not None:
             training_input["response_span_tags"] = response_span_tags_tensor
+        if behavior_sources_tensor is not None:
+            training_input["behavior_sources"] = behavior_sources_tensor
         pair_roles = trajectory_batch.get("pair_roles")
         if pair_roles is not None:
             if len(pair_roles) != len(response_ids):
@@ -2781,9 +2790,14 @@ class RayPPOTrainer:
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(str(self.cfg.trainer.export_path), "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        cpu_data = TrainingInputBatch(
+            {key: None if value is None else value.detach().cpu() for key, value in data.items()}
+        )
+        cpu_data.metadata = data.metadata
+        with io.open_file(join_resource_path(data_save_dir, f"{file_name}.pkl"), "wb") as destination:
+            pickle.dump(cpu_data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""

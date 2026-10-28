@@ -93,6 +93,7 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
+                            chat_template_kwargs=dict(extras.get("chat_template_kwargs") or {}),
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
@@ -125,6 +126,9 @@ def task_prompt_token_count(
 ) -> int:
     """Include native task tools in the initial prompt's length budget."""
     lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+    if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
+        per_example = session_parameters(lowered.task).extras.get("chat_template_kwargs") or {}
+        chat_template_kwargs = {**(chat_template_kwargs or {}), **per_example}
     if lowered.harness == ASSISTANT_PREFIX_HARNESS:
         prompt = assistant_prefix_prompt(lowered.task)
         options = {**prompt.options, "chat_template_kwargs": chat_template_kwargs or {}}
@@ -195,7 +199,9 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         and grader.environment is not None
         and not grades_with_judge(grader)
     ):
-        machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        machine = (
+            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        )
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, verifier_machine=verifier)
     return _stored_prompt(lowered)
@@ -243,7 +249,10 @@ class SourceTaskDataset(TaskDataset):
     ):
         self.environment_configs = environment_configs
         super().__init__(
-            list(datasets), tokenizer, max_prompt_length, num_workers=num_workers,
+            list(datasets),
+            tokenizer,
+            max_prompt_length,
+            num_workers=num_workers,
             chat_template_kwargs=chat_template_kwargs,
         )
 

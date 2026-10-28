@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from marinskyrl.identity_repair import RepairTeacherSettings
 from marinskyrl.runtime_options import inference_engines_required, reference_model_required
 from marinskyrl.distillation import (
     LocalInferenceTeacherSpec,
@@ -397,6 +398,7 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     if inference_engines_required(config):
         claims.append(_rollout_claim(config, values))
     claims.extend(_teacher_claims(config))
+    claims.extend(_repair_teacher_claims(config, values))
     claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
 
@@ -415,6 +417,37 @@ def _role_plan(claims: tuple[ModelRoleClaim, ...], values: _RolePlanValues) -> S
         policy_mini_batch_size=values.policy_mini_batch_size,
         micro_train_batch_size_per_gpu=values.micro_train_batch_size_per_gpu,
         n_samples_per_prompt=values.n_samples_per_prompt,
+    )
+
+
+def _repair_teacher_claims(config: dict[str, Any], values: _RolePlanValues) -> tuple[ModelRoleClaim, ...]:
+    identity = config.get("identity_repair")
+    if identity is None:
+        return ()
+    teacher = RepairTeacherSettings.model_validate(identity["teacher"])
+    width = values.policy_num_gpus_per_node
+    engine_gpus = teacher.tensor_parallel_size * teacher.data_parallel_size
+    if engine_gpus > width or width % engine_gpus:
+        raise ValueError("Repair teacher engines must fit in and divide a physical node")
+    if engine_gpus % teacher.expert_parallel_size:
+        raise ValueError("Repair teacher TP*DP must be divisible by EP")
+    engines_per_node = width // engine_gpus
+    nodes = (teacher.engines + engines_per_node - 1) // engines_per_node
+    return (
+        ModelRoleClaim(
+            role_id="repair_teacher",
+            kind=ModelRoleKind.TEACHER,
+            execution=RoleExecution.LOCAL,
+            backend="vllm",
+            colocation_group="repair_teacher",
+            num_nodes=nodes,
+            gpus_per_node=width,
+            replicas=teacher.engines,
+            tensor_parallel_size=teacher.tensor_parallel_size,
+            pipeline_parallel_size=1,
+            data_parallel_size=teacher.data_parallel_size,
+            expert_parallel_size=teacher.expert_parallel_size,
+        ),
     )
 
 

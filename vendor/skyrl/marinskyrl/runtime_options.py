@@ -54,6 +54,7 @@ class PolicyLossType(StrEnum):
     FTPO = "ftpo"
     DPO = "dpo"
     IMPORTANCE_SAMPLING = "importance_sampling"
+    MIXED_POLICY_GRPO = "mixed_policy_grpo"
 
 
 PREFERENCE_PAIR_ENV_CLASS = "preference_pair"
