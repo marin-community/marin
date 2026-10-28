@@ -40,6 +40,25 @@ scheduling_timeout: 172800
 max_retries_failure: 1
 max_retries_preemption: 3
 task_image: "ghcr.io/marin-community/iris-task@sha256:b66c48a1caca212d2fa970f9fb4d1e0685ab27be9014f335687b1031244f0467"
+vllm_manifest_sha256: e8a9e8e11781e0c1021783c5b559b9de4f82d0b90ca496de48b208d81baeeb82
+vllm_constraints_sha256: b0e4e774c46cd6d6b77f7ed9c97cbcb84066c4bdc8b7361cdc3ad80316aa4771
+vllm_release:
+  release_tag: marin-vllm-gpu-20261012-3a054c458ca8
+  source_commit: 3a054c458ca8a32609ba2bc578c4d9b93eabb395
+  version: 0.0.0.dev20261012+marin.3a054c458ca8.cu132
+  torch_backend: cu132
+  torch_version: 2.14.1+cu132
+  wheels:
+  - architecture: aarch64
+    sm_targets:
+    - '10.0'
+    url: https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012+marin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_aarch64.whl
+    sha256: e8520d4493e5a60f9f6aa96ea3bc80c42e45258e4d2c45882869fc5921df3e15
+  - architecture: x86_64
+    sm_targets:
+    - '9.0'
+    url: https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012+marin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_x86_64.whl
+    sha256: bd4d3d58d831dffd2a831ee1e39e9a9a8b181610ea77067c0ab620cdc9b270a3
 processor_source: "80dff120d27fd6092210f4546b8faa5e6c9723ac"
 profiles:
   gb200:

@@ -36,6 +36,7 @@ from marin.external_dependencies import (
     TPU_INFERENCE_FORK_REQUIREMENT,
     VLLM_FORK_REQUIREMENT,
     VLLM_GPU_RELEASE,
+    VllmGpuRelease,
 )
 from marin.inference.config import (
     STANDARD_VLLM_METRIC_FAMILIES,
@@ -221,6 +222,8 @@ class IsolatedCudaVllm:
     """Pinned vLLM plugins installed into the same isolated CUDA environment."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
+    release: VllmGpuRelease = VLLM_GPU_RELEASE
+    """Verified Marin fork release; callers may pin a profile without changing shared defaults."""
 
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
@@ -228,17 +231,15 @@ class IsolatedCudaVllm:
 
     def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
-            wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
-            provenance = json.dumps(
-                dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)), sort_keys=True
-            )
+            wheel = current_vllm_gpu_wheel(self.release)
+            provenance = json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(self.release, wheel)), sort_keys=True)
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
-                torch_backend=VLLM_GPU_RELEASE.torch_backend,
-                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend],
+                torch_backend=self.release.torch_backend,
+                toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[self.release.torch_backend],
                 torch_install_args=(
                     "--index",
-                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{VLLM_GPU_RELEASE.torch_backend}",
+                    f"{_PYTORCH_WHEEL_INDEX_BASE}/{self.release.torch_backend}",
                     "--index",
                     f"{_PYTORCH_WHEEL_INDEX_BASE}/cpu",
                     "--index-strategy",
@@ -271,7 +272,7 @@ class IsolatedCudaVllm:
         ]
         if self.source is VllmType.MARIN_FORK:
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
-            command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
+            command.extend(("--with", f"torch=={self.release.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
@@ -301,7 +302,7 @@ class IsolatedCudaVllm:
     def cache_identity(self) -> str:
         install = self._install()
         toolchain_version = install.toolchain_version
-        torch_identity = VLLM_GPU_RELEASE.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
+        torch_identity = self.release.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
         identity = f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
         if self.extra_requirements:
             return f"{identity}:{self.extra_requirements}"

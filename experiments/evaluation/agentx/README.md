@@ -25,7 +25,12 @@ Hero's export URI, config digest and immutable tokenizer revision are in
 `hero.yaml`. Its 262K HF overrides follow the
 [recorded performance-only serving recipe](https://github.com/marin-community/marin/issues/10388).
 These measurements do not assess long-context answer quality. Both profiles use
-Marin's adopted released vLLM stack; each attempt freezes its complete identity.
+published vLLM wheels. Snowball retains `01911be` with Torch 2.13.0; Hero pins
+the qualified `3a054c` release with Torch 2.14.1. Both recipes pin their release
+explicitly. Hero's isolated environment uses the published ARM constraints plus
+fixed S3-loader dependencies, with repository UV overrides disabled. Each attempt
+freezes its wheel, dependency ABI and source identity. Selecting Hero's release
+does not change Marin's shared runtime default or Snowball's recipe.
 
 ## Normal use
 
