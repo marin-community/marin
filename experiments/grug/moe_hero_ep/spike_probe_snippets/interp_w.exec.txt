@@ -1,0 +1,36 @@
+# Seq-only gradient of row SEQ at weights W_B + (1-a)*(W_A - W_B) for each a in ALPHAS (a=1 is W_B, the restored
+# checkpoint; a=0 is CKPT_A). Memory-lean: holds the current mix (fp32) and a bf16 delta, and steps the mix in place
+# between alphas. load_checkpoint consumes its template, so W_B is copied before CKPT_A is read.
+# Inputs: STEP, RACK, SEQ, CKPT_A, ALPHAS. probe._interp_alpha records the alpha probe.params currently holds.
+import gc
+if not hasattr(probe, "_delta"):
+    _copy = jax.jit(lambda t: jax.tree.map(jnp.copy, t))
+    wB = _copy((probe.params, probe.pending_qb_betas))
+    runner.op_load_weights({"checkpoint": CKPT_A})
+    wA = (probe.params, probe.pending_qb_betas)
+    _sub = jax.jit(lambda A, B: jax.tree.map(lambda x, y: (x.astype(jnp.float32) - y.astype(jnp.float32)).astype(jnp.bfloat16) if jnp.issubdtype(x.dtype, jnp.floating) else None, A, B))
+    probe._delta = _sub(wA, wB)
+    del wA
+    probe.params, probe.pending_qb_betas = wB
+    del wB
+    gc.collect()
+    probe._interp_alpha = 1.0
+
+def _step(cur, delta, c):
+    def f(x, d):
+        if d is None:
+            return x
+        return (x.astype(jnp.float32) + c * d.astype(jnp.float32)).astype(x.dtype)
+    return jax.tree.map(f, cur, delta, is_leaf=lambda v: v is None)
+
+_stepj = jax.jit(_step, donate_argnums=(0,))
+rows = []
+for a in ALPHAS:
+    c = jnp.float32(probe._interp_alpha - a)
+    probe.params, probe.pending_qb_betas = _stepj((probe.params, probe.pending_qb_betas), probe._delta, c)
+    probe._interp_alpha = float(a)
+    loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+    n = probe.norms(g, 1.0)["grad/norm/total"]
+    del g
+    rows.append({"alpha": float(a), "loss": loss, "grad": n})
+result["scan"] = rows

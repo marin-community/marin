@@ -1,0 +1,27 @@
+# Seq-only gradient of row SEQ at the base weights with token_embed perturbed along noise direction KEY at scale T
+# (T=0 is the unperturbed base). Each perturbed embedding is pinned to the base sharding. Inputs: STEP, RACK, SEQ, KEYS, T.
+import dataclasses
+if not hasattr(probe, "_base_params"):
+    probe._base_params = probe.params
+base = probe._base_params
+
+@jax.jit
+def _perturb_key(e, key, t):
+    noise = jax.random.normal(key, e.shape, jnp.float32)
+    return (e.astype(jnp.float32) + t * 1e-4 * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
+
+rows = []
+try:
+    for k in KEYS:
+        if T == 0:
+            probe.params = base
+        else:
+            emb = _perturb_key(base.token_embed, jax.random.PRNGKey(k), jnp.float32(T))
+            probe.params = dataclasses.replace(base, token_embed=jax.device_put(emb, base.token_embed.sharding))
+        loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+        n = probe.norms(g, 1.0)["grad/norm/total"]
+        del g
+        rows.append({"key": int(k), "loss": loss, "grad": n})
+finally:
+    probe.params = base
+result["scan"] = rows
