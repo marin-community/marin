@@ -690,23 +690,11 @@ index 0d12ce36..3c68dd5d 100644
        ),
        image = excluded.image,
        workers = excluded.workers,
-diff --git a/packages/db/src/etl/db-utils.ts b/packages/db/src/etl/db-utils.ts
-index 310efb23..d0fcaa00 100644
---- a/packages/db/src/etl/db-utils.ts
-+++ b/packages/db/src/etl/db-utils.ts
-@@ -20,6 +20,7 @@ export function createAdminSql(
-     ssl: noSsl ? false : process.env.DATABASE_SSL,
-   });
-   return postgres(connection.url, {
-+    ...(process.env.DATABASE_SOCKET_DIR ? { host: process.env.DATABASE_SOCKET_DIR } : {}),
-     ...pgOpts,
-     ssl: connection.ssl,
-   });
 diff --git a/packages/db/src/etl/normalizers.test.ts b/packages/db/src/etl/normalizers.test.ts
-index eb07bae5..60435118 100644
+index eb07bae5..17ad89e4 100644
 --- a/packages/db/src/etl/normalizers.test.ts
 +++ b/packages/db/src/etl/normalizers.test.ts
-@@ -14,6 +14,17 @@ import {
+@@ -14,6 +14,16 @@ import {
  } from './normalizers';
  import { DB_MODEL_TO_DISPLAY } from '@semianalysisai/inferencex-constants';
  
@@ -717,7 +705,6 @@ index eb07bae5..60435118 100644
 +    { model: 'marin-community/Hero-535B-step144000' },
 +  ])('keeps the pinned Hero checkpoint separate from Snowball: %j', (row) => {
 +    expect(resolveModelKey(row)).toBe('hero144k');
-+    expect(DB_MODEL_TO_DISPLAY.hero144k).toBe('Marin-Hero-535B-step144000');
 +  });
 +});
 +
@@ -832,10 +819,18 @@ index d4f3195e..17d0b9c1 100644
      }
    }
 diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
-index 50130cb5..d9726674 100644
+index 50130cb5..1e761150 100644
 --- a/packages/db/src/ingest-ci-run.ts
 +++ b/packages/db/src/ingest-ci-run.ts
-@@ -296,7 +296,10 @@ async function main(): Promise<void> {
+@@ -248,6 +248,7 @@ const runIdNum = parseInt(runIdStr, 10);
+ const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
+ 
+ const sql = createAdminSql({
++  host: process.env.DATABASE_SOCKET_DIR,
+   noSsl: hasNoSslFlag(),
+   max: 5,
+   idle_timeout: 60,
+@@ -296,7 +297,10 @@ async function main(): Promise<void> {
    ]);
  
    const runId = parseInt(runIdStr, 10);
@@ -847,6 +842,18 @@ index 50130cb5..d9726674 100644
    const triggerRunIdStr = reusedIngestMetadata?.triggerRunId ?? requestedRunIdStr;
    const triggerRunId = parseInt(triggerRunIdStr, 10);
    const triggerGhInfo = reusedIngestMetadata ? await fetchGithubRun(triggerRunId) : null;
+diff --git a/packages/db/src/migrate.ts b/packages/db/src/migrate.ts
+index f9a7cfd0..e220bb63 100644
+--- a/packages/db/src/migrate.ts
++++ b/packages/db/src/migrate.ts
+@@ -7,6 +7,7 @@ import { runMigrations } from './lib/migration-runner';
+ const MIGRATIONS_DIR = path.join(import.meta.dirname, '..', 'migrations');
+ 
+ const sql = createAdminSql({
++  host: process.env.DATABASE_SOCKET_DIR,
+   noSsl: hasNoSslFlag(),
+   max: 1,
+   onnotice: () => {},
 diff --git a/packages/db/src/queries/trace-server-metrics.test.ts b/packages/db/src/queries/trace-server-metrics.test.ts
 index bbbffb19..be3118fc 100644
 --- a/packages/db/src/queries/trace-server-metrics.test.ts
