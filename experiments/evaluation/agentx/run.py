@@ -8,7 +8,6 @@ directory. AgentX alone owns replay, warmup, the measurement clock and validity.
 """
 
 import contextlib
-import dataclasses
 import hashlib
 import json
 import os
@@ -23,7 +22,6 @@ from pathlib import Path
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import TaskState
-from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.iris_vllm import (
     IrisVllmLaunch,
@@ -44,6 +42,7 @@ from experiments.evaluation.agentx.recipe import (
     series_path,
     workload_environment,
 )
+from experiments.evaluation.agentx.runtime import HERO_CONSTRAINTS, gpu_release, runtime_metadata
 from experiments.evaluation.agentx.workload import check_native_cache, restore_workload
 
 SERVER_ENVIRONMENT_KEYS = (
@@ -105,9 +104,10 @@ def create_server(manifest: PointManifest, output: Path, launch: IrisVllmLaunch 
         if launch is None or os.environ["IRIS_NODE_NAME"] not in manifest["placement"]["nodes"]:
             raise RuntimeError("Hero requires a multi-host launch on the verified spare nodes")
     launcher = VllmLauncherWithEnvironment(
-        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=gpu_release(manifest["profile"])),
         {"VLLM_ENGINE_READY_TIMEOUT_S": str(series["ready_timeout"]), "TOKENIZERS_PARALLELISM": "false"}
-        | (launch.subprocess_env if launch is not None else {}),
+        | (launch.subprocess_env if launch is not None else {})
+        | ({"UV_CONSTRAINT": str(HERO_CONSTRAINTS), "UV_NO_CONFIG": "1"} if manifest["profile"] == "gb200" else {}),
     )
     port = 38197
     server_args = [] if "checkpoint" in series else ["--revision", series["model_revision"]]
@@ -185,14 +185,16 @@ def run_point(manifest: PointManifest, output: Path, bundle: Path, launch: IrisV
     series = load_series(path)
     if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise RuntimeError("Series changed since submission")
-    release = dataclasses.asdict(VLLM_GPU_RELEASE)
+    release = runtime_metadata(manifest["profile"])
     if json.dumps(release, sort_keys=True) != json.dumps(manifest["vllm_release"], sort_keys=True):
-        raise RuntimeError("Marin's adopted vLLM release changed since submission")
+        raise RuntimeError("The pinned profile runtime changed since submission")
     profile = series["profiles"][manifest["profile"]]
     devices = profile["hosts"] * profile["gpus"]
     if profile["hosts"] > 1 and os.environ["IRIS_NODE_NAME"] not in manifest["placement"]["nodes"]:
         raise RuntimeError("Iris placed a Hero host outside the verified spare-node list")
     output.mkdir(parents=True, exist_ok=False)
+    if manifest["profile"] == "gb200":
+        shutil.copy2(HERO_CONSTRAINTS, output / "runtime-constraints.txt")
     record = manifest | {
         "architecture": platform.machine(),
         "status": "preparing",

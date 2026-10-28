@@ -20,6 +20,7 @@ from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, loa
 
 logger = logging.getLogger(__name__)
 FAILURE_LOG_LINES = 100
+OUTPUT_FINALIZATION_SECONDS = 600
 
 
 def validate_attempt(point: Path, manifest: PointManifest, attempt_uid: str) -> dict:
@@ -95,7 +96,7 @@ def process_point(point: Path, manifest: PointManifest, artifacts: Path) -> None
     shutil.copytree(point / "aiperf_artifacts", raw / "aiperf_artifacts", dirs_exist_ok=True)
     shutil.copy2(point / "attempt.json", raw / "attempt.json")
     shutil.copy2(point / "hardware.txt", raw / "hardware.txt")
-    for name in ("gang.json", "client-load.jsonl"):
+    for name in ("gang.json", "client-load.jsonl", "runtime-constraints.txt"):
         if (point / name).exists():
             shutil.copy2(point / name, raw / name)
     release = manifest["vllm_release"]
@@ -233,7 +234,7 @@ def collect_terminal(
             native = current_attempt(member)
             if native is not None and native.output_archive is None:
                 finished = native.finished_at or status.finished_at
-                if finished is not None and now - finished.epoch_ms() / 1000 < 600:
+                if finished is not None and now - finished.epoch_ms() / 1000 < OUTPUT_FINALIZATION_SECONDS:
                     return None
     uid = attempt.attempt_uid if attempt is not None else "no-attempt"
     prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/{uid}")
@@ -266,7 +267,7 @@ def collect_terminal(
         archive = attempt.output_archive
         if archive is None:
             finished = attempt.finished_at or status.finished_at
-            if finished is not None and now - finished.epoch_ms() / 1000 < 600:
+            if finished is not None and now - finished.epoch_ms() / 1000 < OUTPUT_FINALIZATION_SECONDS:
                 return None
             receipt["reason"] = "No output receipt after the bounded Iris finalization period"
         elif archive.state != TaskOutputArchiveState.UPLOADED:

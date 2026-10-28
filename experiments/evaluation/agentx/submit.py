@@ -3,18 +3,17 @@
 
 """Submit a fixed point without holding a local control process open."""
 
-import dataclasses
 import hashlib
 import json
 
 from iris.client.client import IrisClient
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
-from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.timing import Duration
 
 from experiments.evaluation.agentx.recipe import SERIES_PATH, PointManifest, load_series, series_path
 from experiments.evaluation.agentx.run import run
+from experiments.evaluation.agentx.runtime import runtime_metadata
 
 
 def point_manifest(
@@ -54,10 +53,10 @@ def submit_point(client: IrisClient, name: str, manifest: PointManifest, priorit
     series = load_series(path)
     if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise ValueError("The submission checkout does not match the saved series")
-    if json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE), sort_keys=True) != json.dumps(
+    if json.dumps(runtime_metadata(manifest["profile"]), sort_keys=True) != json.dumps(
         manifest["vllm_release"], sort_keys=True
     ):
-        raise ValueError("The submission checkout changed the saved vLLM adoption")
+        raise ValueError("The submission checkout changed the saved profile runtime")
     profile = series["profiles"][manifest["profile"]]
     return client.submit(
         entrypoint=Entrypoint.from_callable(run, manifest),

@@ -22,6 +22,9 @@ from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import FederationState, JobState, TaskState
 from iris.rpc import job_pb2
+from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
 from rigging.timing import Timestamp
 
 from experiments.evaluation.agentx.artifacts import read_record, retain_artifacts, unpack, write_record
@@ -30,6 +33,34 @@ from experiments.evaluation.agentx.control import coordinator_plan, materialize,
 from experiments.evaluation.agentx.coordinator import recover_results, resolve_plan, run_points
 from experiments.evaluation.agentx.processes import logged_process
 from experiments.evaluation.agentx.recipe import load_series
+from experiments.evaluation.agentx.runtime import gpu_release
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+def test_hero_release_selects_matching_wheel_and_torch_without_changing_snowball(monkeypatch, architecture):
+    monkeypatch.setattr("platform.machine", lambda: architecture)
+    default = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+    default_command = default.command()
+    snowball = IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=gpu_release("h100"))
+    selected_release = gpu_release("gb200")
+    hero = IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=selected_release)
+    assert default.release is VLLM_GPU_RELEASE
+    snowball_release = gpu_release("h100")
+    snowball_wheel = vllm_gpu_wheel_for_architecture(snowball_release, architecture)
+    snowball_command = snowball.command()
+    assert snowball_command[snowball_command.index("--from") + 1] == (
+        f"vllm @ {snowball_wheel.url}#sha256={snowball_wheel.sha256}"
+    )
+    assert f"torch=={snowball_release.torch_version}" in snowball_command
+    command = hero.command()
+    wheel = vllm_gpu_wheel_for_architecture(selected_release, architecture)
+    assert command[command.index("--from") + 1] == f"vllm @ {wheel.url}#sha256={wheel.sha256}"
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert f"torch=={selected_release.torch_version}" in requirements
+    expected = dataclasses.asdict(vllm_gpu_wheel_provenance(selected_release, wheel))
+    assert json.loads(command[-1]) == json.loads(json.dumps(expected))
+    assert hero.cache_identity() != snowball.cache_identity()
+    assert default.command() == default_command
 
 
 def job_status(job_id: JobName, state: JobState) -> JobStatus:

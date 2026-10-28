@@ -16,13 +16,13 @@ from connectrpc.errors import ConnectError
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.types import JobName
 from iris.resources.state import is_job_finished
-from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration, ExponentialBackoff
 
 from experiments.evaluation.agentx.artifacts import read_record, write_record
 from experiments.evaluation.agentx.collect import collect_terminal
 from experiments.evaluation.agentx.recipe import series_path
+from experiments.evaluation.agentx.runtime import runtime_metadata
 from experiments.evaluation.agentx.submit import point_manifest, submit_point
 from experiments.evaluation.agentx.workload import prepare_workload
 
@@ -32,7 +32,7 @@ COORDINATOR_TIMEOUT = 7 * 86400
 
 def resolve_plan(plan: dict, workload: dict) -> dict:
     """Resolve the source checkout's adopted release once for the prepared grid."""
-    release = json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE)))
+    release = json.loads(json.dumps(runtime_metadata(plan["profile"])))
     return plan | {
         "points": [
             {
