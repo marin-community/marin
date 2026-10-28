@@ -91,9 +91,9 @@ jobs:
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
 
-      # CI rolls controller images without applying Pulumi. Add the namespaced
-      # credential-delivery and isolation-policy read grants before deployment.
-      - name: Prepare CI controller permissions
+      # CI owns its CPU-only RuntimeClass and rolls controller images without
+      # applying Pulumi. Provision it and the scoped read grants before deployment.
+      - name: Prepare CI controller prerequisites
         run: |
           cd lib/iris && uv run --group dev --extra controller python - <<'PY'
           import os
@@ -110,6 +110,7 @@ jobs:
           config = load_config("config/cw-us-west-04a.yaml")
           namespace = os.environ["IRIS_NAMESPACE"]
           assert namespace == config.kubernetes_provider.namespace == "iris-ci"
+          assert config.kubernetes_provider.sandbox_runtime_class == "iris-ci-gvisor-cpu"
           assert config.platform.coreweave is not None
           kubectl = CloudK8sService(
               namespace=namespace,
@@ -117,6 +118,18 @@ jobs:
               context=config.platform.coreweave.kube_context,
           )
           for manifest in (
+              {
+                  "apiVersion": "node.k8s.io/v1",
+                  "kind": "RuntimeClass",
+                  "metadata": {
+                      "name": config.kubernetes_provider.sandbox_runtime_class,
+                      "labels": {"app.kubernetes.io/managed-by": "iris-coreweave-ci"},
+                  },
+                  "handler": "cw-gvisor-cpu",
+                  "scheduling": {
+                      "nodeSelector": {"node.coreweave.cloud/container-runtime.cw-gvisor-cpu": "true"},
+                  },
+              },
               task_secret_role_manifest(namespace),
               task_secret_binding_manifest(namespace, "iris-controller"),
               {

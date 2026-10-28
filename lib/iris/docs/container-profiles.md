@@ -8,7 +8,7 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
-| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
+| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / the operator's configured Kubernetes RuntimeClass). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -83,25 +83,36 @@ container is created.
 |---|---|
 | `RESTRICTED` | `capabilities.drop:[ALL]`, `allowPrivilegeEscalation:false`, `seccompProfile.type:RuntimeDefault` (not full PSS Restricted — `runAsNonRoot` is not forced) |
 | `DEFAULT` | `capabilities.add:[SYS_PTRACE (+SYS_RESOURCE on TPU)]` |
-| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName: gvisor` on the pod — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
+| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName` from `kubernetes_provider.sandbox_runtime_class` — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
 | `DOCKER_ACCESS` | **rejected** — k8s nodes run containerd, not dockerd, so there is no host docker socket. Use the docker worker backend, or `PRIVILEGED` with an in-pod runtime. |
 | `PRIVILEGED` | `privileged:true`, `allowPrivilegeEscalation:true`, plus the DEFAULT caps |
 
 ## Running under gVisor
 
 `SANDBOX` runs the **whole** container under gVisor's `runsc` runtime
-(docker `--runtime=runsc`; k8s `runtimeClassName: gvisor`). The worker/node's
+(docker `--runtime=runsc`; the operator's configured RuntimeClass on Kubernetes). The worker/node's
 container runtime — running as root — builds the sandbox, so the container itself
 needs no privilege: in-container root gets the docker default capability set
 (`setuid`, `apt`, etc. work) while the intercepted guest kernel isolates the
 host. This makes it safe to hand out **without** the admin role, unlike
-`PRIVILEGED`. It is CPU-only — `runsc` cannot pass a GPU/TPU through, so
-accelerator tasks are rejected at submit.
+`PRIVILEGED`. Iris supports CPU-only gVisor workloads; GPU and TPU requests
+are rejected at submit for both `SANDBOX` and legacy `GVISOR`.
 
 **Operator prerequisite:** `runsc` must be installed and registered on the
 workers — as a docker runtime named `runsc` in `/etc/docker/daemon.json` on
-docker-worker clusters (worker bootstrap does this), or as a `RuntimeClass`
-named `gvisor` on k8s. Without it, a `SANDBOX` job fails at container creation.
+docker-worker clusters (worker bootstrap does this), or as a CPU-only Kubernetes
+RuntimeClass. Set `kubernetes_provider.sandbox_runtime_class` to that class's
+name; it defaults to `gvisor`. The operator setting applies to singleton and
+service-group pods under both gVisor profiles. Jobs cannot select another
+class, and a missing class fails Pod creation.
+
+CoreWeave CI uses `iris-ci-gvisor-cpu`, which the smoke workflow provisions
+before deploying the controller. It selects the existing `cw-gvisor-cpu`
+handler, which invokes `runsc` directly with nvproxy disabled. Its node selector
+requires `node.coreweave.cloud/container-runtime.cw-gvisor-cpu: "true"`.
+The provider's existing `gvisor` class uses its NVIDIA wrapper and is not the
+CI sandbox runtime. Other clusters must register their CPU handler and select
+its RuntimeClass explicitly; runtime selection does not alter node configuration.
 
 To instead run an *inner* gVisor sandbox around an untrusted child image while
 keeping the outer container normal, use `CONTAINER_PROFILE_PRIVILEGED` and run

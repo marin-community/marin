@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.composer import make_task_backend
 from iris.cluster.config import (
     ControllerVmConfig,
@@ -43,8 +42,11 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
-from iris.testing.k8s import k8s_backend_descriptor
+from iris.rpc import job_pb2
+from iris.testing.k8s import k8s_backend_descriptor, make_batch, make_run_req
 from rigging.timing import Duration
 
 
@@ -1942,10 +1944,18 @@ def test_kubernetes_provider_rejects_nonpositive_cache_max_age():
         KubernetesProviderConfig(cache_max_age=Duration.from_seconds(0))
 
 
-def test_k8s_backend_uses_canonical_default_task_image():
+@pytest.mark.parametrize(
+    "profile",
+    [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX],
+)
+def test_k8s_dispatch_uses_configured_image_and_isolated_runtime_class(monkeypatch, profile):
+    kubectl = InMemoryK8sService(namespace="iris")
+    monkeypatch.setattr("iris.cluster.composer.CloudK8sService", lambda **_: kubectl)
     config = IrisClusterConfig(
         defaults=DefaultsConfig(worker=WorkerConfig(default_task_image="registry.example/iris-task:abc1234")),
-        kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
+        kubernetes_provider=KubernetesProviderConfig(
+            kueue=KueueConfig(cluster_queue="iris-cq"), sandbox_runtime_class="cpu-sandbox"
+        ),
     )
 
     backend = make_task_backend(
@@ -1953,5 +1963,15 @@ def test_k8s_backend_uses_canonical_default_task_image():
         descriptor=k8s_backend_descriptor(),
     )
 
-    assert isinstance(backend, K8sTaskProvider)
-    assert backend.pods.default_image == "registry.example/iris-task:abc1234"
+    try:
+        request = make_run_req("/alice/runtime/0")
+        request.container_profile = profile
+        assert backend.sync(make_batch(tasks_to_run=[request])) == []
+        [pod] = kubectl.list_json(K8sResource.PODS)
+        assert pod["spec"]["containers"][0]["image"] == "registry.example/iris-task:abc1234"
+        if profile == job_pb2.CONTAINER_PROFILE_DEFAULT:
+            assert "runtimeClassName" not in pod["spec"]
+        else:
+            assert pod["spec"]["runtimeClassName"] == "cpu-sandbox"
+    finally:
+        backend.close()
