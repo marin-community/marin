@@ -45,7 +45,7 @@ SOLUTION_TOLERANCE = 1e-5
 CAP_ROUNDING_SLACK = 1e-9
 WEIGHT_ROUNDING_SLACK = 1e-12
 CVXPY = "cvxpy"
-CVXPY_MISSING = 'the Olmix baseline needs cvxpy, which the olmix extra installs: pip install "marin-mariner[olmix]"'
+CVXPY_MISSING = "the Olmix baseline needs cvxpy, which marin-mariner's olmix extra installs"
 
 
 def require_cvxpy() -> None:

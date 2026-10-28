@@ -95,10 +95,7 @@ COEFFICIENT_PREFIX = "coef__"
 # Floating rounding: the release's runs at one exposure differ by 4.2e-16 at most, and its proportional repeats
 # differ from their calibration run by 3.1e-16 at most.
 EXPOSURE_MIXTURE_TOLERANCE = 1e-12
-HUGGINGFACE_HUB_MISSING = (
-    "downloading mariner-data needs huggingface_hub, which the download extra installs:"
-    ' pip install "marin-mariner[download]"'
-)
+HUGGINGFACE_HUB_MISSING = "downloading mariner-data needs huggingface_hub, which marin-mariner's download extra installs"
 DOWNLOAD_PATTERNS = (
     MANIFEST,
     "README.md",
