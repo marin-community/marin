@@ -21,6 +21,9 @@ on:
       result_uri:
         type: string
         default: ''
+      placement_uri:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -36,6 +39,7 @@ jobs:
       concurrency: ${{ inputs.concurrency }}
       target_cluster: cw-rno2a
       priority: ${{ inputs.priority }}
+      placement_uri: ${{ inputs.placement_uri }}
     secrets: inherit
   collect:
     if: inputs.operation == 'collect'
