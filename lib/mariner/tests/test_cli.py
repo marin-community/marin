@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from mariner import olmix
-from mariner.cli import INPUT_ERROR_STATUS, main
+from mariner.cli import INPUT_ERROR_STATUS, MIXTURES_TABLE, main
 from mariner.data import (
     CALIBRATION_RUN,
     MAIN_SWARM,
@@ -132,13 +132,15 @@ def test_cli_fit_predict_optimize_round_trip_on_own_swarm(tmp_path, synthetic_pr
     # The mixtures as the package reads them: a prediction's last bit depends on the array's memory layout, and the
     # file's columns come back column-major.
     written = read_csv(tmp_path / "mixtures.csv")
-    expected = fit.predict(mixture_weights(written, swarm.buckets), pool_fractions(written, swarm.buckets))
+    expected = fit.predict(
+        mixture_weights(written, swarm.buckets, MIXTURES_TABLE), pool_fractions(written, swarm.buckets, MIXTURES_TABLE)
+    )
     np.testing.assert_array_equal(predicted["predicted_synthetic"], expected)
     # Without pf__ columns, every mixture draws from whole pools.
     mixtures.filter(regex="^(mixture_id|w__)").to_csv(tmp_path / "whole_pools.csv", index=False)
     command = ["predict", "--fit", str(fit_path), "--mixtures", str(tmp_path / "whole_pools.csv")]
     assert main([*command, "--out", str(predicted_path)]) == 0
-    whole_pools = fit.predict(mixture_weights(read_csv(tmp_path / "whole_pools.csv"), swarm.buckets))
+    whole_pools = fit.predict(mixture_weights(read_csv(tmp_path / "whole_pools.csv"), swarm.buckets, MIXTURES_TABLE))
     np.testing.assert_array_equal(read_csv(predicted_path)["predicted_synthetic"], whole_pools)
 
     mixture_path = tmp_path / "mixture.csv"

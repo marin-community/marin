@@ -220,20 +220,28 @@ def objective_from_tasks(tasks: pd.DataFrame, name: str) -> Objective:
     return Objective(name, task_ids, weights)
 
 
-def bucket_values(runs: pd.DataFrame, prefix: str, bucket_ids: Sequence[str]) -> np.ndarray:
+def bucket_values(table: pd.DataFrame, prefix: str, bucket_ids: Sequence[str], name: str) -> np.ndarray:
+    """The columns ``<prefix><bucket_id>`` of ``table``, called ``name`` in messages, as floats (rows x buckets)."""
     columns = [f"{prefix}{bucket}" for bucket in bucket_ids]
-    require_columns(runs, columns, RUN_TABLE)
-    return runs[columns].to_numpy(float)
+    require_columns(table, columns, name)
+    return table[columns].to_numpy(float)
 
 
 def flagged_columns(prefix: str, ids: Sequence[str], flagged: np.ndarray) -> str:
-    """The columns ``<prefix><id>`` that hold a flagged value; ``flagged`` is (runs, ids), ids being buckets or tasks."""
-    return ", ".join(f"{prefix}{identifier}" for identifier, bad in zip(ids, flagged.any(axis=0), strict=True) if bad)
+    """The columns ``<prefix><id>`` that hold a flagged value, at most ``SHOWN_VALUES`` of them (``shown_values``).
+
+    ``flagged`` is (runs, ids), ids being buckets or tasks.
+    """
+    columns = [f"{prefix}{identifier}" for identifier, bad in zip(ids, flagged.any(axis=0), strict=True) if bad]
+    return shown_values(columns)
 
 
-def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
-    """The runs' weights (runs x buckets): finite and nonnegative, and each run's summing to one within 1e-6."""
-    weights = bucket_values(runs, WEIGHT_PREFIX, bucket_ids)
+def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
+    """The runs' weights (runs x buckets): finite and nonnegative, and each run's summing to one within 1e-6.
+
+    ``name`` is the table's name in messages.
+    """
+    weights = bucket_values(runs, WEIGHT_PREFIX, bucket_ids, name)
     invalid = ~(np.isfinite(weights) & (weights >= 0.0))
     if invalid.any():
         raise ValueError(
@@ -247,9 +255,12 @@ def mixture_weights(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray
     return weights
 
 
-def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str]) -> np.ndarray:
-    """The runs' pool fractions (runs x buckets); each must lie in (0, 1], since a zero gives infinite exposure."""
-    fractions = bucket_values(runs, POOL_FRACTION_PREFIX, bucket_ids)
+def pool_fractions(runs: pd.DataFrame, bucket_ids: Sequence[str], name: str) -> np.ndarray:
+    """The runs' pool fractions (runs x buckets); each must lie in (0, 1], since a zero gives infinite exposure.
+
+    ``name`` is the table's name in messages.
+    """
+    fractions = bucket_values(runs, POOL_FRACTION_PREFIX, bucket_ids, name)
     outside = ~((fractions > 0.0) & (fractions <= 1.0))
     if outside.any():
         raise ValueError(
@@ -298,9 +309,9 @@ def swarm_from_runs(runs: pd.DataFrame, partition: Partition, task_ids: Sequence
     return Swarm(
         runs=tuple(fit[OBSERVATION_ID]),
         buckets=partition.bucket_ids,
-        weights=mixture_weights(fit, partition.bucket_ids),
+        weights=mixture_weights(fit, partition.bucket_ids, RUN_TABLE),
         epochs_per_unit_weight=partition.epochs_per_unit_weight,
-        pool_fractions=pool_fractions(fit, partition.bucket_ids),
+        pool_fractions=pool_fractions(fit, partition.bucket_ids, RUN_TABLE),
         outcomes=measured_outcomes(fit, task_ids),
         calibration=calibration,
     )
@@ -315,7 +326,8 @@ def anchors_from_runs(swarm: Swarm, runs: pd.DataFrame, task_ids: Sequence[str])
     """
     if len(runs) < 2:
         raise ValueError(f"the floors need at least two proportional runs for a standard deviation, got {len(runs)}")
-    mixtures = np.hstack([mixture_weights(runs, swarm.buckets), pool_fractions(runs, swarm.buckets)])
+    weights, fractions = mixture_weights(runs, swarm.buckets, RUN_TABLE), pool_fractions(runs, swarm.buckets, RUN_TABLE)
+    mixtures = np.hstack([weights, fractions])
     calibration = np.hstack([swarm.weights, swarm.pool_fractions])[swarm.calibration]
     other = np.abs(mixtures[:, None, :] - calibration[None, :, :]).max(axis=(1, 2)) > EXPOSURE_MIXTURE_TOLERANCE
     if other.any():
@@ -338,8 +350,8 @@ def heldout_bank(runs: pd.DataFrame, partition: Partition, objective: Objective)
     per-task values; otherwise it is the task means weighted by the objective.
     """
     runs = runs.reset_index(drop=True)
-    weights = mixture_weights(runs, partition.bucket_ids)
-    fractions = pool_fractions(runs, partition.bucket_ids)
+    weights = mixture_weights(runs, partition.bucket_ids, RUN_TABLE)
+    fractions = pool_fractions(runs, partition.bucket_ids, RUN_TABLE)
     columns = [f"{OUTCOME_PREFIX}{task}" for task in objective.tasks]
     require_columns(runs, columns, RUN_TABLE)
     keys = runs[EXPOSURE_ID if EXPOSURE_ID in runs.columns else OBSERVATION_ID]
@@ -441,11 +453,12 @@ def release_anchors(root: Path, swarm: str, objective: str) -> dict[str, Anchor]
 
 def trained_counts(root: Path, mixture_id: str) -> np.ndarray:
     """The block counts of a trained mixture: its ``validation_3e18`` weights times 2,048, which must be integers."""
-    table = read_table(root, "validation_3e18")
+    name = "validation_3e18"
+    table = read_table(root, name)
     rows = table[table["mixture_id"] == mixture_id]
     if rows.empty:
-        raise ValueError(f"no validation_3e18 run trained {mixture_id}")
-    blocks = bucket_values(rows, WEIGHT_PREFIX, release_partition(root).bucket_ids) * MIXTURE_BLOCK_SIZE
+        raise ValueError(f"no {name} run trained {mixture_id}")
+    blocks = bucket_values(rows, WEIGHT_PREFIX, release_partition(root).bucket_ids, name) * MIXTURE_BLOCK_SIZE
     counts = np.rint(blocks[0])
     if not (blocks == counts).all():
         raise ValueError(f"the runs of {mixture_id} do not share one mixture on the {MIXTURE_BLOCK_SIZE}-block grid")
@@ -475,10 +488,11 @@ def released_olmix_laws(root: Path, objective: str) -> tuple[LogLinearLaw, ...]:
 
     Each law's coefficients follow the partition's bucket order.
     """
-    frame = read_table(root, "fits_olmix_task_laws")
+    name = "fits_olmix_task_laws"
+    frame = read_table(root, name)
     rows = frame[(frame["swarm"] == MAIN_SWARM) & (frame[OBJECTIVE_COLUMN] == objective)].set_index(TASK_ID)
     rows = rows.loc[list(objective_from_tasks(release_tasks(root), objective).tasks)]
-    coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids)
+    coefficients = bucket_values(rows, COEFFICIENT_PREFIX, release_partition(root).bucket_ids, name)
     return tuple(
         LogLinearLaw(float(log_c), task_coefficients, float(huber_loss))
         for log_c, task_coefficients, huber_loss in zip(rows["log_c"], coefficients, rows["huber_loss"], strict=True)

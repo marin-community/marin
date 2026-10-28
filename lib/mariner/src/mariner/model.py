@@ -14,6 +14,7 @@ as sum_t a_t f_t(w) with the evaluation's own weights a_t.
 from __future__ import annotations
 
 import dataclasses
+from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
@@ -257,11 +258,19 @@ def shown_values(values: Sequence[object]) -> str:
 
 
 def order_difference(expected: Sequence[str], given: Sequence[str]) -> str:
-    """How the ids ``given`` differ from ``expected``: the ids they lack and add, or, with the same ids, those moved."""
+    """How the ids ``given`` differ from ``expected``, for a message.
+
+    The ids they lack and add; with the same ids, those they list a different number of times, as a hand-edited fit
+    that repeats an id does; with each id as often, those moved.
+    """
     lacks = [item for item in expected if item not in given]
     adds = [item for item in given if item not in expected]
     if lacks or adds:
         return f"it lacks {shown_values(lacks) or 'none'} and adds {shown_values(adds) or 'none'}"
+    counts, expected_counts = Counter(given), Counter(expected)
+    if counts != expected_counts:
+        recounted = [item for item in expected_counts if counts[item] != expected_counts[item]]
+        return f"it lists {shown_values(recounted)} a different number of times: {len(given)} ids for {len(expected)}"
     moved = [item for item, other in zip(expected, given, strict=True) if item != other]
     return f"it orders {shown_values(moved)} differently"
 

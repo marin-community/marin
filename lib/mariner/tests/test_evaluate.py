@@ -57,8 +57,8 @@ def test_cross_validate_predicts_each_run_at_its_pool_fractions(synthetic_proble
     fractions[PERTURBED_RUN] = 0.5  # the run draws half of every pool, which doubles its exposures
     run = swarm.runs[PERTURBED_RUN]
     before = cross_validate(swarm, one_task, anchors).set_index("observation_id")
-    half_pools = dataclasses.replace(swarm, pool_fractions=fractions)
-    after = cross_validate(half_pools, one_task, anchors).set_index("observation_id")
+    one_run_halved = dataclasses.replace(swarm, pool_fractions=fractions)
+    after = cross_validate(one_run_halved, one_task, anchors).set_index("observation_id")
     # The fit that predicts the run never trains on it, so in the run's fold only the run's own prediction moves.
     fold = before["fold"] == before.loc[run, "fold"]
     assert after.loc[run, "predicted"] != before.loc[run, "predicted"]

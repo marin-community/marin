@@ -78,6 +78,8 @@ EPOCHS_TOLERANCE = 1e-12  # relative: one partition and target budget give the s
 TASK_WEIGHT_TOLERANCE = 1e-12  # relative: one tasks table gives the same weights up to floating rounding
 UNIMAX_MAX_EPOCHS = 1.0  # the recipe's UniMax baseline repeats no bucket
 PREDICTION_PREFIX = "predicted_"
+HELDOUT_TABLE = "heldout"  # the snapshot's held-out runs
+MIXTURES_TABLE = "mixtures"  # predict's --mixtures, in error messages
 DIAGNOSTICS_SUFFIX = ".diagnostics.json"
 LAWS_SUFFIX = ".laws.json"
 CHECK_FAILED_STATUS = 1
@@ -133,7 +135,7 @@ def self_test(
     """
     olmix_laws = OlmixLaws(olmix_laws)  # also takes the value, "released" or "refit"
     olmix.require_cvxpy()
-    heldout_runs = read_table(root, "heldout").set_index(OBSERVATION_ID)
+    heldout_runs = read_table(root, HELDOUT_TABLE).set_index(OBSERVATION_ID)
     checks = []
     for name in objectives:
         objective = objective_from_tasks(release_tasks(root), name)
@@ -144,7 +146,9 @@ def self_test(
         in_sample = released_task_predictions(root, "fits_swarm_predictions", name).loc[list(swarm.runs), tasks]
         heldout = released_task_predictions(root, "fits_heldout_predictions", name)[tasks]
         runs = heldout_runs.loc[heldout.index]
-        heldout_predictions = fit.predict_tasks(mixture_weights(runs, fit.buckets), pool_fractions(runs, fit.buckets))
+        heldout_predictions = fit.predict_tasks(
+            mixture_weights(runs, fit.buckets, HELDOUT_TABLE), pool_fractions(runs, fit.buckets, HELDOUT_TABLE)
+        )
         checks.append(
             Check(
                 f"{name} in-sample prediction gap",
@@ -237,13 +241,15 @@ def read_anchors(args: argparse.Namespace, tables: SwarmTables) -> dict[str, Anc
 
 
 def read_fit(path: Path) -> ObjectiveFit:
-    """The fit JSON at ``path``; raises ``ValueError`` naming the path when the file is not JSON or not a fit.
+    """The fit JSON at ``path``; raises ``ValueError`` naming the path unless the file is UTF-8 JSON of a fit.
 
     A fit is a JSON object that ``ObjectiveFit.from_json`` reads: it has every field, and each field holds a value of
     the type the field needs.
     """
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{path} is not UTF-8 text: {error}") from error
     except json.JSONDecodeError as error:
         raise ValueError(f"{path} is not JSON: {error}") from error
     if not isinstance(payload, dict):
@@ -345,12 +351,12 @@ def run_fit(args: argparse.Namespace) -> int:
 def run_predict(args: argparse.Namespace) -> int:
     fit = read_fit(args.fit)
     mixtures = read_csv(args.mixtures)
-    weights = mixture_weights(mixtures, fit.buckets)
+    weights = mixture_weights(mixtures, fit.buckets, MIXTURES_TABLE)
     read = [f"{WEIGHT_PREFIX}{bucket}" for bucket in fit.buckets]
     fraction_columns = [f"{POOL_FRACTION_PREFIX}{bucket}" for bucket in fit.buckets]
     fractions = None  # whole pools, unless the file gives pool fractions
     if mixtures.columns.isin(fraction_columns).any():
-        fractions = pool_fractions(mixtures, fit.buckets)
+        fractions = pool_fractions(mixtures, fit.buckets, MIXTURES_TABLE)
         read += fraction_columns
     predicted = {f"{PREDICTION_PREFIX}{fit.objective}": fit.predict(weights, fractions)}
     write_csv(mixtures.drop(columns=read).assign(**predicted), args.out)

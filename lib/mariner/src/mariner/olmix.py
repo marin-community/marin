@@ -141,8 +141,10 @@ def fit_laws(swarm: Swarm, objective: Objective, delta: float = HUBER_DELTA) -> 
 
 
 def constraint_violation(solution: np.ndarray, caps: np.ndarray) -> float:
-    """How far ``solution`` lies outside the simplex and the ``caps``: its largest negative weight, the gap of its sum
-    from one or its largest excess over a cap, whichever is largest; inf when a weight is not finite."""
+    """How far ``solution`` lies outside the simplex and the ``caps``; inf when a weight is not finite.
+
+    The largest of minus its smallest weight, its sum's distance from one and its largest excess over a cap.
+    """
     if not np.isfinite(solution).all():
         return np.inf
     return float(max(-solution.min(), abs(solution.sum() - 1.0), np.max(solution - caps)))
@@ -248,7 +250,8 @@ def propose(
     ``laws`` holds one law per task of ``objective``, in task order. The KL penalty, weighted by ``kl``, pulls toward
     the proportional mixture (1 / epochs) / sum(1 / epochs), and each bucket's weight is capped at min(1, cap / epochs).
     Raises ``ValueError`` before any solve when the laws do not match the tasks, ``kl`` is negative or not finite, or
-    the cap is NaN or cannot hold a complete mixture on the 2,048-block grid (``optimize.check_cap_and_kl``).
+    the cap is not positive (NaN included) or cannot hold a complete mixture on the 2,048-block grid
+    (``optimize.check_cap_and_kl``).
     """
     if len(laws) != len(objective.tasks):
         raise ValueError(f"{len(laws)} laws for the {len(objective.tasks)} tasks of {objective.name}")

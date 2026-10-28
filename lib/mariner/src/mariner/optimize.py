@@ -131,15 +131,15 @@ def block_maxima(upper: np.ndarray, slack: float) -> np.ndarray:
 def check_cap_and_kl(epochs_per_unit_weight: np.ndarray, cap: float | None, kl: float, slack: float) -> None:
     """Raise ``ValueError`` unless the epoch cap and the KL weight admit a proposal; proposers call it before solving.
 
-    ``kl`` must be finite and nonnegative. ``cap`` is None (no cap) or a number of epochs, inf included, whose weight
-    bounds (``bucket_upper_bounds``) hold a mixture on the 2,048-block grid: their block maxima, computed as the
-    rounding computes them with its ``slack`` (``block_maxima``), sum to 2,048 or more.
+    ``kl`` must be finite and nonnegative. ``cap`` is None (no cap) or a positive number of epochs, inf included,
+    whose weight bounds (``bucket_upper_bounds``) hold a mixture on the 2,048-block grid: their block maxima, computed
+    as the rounding computes them with its ``slack`` (``block_maxima``), sum to 2,048 or more.
     """
     if not (np.isfinite(kl) and kl >= 0.0):
         raise ValueError(f"the KL weight must be finite and nonnegative, got {kl:g}")
     if cap is None:
         return
-    if np.isnan(cap):
+    if not cap > 0:  # NaN included
         raise ValueError(f"the epoch cap must be a positive number of epochs or inf, got {cap:g}")
     blocks = int(block_maxima(bucket_upper_bounds(epochs_per_unit_weight, cap, slack), slack).sum())
     if blocks < MIXTURE_BLOCK_SIZE:
@@ -279,8 +279,8 @@ def propose(fit: ObjectiveFit, swarm_weights: np.ndarray, cap: float | None = No
 
     ``cap`` bounds every bucket's materialized epochs and ``kl`` weights a KL penalty toward the proportional
     mixture; both are optional and not part of the procedure. Raises ``ValueError`` before any solve when ``kl`` is
-    negative or not finite, or the cap is NaN or cannot hold a complete mixture on the 2,048-block grid
-    (``check_cap_and_kl``).
+    negative or not finite, or the cap is not positive (NaN included) or cannot hold a complete mixture on the
+    2,048-block grid (``check_cap_and_kl``).
     """
     check_cap_and_kl(fit.epochs_per_unit_weight, cap, kl, BLOCK_MAXIMUM_SLACK)
     continuous, starts = continuous_optimum(fit, swarm_weights, cap, kl)

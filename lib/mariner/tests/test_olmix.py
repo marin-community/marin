@@ -46,7 +46,7 @@ def test_quantize_under_cap_with_infinite_cap_floors_and_gives_remainder_to_larg
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", RuntimeWarning)
         counts = quantize_under_cap(np.array([0.5, 0.3, 0.2]), np.array([4.0, 1.0, 1.0]), cap=math.inf)
-    # numpy reports the invalid cast of an infinite block maximum to integers as a RuntimeWarning.
+    # An infinite cap bounds no bucket, and the rounding computes its block maxima without NumPy warnings.
     assert not [str(warning.message) for warning in caught if issubclass(warning.category, RuntimeWarning)]
     assert counts.tolist() == [1025, 614, 409]  # floors 1024, 614 and 409; the block left over goes to weight 0.5
 
@@ -101,7 +101,7 @@ def test_olmix_proposal_with_infinite_cap_is_unconstrained():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", RuntimeWarning)
         proposal = propose([GENERATING_LAW], ONE_TASK, EPOCHS_PER_UNIT_WEIGHT, cap=math.inf, kl=0.01)
-    # numpy reports the invalid cast of an infinite block maximum to integers as a RuntimeWarning.
+    # An infinite cap proposes without NumPy warnings.
     assert not [str(warning.message) for warning in caught if issubclass(warning.category, RuntimeWarning)]
     assert proposal.counts.tolist() == [2048, 0, 0, 0]  # the law alone puts the whole block on bucket 0
 
