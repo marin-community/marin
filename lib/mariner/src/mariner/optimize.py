@@ -156,11 +156,13 @@ def continuous_optimum(
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """The lowest feasible SLSQP endpoint over the proportional start and four seeded swarm rows, polished.
 
-    Each restart keeps the better of its first-pass and polished endpoints by ``endpoint_rank``, the polish on a tie.
+    A swarm of fewer than four rows starts from all of them. Each restart keeps the better of its first-pass and
+    polished endpoints by ``endpoint_rank``, the polish on a tie.
     """
     natural = proportional_mixture(fit.epochs_per_unit_weight)
     upper = bucket_upper_bounds(fit.epochs_per_unit_weight, cap, BLOCK_MAXIMUM_SLACK)
-    indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), PANEL_STARTS, replace=False)
+    panel = min(len(swarm_weights), PANEL_STARTS)
+    indices = np.random.default_rng(START_SEED).choice(len(swarm_weights), panel, replace=False)
     starts = [project_start(row, upper, natural) for row in (natural, *swarm_weights[indices])]
     records, solutions = [], []
     for index, start in enumerate(starts):
