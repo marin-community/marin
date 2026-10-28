@@ -1247,6 +1247,7 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
     updates, resources = _dispatch(
         request,
         pod_config(
+            sandbox_runtime_class="cpu-sandbox",
             host_network=True,
             task_env={"AWS_SECRET_ACCESS_KEY": "host-private"},
             service_account="privileged-account",
@@ -1262,7 +1263,7 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
     spec = pod["spec"]
     task, runtime = spec["containers"]
     assert [container["name"] for container in spec["containers"]] == ["task", "service-runtime"]
-    assert spec["runtimeClassName"] == "gvisor"
+    assert spec["runtimeClassName"] == "cpu-sandbox"
     assert spec["hostAliases"] == [{"ip": "127.0.0.1", "hostnames": ["task", "runtime"]}]
     assert spec["dnsPolicy"] == "None"
     assert "hostNetwork" not in spec and "serviceAccountName" not in spec
