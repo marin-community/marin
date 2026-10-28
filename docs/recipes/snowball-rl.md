@@ -112,6 +112,7 @@ the submitting environment; every run forwards its required keys through Iris.
 | reused-dev-panel | use this panel for iteration; use independent benchmarks for release claims |
 | no-image-sandbox | image-only tasks need the planned sandbox backend |
 | no-grading-timer | generation includes grader tails; add separate grader timings |
+| eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling belongs with the Phase 1.5 panel and new controls. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
 | harbor-on-daytona | the Harbor fallback and its evidence run are a follow-up PR |
 
