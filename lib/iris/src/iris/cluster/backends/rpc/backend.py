@@ -327,7 +327,7 @@ class RpcTaskBackend:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
-    def egress_allowlist_mode(self) -> EgressAllowlistMode:
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
         """Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``)."""
         return EgressAllowlistMode.DEFAULT if self.egress_allowlist_default else EgressAllowlistMode.OPT_IN
 

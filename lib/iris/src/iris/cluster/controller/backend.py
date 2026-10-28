@@ -80,7 +80,7 @@ class BackendKind(StrEnum):
 class EgressAllowlistMode(StrEnum):
     """How a backend handles ``EGRESS_POLICY_ALLOWLIST`` jobs."""
 
-    UNAVAILABLE = "unavailable"  # cannot enforce it; such jobs run on the cluster network
+    UNAVAILABLE = "unavailable"  # cannot enforce it; the job runs on the cluster network
     OPT_IN = "opt-in"  # enforces it for jobs that request it
     DEFAULT = "default"  # enforces it, and root jobs get it unless they choose otherwise
 
@@ -535,8 +535,8 @@ class TaskBackend(Protocol):
         """Validate backend requirements; return an error for an invalid job, or None."""
         ...
 
-    def egress_allowlist_mode(self) -> EgressAllowlistMode:
-        """How this backend handles ``EGRESS_POLICY_ALLOWLIST`` jobs."""
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        """How this backend handles ``EGRESS_POLICY_ALLOWLIST`` for ``request``."""
         ...
 
     def get_process_status(

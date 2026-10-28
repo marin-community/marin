@@ -186,6 +186,15 @@ counting those it inherits from its parent.
 iris job run --egress-allow api.openai.com:443 --egress-allow 203.0.113.0/24 -- python eval.py
 ```
 
+A task that needs an unlisted host usually fails to resolve it: the allowlist
+answers DNS queries for unlisted names `REFUSED`, which most clients report as
+a name-resolution error naming the host, such as curl's `Could not resolve
+host`. To confirm the allowlist is the cause, rerun the job with
+`--egress-policy EGRESS_POLICY_CLUSTER`; then add the host with
+`--egress-allow`. Docker workers log each refused name in the worker log, and
+an operator can watch a Kubernetes pod's refusals on its node (see
+[Kubernetes](#kubernetes)).
+
 A rule is `DEST[:PORT[,PORT...]]`:
 
 | Rule | Admits |
@@ -316,10 +325,23 @@ owned by the pod and deleted with it. The pod's containers start only after
 the policy exists. Cilium admits the union of both policies. Ingress is not
 restricted.
 
-A GPU job with more than one task keeps host networking under `ALLOWLIST`,
-because NCCL needs the node's InfiniBand devices. Pod policy does not apply to
-host-network pods, so such a job runs unrestricted. Inspect drops with
-`cilium-dbg monitor --type drop` in the node's Cilium agent pod.
+On a cluster with `kubernetes_provider.host_network`, a GPU job with more than
+one task runs under `CLUSTER`: NCCL needs the node's InfiniBand devices, which
+only host networking exposes, and pod policy cannot restrict a host-network
+pod. The controller stores `CLUSTER` for such a job, logging a warning when the
+job asked for `ALLOWLIST`, and its child jobs inherit `CLUSTER`.
+
+To see what an `ALLOWLIST` pod is refused, run `cilium-dbg monitor` in the
+Cilium agent pod on the pod's node: `--type l7` shows DNS lookups and their
+verdicts, and `--type drop` shows dropped connections. On CoreWeave the agents
+run in `cw-cilium-system`:
+
+```bash
+NODE=$(kubectl -n "$NAMESPACE" get pod "$POD" -o jsonpath='{.spec.nodeName}')
+AGENT=$(kubectl -n cw-cilium-system get pod -l app.kubernetes.io/name=cilium \
+  --field-selector "spec.nodeName=$NODE" -o name)
+kubectl -n cw-cilium-system exec "$AGENT" -c cilium -- cilium-dbg monitor --type l7 --type drop
+```
 
 ## Task tokens
 

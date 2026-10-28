@@ -696,15 +696,17 @@ def _resolve_egress(
     keeps that choice. A root job, and a SANDBOX child, takes the cluster's
     default: ALLOWLIST where the backend defaults to it and the job is not
     SANDBOX, otherwise its profile's default. A job on ALLOWLIST that the
-    backend cannot enforce runs on CLUSTER instead, with a warning. A job
-    queued for a federation peer is not resolved here; the peer resolves it.
+    backend cannot enforce for it runs on CLUSTER instead, with a warning, so
+    the stored policy is the one the job runs under. A job queued for a
+    federation peer is not resolved here; the peer resolves it.
     """
-    mode = dependencies.runtime.backend.egress_allowlist_mode()
+    mode = dependencies.runtime.backend.egress_allowlist_mode(request)
     if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
         _resolve_unspecified_egress(dependencies, request, launch, mode)
     if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and mode is EgressAllowlistMode.UNAVAILABLE:
         logger.warning(
-            "Job %s uses egress policy allowlist, which this cluster cannot enforce; it runs on the cluster network",
+            "Job %s uses egress policy allowlist, which this cluster cannot enforce for it; "
+            "it runs on the cluster network",
             launch.job_id.to_wire(),
         )
         request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER

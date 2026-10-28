@@ -866,16 +866,17 @@ def _topology_request_annotations(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    CLUSTER pods do. So do ALLOWLIST pods of a GPU job with more than one task:
-    NCCL needs the node's InfiniBand devices, and since host networking
-    bypasses pod policy, their allowlist goes unenforced. Legacy gVisor needs
-    the CNI-created interface and routes for cluster egress.
+    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
+    for cluster egress.
     """
     if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
         return False
-    if network is TaskNetwork.CLUSTER:
-        return True
-    return network is TaskNetwork.ALLOWLIST and run_req.num_tasks > 1 and get_gpu_count(run_req.resources.device) > 0
+    return network is TaskNetwork.CLUSTER
+
+
+def _needs_infiniband(num_tasks: int, device: job_pb2.DeviceConfig) -> bool:
+    """Whether NCCL in a job needs its nodes' InfiniBand devices, which only host networking exposes."""
+    return num_tasks > 1 and get_gpu_count(device) > 0
 
 
 def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
@@ -901,9 +902,11 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    host_network = _uses_host_network(config, run_req, isolation.network)
-    # Pod policy does not apply to a host-network pod, so it is on the cluster network whatever its policy.
-    network = TaskNetwork.CLUSTER if host_network else isolation.network
+    network = isolation.network
+    if network is TaskNetwork.ALLOWLIST and config.egress_allowlist is None:
+        # Without Cilium nothing enforces the allowlist, so a stored ALLOWLIST job runs on the cluster network.
+        network = TaskNetwork.CLUSTER
+    host_network = _uses_host_network(config, run_req, network)
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -2555,9 +2558,12 @@ class K8sTaskProvider:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
 
-    def egress_allowlist_mode(self) -> EgressAllowlistMode:
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
         allowlist = self.pods.egress_allowlist
-        if allowlist is None:
+        # Pod policy cannot restrict a host-network pod.
+        if allowlist is None or (
+            self.pods.host_network and _needs_infiniband(request.replicas, request.resources.device)
+        ):
             return EgressAllowlistMode.UNAVAILABLE
         return EgressAllowlistMode.DEFAULT if allowlist.default else EgressAllowlistMode.OPT_IN
 

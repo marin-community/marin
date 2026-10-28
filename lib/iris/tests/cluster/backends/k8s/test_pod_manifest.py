@@ -1145,16 +1145,9 @@ def _allowlist_config() -> PodConfig:
     return pod_config(controller_address="http://ctrl:8080", host_network=True, egress_allowlist=EgressAllowlistConfig())
 
 
-@pytest.mark.parametrize(
-    ("num_tasks", "gpus", "host_network"),
-    [
-        pytest.param(1, 0, False, id="cpu"),
-        pytest.param(1, 8, False, id="single-host-gpu"),
-        pytest.param(2, 8, True, id="multi-host-gpu"),
-    ],
-)
-def test_allowlist_pod_leaves_the_host_network_unless_it_needs_infiniband(num_tasks, gpus, host_network):
-    """Pod policy cannot see a host-network pod, so only a multi-host GPU job, which needs InfiniBand, keeps it."""
+@pytest.mark.parametrize(("num_tasks", "gpus"), [pytest.param(1, 0, id="cpu"), pytest.param(1, 8, id="gpu")])
+def test_allowlist_pod_leaves_the_host_network(num_tasks, gpus):
+    """Pod policy cannot see a host-network pod."""
     updates, resources = _dispatch(_allowlist_request(num_tasks, gpus, rules=["api.openai.com"]), _allowlist_config())
     assert updates == []
     [manifest] = resources[K8sResource.PODS]
@@ -1162,14 +1155,24 @@ def test_allowlist_pod_leaves_the_host_network_unless_it_needs_infiniband(num_ta
     task = spec["containers"][0]
     env = {e["name"]: e.get("value") for e in task["env"]}
 
-    assert spec.get("hostNetwork", False) == host_network
-    assert (RDMA_RESOURCE in task["resources"].get("limits", {})) == host_network
-    assert manifest["metadata"]["labels"].get(EGRESS_LABEL) == (None if host_network else "allowlist")
-    # A policy the pod cannot be subject to is not created.
-    assert len(resources[K8sResource.CILIUM_NETWORK_POLICIES]) == (0 if host_network else 1)
+    assert not spec.get("hostNetwork", False)
+    assert RDMA_RESOURCE not in task["resources"].get("limits", {})
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == "allowlist"
+    assert len(resources[K8sResource.CILIUM_NETWORK_POLICIES]) == 1
     # Unlike a sandbox, an allowlisted task stays a cluster citizen.
     assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
     assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
+
+
+def test_allowlist_pod_runs_on_the_cluster_network_without_cilium():
+    """Removing Cilium from the config rolls back the allowlist for every pod started afterwards."""
+    config = pod_config(controller_address="http://ctrl:8080", host_network=True)
+    _, resources = _dispatch(_allowlist_request(rules=["api.openai.com"]), config)
+    [manifest] = resources[K8sResource.PODS]
+
+    assert manifest["spec"]["hostNetwork"]
+    assert EGRESS_LABEL not in manifest["metadata"]["labels"]
+    assert resources[K8sResource.CILIUM_NETWORK_POLICIES] == []
 
 
 def test_allowlist_job_rules_reach_only_their_own_attempt():

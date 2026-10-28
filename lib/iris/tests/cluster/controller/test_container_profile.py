@@ -75,14 +75,22 @@ def _as(role: str, user_id: str, fn, *args, **kwargs):
 
 
 def _launch(
-    name: str, profile: int, egress: int = job_pb2.EGRESS_POLICY_UNSPECIFIED, rules: Sequence[str] = ()
+    name: str,
+    profile: int,
+    egress: int = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+    rules: Sequence[str] = (),
+    replicas: int = 1,
+    gpus: int = 0,
 ) -> controller_pb2.Controller.LaunchJobRequest:
+    resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
+    if gpus:
+        resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpus))
     return controller_pb2.Controller.LaunchJobRequest(
         name=name,
         entrypoint=make_test_entrypoint(),
         environment=job_pb2.EnvironmentConfig(),
-        replicas=1,
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=replicas,
+        resources=resources,
         container_profile=profile,
         egress_policy=egress,
         egress_allow=parse_egress_rules(rules),
@@ -271,7 +279,7 @@ def _k8s_backend(service: ControllerServiceImpl, egress_allowlist: EgressAllowli
     backend = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(),
         kubectl=InMemoryK8sService(namespace="iris"),
-        pods=pod_config(egress_allowlist=egress_allowlist),
+        pods=pod_config(host_network=True, egress_allowlist=egress_allowlist),
     )
     service._controller.backend.egress_allowlist_mode.side_effect = backend.egress_allowlist_mode
     service._controller.backend.validate_job.side_effect = backend.validate_job
@@ -283,7 +291,7 @@ def _k8s_backend(service: ControllerServiceImpl, egress_allowlist: EgressAllowli
 
 @pytest.fixture
 def allowlist_default_service(service):
-    """The service in front of a Kubernetes backend whose cluster defaults to the allowlist."""
+    """The service in front of a host-network Kubernetes backend whose cluster defaults to the allowlist."""
     with _k8s_backend(service, EgressAllowlistConfig(default=True)):
         yield service
 
@@ -352,3 +360,23 @@ def test_child_rules_and_inherited_rules_share_the_rule_cap(allowlist_default_se
         _as("user", "alice", service.launch_job, _launch("/alice/parent/extra", DEFAULT, rules=["pypi.org"]), None)
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert f"at most {MAX_EGRESS_RULES}" in str(exc.value.message)
+
+
+@pytest.mark.parametrize(
+    ("replicas", "gpus", "egress", "resolved"),
+    [
+        pytest.param(1, 8, job_pb2.EGRESS_POLICY_UNSPECIFIED, job_pb2.EGRESS_POLICY_ALLOWLIST, id="single-host-gpu"),
+        pytest.param(2, 0, job_pb2.EGRESS_POLICY_UNSPECIFIED, job_pb2.EGRESS_POLICY_ALLOWLIST, id="multi-host-cpu"),
+        pytest.param(2, 8, job_pb2.EGRESS_POLICY_UNSPECIFIED, job_pb2.EGRESS_POLICY_CLUSTER, id="multi-host-gpu"),
+        pytest.param(2, 8, job_pb2.EGRESS_POLICY_ALLOWLIST, job_pb2.EGRESS_POLICY_CLUSTER, id="multi-host-gpu-asked"),
+    ],
+)
+def test_multi_host_gpu_job_is_recorded_on_the_cluster_network(
+    allowlist_default_service, state, replicas, gpus, egress, resolved
+):
+    """NCCL needs host networking for InfiniBand, which pod policy cannot restrict; the stored policy says so."""
+    job_id = JobName.from_wire("/alice/job")
+    request = _launch(job_id.to_wire(), DEFAULT, egress, replicas=replicas, gpus=gpus)
+    _as("user", "alice", allowlist_default_service.launch_job, request, None)
+
+    assert _stored_egress(state, job_id) == (resolved, resolved)
