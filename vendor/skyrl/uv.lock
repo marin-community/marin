@@ -3106,6 +3106,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "ijson", marker = "extra == 'pipeline'", specifier = ">=3.3" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
@@ -3114,6 +3115,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomlkit", specifier = ">=0.13" },
 ]
 provides-extras = ["pipeline"]
@@ -3152,16 +3154,21 @@ schema = [
 
 [package.metadata]
 requires-dist = [
+    { name = "emoji", marker = "extra == 'instructions'" },
+    { name = "immutabledict", marker = "extra == 'instructions'" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../../lib/verifyit" },
+    { name = "langdetect", marker = "extra == 'instructions'" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym", "instructions"], marker = "extra == 'all'", editable = "../../lib/verifyit" },
     { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
+    { name = "nltk", marker = "extra == 'instructions'", specifier = ">=3.9.1" },
     { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
+    { name = "syllapy", marker = "extra == 'instructions'" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
     { name = "tomli-w", specifier = ">=1.2" },
 ]
-provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "instructions", "all"]
 
 [package.metadata.requires-dev]
 test = [

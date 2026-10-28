@@ -3,6 +3,7 @@
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,16 @@ from verifyit.grade import InvalidTask, Status, run, write_reward
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
 from verifyit.modes.grade_exact import grade_exact_candidate
-from verifyit.spec import ExactSpec, MathProfile, MathSpec, MathType, render_spec
+from verifyit.modes.grade_harness_generation import grade_harness_generation_candidate
+from verifyit.spec import (
+    ExactSpec,
+    HarnessGenerationProfile,
+    HarnessGenerationSpec,
+    MathProfile,
+    MathSpec,
+    MathType,
+    render_spec,
+)
 
 
 def _answer(workspace: Path, text: str) -> None:
@@ -115,6 +125,19 @@ def test_math_grades_from_a_worker_thread(tmp_path):
     worker.start()
     worker.join()
     assert results[0].status == Status.SCORED and results[0].reward == 1.0
+
+
+def test_harness_math_symbolic_fallback_grades_correctly_in_a_worker_thread():
+    # Beyond the exact-decimal shortcut, the source comparator needs symbolic parsing.
+    answer = "1.2345678901234567"
+    spec = HarnessGenerationSpec(profile=HarnessGenerationProfile.GSM8K, references=((answer,),))
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        result = workers.submit(grade_harness_generation_candidate, spec, "#### " + answer).result(timeout=15)
+    assert result.reward == 1
+    assert result.detail["metrics"] == {
+        "exact_match,strict-match": 1.0,
+        "exact_match,flexible-extract": 1.0,
+    }
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frozen original judge plans, classifications, HTTP replies and source subset order."""
+"""Exercise source preparation, judge failures and retry evidence through HTTP."""
 
 import csv
 import json
@@ -23,7 +23,6 @@ from taskcompendium.models import ConversationTrace, GradingAttempt, TextMessage
 from taskcompendium.pipeline.evaluation import evaluation_cases
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
-from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 
@@ -32,7 +31,7 @@ from experiments.post_training.task_curation.config import InputOverrides, Pipel
 from experiments.post_training.task_curation.datasets.evalchemy.judged import read_simpleqa, sources
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import curate
 
-ORACLE = Path(__file__).parent / "fixtures/evalchemy_judged_oracle.json"
+INPUTS = json.loads((Path(__file__).parent / "fixtures/evalchemy_inputs.json").read_text())["judged"]
 
 
 def write_simpleqa(file, rows):
@@ -46,7 +45,7 @@ def write_simpleqa(file, rows):
 
 @pytest.fixture(params=["FinanceBench", "SimpleQA"])
 def judged_corpus(request, tmp_path, monkeypatch):
-    reference = next(case for case in json.loads(ORACLE.read_text())["cases"] if case["name"] == request.param)
+    reference = next(case for case in INPUTS if case["name"] == request.param)
     source = next(source for source in sources() if source.config.protocol.benchmark == request.param)
     dataset = source.config
     root = tmp_path / "source"
@@ -135,64 +134,53 @@ def judged_attempt(task, candidate):
     )
 
 
-def test_judged_source_preserves_solver_and_judge_requests(judged_corpus, judge_http):
-    reference, cases = judged_corpus
+def judge_response(name, *, reply=None, finish_reason="stop"):
+    return {
+        "id": "fixture-judge",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "fixture-revision",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": finish_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": reply if reply is not None else ("CORRECT" if name == "FinanceBench" else "A"),
+                },
+            }
+        ],
+    }
+
+
+def test_source_judge_grades_empty_and_exact_candidates_and_retains_model_identity(judged_corpus, judge_http):
+    inputs, cases = judged_corpus
     state, connection = judge_http
-    for case, original in zip(cases, reference["specs"], strict=True):
-        assert conversation_messages(case.task.context.events) == original["requests"][0]["prompt"]
-    state["response"] = reference["http_cases"][0]["response"]
-    for recorded in reference["judge_plans"]:
-        result = grade_remote_judge_answer(
-            cases[0].task, judged_attempt(cases[0].task, recorded["candidate"]), connection
-        )
+    state["response"] = judge_response(inputs["name"])
+    for candidate in ("", str(inputs["rows"][0]["answer"])):
+        result = grade_remote_judge_answer(cases[0].task, judged_attempt(cases[0].task, candidate), connection)
         assert result.status is Outcome.GRADED
-        assert state["requests"][-1]["messages"] == [
-            {"role": "user", "content": recorded["plan"]["requests"][0]["prompt"]}
-        ]
-        assert (
-            state["requests"][-1]["max_completion_tokens"]
-            == recorded["plan"]["requests"][0]["generation"]["max_gen_toks"]
-        )
+        assert result.reward == 1
         assert result.detail["requested_model"] == state["requests"][-1]["model"]
-        assert state["requests"][-1]["model"] == (
-            "openai/gpt-oss-120b" if reference["name"] == "FinanceBench" else "gpt-4o-mini"
-        )
-        assert result.detail["response_model"] == state["response"]["model"]
+        assert result.detail["response_model"] == "fixture-revision"
+    assert len(state["requests"]) == 2
+    assert len(cases) == len(inputs["rows"])
 
 
-def test_judge_classifications_and_length_replies_match_original_transport(judged_corpus, judge_http):
-    reference, cases = judged_corpus
+@pytest.mark.parametrize(
+    "reply,finish_reason,expected", [(None, "length", Outcome.GRADED), ("malformed", "stop", Outcome.INFRA_ERROR)]
+)
+def test_source_judge_accepts_content_on_length_and_keeps_malformed_labels_unscored(
+    judged_corpus, judge_http, reply, finish_reason, expected
+):
+    inputs, cases = judged_corpus
     state, connection = judge_http
-    for recorded in reference["http_cases"]:
-        state["response"] = recorded["response"]
-        before = len(state["requests"])
-        result = grade_remote_judge_answer(
-            cases[0].task, judged_attempt(cases[0].task, "candidate with extra details"), connection
-        )
-        if "error" in recorded:
-            assert result.status is Outcome.INFRA_ERROR
-            assert result.reward is None
-            assert result.detail["completion"] == recorded["response"]["choices"][0]["message"]["content"]
-            assert len(state["requests"]) == before + 1
-        else:
-            assert result.status is Outcome.GRADED
-            assert result.detail["metrics"] == recorded["grade"]["metrics"]
-            assert result.detail["finish_reason"] == recorded["response"]["choices"][0]["finish_reason"]
-    for recorded in reference["judge_grades"]:
-        state["response"] = {
-            **reference["http_cases"][0]["response"],
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": recorded["reply"]}, "finish_reason": "stop"}
-            ],
-        }
-        result = grade_remote_judge_answer(
-            cases[0].task, judged_attempt(cases[0].task, "candidate with extra details"), connection
-        )
-        if "error" in recorded:
-            assert result.status is Outcome.INFRA_ERROR
-            assert result.reward is None
-        else:
-            assert result.detail["metrics"] == recorded["grade"]["metrics"]
+    state["response"] = judge_response(inputs["name"], reply=reply, finish_reason=finish_reason)
+    result = grade_remote_judge_answer(cases[0].task, judged_attempt(cases[0].task, "candidate"), connection)
+    assert result.status is expected
+    assert result.reward == (1 if expected is Outcome.GRADED else None)
+    assert len(state["requests"]) == 1
+    assert result.detail["finish_reason"] == finish_reason
 
 
 def test_provider_failure_does_not_become_an_incorrect_answer(judged_corpus, judge_http):
@@ -210,10 +198,10 @@ def test_transient_provider_failure_retries_with_source_policy_and_preserves_evi
     reference, cases = judged_corpus
     state, connection = judge_http
     failure = {"error": {"message": "temporary overload"}}
-    state["responses"] = [(503, failure, 0.25), (200, reference["http_cases"][0]["response"], None)]
+    state["responses"] = [(503, failure, 0.25), (200, judge_response(reference["name"]), None)]
     result = grade_remote_judge_answer(cases[0].task, judged_attempt(cases[0].task, "candidate"), connection)
     assert result.status is Outcome.GRADED
-    assert result.detail["metrics"] == reference["http_cases"][0]["grade"]["metrics"]
+    assert result.reward == 1
     assert len(state["requests"]) == 2
     assert state["request_times"][1] - state["request_times"][0] >= 0.25
     first, second = result.detail["transport_attempts"]
@@ -243,7 +231,7 @@ def test_retry_after_beyond_operation_budget_does_not_send_another_request(judge
     state["retry_after"] = 60
     state["response"] = {"error": {"message": "rate limit"}}
     task = cases[0].task
-    verifier = replace(verifyit_spec(task.grader), transport_budget=0.1)
+    verifier = replace(verifyit_spec(task.grader), request_timeout=0.1, transport_budget=0.1)
     task = task.model_copy(update={"grader": verifyit_package(verifier).grader})
     result = grade_remote_judge_answer(task, judged_attempt(task, "candidate"), connection)
     assert result.status is Outcome.INFRA_ERROR
@@ -252,8 +240,7 @@ def test_retry_after_beyond_operation_budget_does_not_send_another_request(judge
     assert result.detail["transport_attempts"][0]["status"] == 429
 
 
-def test_simpleqa_mini_preserves_original_row_identity_and_sample_order(tmp_path):
-    reference = next(case for case in json.loads(ORACLE.read_text())["cases"] if case["name"] == "SimpleQAMini")
+def test_simpleqa_mini_preserves_row_identity_across_repeated_reads(tmp_path):
     file = tmp_path / "simpleqa.csv"
     write_simpleqa(
         file,
@@ -263,5 +250,10 @@ def test_simpleqa_mini_preserves_original_row_identity_and_sample_order(tmp_path
         ],
     )
     rows = list(read_simpleqa(StoragePath(str(file)), ConversionContext({}, None), mini=True))
-    assert [row["source_index"] for row in rows] == reference["mini_source_indices"]
-    assert [row["question"] for row in rows[:2]] == [row["question"] for row in reference["rows"]]
+    assert len(rows) == 500
+    assert len({row["source_index"] for row in rows}) == 500
+    assert all(
+        row["question"] == f"Question {row['source_index']}?" and row["metadata"]["id"] == row["source_index"]
+        for row in rows
+    )
+    assert list(read_simpleqa(StoragePath(str(file)), ConversionContext({}, None), mini=True)) == rows

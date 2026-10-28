@@ -26,6 +26,9 @@ from marin.evaluation.task_driver import (
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.test_support import machine_runtime
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.convert.evaluation import source_evidence
 from taskcompendium.evaluation import (
@@ -44,7 +47,14 @@ from taskcompendium.evaluation import (
     TextGeneration,
     TrialPolicy,
 )
-from taskcompendium.models import ConversationInput, TextMessage
+from taskcompendium.models import (
+    CommandSemantics,
+    ConversationInput,
+    EnvironmentRequirements,
+    ExitCodeReward,
+    ScriptGrader,
+    TextMessage,
+)
 from taskcompendium.pipeline.evaluation import chat_item, publish_evaluation_corpus, source_order
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow, SourceRecipe
@@ -200,6 +210,20 @@ def convert_mixed_row(row: RawRow, _context: ConversionContext):
         else ExactSpec((row.data["expected"],), ignore_case=False, empty_output=EmptyOutputPolicy.GRADE)
     )
     task = answer_task(row, prompt=row.data["prompt"], spec=spec, evidence=row.data)
+    if row.data["kind"] == "sandbox":
+        task = task.model_copy(
+            update={
+                "grader": ScriptGrader(
+                    argv=("sh", "-c", 'test "$(cat /app/answer.txt)" = red'),
+                    answer_path="/app/answer.txt",
+                    reward=ExitCodeReward(),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                        package_spec=PackageSpec(),
+                    ),
+                )
+            }
+        )
     if row.data.get("history"):
         task = task.model_copy(
             update={
@@ -227,7 +251,9 @@ def mixed_item(task):
             requests=tuple(LikelihoodRequest(context=" café ", continuation=choice) for choice in ("A", "BBBB")),
         )
     elif kind == "continuation":
-        operation = ContinuationLikelihood(request=LikelihoodRequest(context="L", continuation=" word"))
+        operation = ContinuationLikelihood(
+            request=LikelihoodRequest(context="L", continuation="x" * 64 if source.get("unscorable") else " word")
+        )
     else:
         operation = ChatGeneration(response_selection=source["selection"], historical_assistant_reasoning="empty")
     return EvaluationItem(
@@ -252,7 +278,11 @@ def mixed_corpora(tmp_path):
         ],
         "raw": [{"kind": "raw", "prompt": name} for name in ("raw/contract", "raw/bare")],
         "choice": [{"kind": "choice", "prompt": " café ", "expected": "BBBB"}],
-        "continuation": [{"kind": "continuation", "prompt": "L", "expected": " word"}],
+        "continuation": [
+            {"kind": "continuation", "prompt": "L", "expected": " word"},
+            {"kind": "continuation", "prompt": "unscorable", "expected": "", "unscorable": True},
+        ],
+        "sandbox": [{"kind": "sandbox", "prompt": "chat/sandbox", "expected": "red", "selection": "combine"}],
     }
     roots = []
     client = LocalClient()
@@ -289,7 +319,7 @@ def mixed_corpora(tmp_path):
                 else:
                     names = (
                         ("accuracy",)
-                        if benchmark == "chat"
+                        if benchmark in {"chat", "sandbox"}
                         else ("exact_match,strict_answer", "exact_match,extract_answer")
                     )
                 protocol = EvaluationProtocol(
@@ -300,6 +330,7 @@ def mixed_corpora(tmp_path):
                         "raw": "text_generation",
                         "choice": "choice_likelihood",
                         "continuation": "continuation_likelihood",
+                        "sandbox": "chat_generation",
                     }[benchmark],
                     sampling=(
                         Sampling(
@@ -310,10 +341,13 @@ def mixed_corpora(tmp_path):
                             stop=("STOP",) if benchmark == "chat" else ("\nQuestion:",),
                             chat_template_kwargs={"enable_thinking": False} if benchmark == "chat" else {},
                         )
-                        if benchmark in ("chat", "raw")
+                        if benchmark in ("chat", "raw", "sandbox")
                         else None
                     ),
-                    trials=TrialPolicy(count=2 if benchmark == "chat" else 1, seed=7 if benchmark == "chat" else None),
+                    trials=TrialPolicy(
+                        count=2 if benchmark == "chat" else 1,
+                        seed=7 if benchmark == "chat" else 11 if benchmark in {"choice", "continuation"} else None,
+                    ),
                     metrics=tuple(
                         Metric(
                             name=name,
@@ -675,6 +709,7 @@ class MixedEndpoint:
                 "chat/reasoning": {"content": None, "reasoning": "red"},
                 "chat/truncated": {"content": None, "reasoning_content": "red"},
                 "chat/combine": {"content": "blue", "reasoning_content": "red"},
+                "chat/sandbox": {"content": "red"},
             }
             result = {
                 "id": f"chat-{len(self.requests)}",
@@ -690,7 +725,7 @@ class MixedEndpoint:
                 ],
                 "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
             }
-            self.completed.append((prompt, body["seed"]))
+            self.completed.append((prompt, body.get("seed")))
         elif isinstance(body["prompt"], str):
             result = {
                 "id": f"raw-{len(self.requests)}",
@@ -744,7 +779,9 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
 ):
     endpoint = MixedEndpoint()
     tokenizer = CharacterTokenizer()
-    config = run_config.model_copy(update={"source_limit": None, "concurrency": 3})
+    config = run_config.model_copy(
+        update={"source_limit": None, "concurrency": 3, "verifier_machine": machine_runtime(backend="shellsim")}
+    )
     output = str(tmp_path / "mixed-results")
     async with openai.AsyncOpenAI(
         api_key="test",
@@ -753,7 +790,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(endpoint.handle)),
     ) as client:
         arguments = dict(
-            machine_factories={},
+            machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
             likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
@@ -796,7 +833,11 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         assert len(endpoint.requests) == final_count
     reader = ReadView(output)
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
-    assert len([row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]) == 12
+    assert len([row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]) == 13
+    invalid = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "invalid_task"]
+    assert len(invalid) == 1
+    assert invalid[0]["retry"] == 0
+    assert next(sample for sample in samples if sample.task == "sandbox").metrics == {"accuracy": 1}
     chat = [sample for sample in samples if sample.task == "chat"]
     assert len(chat) == 8
     assert sorted(sample.metrics["accuracy"] for sample in chat) == [0, 0, 1, 1, 1, 1, 1, 1]
@@ -811,11 +852,11 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
     successful_choice = next(sample for sample in samples if sample.task == "choice" and sample.metrics)
     assert successful_choice.metrics == {"acc,none": 0, "acc_norm,none": 1}
     assert [choice.text for choice in successful_choice.choices] == ["A", "BBBB"]
-    assert next(sample for sample in samples if sample.task == "continuation").metrics == {
+    assert next(sample for sample in samples if sample.task == "continuation" and sample.metrics).metrics == {
         "acc,none": 1,
         "perplexity,none": -0.5,
     }
-    wire = next(body for path, body in endpoint.requests if path.endswith("/chat/completions") and body["seed"] == 7)
+    wire = next(body for path, body in endpoint.requests if path.endswith("/chat/completions") and body.get("seed") == 7)
     assert wire == {
         "model": "fixture",
         "messages": [
@@ -850,6 +891,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
         "max_tokens": 1,
         "logprobs": 1,
         "echo": True,
+        "seed": 11,
     }
 
 
@@ -891,7 +933,7 @@ async def test_malformed_nonfinite_likelihood_retains_archive_safe_wire_evidence
     ) as client:
         with pytest.raises(LikelihoodTransportError) as failure:
             await VllmLikelihood(client, "fixture", CharacterTokenizer(), 64, 0)(
-                LikelihoodRequest(context="c", continuation="A")
+                LikelihoodRequest(context="c", continuation="A"), seed=None
             )
     evidence = failure.value.evidence
     assert requests == [evidence["request"]]

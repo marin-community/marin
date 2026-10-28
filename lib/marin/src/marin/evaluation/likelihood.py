@@ -61,7 +61,11 @@ class LikelihoodTransportError(ValueError):
 
 
 class LikelihoodScorer(Protocol):
-    async def __call__(self, request: LikelihoodRequest) -> LikelihoodScore: ...
+    async def __call__(self, request: LikelihoodRequest, *, seed: int | None) -> LikelihoodScore: ...
+
+
+class InvalidLikelihoodRequest(ValueError):
+    """A continuation cannot be scored with the configured tokenizer and context window."""
 
 
 def encode_pair(
@@ -100,7 +104,9 @@ class VllmLikelihood:
         removed = max(0, len(context) + len(continuation) - maximum_prompt)
         retained_context = len(context) - removed
         if not continuation or retained_context < 1:
-            raise ValueError("Likelihood scoring requires a nonempty continuation and a retained context token")
+            raise InvalidLikelihoodRequest(
+                "Likelihood scoring requires a nonempty continuation and a retained context token"
+            )
         return EncodedLikelihood(
             prompt_token_ids=(context + continuation)[-maximum_prompt:],
             context_tokens=retained_context,
@@ -108,7 +114,7 @@ class VllmLikelihood:
             truncated_context_tokens=removed,
         )
 
-    async def __call__(self, request: LikelihoodRequest) -> LikelihoodScore:
+    async def __call__(self, request: LikelihoodRequest, *, seed: int | None) -> LikelihoodScore:
         prepared = self.prepare(request)
         payload = {
             "model": self.model,
@@ -118,6 +124,8 @@ class VllmLikelihood:
             "logprobs": 1,
             "echo": True,
         }
+        if seed is not None:
+            payload["seed"] = seed
         response = await self.client.completions.create(**payload)
         try:
             return _echo_score(response, prepared)

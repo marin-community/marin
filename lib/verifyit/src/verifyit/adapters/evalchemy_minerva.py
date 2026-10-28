@@ -18,11 +18,15 @@ documented at each pattern below.
 import functools
 import re
 import signal
+import threading
 from fractions import Fraction
 
 import sympy
 from sympy.parsing.latex import parse_latex
 from sympy.parsing.latex.errors import LaTeXParsingError
+
+from verifyit.execution.worker import call_bounded
+from verifyit.grade import GradingInfraError
 
 _SYMPY_TIMEOUT = 5
 _PARSE_CACHE_SIZE = 8192
@@ -179,11 +183,15 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
     scores 0.
     """
 
+    if threading.current_thread() is not threading.main_thread():
+        try:
+            return call_bounded(_sympy_is_equiv, candidate, reference, timeout=_SYMPY_TIMEOUT)
+        except (TimeoutError, RuntimeError) as error:
+            raise GradingInfraError("Symbolic math comparison failed in its bounded worker") from error
+
     def on_timeout(signum, frame):
         raise TimeoutError
 
-    # Arming the alarm sits inside the guard: off the main thread signal.signal
-    # raises, which the reference also scores as a non-match.
     previous = None
     try:
         previous = signal.signal(signal.SIGALRM, on_timeout)
@@ -202,8 +210,10 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
         # Without antlr4-python3-runtime 4.11 every comparison would quietly
         # score 0, so surface it rather than report a non-match.
         raise
+    except TimeoutError as error:
+        raise GradingInfraError("Symbolic math comparison timed out") from error
     except Exception:
-        # Parse, subtraction, simplify, and timeout failures all score 0.
+        # Invalid expressions and unsupported subtraction are non-matches.
         return False
     finally:
         if previous is not None:

@@ -1,0 +1,685 @@
+{
+  "choices": [
+    {
+      "name": "MMLUPro",
+      "rows": [
+        {
+          "question_id": 5,
+          "category": "math",
+          "question": "Choose the even integer.",
+          "options": [
+            "one",
+            "N/A",
+            "two",
+            "three"
+          ],
+          "answer": "B",
+          "cot_content": ""
+        },
+        {
+          "question_id": 6,
+          "category": "law",
+          "question": "Choose the legal document.",
+          "options": [
+            "rock",
+            "statute"
+          ],
+          "answer": "B",
+          "cot_content": ""
+        }
+      ],
+      "fewshot_rows": [
+        {
+          "question_id": 0,
+          "category": "law",
+          "question": "Support 0",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 1,
+          "category": "math",
+          "question": "Support 1",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 2,
+          "category": "math",
+          "question": "Support 2",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 3,
+          "category": "math",
+          "question": "Support 3",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 4,
+          "category": "math",
+          "question": "Support 4",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 5,
+          "category": "math",
+          "question": "Support 5",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        },
+        {
+          "question_id": 6,
+          "category": "math",
+          "question": "Support 6",
+          "options": [
+            "first",
+            "N/A",
+            "second"
+          ],
+          "answer": "A",
+          "cot_content": "A: Let's think step by step. The answer is (A)."
+        }
+      ]
+    }
+  ],
+  "instructions": [
+    {
+      "name": "ifeval",
+      "rows": [
+        {
+          "key": 1,
+          "prompt": "Return JSON containing apple.",
+          "instruction_id_list": [
+            "detectable_format:json_format",
+            "keywords:existence"
+          ],
+          "kwargs": [
+            {},
+            {
+              "keywords": [
+                "apple"
+              ]
+            }
+          ]
+        },
+        {
+          "key": 2,
+          "prompt": "Use at least six words.",
+          "instruction_id_list": [
+            "length_constraints:number_words"
+          ],
+          "kwargs": [
+            {
+              "num_words": 6,
+              "relation": "at least"
+            }
+          ]
+        },
+        {
+          "key": 3,
+          "prompt": "First repeat the request.",
+          "instruction_id_list": [
+            "combination:repeat_prompt"
+          ],
+          "kwargs": [
+            {
+              "prompt_to_repeat": "First repeat the request."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IFBench",
+      "rows": [
+        {
+          "key": 1,
+          "prompt": "Use no whitespace and ten palindromes.",
+          "instruction_id_list": [
+            "format:no_whitespace",
+            "words:palindrome"
+          ],
+          "kwargs": [
+            {},
+            {}
+          ]
+        },
+        {
+          "key": 2,
+          "prompt": "Use four words.",
+          "instruction_id_list": [
+            "count:word_count_range"
+          ],
+          "kwargs": [
+            {
+              "min_words": 4,
+              "max_words": 4
+            }
+          ]
+        },
+        {
+          "key": 3,
+          "prompt": "Use few stop words.",
+          "instruction_id_list": [
+            "ratio:stop_words"
+          ],
+          "kwargs": [
+            {
+              "percentage": 0.5
+            }
+          ]
+        },
+        {
+          "key": 4,
+          "prompt": "Use emoji at every sentence end.",
+          "instruction_id_list": [
+            "format:emoji"
+          ],
+          "kwargs": [
+            {}
+          ]
+        }
+      ]
+    }
+  ],
+  "judged": [
+    {
+      "name": "FinanceBench",
+      "rows": [
+        {
+          "id": "financebench_id_03029",
+          "question": "What is the FY2018 capital expenditure amount (in USD millions) for 3M? Give a response to the question by relying on the details shown in the cash flow statement.",
+          "answer": "$1577.00",
+          "evidence_text": "Table of Contents \n3M Company and Subsidiaries\nConsolidated Statement of Cash Flow s\nYears ended December 31\n \n(Millions)\n \n2018\n \n2017\n \n2016\n \nCash Flows from Operating Activities\n \n \n \n \n \n \n \nNet income including noncontrolling interest\n \n$\n5,363 \n$\n4,869 \n$\n5,058 \nAdjustments to reconcile net income including noncontrolling interest to net cash\nprovided by operating activities\n \n \n \n \n \n \n \nDepreciation and amortization\n \n \n1,488 \n \n1,544 \n \n1,474 \nCompany pension and postretirement contributions\n \n \n(370) \n \n(967) \n \n(383) \nCompany pension and postretirement expense\n \n \n410 \n \n334 \n \n250 \nStock-based compensation expense\n \n \n302 \n \n324 \n \n298 \nGain on sale of businesses\n \n \n(545) \n \n(586) \n \n(111) \nDeferred income taxes\n \n \n(57) \n \n107 \n \n 7 \nChanges in assets and liabilities\n \n \n \n \n \n \n \nAccounts receivable\n \n \n(305) \n \n(245) \n \n(313) \nInventories\n \n \n(509) \n \n(387) \n \n57 \nAccounts payable\n \n \n408 \n \n24 \n \n148 \nAccrued income taxes (current and long-term)\n \n \n134 \n \n967 \n \n101 \nOther net\n \n \n120 \n \n256 \n \n76 \nNet cash provided by (used in) operating activities\n \n \n6,439 \n \n6,240 \n \n6,662 \n \n \n \n \n \n \n \n \nCash Flows from Investing Activities\n \n \n \n \n \n \n \nPurchases of property, plant and equipment (PP&E)\n \n \n(1,577) \n \n(1,373) \n \n(1,420) \nProceeds from sale of PP&E and other assets\n \n \n262 \n \n49 \n \n58 \nAcquisitions, net of cash acquired\n \n \n13 \n \n(2,023) \n \n(16) \nPurchases of marketable securities and investments\n \n \n(1,828) \n \n(2,152) \n \n(1,410) \nProceeds from maturities and sale of marketable securities and investments\n \n \n2,497 \n \n1,354 \n \n1,247 \nProceeds from sale of businesses, net of cash sold\n \n \n846 \n \n1,065 \n \n142 \nOther net\n \n \n 9 \n \n(6) \n \n(4) \nNet cash provided by (used in) investing activities\n \n \n222 \n \n(3,086) \n \n(1,403) \n \n \n \n \n \n \n \n \nCash Flows from Financing Activities\n \n \n \n \n \n \n \nChange in short-term debt net\n \n \n(284) \n \n578 \n \n(797) \nRepayment of debt (maturities greater than 90 days)\n \n \n(1,034) \n \n(962) \n \n(992) \nProceeds from debt (maturities greater than 90 days)\n \n \n2,251 \n \n1,987 \n \n2,832 \nPurchases of treasury stock\n \n \n(4,870) \n \n(2,068) \n \n(3,753) \nProceeds from issuance of treasury stock pursuant to stock option and benefit plans\n \n \n485 \n \n734 \n \n804 \nDividends paid to shareholders\n \n \n(3,193) \n \n(2,803) \n \n(2,678) \nOther net\n \n \n(56) \n \n(121) \n \n(42) \nNet cash provided by (used in) financing activities\n \n \n(6,701) \n \n(2,655) \n \n(4,626) \n \n \n \n \n \n \n \n \nEffect of exchange rate changes on cash and cash equivalents\n \n \n(160) \n \n156 \n \n(33) \n \n \n \n \n \n \n \n \nNet increase (decrease) in cash and cash equivalents\n \n \n(200) \n \n655 \n \n600 \nCash and cash equivalents at beginning of year\n \n \n3,053 \n \n2,398 \n \n1,798 \nCash and cash equivalents at end of period\n \n$\n2,853 \n$\n3,053 \n$\n2,398 \n \nThe accompanying Notes to Consolidated Financial Statements are an integral part of this statement.\n \n60\n \n",
+          "doc_name": "3M_2018_10K",
+          "company": "3M",
+          "question_type": "metrics-generated"
+        },
+        {
+          "id": "financebench_id_04672",
+          "question": "Assume that you are a public equities analyst. Answer the following question by primarily using information that is shown in the balance sheet: what is the year end FY2018 net PPNE for 3M? Answer in USD billions.",
+          "answer": "$8.70",
+          "evidence_text": "Table of Contents \n3M Company and Subsidiaries\nConsolidated Balance Shee t\nAt December 31\n \n \n \nDecember 31,\n \nDecember 31,\n \n(Dollars in millions, except per share amount)\n \n2018\n \n2017\n \nAssets\n \n \n \n \n \nCurrent assets\n \n \n \n \n \nCash and cash equivalents\n \n$\n2,853 \n$\n3,053 \nMarketable securities current\n \n \n380 \n \n1,076 \nAccounts receivable net of allowances of $95 and $103\n \n \n5,020 \n \n4,911 \nInventories\n \n \n \n \n \nFinished goods\n \n \n2,120 \n \n1,915 \nWork in process\n \n \n1,292 \n \n1,218 \nRaw materials and supplies\n \n \n954 \n \n901 \nTotal inventories\n \n \n4,366 \n \n4,034 \nPrepaids\n \n \n741 \n \n937 \nOther current assets\n \n \n349 \n \n266 \nTotal current assets\n \n \n13,709 \n \n14,277 \nProperty, plant and equipment\n \n \n24,873 \n \n24,914 \nLess: Accumulated depreciation\n \n \n(16,135) \n \n(16,048) \nProperty, plant and equipment net\n \n \n8,738 \n \n8,866 \nGoodwill\n \n \n10,051 \n \n10,513 \nIntangible assets net\n \n \n2,657 \n \n2,936 \nOther assets\n \n \n1,345 \n \n1,395 \nTotal assets\n \n$\n36,500 \n$\n37,987 \nLiabilities\n \n \n \n \n \nCurrent liabilities\n \n \n \n \n \nShort-term borrowings and current portion of long-term debt\n \n$\n1,211 \n$\n1,853 \nAccounts payable\n \n \n2,266 \n \n1,945 \nAccrued payroll\n \n \n749 \n \n870 \nAccrued income taxes\n \n \n243 \n \n310 \nOther current liabilities\n \n \n2,775 \n \n2,709 \nTotal current liabilities\n \n \n7,244 \n \n7,687 \n \n \n \n \n \n \nLong-term debt\n \n \n13,411 \n \n12,096 \nPension and postretirement benefits\n \n \n2,987 \n \n3,620 \nOther liabilities\n \n \n3,010 \n \n2,962 \nTotal liabilities\n \n$\n26,652 \n$\n26,365 \nCommitments and contingencies (Note 16)\n \n \n \n \n \nEquity\n \n \n \n \n \n3M Company shareholders equity:\n \n \n \n \n \nCommon stock par value, $.01 par value\n \n$\n 9 \n$\n 9 \nShares outstanding - 2018: 576,575,168\n \n \n \n \n \nShares outstanding - 2017: 594,884,237\n \n \n \n \n \nAdditional paid-in capital\n \n \n5,643 \n \n5,352 \nRetained earnings\n \n \n40,636 \n \n39,115 \nTreasury stock\n \n \n(29,626) \n \n(25,887) \nAccumulated other comprehensive income (loss)\n \n \n(6,866) \n \n(7,026) \nTotal 3M Company shareholders equity\n \n \n9,796 \n \n11,563 \nNoncontrolling interest\n \n \n52 \n \n59 \nTotal equity\n \n$\n9,848 \n$\n11,622 \nTotal liabilities and equity\n \n$\n36,500 \n$\n37,987 \n \nThe accompanying Notes to Consolidated Financial Statements are an integral part of this statement.\n58\n \n",
+          "doc_name": "3M_2018_10K",
+          "company": "3M",
+          "question_type": "metrics-generated"
+        }
+      ]
+    },
+    {
+      "name": "SimpleQA",
+      "rows": [
+        {
+          "source_index": 0,
+          "question": "Question 0?",
+          "answer": "Answer 0",
+          "metadata": {
+            "topic": "fixture",
+            "id": 0
+          }
+        },
+        {
+          "source_index": 1,
+          "question": "Question 1?",
+          "answer": "Answer 1",
+          "metadata": {
+            "topic": "fixture",
+            "id": 1
+          }
+        }
+      ]
+    }
+  ],
+  "code": [
+    {
+      "suite": "humaneval",
+      "rows": [
+        {
+          "task_id": "HumanEval/0",
+          "prompt": "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
+          "canonical_solution": "    for idx, elem in enumerate(numbers):\n        for idx2, elem2 in enumerate(numbers):\n            if idx != idx2:\n                distance = abs(elem - elem2)\n                if distance < threshold:\n                    return True\n\n    return False\n",
+          "test": "\n\nMETADATA = {\n    'author': 'jt',\n    'dataset': 'test'\n}\n\n\ndef check(candidate):\n    assert candidate([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.3) == True\n    assert candidate([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.05) == False\n    assert candidate([1.0, 2.0, 5.9, 4.0, 5.0], 0.95) == True\n    assert candidate([1.0, 2.0, 5.9, 4.0, 5.0], 0.8) == False\n    assert candidate([1.0, 2.0, 3.0, 4.0, 5.0, 2.0], 0.1) == True\n    assert candidate([1.1, 2.2, 3.1, 4.1, 5.1], 1.0) == True\n    assert candidate([1.1, 2.2, 3.1, 4.1, 5.1], 0.5) == False\n\n",
+          "entry_point": "has_close_elements"
+        }
+      ]
+    },
+    {
+      "suite": "cruxeval",
+      "rows": [
+        {
+          "code": "def f(nums):\n    output = []\n    for n in nums:\n        output.append((nums.count(n), n))\n    output.sort(reverse=True)\n    return output",
+          "input": "[1, 1, 3, 1, 3, 1]",
+          "output": "[(4, 1), (4, 1), (4, 1), (4, 1), (2, 3), (2, 3)]",
+          "id": "sample_0"
+        }
+      ]
+    }
+  ],
+  "nupa": {
+    "nested_source": {
+      "to_float_Fraction_none_Float": {
+        "21": [
+          "Convert to float: 1/2 = 0.5",
+          "Convert to float: 99/10 = 9.9"
+        ],
+        "1": [
+          "Convert to float: 1/1 = 1.0"
+        ]
+      },
+      "add_Integer_Integer_Integer": {
+        "3": [
+          "Add: 120 + 3 = 123",
+          "Add: 120 + 3 = 123",
+          "Add: 10 + 2 = 12",
+          "Add: 12 + 0 = 12"
+        ],
+        "4": [
+          "Add: 100 + 23 = 123",
+          "Add: 100 + 0 = 100"
+        ]
+      },
+      "truediv_Fraction_Fraction_Fraction": {
+        "2": [
+          "Divide: 1/1 / 2/1 = 1/2",
+          "Divide: 3/4 / 1/2 = 3/2"
+        ]
+      },
+      "to_scient_Integer_ScientificNotation": {
+        "61": [
+          "Scientific: 50400 = 5.04e4",
+          "Scientific: 0.000504 = 5.04e-4"
+        ],
+        "20": [
+          "Scientific: 1000 = 1.0e3"
+        ]
+      },
+      "get_digit_Integer_int": {
+        "3": [
+          "Get a digit from 123: 2 = 2",
+          "Get a digit from 123: 1 = 1"
+        ]
+      }
+    },
+    "panel_manifest": [
+      {
+        "task_name": "add_Integer_Integer_Integer",
+        "digit": 3,
+        "sha256": "1a0512e8927600261c92554812eb6f5236bfa06028128c2add1995ad1e4eb24a"
+      },
+      {
+        "task_name": "add_Integer_Integer_Integer",
+        "digit": 4,
+        "sha256": "31a4ba50b84aeb9e8b6346b6105c04a57043f0bdc0e8590fe5e05e5bfadb4dc6"
+      },
+      {
+        "task_name": "get_digit_Integer_int",
+        "digit": 3,
+        "sha256": "4bd2e2fddf4e748b8736cc242513f40db103a9113101467aa79c807089f80ff8"
+      },
+      {
+        "task_name": "to_float_Fraction_none_Float",
+        "digit": 1,
+        "sha256": "6bf3024774ce2d17ce2ec22d1d55fa1b2ddcdc85814eef75ff0e8964114d61fe"
+      },
+      {
+        "task_name": "to_float_Fraction_none_Float",
+        "digit": 21,
+        "sha256": "2154d4a7f2fe116723e65122d1bd975f139d35cc4780920331adf533b45a55ce"
+      },
+      {
+        "task_name": "to_scient_Integer_ScientificNotation",
+        "digit": 20,
+        "sha256": "5a0bc846ebcebc3da751dba45a81856c614c5b4dfb114959c6dca3294bb20a60"
+      },
+      {
+        "task_name": "to_scient_Integer_ScientificNotation",
+        "digit": 61,
+        "sha256": "70298c93d0de3700ed107e07682d4d9441dbd863857e6a987f739594e0e6ab35"
+      },
+      {
+        "task_name": "truediv_Fraction_Fraction_Fraction",
+        "digit": 2,
+        "sha256": "dced9b1d66cdb3d79ecb97c99c9dd23cd3cb77e699d012dd42852ec7104eedd3"
+      },
+      {
+        "task_name": "add_Integer_Integer_Integer",
+        "digit": 3,
+        "sha256": "1d68de7b6a50ff7178fe75e3bb7d1d51280fd9cba98645b3f88965fb103f4ae3"
+      },
+      {
+        "task_name": "add_Integer_Integer_Integer",
+        "digit": 4,
+        "sha256": "c9e69d5af45c014dfc10c19d9e68bd1e60e10d8812b1c028e834a7a2aa42ea3b"
+      },
+      {
+        "task_name": "get_digit_Integer_int",
+        "digit": 3,
+        "sha256": "d7005550ca219ed7498de11253a566950a7a04e345acfbe3283d0a14b78e7b8d"
+      },
+      {
+        "task_name": "to_float_Fraction_none_Float",
+        "digit": 21,
+        "sha256": "e1a96b2a2ca0fd4f9a58355ad43666f7db6020ac2def7d0e9969d1145665d03c"
+      }
+    ]
+  },
+  "harness": [
+    {
+      "name": "mmlu",
+      "shots": 5,
+      "document": {
+        "question": " Which caf\u00e9? ",
+        "subject": "abstract_algebra",
+        "choices": [
+          "caf\u00e9",
+          "tea",
+          "A longer answer",
+          "water"
+        ],
+        "answer": 0
+      },
+      "pool": [
+        {
+          "question": "Example 0:  Which caf\u00e9? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "caf\u00e9",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 1:  Which caf\u00e9? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "caf\u00e9",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 2:  Which caf\u00e9? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "caf\u00e9",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 3:  Which caf\u00e9? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "caf\u00e9",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        },
+        {
+          "question": "Example 4:  Which caf\u00e9? ",
+          "subject": "abstract_algebra",
+          "choices": [
+            "caf\u00e9",
+            "tea",
+            "A longer answer",
+            "water"
+          ],
+          "answer": 0
+        }
+      ]
+    },
+    {
+      "name": "drop",
+      "shots": 3,
+      "document": {
+        "query_id": "fixture",
+        "passage": "New York and Boston have caf\u00e9s.",
+        "question": "Which cities have caf\u00e9s?",
+        "answer": {
+          "number": "",
+          "date": {
+            "day": "",
+            "month": "",
+            "year": ""
+          },
+          "spans": [
+            "New York",
+            "Boston"
+          ]
+        },
+        "validated_answers": {
+          "number": [
+            "",
+            "7"
+          ],
+          "date": [
+            {
+              "day": "",
+              "month": "",
+              "year": ""
+            },
+            {
+              "day": "",
+              "month": "",
+              "year": ""
+            }
+          ],
+          "spans": [
+            [
+              "New York"
+            ],
+            []
+          ]
+        }
+      },
+      "pool": [
+        {
+          "query_id": "fixture",
+          "passage": "New York and Boston have caf\u00e9s.",
+          "question": "Example 0: Which cities have caf\u00e9s?",
+          "answer": {
+            "number": "",
+            "date": {
+              "day": "",
+              "month": "",
+              "year": ""
+            },
+            "spans": [
+              "New York",
+              "Boston"
+            ]
+          },
+          "validated_answers": {
+            "number": [
+              "",
+              "7"
+            ],
+            "date": [
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              },
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              }
+            ],
+            "spans": [
+              [
+                "New York"
+              ],
+              []
+            ]
+          }
+        },
+        {
+          "query_id": "fixture",
+          "passage": "New York and Boston have caf\u00e9s.",
+          "question": "Example 1: Which cities have caf\u00e9s?",
+          "answer": {
+            "number": "",
+            "date": {
+              "day": "",
+              "month": "",
+              "year": ""
+            },
+            "spans": [
+              "New York",
+              "Boston"
+            ]
+          },
+          "validated_answers": {
+            "number": [
+              "",
+              "7"
+            ],
+            "date": [
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              },
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              }
+            ],
+            "spans": [
+              [
+                "New York"
+              ],
+              []
+            ]
+          }
+        },
+        {
+          "query_id": "fixture",
+          "passage": "New York and Boston have caf\u00e9s.",
+          "question": "Example 2: Which cities have caf\u00e9s?",
+          "answer": {
+            "number": "",
+            "date": {
+              "day": "",
+              "month": "",
+              "year": ""
+            },
+            "spans": [
+              "New York",
+              "Boston"
+            ]
+          },
+          "validated_answers": {
+            "number": [
+              "",
+              "7"
+            ],
+            "date": [
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              },
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              }
+            ],
+            "spans": [
+              [
+                "New York"
+              ],
+              []
+            ]
+          }
+        },
+        {
+          "query_id": "fixture",
+          "passage": "New York and Boston have caf\u00e9s.",
+          "question": "Example 3: Which cities have caf\u00e9s?",
+          "answer": {
+            "number": "",
+            "date": {
+              "day": "",
+              "month": "",
+              "year": ""
+            },
+            "spans": [
+              "New York",
+              "Boston"
+            ]
+          },
+          "validated_answers": {
+            "number": [
+              "",
+              "7"
+            ],
+            "date": [
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              },
+              {
+                "day": "",
+                "month": "",
+                "year": ""
+              }
+            ],
+            "spans": [
+              [
+                "New York"
+              ],
+              []
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

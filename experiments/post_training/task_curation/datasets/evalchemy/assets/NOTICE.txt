@@ -1,8 +1,7 @@
-The Python execution helper was adopted from Marin's Evalchemy standalone
-HumanEval grader at Marin revision 623134de90723e7f189036da005067f36817b6e7.
-Its execution helpers derive from Hugging Face evaluate/code_eval (Apache-2.0)
-and OpenAI HumanEval (MIT). The repository LICENSE contains Apache-2.0 terms.
-The CruxEval prompt templates derive from the same Evalchemy revision.
+The code extraction, private test-program preparation, and CruxEval prompt
+templates derive from Marin's Evalchemy at revision
+623134de90723e7f189036da005067f36817b6e7, lm-evaluation-harness (MIT), and
+OpenAI HumanEval (MIT). Shellbox provides program execution and termination.
 
 Copyright (c) OpenAI (https://openai.com)
 

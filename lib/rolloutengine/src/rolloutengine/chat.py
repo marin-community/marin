@@ -64,8 +64,8 @@ class ChatModel:
         message: dict[str, Any] = {"role": "assistant", "content": served.get("content") or ""}
         if served.get("tool_calls"):
             message["tool_calls"] = served["tool_calls"]
-        if reasoning := served.get("reasoning_content") or served.get("reasoning"):
-            message["reasoning_content"] = reasoning
+        if served.get("reasoning_content"):
+            message["reasoning_content"] = served["reasoning_content"]
         metadata: dict[str, Any] = {"response_id": response.id}
         if served.get("reasoning"):
             metadata["reasoning"] = served["reasoning"]

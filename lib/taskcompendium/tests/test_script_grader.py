@@ -451,6 +451,48 @@ JSON_FILE = (RewardFile(path=REWARD_JSON, format=RewardFileFormat.JSON),)
 DETAIL = {"cases": [{"passed": True}]}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reward,phase,exit_code,expected",
+    [
+        (ExitCodeReward(), "candidate", None, (Outcome.GRADED, 0.0, None)),
+        (StdoutReward(), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (FileReward(files=NUMBER_FILE), "candidate", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (ExitCodeReward(), "preparation", None, (Outcome.INFRA_ERROR, None, GradingFailure.TIMEOUT)),
+        (ExitCodeReward(), "preparation", 1, (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)),
+    ],
+)
+async def test_test_command_timeout_is_candidate_failure_but_preparation_failure_is_infra(
+    monkeypatch,
+    reward,
+    phase,
+    exit_code,
+    expected,
+):
+    original_run = VerifyitImageMachine.run
+    preparation = ("sh", "-c", "prepare-tests")
+    candidate = ("candidate-tests",)
+
+    async def run(machine, command):
+        if command.argv == (candidate if phase == "candidate" else preparation):
+            reason = ExitReason.TIMED_OUT if exit_code is None else ExitReason.EXITED
+            return Result(exit_code, b"", b"command failure", False, False, reason)
+        if command.argv == preparation:
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(VerifyitImageMachine, "run", run)
+    grader = ScriptGrader(
+        argv=candidate,
+        reward=reward,
+        environment=GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("prepare-tests",)}),
+    )
+    task = arithmetic_task(grader)
+    result = await grade_in_sandbox(task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE)
+    assert (result.status, result.reward, result.failure) == expected
+    assert result.diagnostics["stderr"] == "command failure"
+
+
 @pytest.mark.parametrize(
     "reward,script,expected",
     [

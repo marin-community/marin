@@ -14,7 +14,7 @@ from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sampling, TrialPolicy
-from taskcompendium.pipeline.evaluation import MANIFEST_FILENAME, chat_item, evaluation_cases
+from taskcompendium.pipeline.evaluation import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
@@ -24,6 +24,7 @@ from zephyr.context import ZephyrContext
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
+from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
@@ -39,9 +40,16 @@ def convert_fixture(row: RawRow, _context: ConversionContext):
 
 def convert_mutating_fixture(row: RawRow, context: ConversionContext):
     task = convert_fixture(row, context)
-    path = Path(row.data["mutate_path"])
-    path.write_bytes(path.read_bytes() + b"\n")
+    marker = Path(row.data["mutation_marker"])
+    if not marker.exists():
+        path = Path(row.data["mutate_path"])
+        path.write_bytes(path.read_bytes() + b"\n")
+        marker.write_text("mutation completed")
     return task
+
+
+def grouped_item(task):
+    return chat_item(task).model_copy(update={"groups": {"panel": "changed"}})
 
 
 def fixture_source() -> RlDataSource[EvalDataSet]:
@@ -111,7 +119,10 @@ def test_evaluation_artifact_cache_distinguishes_source_preparation(local_graph)
 def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(local_graph):
     root, options = local_graph
     path = root / "rows.jsonl"
-    path.write_text(json.dumps({"prompt": "Name a color", "mutate_path": str(path)}) + "\n")
+    path.write_text(
+        json.dumps({"prompt": "Name a color", "mutate_path": str(path), "mutation_marker": str(root / "mutated")}) + "\n"
+    )
+    original = path.read_bytes()
     source = fixture_source()
     dataset = source.config
     assert dataset is not None
@@ -120,3 +131,32 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
     with pytest.raises(RuntimeError):
         run(step, max_concurrent=1)
     assert not (Path(step.path()) / MANIFEST_FILENAME).exists()
+    path.write_bytes(original)
+    artifact = run(step, max_concurrent=1)[0]
+    assert artifact.path == step.path()
+    assert len(list(evaluation_cases(artifact.path))) == 1
+
+
+def test_remote_quick_wrapper_does_not_reuse_corpora_after_protocol_or_item_builder_changes(local_graph):
+    root, options = local_graph
+    (root / "rows.jsonl").write_text(json.dumps({"prompt": "Name a color"}) + "\n")
+    source = fixture_source()
+    dataset = source.config
+    assert dataset is not None
+    changed = replace(
+        dataset,
+        protocol=dataset.protocol.model_copy(
+            update={"sampling": dataset.protocol.sampling.model_copy(update={"max_tokens": 7})}
+        ),
+    )
+    versions = (dataset, changed, replace(changed, item_builder=grouped_item))
+    published = []
+    for version in versions:
+        configured = replace(source, config=version)
+        # Remote QUICK uses this wrapper; run the same ArtifactSteps in the local cache.
+        steps = _conversion_steps({source.name: configured}, options)
+        artifact = run(steps[source.name], max_concurrent=1)[0]
+        protocol, _ = evaluation_protocol(artifact.path)
+        case = next(evaluation_cases(artifact.path))
+        published.append((protocol.sampling.max_tokens, case.item.groups))
+    assert published == [(10, {}), (7, {}), (7, {"panel": "changed"})]

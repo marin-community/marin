@@ -129,10 +129,21 @@ Code and canonical instruction graders need a verifier machine. Add a
 `verifier_machine` object with `backend: "local"`, `network: "deny"`,
 `cpus`/`memory_mb`/`storage_mb`/`user: null`, `gpus: 0`,
 `startup_timeout: 300` and `cleanup_timeout: 30`. The CLI uses Shellbox's local
-sandbox. Other backends can supply factories through the library
-`run_evaluation` API. Package locks, private tests and pinned NLP assets come
-from the published task's grader environment. Local shared runtime caches use
+sandbox, which is intended for trusted development inputs. Other backends can
+supply factories through the library `run_evaluation` API. Package locks, private
+tests and pinned NLP assets come from the published task's grader environment.
+Local shared runtime caches use
 `~/.cache/marin/task-runtime`; mounted workers use `/cache/task-curation`.
+
+Python code grading prepares the private test program before executing the
+candidate. Shellbox owns execution and termination; no copied Python execution
+sandbox or monkeypatch guard remains. A completion receipt distinguishes finishing
+the tests from exiting the process early. Candidate timeout scores zero;
+preparation and machine failures remain infrastructure errors. The 3-second
+budget (10 seconds for CruxEval) includes Python startup and compilation. Backend
+resource limits replace the old executor's process memory limit. These are
+versioned protocol changes. The current code environments require CPython and
+NumPy; selecting Shellbox does not automatically select its Shellsim backend.
 
 Chat, raw-text completion and likelihood operations remain distinct. Chat keeps
 the source conversation without an added submission instruction. Raw completions
@@ -170,6 +181,8 @@ protocol or selection, skips completed logical attempts and retries failed ones
 with the same seed and a new physical retry index. Consumers must select the
 latest terminal physical attempt per dataset snapshot, source row and trial;
 otherwise resumed attempts would be counted twice.
+Concurrency remains part of the run identity because server batching can affect
+generation, even with a fixed seed and temperature zero.
 
 This path emits no headline summary or legacy `record.json`. Evaldash's existing
 legacy-run discovery does not yet import these archives. Its raw importer must
@@ -185,8 +198,28 @@ TaskCompendium importers or VerifyIT adapters; artifact graphs stay in
 `experiments/`.
 
 Pin source revisions and assets, retain the original population and source order,
-and version changes to prompts or grading. Compare independent legacy fixtures
-through the real publication graph, including negative answers and extraction
-boundaries. Code graders run in Shellbox. Keep exact same-output grading checks
-separate from live generation comparisons: a successful small model smoke does
-not establish suite-wide statistical equivalence.
+and version changes to prompts or grading. Compare the actual old and new
+implementations on matching pinned inputs and the same recorded responses.
+Keep pipeline tests for publication integrity, input identity, population joins,
+selection, transport failures and resume. Input fixtures may exercise these
+boundaries; stored expected prompts and grades are not the equivalence gate.
+
+## Validate ingestion
+
+For each dataset and protocol variant, run a matching subset of real pinned
+source rows through the old evaluator and the new curation/driver pipeline.
+Read the new results from FineStore and compare actual requests, references,
+same-response grades, metrics and trial seeds. Use full inputs when the old
+reader cannot subsample, recording the selected original row identities.
+
+Keep this one-time acceptance run's commands, source pins and hashes, row
+identities, raw responses, results and intentional protocol differences in the
+task artifact. Expected-output snapshots are not required in CI. Routine tests
+protect publication integrity, identity, joins, transport failures and resume.
+
+Compare independently generated answers separately, using the same served
+model/tokenizer revision, context, generation options and output cap. Record
+strict request differences as well as any interpretation of omitted defaults.
+Identical shared-response grades establish grading equivalence; they do not
+establish independently generated output identity. State live coverage limits
+for context windows and external judges in the acceptance record.

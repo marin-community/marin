@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Python benchmark sources with private, isolated source test programs."""
+"""Pinned Python benchmarks with private test programs run as Shellbox commands.
+
+The 3-second (CruxEval: 10-second) budget includes Python startup and compilation,
+unlike the source's exec-only alarm. Backend limits replace the source's process
+memory limit and reliability guard.
+"""
 
 import hashlib
 import json
@@ -10,12 +15,13 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.evaluation import source_evidence
-from taskcompendium.convert.script_grader import grade_script, script_package
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import EvaluationItem, EvaluationProtocol, Sampling, TextGeneration, TrialPolicy
+from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import ExitCodeReward, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
@@ -31,10 +37,9 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 ASSETS = Path(__file__).parent / "assets"
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
-CODE_ASSETS = grade_script(
-    ASSETS / "python_grade.py",
+CODE_ASSETS = (
+    inline_resource("prepare.py", (ASSETS / "python_prepare.py").read_bytes()),
     inline_resource("code_protocol.py", Path(evalchemy_code.__file__).read_bytes()),
-    inline_resource("python_execution.py", (ASSETS / "python_execution.py").read_bytes()),
     inline_resource("NOTICE.txt", (ASSETS / "NOTICE.txt").read_bytes()),
     inline_resource(
         "lm-evaluation-harness-MIT.txt",
@@ -42,14 +47,13 @@ CODE_ASSETS = grade_script(
     ),
 )
 CODE_REVISION = (
-    "1-"
+    "2-"
     + canonical_sha256(
         {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (
                 Path(evalchemy_code.__file__),
-                ASSETS / "python_grade.py",
-                ASSETS / "python_execution.py",
+                ASSETS / "python_prepare.py",
                 ASSETS / "crux_input.txt",
                 ASSETS / "crux_output.txt",
             )
@@ -85,13 +89,24 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
         else problem["evaluation_prompt"]
     )
     timeout = 10 if suite == "cruxeval" else 3
-    package = script_package(
-        CODE_ASSETS,
-        {"suite": suite, "problem": problem, "timeout": timeout, "direction": problem.get("direction", "")},
-        environment=required_grader_environment(context),
-        timeout=timeout + 10,
-        answer_path="/app/answer.txt",
-        env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
+    environment = required_grader_environment(context)
+    environment = environment.model_copy(
+        update={
+            "setup_commands": (*environment.setup_commands, "python3 /tests/prepare.py"),
+            "environment_variables": {**environment.environment_variables, **THREAD_ENVIRONMENT},
+        }
+    )
+    config = {"suite": suite, "problem": problem, "direction": problem.get("direction", "")}
+    package = GraderPackage(
+        ScriptGrader(
+            argv=("sh", "-c", "python3 /app/program.py && test -f /app/passed"),
+            cwd="/app",
+            environment=environment,
+            timeout=timeout,
+            answer_path="/app/answer.txt",
+            reward=ExitCodeReward(),
+        ),
+        (*CODE_ASSETS, inline_resource("config.json", json.dumps(config, allow_nan=False, sort_keys=True).encode())),
     )
     task = conversation_task(row, events=(TextMessage(role="user", content=prompt),), package=package, evidence=problem)
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", f"benchmark:{suite}", "code")})
@@ -136,7 +151,7 @@ def python_source(
             ),
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="maintained-code-v2",
+                version="shellbox-command-code-v4",
                 operation="text_generation" if completion else "chat_generation",
                 sampling=Sampling(
                     temperature=0.2 if sampled else 0,

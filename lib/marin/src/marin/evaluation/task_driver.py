@@ -53,20 +53,20 @@ from taskcompendium.evaluation import (
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec, VerifyitGrader, grades_with_judge, verifyit_spec
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, verifyit_spec
 from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_protocol
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec, MathJudgeSpec
 
 from marin.evaluation.completion import completion_text
-from marin.evaluation.likelihood import LikelihoodScorer, LikelihoodTransportError
+from marin.evaluation.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
 from marin.evaluation.rollouts import rollout_records_from_sample
 from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Selection, select_cases
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.10.28.1"
+DRIVER_REVISION = "2026.10.28.2"
 
 
 class RunModel(BaseModel):
@@ -208,15 +208,18 @@ async def generation_turn(
         )
         request = dataclasses.replace(request, messages=messages)
     turn = await model(request)
+    raw_message = dict(turn.message)
+    if reasoning := turn.metadata.get("reasoning"):
+        raw_message["reasoning"] = reasoning
     selection = operation.response_selection if isinstance(operation, ChatGeneration) else "combine"
-    content = completion_text(turn.message, turn.stop_reason, selection)
+    content = completion_text(raw_message, turn.stop_reason, selection)
     return dataclasses.replace(
         turn,
         message={**turn.message, "content": content},
         text=content,
         metadata={
             **turn.metadata,
-            "evaluation_raw_message": turn.message,
+            "evaluation_raw_message": raw_message,
             "evaluation_request": dataclasses.asdict(request),
         },
     )
@@ -270,8 +273,11 @@ async def _score_likelihood(
     try:
         async with asyncio.timeout(timeout):
             for request in requests:
-                results.append(await scorer(request))
-    except Exception as failure:
+                results.append(await scorer(request, seed=attempt.seed))
+    except InvalidLikelihoodRequest as failure:
+        outcome = Outcome.INVALID_TASK
+        error = str(failure)
+    except (APIError, LikelihoodTransportError, TimeoutError) as failure:
         # Preserve partial endpoint evidence and retry the same logical attempt on resume.
         outcome = Outcome.INFRA_ERROR
         error = f"{type(failure).__name__}: {failure}"
@@ -367,7 +373,13 @@ async def _score_generation(
         task=task,
         harness=EXACT_CHAT_HARNESS,
         task_machine=config.task_machine,
-        verifier_machine=config.verifier_machine,
+        verifier_machine=(
+            config.verifier_machine
+            if isinstance(task.grader, ScriptGrader | VerifyitGrader)
+            and task.grader.environment is not None
+            and not grades_with_judge(task.grader)
+            else None
+        ),
         judge_connection=judge_connection,
         limits=config.limits,
         trace=TraceMode.MESSAGES,

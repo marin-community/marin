@@ -7,6 +7,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import httpx
 import pytest
 from verifyit.grade import InvalidTask, Status, grade, run, write_reward
 from verifyit.modes import grade_judge
@@ -210,6 +211,32 @@ def test_exact_gate_scores_one_without_calling_a_model(tmp_path, unconfigured_ju
 def test_gate_ignores_articles_and_trailing_punctuation(tmp_path, unconfigured_judge):
     reward = grade_judge.grade(JudgeSpec(references=("Paris",)), tmp_path, _workspace(tmp_path, "\\boxed{The Paris.}"))
     assert reward.reward == 1.0
+
+
+def test_label_judge_preserves_long_request_timeout_at_the_http_boundary(fake_judge, monkeypatch):
+    fake_judge.replies = ["PASS"]
+    timeouts = []
+    original_send = httpx.Client.send
+
+    def send(client, request, *args, **kwargs):
+        timeouts.append(request.extensions["timeout"])
+        return original_send(client, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.Client, "send", send)
+    result = grade_judge.grade_judge_candidate(
+        JudgeSpec(
+            references=("reference",),
+            rubric="labels",
+            exact_gate=False,
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            request_timeout=600,
+        ),
+        "candidate",
+    )
+    assert result.reward == 1
+    assert len(fake_judge.requests) == len(timeouts) == 1
+    assert all(599 < timeout <= 600 for timeout in timeouts[0].values())
 
 
 def test_paraphrase_falls_through_to_the_model(tmp_path, fake_judge):

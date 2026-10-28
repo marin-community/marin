@@ -137,7 +137,13 @@ def _conversion_steps(
         step = cast(CurationPipeline, source.pipeline)(source, options)
         declaration = source.declaration
         assert declaration.pipeline is not None
-        identity = canonical_sha256({"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()})
+        identity = canonical_sha256(
+            {
+                "pipeline": declaration.pipeline.model_dump(),
+                "step": f"{step.name}@{step.version}",
+                "dependencies": step.fingerprint(),
+            }
+        )
         steps[source.name] = replace(
             step, name=f"rl-semantics/converted/{source.name}-{identity[:16]}", version=CORPUS_CONVERSION_VERSION
         )

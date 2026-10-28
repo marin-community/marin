@@ -324,11 +324,11 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float)
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
     diagnostics = _diagnostics(result)
+    if isinstance(grader.reward, ExitCodeReward):
+        passed = result.reason == ExitReason.EXITED and result.exit_code == 0
+        return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if result.reason == ExitReason.TIMED_OUT:
         return _infra_error("Grader command timed out", GradingFailure.TIMEOUT, diagnostics)
-    if isinstance(grader.reward, ExitCodeReward):
-        passed = result.exit_code == 0
-        return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if isinstance(grader.reward, FileReward):
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
     if result.exit_code != 0:

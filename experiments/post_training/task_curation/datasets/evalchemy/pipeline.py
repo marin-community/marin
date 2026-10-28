@@ -123,8 +123,11 @@ def _publish(dataset: EvalDataSet, options: PipelineOptions, identity: dict, run
         status=SourceStatus.COMPLETED,
         result=PipelineResult(
             SourceStatus.COMPLETED,
-            {"normalize": run.output_path + "/normalize", "evaluation": run.output_path + "/evaluation"},
-            {"manifest": run.output_path + "/" + MANIFEST_FILENAME},
+            {
+                "normalize": str(StoragePath(run.output_path) / "normalize"),
+                "evaluation": str(StoragePath(run.output_path) / "evaluation"),
+            },
+            {"manifest": str(StoragePath(run.output_path) / MANIFEST_FILENAME)},
             ("normalize", "evaluation"),
         ),
     )

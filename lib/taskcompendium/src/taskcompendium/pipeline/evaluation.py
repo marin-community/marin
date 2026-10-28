@@ -219,8 +219,19 @@ def publish_evaluation_corpus(
     """
     if recipe.intended_use is not IntendedUse.EVAL:
         raise ValueError("An evaluation corpus requires an evaluation source recipe")
-    if (StoragePath(output_path) / MANIFEST_FILENAME).exists():
+    output = StoragePath(output_path)
+    if (output / MANIFEST_FILENAME).exists():
         raise FileExistsError(f"Evaluation corpus already published: {output_path}")
+    # Without the release marker these are incomplete outputs from an earlier
+    # conversion or sidecar attempt. Keep executor bookkeeping and staged inputs.
+    for directory in ("normalize", "evaluation"):
+        path = output / directory
+        if path.exists():
+            path.rmtree()
+    for filename in ("manifest.json", PROTOCOL_FILENAME):
+        path = output / filename
+        if path.exists():
+            path.rm()
     result = run_source_pipeline(
         recipe,
         context,
@@ -259,7 +270,6 @@ def publish_evaluation_corpus(
         (shard for row in published.results if (shard := EvaluationShard.model_validate(row)).rows),
         key=lambda shard: source_order(shard.first_source_row),
     )
-    output = StoragePath(output_path)
     manifest = EvaluationManifest(
         source_dataset=recipe.source.dataset,
         source_revision=recipe.source.revision,

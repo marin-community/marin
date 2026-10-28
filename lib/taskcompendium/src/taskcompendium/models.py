@@ -473,7 +473,10 @@ class StdoutReward(BaseModel):
 
 
 class ExitCodeReward(BaseModel):
-    """Score a completed command as one on success and zero on failure."""
+    """Score a test command as one on exit zero and zero on failure or command timeout.
+
+    Machine and preparation failures remain infrastructure errors.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -908,7 +911,11 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
-        if grades_in_process(self.grader) and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
+        if (
+            isinstance(self.grader, VerifyitGrader)
+            and self.grader.environment is None
+            and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE)
+        ):
             raise ValueError(f"A {self.answer_type} answer requires a grading environment")
         if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:
             if self.answer_type in CONVERSATION_ANSWERS and verifyit_answer_file(verifyit_spec(self.grader)) is None:

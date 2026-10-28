@@ -108,6 +108,7 @@ def test_evaluation_publication_retains_duplicate_source_positions_and_detects_c
 @pytest.mark.parametrize("change", ["rewrite", "reject", "missing"])
 def test_evaluation_publication_withholds_release_for_changed_population_or_prompts(corpus, tmp_path, change):
     source, output, _, _ = corpus
+    original = (source / "rows.jsonl").read_bytes()
     rows = [{"prompt": "Name the color", change: True}, {"prompt": "Name the color"}, {"prompt": "Choose a color"}]
     if change == "missing":
         rows.pop()
@@ -115,6 +116,9 @@ def test_evaluation_publication_withholds_release_for_changed_population_or_prom
     with pytest.raises((ValueError, ZephyrWorkerError)):
         publish(corpus, tmp_path)
     assert not (output / MANIFEST_FILENAME).exists()
+    (source / "rows.jsonl").write_bytes(original)
+    assert publish(corpus, tmp_path).rows == 3
+    assert len(list(evaluation_cases(str(output)))) == 3
 
 
 def test_evaluation_publication_requires_context_metadata_for_a_selection_policy(corpus, tmp_path):
@@ -123,6 +127,27 @@ def test_evaluation_publication_requires_context_metadata_for_a_selection_policy
     with pytest.raises((ValueError, ZephyrWorkerError), match="context metadata"):
         publish((source, output, recipe, selected), tmp_path)
     assert not (output / MANIFEST_FILENAME).exists()
+    assert publish(corpus, tmp_path).rows == 3
+    assert len(list(evaluation_cases(str(output)))) == 3
+
+
+def test_evaluation_publication_retries_preempted_outputs_without_mixing_stale_shards(corpus, tmp_path):
+    output = corpus[1]
+    for directory in ("normalize", "evaluation"):
+        path = output / directory
+        path.mkdir(parents=True)
+        (path / "stale.parquet").write_bytes(b"preempted partial shard")
+    (output / "manifest.json").write_text("incomplete conversion manifest")
+    (output / "protocol.json").write_text("incomplete protocol")
+    (output / "worker.log").write_text("executor evidence")
+    manifest = publish(corpus, tmp_path)
+    assert manifest.rows == 3
+    assert len(list(evaluation_cases(str(output)))) == 3
+    assert (output / "worker.log").read_text() == "executor evidence"
+    assert not (output / "normalize" / "stale.parquet").exists()
+    assert not (output / "evaluation" / "stale.parquet").exists()
+    with pytest.raises(FileExistsError):
+        publish(corpus, tmp_path)
 
 
 @pytest.mark.parametrize("corruption", ["missing_shards", "changed_bounds", "changed_provenance"])
@@ -180,6 +205,8 @@ def test_raw_publication_withholds_release_when_sidecar_prompt_differs_from_cano
     with pytest.raises((ValueError, ZephyrWorkerError), match="Raw evaluation prompt differs"):
         publish((source, output, recipe, raw_protocol), tmp_path, mismatched_raw_item)
     assert not (output / MANIFEST_FILENAME).exists()
+    assert publish((source, output, recipe, raw_protocol), tmp_path, raw_item).rows == 3
+    assert len(list(evaluation_cases(str(output)))) == 3
 
 
 def test_raw_reader_rejects_committed_prompt_mismatch_for_selected_task(corpus, tmp_path):

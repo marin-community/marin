@@ -149,7 +149,10 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
     tool_call = {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "a"}'}}
     server = ChatServer(
         [
-            completion({"content": None, "tool_calls": [tool_call]}, finish_reason="tool_calls"),
+            completion(
+                {"content": None, "tool_calls": [tool_call], "reasoning": "Look up a before answering."},
+                finish_reason="tool_calls",
+            ),
             completion({"content": "The value of a is 12."}),
         ]
     )
