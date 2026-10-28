@@ -37,8 +37,9 @@ FIT_SEED = 0
 MAX_LOG = 50.0
 SOLVERS = ("CLARABEL", "SCS")
 SOLVER_STATUSES = ("optimal", "optimal_inaccurate")
-# How far a solver's solution may lie outside the simplex and the caps: the accuracy cvxpy asks of SCS (eps_abs and
-# eps_rel 1e-5). The released solves lie 1.1e-10 outside at most, and SCS alone solves them 3.8e-8 outside.
+# How far a solver's solution, and the weights returned from it, may lie outside the simplex and the caps: the accuracy
+# cvxpy asks of SCS (eps_abs and eps_rel 1e-5). The released solves lie 1.1e-10 outside at most, and SCS alone solves
+# them 3.8e-8 outside.
 SOLUTION_TOLERANCE = 1e-5
 # Slack in blocks for floating rounding: a block maximum or a weight this close below a whole block reaches it.
 CAP_ROUNDING_SLACK = 1e-9
@@ -156,13 +157,14 @@ def exact_proposal(
     """Olmix's exact proposer: the weights that minimize the laws' weighted prediction plus kl_reg * KL(w || natural).
 
     The weights range over the simplex with each at most its cap. The solvers are tried in ``SOLVERS`` order, and the
-    first solution that a solver reports optimal (or optimal_inaccurate) and that lies within ``SOLUTION_TOLERANCE``
-    of the constraints (``constraint_violation``) is returned, clipped at zero and renormalized, with the weighted
-    prediction at it without the KL term and ``"<solver>:<status>"``.
+    first solution that a solver reports optimal (or optimal_inaccurate), that lies within ``SOLUTION_TOLERANCE`` of
+    the constraints (``constraint_violation``) and that, clipped at zero and renormalized, exceeds no cap by more than
+    ``SOLUTION_TOLERANCE`` is returned in that form, with the laws' weighted prediction at it without the KL term and
+    ``"<solver>:<status>"``.
 
     Raises:
         ImportError: If cvxpy, which the olmix extra installs, does not import.
-        RuntimeError: If no solver returns such a solution; the message gives each solver's status and violation.
+        RuntimeError: If no solver returns such a solution; the message gives each solver's status and outcome.
     """
     try:
         import cvxpy as cp  # noqa: PLC0415  (optional dependency: the olmix extra)
@@ -170,12 +172,12 @@ def exact_proposal(
         raise ImportError(CVXPY_MISSING) from error
 
     weights = cp.Variable(len(natural))
-    predicted = sum(
+    prediction = sum(
         float(task_weights[i]) * (float(np.exp(law.log_c)) + cp.exp(cp.sum(cp.multiply(law.coefficients, weights))))
         for i, law in enumerate(laws)
     )
     problem = cp.Problem(
-        cp.Minimize(predicted + kl_reg * cp.sum(cp.rel_entr(weights, natural))),
+        cp.Minimize(prediction + kl_reg * cp.sum(cp.rel_entr(weights, natural))),
         [weights >= 0, cp.sum(weights) == 1, weights <= caps],
     )
     attempts = []
@@ -188,12 +190,21 @@ def exact_proposal(
         if problem.status not in SOLVER_STATUSES:
             attempts.append(f"{solver} {problem.status}")
             continue
-        solution = np.asarray(weights.value, float)
-        violation = constraint_violation(solution, caps)
-        if violation <= SOLUTION_TOLERANCE:
-            solution = np.clip(solution, 0.0, None)
-            return solution / solution.sum(), float(predicted.value), f"{solver}:{problem.status}"
-        attempts.append(f"{solver} {problem.status} at a point {violation:.3g} outside the constraints")
+        raw = np.asarray(weights.value, float)
+        violation = constraint_violation(raw, caps)
+        if violation > SOLUTION_TOLERANCE:
+            attempts.append(f"{solver} {problem.status} at a point {violation:.3g} outside the constraints")
+            continue
+        solution = np.clip(raw, 0.0, None)
+        solution = solution / solution.sum()
+        excess = float(np.max(solution - caps))
+        if excess > SOLUTION_TOLERANCE:
+            attempts.append(
+                f"{solver} {problem.status} at a point that exceeds a cap by {excess:.3g} once clipped and renormalized"
+            )
+            continue
+        predicted = sum(float(task_weights[i]) * float(law.predict(solution)[0]) for i, law in enumerate(laws))
+        return solution, predicted, f"{solver}:{problem.status}"
     raise RuntimeError(
         f"no solver found a solution within {SOLUTION_TOLERANCE:g} of the simplex and the caps: {'; '.join(attempts)}"
     )
@@ -238,7 +249,7 @@ class OlmixProposal:
 
     counts: np.ndarray  # (buckets,) blocks of the 2,048-block grid
     continuous: np.ndarray  # (buckets,) the exact proposer's solution
-    predicted: float  # the laws' objective at the continuous solution, without the KL penalty
+    predicted: float  # the laws' weighted prediction at the continuous solution, without the KL penalty
     solver: str  # "<solver>:<status>", e.g. "CLARABEL:optimal"
 
 
