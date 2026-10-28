@@ -17,6 +17,7 @@ import os
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from functools import partial
 
 import click
@@ -54,6 +55,7 @@ from experiments.post_training.rsi.feedback import (
     analyze_failed_runs,
     capability_of,
     generate_tasks,
+    read_ideas,
 )
 from experiments.post_training.rsi.gap import (
     DIAGNOSTIC_CAPABILITY_PREFIX,
@@ -65,6 +67,7 @@ from experiments.post_training.rsi.gap import (
     training_indices,
     without_generators,
 )
+from experiments.post_training.rsi.generator_box import GeneratorConfig, generator_tasks
 from experiments.post_training.rsi.live_eval import EvalSet, eval_policy, evaluator, policy_step
 from experiments.post_training.rsi.loop import Boxes, LoopConfig, rsi_loop
 from experiments.post_training.rsi.policy import MAX_MODEL_LEN, LivePolicy, Sampling
@@ -103,6 +106,11 @@ def main() -> None:
     configure_logging(logging.INFO)
 
 
+class Synthesis(StrEnum):
+    AGENTIC = "agentic"
+    GENERATOR = "generator"
+
+
 def feedback_options(function):
     for option in reversed(
         [
@@ -127,6 +135,20 @@ def feedback_options(function):
                 default=0.0,
                 show_default=True,
                 help="Seconds that training waits for synthesized tasks to keep their share.",
+            ),
+            click.option(
+                "--synthesis",
+                type=click.Choice(tuple(Synthesis)),
+                default=Synthesis.AGENTIC,
+                show_default=True,
+                help="agentic runs a Taskforge session per idea; generator asks GLM for a program per idea.",
+            ),
+            click.option(
+                "--generator-instances",
+                type=int,
+                default=128,
+                show_default=True,
+                help="The instances that a generator program prints for each Reasoning Gym type an idea cites.",
             ),
             click.option("--tasks-per-idea", type=int, default=2, show_default=True),
             click.option("--instances-per-task", type=int, default=32, show_default=True),
@@ -176,7 +198,7 @@ def feedback_options(function):
 
 def _pop_feedback(arguments: dict) -> "FeedbackOptions":
     feedback = {name: arguments.pop(name) for name in FeedbackOptions.__dataclass_fields__}
-    return FeedbackOptions(**{**feedback, "pool": Pool(feedback["pool"])})
+    return FeedbackOptions(**{**feedback, "pool": Pool(feedback["pool"]), "synthesis": Synthesis(feedback["synthesis"])})
 
 
 @dataclass(frozen=True)
@@ -189,6 +211,8 @@ class FeedbackOptions:
     analysis_rules: str
     synthesized_share: float
     synthesis_max_wait: float
+    synthesis: Synthesis
+    generator_instances: int
     tasks_per_idea: int
     instances_per_task: int
     probes_per_task: int
@@ -260,7 +284,6 @@ async def _feedback_boxes(
     trained_ids: Collection[str],
 ) -> Boxes:
     source = endpoint_source(None, feedback.relay_job, feedback.pool)
-    synthesis = await synthesis_config(stack, feedback, solver, output)
     analysis = AnalysisConfig(
         make_client=partial(GlmClient, source, GLM_PROVIDER),
         max_new_ideas=feedback.max_new_ideas,
@@ -272,14 +295,27 @@ async def _feedback_boxes(
         work_dir="/tmp/baby-rsi-zephyr",
         workers=16,
     )
-    resumed = untrained_instances(output, trained_ids, feedback.instances_per_task, synthesis.agentic.workspace_factory)
-
-    def generate(ideas: AsyncIterable[CapabilityIdea]) -> AsyncIterator[TaskSpec]:
-        # A resumed run first gives back the instances of the tasks that it accepted and did not train on.
-        new = generate_tasks(ideas, synthesis)
-        return mix(Source(resumed, share=1.0), Source(new, share=1.0), seed=0)
-
     eval_set = await asyncio.to_thread(evaluation_set, feedback.eval_gap_types)
+    if feedback.synthesis == Synthesis.GENERATOR:
+        generator = GeneratorConfig(
+            client=await stack.enter_async_context(GlmClient(source, GLM_PROVIDER)),
+            evaluation=eval_set.tasks,
+            templates={name: rows.template for name, rows in (await asyncio.to_thread(scan_types)).items()},
+            instances_per_type=feedback.generator_instances,
+            concurrency=feedback.sessions,
+        )
+        generate = partial(generator_tasks, config=generator)
+    else:
+        synthesis = await synthesis_config(stack, feedback, solver, output)
+        resumed = untrained_instances(
+            output, trained_ids, feedback.instances_per_task, synthesis.agentic.workspace_factory
+        )
+
+        def generate(ideas: AsyncIterable[CapabilityIdea]) -> AsyncIterator[TaskSpec]:
+            # A resumed run first gives back the instances of the tasks that it accepted and did not train on.
+            new = generate_tasks(ideas, synthesis)
+            return mix(Source(resumed, share=1.0), Source(new, share=1.0), seed=0)
+
     runner = PolicyRunner(rollout_engine(EVAL_GRADER_SLOTS), solver, POLICY_LIMITS, EVAL_CONCURRENCY)
     evaluate = evaluator(runner, eval_set, feedback.eval_samples, output)
     analyze = partial(analyze_failed_runs, config=analysis, known=known_ideas(output))
@@ -291,10 +327,6 @@ async def _feedback_boxes(
         analyze_failed_runs=analyze,
         generate_tasks=generate,
     )
-
-
-def read_ideas(url: str) -> list[CapabilityIdea]:
-    return [CapabilityIdea.model_validate(idea) for idea in json.loads(StoragePath(url).read_text())]
 
 
 async def fixed_ideas(

@@ -18,12 +18,11 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.post_training.rsi.evaluate import PolicyOptions, Served, policy_options, serve
-from experiments.post_training.rsi.feedback import generate_tasks
+from experiments.post_training.rsi.feedback import generate_tasks, read_ideas
 from experiments.post_training.rsi.run import (
     FeedbackOptions,
     _pop_feedback,
     feedback_options,
-    read_ideas,
     synthesis_config,
 )
 from experiments.post_training.rsi.streams import from_iterable

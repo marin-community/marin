@@ -233,7 +233,10 @@ def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
     assert names_and_evidence(analyze(ctx, rollouts, max_new_ideas=1).results) == [
         (CHECK_WORK.name, ["wrong-b", "wrong-c"])
     ]
-    assert names_and_evidence(analyze(ctx, samples).results) == [(STOP_LOOPS.name, [f"sample-{i}" for i in range(3)])]
+    ideas = analyze(ctx, samples).results
+    assert names_and_evidence(ideas) == [(STOP_LOOPS.name, [f"sample-{i}" for i in range(3)])]
+    # The record also names the tasks of its evidence, once each.
+    assert ideas[0].capability["evidence_tasks"] == ["task-a"]
 
 
 def test_no_failed_rollout_needs_no_model_call(ctx):

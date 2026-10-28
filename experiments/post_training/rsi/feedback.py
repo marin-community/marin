@@ -200,9 +200,17 @@ async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: Synthesis
             await runner
 
 
+def cited_tasks(idea: CapabilityIdea) -> set[str]:
+    """The IDs of the failed tasks that an idea's evidence cites."""
+    return set(idea.capability.get("evidence_tasks") or ())
+
+
 def cited_failures(idea: CapabilityIdea) -> int:
-    """The failed tasks that an idea's evidence cites; the evidence names attempts as ``<task id>_<attempt>``."""
-    return len({str(attempt).rsplit("_", 1)[0] for attempt in idea.capability.get("evidence") or ()})
+    return len(cited_tasks(idea))
+
+
+def read_ideas(url: str) -> list[CapabilityIdea]:
+    return [CapabilityIdea.model_validate(idea) for idea in json.loads(StoragePath(url).read_text())]
 
 
 def held_out_idea(idea: CapabilityIdea, share: float) -> bool:

@@ -112,10 +112,9 @@ def test_a_held_out_idea_gives_probes_but_no_training_tasks(session, tmp_path):
 
 def test_ideas_are_ranked_by_the_failed_tasks_that_they_cite():
     def idea(name: str, evidence: list[str]) -> CapabilityIdea:
-        return IDEA.model_copy(update={"capability_id": name, "capability": {"id": name, "evidence": evidence}})
+        return IDEA.model_copy(update={"capability_id": name, "capability": {"id": name, "evidence_tasks": evidence}})
 
-    ideas = [idea("format", ["a_0", "a_1"]), idea("sorting", ["b_0", "c_0", "d_1"]), idea("none", [])]
-    # Two attempts at one task count once.
+    ideas = [idea("format", ["a"]), idea("sorting", ["b", "c", "d"]), idea("none", [])]
     assert [feedback.cited_failures(item) for item in ideas] == [1, 3, 0]
     assert [item.capability_id for item in sorted(ideas, key=feedback.cited_failures, reverse=True)] == [
         "sorting",

@@ -31,9 +31,9 @@ from taskforge.llm.policy import LLMPolicy, ReasoningEffort
 
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
+from experiments.post_training.rsi.feedback import read_ideas
 from experiments.post_training.rsi.gap import GAP_CAPABILITY_PREFIX, entry_task, scan_types
 from experiments.post_training.rsi.label_check import label_correct
-from experiments.post_training.rsi.run import read_ideas
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def brief(idea: CapabilityIdea) -> str:
     capability = dict(idea.capability)
     examples = capability.pop("example_tasks", [])[:8]
     entries = capability.pop("example_entries", [])
-    for key in ("example_task_spec", "grader_rule", "evidence", "example_task"):
+    for key in ("example_task_spec", "grader_rule", "evidence", "evidence_tasks", "example_task"):
         capability.pop(key, None)
     pairs = [{"question": q, "entry": e} for q, e in zip(examples, entries, strict=False)] or examples
     return json.dumps({"capability": capability, "examples": pairs}, indent=1)
