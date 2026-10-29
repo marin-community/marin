@@ -852,6 +852,7 @@ custom_roles:
   - serviceusage.quotas.get
   - serviceusage.services.get
   - serviceusage.services.list
+  - serviceusage.services.use
   - serviceusage.values.test
   - storage.buckets.get
   - storage.buckets.list
