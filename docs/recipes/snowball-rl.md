@@ -63,43 +63,36 @@ commit in their shared artifact names. Data-medium uses learning-medium's contro
 
 ## Compare with controls
 
-Short and medium presets write `gate_report.json` and `gate_report.md` after the
-run. The status block shows `pass`, `fail` or `invalid`, a change label and the
-report path. Train-long has no verdict. A crashed run reports `fail` with its Iris
-job ID.
+Short and medium presets write `gate_report.json` and `gate_report.md`. Status shows
+`pass`, `fail` or `invalid`, a change label and the report path. Train-long has no
+verdict; a crashed run reports `fail` with its Iris job ID.
 
-The gate reads the exact control runs pinned in `snowball_rl_gate.CONTROLS`.
-A control refresh adds a pin after its replicates finish. Controls with the same
-preset revision pool deviations from each pin's own mean.
+The gate reads exact runs pinned in `snowball_rl_gate.CONTROLS`. Refresh a pin after
+its replicates finish. Pins with the same preset revision pool deviations from each
+pin's own mean.
 
-Each guard compares the candidate replicate mean with the control mean, signed
-so positive means better. Its tolerance is
-`t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number
-of guards and `sd` is calibrated run-to-run spread. Update time first reduces
-each run's measured updates to their median; other metrics use their mean.
-A guard fails below the negative tolerance. Declared reported metrics use `k=1`
-in both directions and determine the label with the verdict. Labels are
-`improves`, `trade-off`, `regression` and `no change`. Expanded panel statistics
-are detail rows: their comparisons use `k` equal to the detail count, and they
-do not determine the label.
+Guards compare candidate and control replicate means, signed so positive means better.
+Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` guards
+and calibrated run-to-run spread `sd`. Each run reduces update time to its median;
+other metrics use their mean. A guard fails below negative tolerance. Declared reported
+metrics use `k=1` in both directions and determine the label with the verdict:
+`improves`, `trade-off`, `regression` or `no change`. Panel detail rows use their own
+count for `k` and do not determine the label.
 
-Every planned batch or update must finish, losses and gradients must be finite,
-at least 99% of panel tasks must score, and grader infrastructure failures must
-stay at or below 1%. Speed replies must all have the fixed length. A mismatched
-control pin, preset revision or heldout panel, a missing guard, or a mismatch
-guard with no measured tokens or zero observed control variation produces
-`invalid` and a reason.
+Every planned batch/update must finish, losses and gradients must be finite, panel
+coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed
+replies must have the fixed length. Mismatched pins, preset revisions or panel IDs,
+missing receipts/provenance/guards, missing mismatch tokens or zero control variation
+give `invalid` with a reason.
 
-Failure counts can overlap. The report bounds their union: upper ≤ 1% passes;
-lower > 1% fails. A candidate straddling 1% is `invalid` if every other check
-passes, otherwise `fail`. An ambiguous control is `invalid`. Both bounds remain
-in the report.
+The report bounds overlapping failure counts: upper ≤ 1% passes; lower > 1% fails.
+A candidate straddling 1% is `invalid` if every other check passes, otherwise `fail`.
+An ambiguous control is `invalid`. Both bounds remain in the report.
 
-For another initializer, the report includes its update-0 score and final score
-minus initial score. These candidate values have an unavailable comparison when
-the controls have no update-0 evaluation.
+For another initializer, the report includes update-0 score and final-minus-initial
+score. Their comparisons are unavailable when controls have no update-0 evaluation.
 
-Re-score a recorded run with the current gate, without allocating GPUs:
+Re-score saved runs on CPU:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl_gate \
@@ -108,17 +101,14 @@ uv run python -m experiments.post_training.snowball_rl_gate \
   --preset speed-medium --leave-out r0
 ```
 
-Reports write into the caller's run namespace under `MARIN_PREFIX`. Recorded controls are read-only.
-The host status lists changed RL paths against the control commit, including
-uncommitted edits; without local git metadata it gives a reason. This list does
-not change the verdict.
+Reports use the caller's namespace under `MARIN_PREFIX`; controls are read-only.
+Host status lists changed RL paths, including uncommitted edits, against the control
+commit, or explains missing git metadata. This list does not affect the verdict.
 
-`snowball_pass_rates` answers each panel task eight times at temperature 1. Its
-versioned artifact pins the initializer revision and records task IDs, passed
-answers and scored samples, excluding grading errors from the denominator.
-Heldout reports join these rows into easy (> 0.7), learnable (0.1–0.7) and hard
-(< 0.1) pass-rate bands. These bands are reported only; refresh the artifact when
-the initializer revision changes.
+`snowball_pass_rates` answers each panel task eight times at temperature 1. Its artifact
+pins the initializer revision and records task IDs, passed answers and scored samples,
+excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
+(< 0.1) pass-rate bands for reporting only. Refresh when the initializer revision changes.
 
 ## Tasks and evaluation
 
