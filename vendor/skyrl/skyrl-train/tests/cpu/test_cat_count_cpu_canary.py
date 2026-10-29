@@ -316,11 +316,12 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         cfg.trainer.micro_train_batch_size_per_gpu = 1
         cfg.trainer.micro_forward_batch_size_per_gpu = 1
         cfg.generator.n_samples_per_prompt = 2
-        path = Path(cfg.data.train_data[0])
-        row = json.loads(path.read_text().splitlines()[0])
-        row["prompt"][0]["content"] = "cat " * 200
-        with path.open("a") as handle:
-            handle.write(json.dumps(row) + "\n")
+        for filename in (cfg.data.train_data[0], cfg.data.val_data[0]):
+            path = Path(filename)
+            row = json.loads(path.read_text().splitlines()[0])
+            row["prompt"][0]["content"] = "cat " * 200
+            with path.open("a") as handle:
+                handle.write(json.dumps(row) + "\n")
         records = run_process(forkserver_context, root, cfg)
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
@@ -356,7 +357,12 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     tasks.append(task(2, "rollout-error", {"n": "invalid"}))
     expected["rollout-error"] = PROMPT.format(N=2)
     path = root / "data" / "permuted.parquet"
-    write_tasks(path, reversed(tasks))
+    overlong = task(2, "overlong", {})
+    context = overlong.task.context.model_copy(
+        update={"events": (overlong.task.context.events[0].model_copy(update={"content": "cat " * 200}),)}
+    )
+    spec = overlong.task.model_copy(update={"context": context})
+    write_tasks(path, [*reversed(tasks), overlong.model_copy(update={"task": spec})])
     cfg.data.val_data = [str(path)]
     cfg.generator.num_inference_engines = 2
     cfg.generator.eval_n_samples_per_prompt = 2
@@ -369,6 +375,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
         json.loads(line)
         for line in (Path(evaluation_dump_dir(str(root / "exports"), None)) / "train.jsonl").read_text().splitlines()
     ]
+    assert metrics["generate/prompts_dropped_too_long"] == 1
     assert len(rows) == 2 * len(expected)
     assert {row["task_id"] for row in rows} == expected.keys()
     assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
