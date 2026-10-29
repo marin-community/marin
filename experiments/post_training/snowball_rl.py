@@ -27,6 +27,7 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLModelSource,
     SkyRLPolicyModel,
+    SkyRLReceiptLookupError,
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLSpec,
@@ -159,7 +160,10 @@ def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
         )
         return ArtifactHfModel(model, presets.MODEL_ID, presets.MODEL_REVISION, relative_path="")
     if init.artifact_type is SkyRLRun:
-        result = presets.artifact_record(init).result or {}
+        try:
+            result = presets.artifact_record(init.path()).result or {}
+        except FileNotFoundError as error:
+            raise click.BadParameter("the initializer requires a completed published artifact record") from error
         if not result.get("hf_model_uri"):
             raise click.BadParameter("the initializer run has no HF export; gated runs cannot initialize another run")
         return SkyRLPolicyModel(init)
@@ -208,9 +212,12 @@ def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSou
     if isinstance(model, ArtifactHfModel):
         tokenizer, revision = model.tokenizer_uri, model.tokenizer_revision
     else:
-        result = presets.artifact_record(model.step).result
+        result = presets.artifact_record(model.step.path()).result
         tokenizer, revision = result["tokenizer_uri"], result["tokenizer_revision"]
-    receipt = read_skyrl_launch_receipt(source.path())
+    try:
+        receipt = read_skyrl_launch_receipt(source.path())
+    except SkyRLReceiptLookupError as error:
+        raise click.BadParameter(str(error)) from error
     if receipt is None:
         raise click.BadParameter(f"no launch metadata at {source.path()}")
     config, result = receipt.config, receipt.result
@@ -232,7 +239,9 @@ def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSou
     root = config["artifacts"]["checkpoint_root"]
     marker = StoragePath(root) / "latest_ckpt_global_step.txt"
     missing = f"no checkpoint remains at {root}; temporary checkpoints expire after 14 days"
-    if not marker.isfile() or not (StoragePath(root) / f"global_step_{int(marker.read_text().strip())}").exists():
+    if not presets.exists(marker) or not presets.exists(
+        StoragePath(root) / f"global_step_{int(presets.read_text(marker).strip())}"
+    ):
         raise click.BadParameter(missing)
     return root
 
@@ -447,7 +456,10 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         path = step.path(presets.artifact_prefix(execution.cluster))
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
-        receipt = read_skyrl_launch_receipt(path)
+        try:
+            receipt = read_skyrl_launch_receipt(path)
+        except SkyRLReceiptLookupError as error:
+            raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
         status_fs, status_key = filesystem_for(get_status_path(path))
         state = result.state if result else None
@@ -519,6 +531,8 @@ def main(
     replicates: int,
     control: bool,
 ) -> tuple[ArtifactStep, ...]:
+    if init_name and "@" not in init_name:
+        raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
     preset = presets.PRESETS[preset_name]
     layout = presets.LAYOUTS[layout_name] if layout_name else None
     run = build_run(
