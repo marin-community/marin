@@ -689,7 +689,9 @@ def gate_step(
     pins = _pins(preset.name)
     if not pins:
         raise click.BadParameter(
-            f"no control pin for {preset.name} at {presets.PRESET_REVISION}; collect and pin controls"
+            f"no control pin for {preset.name} at {presets.PRESET_REVISION}; collect with "
+            f"python -m experiments.post_training.snowball_rl --preset {preset.name} "
+            f"--version {presets.PRESET_REVISION} --control --replicates {CONTROLS[preset.name][0].runs} --run"
         )
     root = presets.artifact_prefix(preset.recipe.layout.cluster)
     name = runs[0].name.rsplit("-r", 1)[0] + f"/gate-n{len(runs)}-{pins[0].main_commit}"
@@ -730,13 +732,15 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None) ->
     root = presets.artifact_prefix(preset.recipe.layout.cluster)
     name, separator, version = candidate_name.partition("@")
     source = str(StoragePath(root) / name / (version if separator else presets.PRESET_REVISION))
-    namespace = user_owned_name(f"checkpoints/snowball-rl/rescore/{preset_name}-{fingerprint_hash(source)}")
+    controls = control_paths(pins, root, index)
+    identity = fingerprint_hash(json.dumps((source, controls)))
+    namespace = user_owned_name(f"checkpoints/snowball-rl/rescore/{preset_name}-{identity}")
     step = _gate_artifact(
         namespace + f"/gate-n1-{pins[0].main_commit}",
         preset,
         (source,),
         pins,
-        control_paths(pins, root, index),
+        controls,
         recorded_inputs(source),
     )
     result = run(step)[0]
