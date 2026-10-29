@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from enum import StrEnum
 from typing import Any, Callable, Generic, Optional, TypeVar
 
 import equinox as eqx
@@ -25,6 +26,11 @@ S = TypeVar("S")
 
 
 DataclassInstance = Any  # _typeshed is stub-only; use Any at runtime
+
+
+class FrozenParameterStorage(StrEnum):
+    COMPUTE = "compute"
+    NATIVE = "native"
 
 
 def _ensure_int_is_array(x):
@@ -90,12 +96,15 @@ class TrainerState(eqx.Module, Generic[M]):
         key: PRNGKeyArray,
         is_trainable: FilterTree = True,
         mp: Optional[jmp.Policy] = None,
+        frozen_parameter_storage: FrozenParameterStorage = FrozenParameterStorage.COMPUTE,
         quantization: Optional[QuantizationConfig] = None,
         model_averaging: ModelAveragingConfig[M] | None = None,
         **kwargs,
     ) -> "TrainerState[M]":
         if mp is not None:
-            model = cast_params_by_trainability(model, mp, is_trainable)
+            model = cast_params_by_trainability(
+                model, mp, is_trainable, frozen_parameter_storage=frozen_parameter_storage
+            )
         else:
             mp = jmp.get_policy("f32")
 
@@ -197,14 +206,19 @@ def trainables_only(model, filter):
     return _partition_trainable_params(model, filter)[0]
 
 
-def cast_params_by_trainability(model, mp, is_trainable):
+def cast_params_by_trainability(
+    model, mp, is_trainable, *, frozen_parameter_storage: FrozenParameterStorage = FrozenParameterStorage.COMPUTE
+):
     """
     Casts the parameters of a model to the appropriate precision based on the is_trainable filter spec.
-    Trainable parameters are cast to param precision, non-trainable parameters are cast to compute precision.
+    Trainable parameters use param precision. Frozen parameters use compute precision
+    by default; native storage preserves each frozen leaf's existing dtype and values.
+    This does not change the model view used for forward computation.
     """
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
-    non_trainable = mp.cast_to_compute(non_trainable)
+    if frozen_parameter_storage == FrozenParameterStorage.COMPUTE:
+        non_trainable = mp.cast_to_compute(non_trainable)
     return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
 
