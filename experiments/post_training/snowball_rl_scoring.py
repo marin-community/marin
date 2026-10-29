@@ -21,7 +21,6 @@ from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILE
 EVAL_SCORE_SCHEMA = pa.schema(
     [
         ("evaluation", pa.string()),
-        ("harness", pa.string()),
         ("step", pa.int32()),
         ("item", pa.string()),
         ("attempt", pa.int32()),
@@ -35,12 +34,8 @@ PASS_RATES_NAME = f"rl-data/snowball-pass-rates/{presets.MODEL_REVISION}"
 PASS_RATE_EVALUATION = replace(presets.EVALUATIONS["panel-910"], name="pass-rates-910x8", answers=8, post_run=False)
 
 
-class InvalidScores(ValueError):
-    """Evaluation answers cannot be joined or normalized for comparison."""
-
-
-class InvalidPassRates(ValueError):
-    """Pass-rate rows do not match the pinned initializer and panel."""
+class InvalidComparison(ValueError):
+    """The recorded runs cannot support this calibrated comparison."""
 
 
 def task_manifest(root: StoragePath) -> dict[str, dict]:
@@ -81,21 +76,20 @@ def panel_scores(
     for step, path, row in evaluation_answers(run_output) if answers is None else answers:
         item = row.get("task_id")
         if not item:
-            raise InvalidScores(f"evaluation answer lacks a TaskSpec id: {path}")
+            raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
         metadata = manifest.get(item, {})
         if evaluation.file != "train" and not metadata:
-            raise InvalidScores(f"panel task {item} is absent from its task manifest")
+            raise InvalidComparison(f"panel task {item} is absent from its task manifest")
         verdict = row.get("verification")
         score = 0.0
         if verdict and verdict["status"] == "verified":
             value, lower, upper = (float(verdict[key]) for key in ("score", "score_min", "score_max"))
             if not all(math.isfinite(number) for number in (value, lower, upper)) or upper <= lower:
-                raise InvalidScores(f"invalid verifier score or bounds for {item}")
+                raise InvalidComparison(f"invalid verifier score or bounds for {item}")
             score = min(1.0, max(0.0, (value - lower) / (upper - lower)))
         rows.append(
             {
                 "evaluation": evaluation.name,
-                "harness": evaluation.harness.value,
                 "step": step,
                 "item": item,
                 "attempt": attempts[step, item],
@@ -162,5 +156,5 @@ def read_pass_rates(path: str) -> pa.Table:
             for row in rows
         )
     ):
-        raise InvalidPassRates("pass-rate artifact differs from the pinned initializer or development panel")
+        raise InvalidComparison("pass-rate artifact differs from the pinned initializer or development panel")
     return table

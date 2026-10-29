@@ -61,7 +61,6 @@ Use `--replicates N` for 1–5 copies of a short or medium preset, sharing a see
 `--control --replicates N` from a clean checkout and fixed default inputs, with the
 commit in their shared artifact names. Data-medium uses learning-medium's control.
 
-
 ## Compare with controls
 
 Short and medium presets write `gate_report.json` and `gate_report.md` after the
@@ -70,10 +69,8 @@ report path. Train-long has no verdict. A crashed run reports `fail` with its Ir
 job ID.
 
 The gate reads the exact control runs pinned in `snowball_rl_gate.CONTROLS`.
-Controls share the experiment's seed, selection, initializer and preset revision.
-Data-medium compares against learning-medium's control. A control refresh adds a
-pin after its replicates finish; controls with the same preset revision pool
-their deviations from each pin's own mean.
+A control refresh adds a pin after its replicates finish. Controls with the same
+preset revision pool deviations from each pin's own mean.
 
 Each guard compares the candidate replicate mean with the control mean, signed
 so positive means better. Its tolerance is
@@ -93,12 +90,10 @@ control pin, preset revision or heldout panel, a missing guard, or a mismatch
 guard with no measured tokens or zero observed control variation produces
 `invalid` and a reason.
 
-Recorded failure counts can overlap. The report gives lower and upper bounds on
-the fraction of affected answers: the invariant passes when its upper bound is
-at most 1% and fails when its lower bound exceeds 1%. A candidate whose bounds
-straddle 1% is `invalid` when every other invariant and guard passes; an
-independent invariant or guard failure gives `fail`. An ambiguous control is
-`invalid`. Both bounds remain in the report.
+Failure counts can overlap. The report bounds their union: upper ≤ 1% passes;
+lower > 1% fails. A candidate straddling 1% is `invalid` if every other check
+passes, otherwise `fail`. An ambiguous control is `invalid`. Both bounds remain
+in the report.
 
 For another initializer, the report includes its update-0 score and final score
 minus initial score. These candidate values have an unavailable comparison when
@@ -118,13 +113,12 @@ The host status lists changed RL paths against the control commit, including
 uncommitted edits; without local git metadata it gives a reason. This list does
 not change the verdict.
 
-`snowball_pass_rates` uses the same generate-only builder to answer every panel
-task eight times at temperature 1. Its versioned `pass_rates.parquet` contains
-task ID, initializer revision, passed answers and scored samples. Every task has
-eight attempts; grading errors are excluded from its scored-sample denominator.
-Heldout panel reports depend on this artifact and join its rows by task ID for easy (pass rate above 0.7), learnable (0.1–0.7) and hard
-(below 0.1) means. These bands are reported only. The artifact name pins the
-initializer revision; measure it again when that revision changes.
+`snowball_pass_rates` answers each panel task eight times at temperature 1. Its
+versioned artifact pins the initializer revision and records task IDs, passed
+answers and scored samples, excluding grading errors from the denominator.
+Heldout reports join these rows into easy (> 0.7), learnable (0.1–0.7) and hard
+(< 0.1) pass-rate bands. These bands are reported only; refresh the artifact when
+the initializer revision changes.
 
 ## Tasks and evaluation
 

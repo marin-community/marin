@@ -219,9 +219,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     ]
     assert all(left != right for left, right in pairs), pairs
     assert name(
-        learning,
-        "trainer.policy.optimizer_config={lr: 0.000002}",
-        "trainer.policy.optimizer_config={weight_decay: 0.1}",
+        learning, "trainer.policy.optimizer_config={lr: 0.000002}", "trainer.policy.optimizer_config={weight_decay: 0.1}"
     ) == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002", "trainer.policy.optimizer_config.weight_decay=0.1"
     )
@@ -277,10 +275,7 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     assert all(dep.artifact_type is not SkyRLRun for dep in resumed.deps)
     config = resumed.build_config(
         StepContext.for_run(
-            str(tmp_path / "resumed"),
-            str(tmp_path / "artifacts"),
-            deps=resumed.deps,
-            runtime_args=resumed.runtime_args,
+            str(tmp_path / "resumed"), str(tmp_path / "artifacts"), deps=resumed.deps, runtime_args=resumed.runtime_args
         )
     )
     assert config.output.checkpoint_root == str(checkpoints)

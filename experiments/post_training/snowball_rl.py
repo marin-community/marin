@@ -311,12 +311,7 @@ def _post_evaluation(
     layout = replace(parent_layout, name=presets.E8.name, role_plan=plan)
     config = deepcopy(parent_config)
     config["trainer"].update(
-        callbacks=[],
-        eval_interval=1,
-        eval_before_train=False,
-        resume_mode="none",
-        ckpt_interval=0,
-        hf_save_interval=-1,
+        callbacks=[], eval_interval=1, eval_before_train=False, resume_mode="none", ckpt_interval=0, hf_save_interval=-1
     )
     evaluator = presets.EVALUATORS[evaluation.harness]
     validation = evaluator.configure(evaluation, config, selection)
@@ -440,11 +435,11 @@ def build_run(
         runs.append(run)
         for evaluation in post:
             post_runs.append(_post_evaluation(run, evaluation, default, preset, config))
-    gate = None
-    if preset.name in snowball_rl_gate.CONTROLS and not control:
-        gate = snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init)
-        )
+    gate = (
+        snowball_rl_gate.gate_step(preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init))
+        if preset.name in snowball_rl_gate.CONTROLS and not control
+        else None
+    )
     return SnowballRun(tuple(runs), tuple(post_runs), gate)
 
 
@@ -499,16 +494,12 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         )
     verdict = {}
     if run.gate is not None:
-        execution = next(value for value in run.runs[0].runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = StoragePath(run.gate.path(prefix=presets.artifact_prefix(execution.cluster))) / "gate_report.json"
+        path = (
+            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))) / "gate_report.json"
+        )
         if presets.exists(path):
             report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
-            verdict = {
-                "verdict": report.verdict.value,
-                "label": report.label.value if report.label else None,
-                "reason": report.reason,
-                "report": str(path),
-            }
+            verdict = {"report": str(path), **report.model_dump(mode="json", include={"verdict", "label", "reason"})}
             changes, reason = _changed_paths(
                 report.control.main_commit,
                 ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
