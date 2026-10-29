@@ -700,6 +700,8 @@ class SkyRLLaunchResponse(BaseModel):
     state: str
     iris_job_id: str | None = None
     failure: str | None = None
+    provenance: dict | None = None
+    run_id: str | None = None
     model: _SkyRLTerminalModel | None = None
 
 

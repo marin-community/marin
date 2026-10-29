@@ -45,6 +45,7 @@ from experiments.post_training.snowball_rl_scoring import (
     evaluation_answers,
     evaluation_statistics,
     panel_scores,
+    paths,
     read_pass_rates,
 )
 
@@ -247,7 +248,7 @@ def _verdict(invariants: Sequence[Invariant], guards: Sequence[GuardComparison])
 def _metrics(root: StoragePath) -> dict[int, dict]:
     return {
         int(PurePosixPath(str(path)).stem.removeprefix("step-")): json.loads(presets.read_text(path))
-        for path in presets.paths(root / "exports/metrics/step-*.json")
+        for path in paths(root / "exports/metrics/step-*.json")
     }
 
 
@@ -290,7 +291,7 @@ def _session_invariants(
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["item"] for row in rows)
-    expected = presets.evaluation_answer_count(evaluation, presets.default_selection(), presets.default_selection())
+    expected = presets.evaluation_answer_count(evaluation, presets.default_selection())
     result = [
         Invariant(
             name=f"{name}/batch_finished",

@@ -738,7 +738,7 @@ def run_command(*, help_text: str | None = None):
             (("--init", "init_name"), {}),
             (("--resume-from", "resume_name"), {}),
             (("--layout", "layout_name"), {"type": click.Choice(sorted(TRAIN_LONG_RECIPES))}),
-            (("--eval", "evaluations"), {"multiple": True}),
+            (("--eval", "evaluations"), {"multiple": True, "type": click.Choice(sorted(EVALUATIONS))}),
             (("--replicates",), {"type": click.IntRange(1, 5), "default": 1}),
             (("--control",), {"is_flag": True}),
         )

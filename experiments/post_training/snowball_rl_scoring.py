@@ -16,6 +16,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training.task_curation.inventory import TASK_MANIFEST_FILENAME
 
 EVAL_SCORE_SCHEMA = pa.schema(
     [
@@ -42,12 +43,25 @@ class InvalidPassRates(ValueError):
     """Pass-rate rows do not match the pinned initializer and panel."""
 
 
+def task_manifest(root: StoragePath) -> dict[str, dict]:
+    fs, key = filesystem_for(str(root / TASK_MANIFEST_FILENAME))
+    if not fs.exists(key):
+        return {}
+    with fs.open(key, "rb") as stream:
+        return {row["task_id"]: row for row in pq.read_table(stream).to_pylist()}
+
+
+def paths(pattern: StoragePath) -> list[StoragePath]:
+    fs, key = filesystem_for(str(pattern))
+    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
+
+
 def evaluation_answers(run_output: str) -> list[tuple[int, StoragePath, dict]]:
     answers = []
-    for session in presets.paths(StoragePath(run_output) / "exports/dumped_evals/*"):
+    for session in paths(StoragePath(run_output) / "exports/dumped_evals/*"):
         name = PurePosixPath(str(session)).name
         step = -1 if name == "eval_only" else int(name.removeprefix("global_step_").removesuffix("_evals"))
-        for path in presets.paths(session / "*.jsonl"):
+        for path in paths(session / "*.jsonl"):
             if PurePosixPath(str(path)).name != "aggregated_results.jsonl":
                 answers.extend(
                     (step, path, json.loads(line)) for line in presets.read_text(path).split("\n") if line.strip()
@@ -61,7 +75,7 @@ def panel_scores(
     launch = read_skyrl_launch_config(run_output)
     manifest = {}
     for source in launch["inputs"]["validation_data"]:
-        manifest.update(presets.task_manifest(StoragePath(source["uri"])))
+        manifest.update(task_manifest(StoragePath(source["uri"])))
     attempts = Counter()
     rows = []
     for step, path, row in evaluation_answers(run_output) if answers is None else answers:
@@ -137,7 +151,7 @@ def read_pass_rates(path: str) -> pa.Table:
         table = pq.read_table(stream)
     rows = table.to_pylist()
     ids = {row["task_id"] for row in rows}
-    expected = set(presets.task_manifest(StoragePath(presets.default_selection().path())))
+    expected = set(task_manifest(StoragePath(presets.default_selection().path())))
     if (
         ids != expected
         or len(rows) != len(ids)
