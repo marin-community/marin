@@ -11,9 +11,40 @@ from harbor.environments.base import ExecResult
 from harbor.literal.proxy import LITERAL_LOG_FILENAME
 from harbor.models.agent.context import AgentContext
 from minisweagent.run.mini import app
+from openai import OpenAI
 from openai.resources.chat.completions import Completions
 from openai.types.chat import ChatCompletion
 from typer.testing import CliRunner
+
+
+def test_openai_adapter_accepts_litellm_drop_params_option(monkeypatch):
+    _compacting_model_class(monkeypatch)
+    module = importlib.import_module("mini_swe_model")
+    requests = []
+
+    def completion(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_tool_response().model_dump())
+
+    def client(**kwargs):
+        return OpenAI(
+            http_client=httpx.Client(transport=httpx.MockTransport(completion)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(module, "OpenAI", client)
+    model = module.OpenAIModel(
+        model_name="hosted_vllm/served-model",
+        api_base="http://model/v1",
+        cost_tracking="ignore_errors",
+        model_kwargs={"drop_params": True, "temperature": 0.25, "max_tokens": 16},
+    )
+    model.query([{"role": "user", "content": "Run echo ready"}])
+    [request] = requests
+    assert request["model"] == "served-model"
+    assert request["temperature"] == 0.25
+    assert request["max_tokens"] == 16
+    assert "drop_params" not in request
 
 
 def _compacting_model_class(monkeypatch):

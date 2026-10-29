@@ -296,7 +296,9 @@ class MegatronModelWrapper:
         prediction_mask = self._router_rows(prediction_BS, attention_mask)
         if probe_positions is not None:
             probe_positions = self._router_rows(probe_positions, attention_mask) - 1
-        per_layer = {idx: flat[:, idx, :].to(device) for idx in layer_indices}
+        # Backward replay retains these targets; do not keep the all-layer canvas alive through views.
+        copy_local_targets = len(layer_indices) < flat.shape[1] or mpu.get_tensor_model_parallel_world_size() > 1
+        per_layer = {idx: flat[:, idx, :].to(device=device, copy=copy_local_targets) for idx in layer_indices}
         return RouterReplayTargets(per_layer, mask.to(device), prediction_mask.to(device), probe_positions)
 
     def _router_rows(self, tensor_BS: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
