@@ -278,7 +278,6 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     (checkpoints / "global_step_10").mkdir(parents=True)
     marker = checkpoints / "latest_ckpt_global_step.txt"
     marker.write_text("10")
-    (checkpoints / "global_step_10/metadata.json").write_text("{}")
     attempts = source / "attempts"
     attempts.mkdir()
     document["run"]["attempt_id"] = "attempt-fixture"
