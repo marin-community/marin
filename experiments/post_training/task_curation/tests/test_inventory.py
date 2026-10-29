@@ -94,20 +94,9 @@ def heldout_rows() -> list[dict]:
                 }
                 dataset = next(dataset for dataset, expected in HELDOUT_FAMILIES.items() if expected == family)
                 task["tags"] = ["agentic"] if index == 0 else []
+                contract = {"dataset": dataset, "pass_rate_passed": 5, "pass_rate_total": 8, "pass_rate": 0.625}
                 task["resources"]["verifier"].append(
-                    inline_resource(
-                        "config.json",
-                        json.dumps(
-                            {
-                                "contract": {
-                                    "dataset": dataset,
-                                    "pass_rate_passed": 5,
-                                    "pass_rate_total": 8,
-                                    "pass_rate": 0.625,
-                                }
-                            }
-                        ).encode(),
-                    ).model_dump(mode="json")
+                    inline_resource("config.json", json.dumps({"contract": contract}).encode()).model_dump(mode="json")
                 )
             rows.append(
                 {
