@@ -473,6 +473,7 @@ def test_hf_reload_keeps_requested_runtime_settings():
         fp32_activations=True,
         moe_implementation="ring",
         moe_capacity_factor=4.0,
+        attention_implementation="torch_order",
     )
     reloaded = _tiny_config(moe_implementation=None)
     restored = preserve_hf_runtime_settings(reloaded, requested, {"router_bias": "float32"})
@@ -481,6 +482,7 @@ def test_hf_reload_keeps_requested_runtime_settings():
     assert restored.moe_capacity_factor == 4.0
     assert restored.router_combine_fp32
     assert restored.fp32_activations
+    assert restored.attention_implementation == "torch_order"
 
 
 @pytest.mark.parametrize(
