@@ -20,6 +20,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret, require_secret
+from rigging.timing import Duration
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.models import MachineRuntimeSpec
@@ -123,10 +124,12 @@ def submit_evaluation(
         name=name,
         resources=resources,
         environment=EnvironmentSpec(
-            sync_packages=("marin-core",), pip_packages=("./lib/taskcompendium[pipeline]",), secrets=secrets
+            sync_packages=("marin-core", "marin-taskcompendium"),
+            extras=("marin-taskcompendium:pipeline",),
+            secrets=secrets,
         ),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-        timeout=timeout,
+        timeout=Duration.from_seconds(timeout),
         max_retries_failure=0,
     )
 

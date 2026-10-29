@@ -161,7 +161,9 @@ the coordinator's mounted secret files and do not enter grader machines or the
 run descriptor. Iris supplies the coordinator's storage credentials separately.
 
 An explicit `verifier_machine` or `task_machine` in the run configuration can
-override local machine resources and deadlines. The default verifier startup
+set machine deadlines, network policy and user. Local machines require
+`cpus`, `memory_mb` and `storage_mb` to be null and `gpus` to be zero. Use the
+CLI worker flags for resource allocations. The default verifier startup
 deadline is 600 seconds; cleanup uses `limits.cleanup_timeout`. The CLI supports
 the local Shellbox backend; other backends supply factories through the library
 `run_evaluation` API. `--local` requires a host that supports bubblewrap
@@ -178,10 +180,11 @@ candidate. Shellbox owns execution and termination; no copied Python execution
 sandbox or monkeypatch guard remains. A completion receipt distinguishes finishing
 the tests from exiting the process early. Candidate timeout scores zero;
 preparation and machine failures remain infrastructure errors. The 3-second
-budget (10 seconds for CruxEval) includes Python startup and compilation. Backend
-resource limits replace the old executor's process memory limit. These are
-versioned protocol changes. The current code environments require CPython and
-NumPy; selecting Shellbox does not automatically select its Shellsim backend.
+budget (10 seconds for CruxEval) includes Python startup and compilation. Iris
+worker limits replace the old executor's per-process memory limit and are shared
+across concurrent attempts. These are versioned protocol changes. The current code
+environments require CPython and NumPy; selecting Shellbox does not automatically
+select its Shellsim backend.
 
 Chat, raw-text completion and likelihood operations remain distinct. Chat keeps
 the source conversation without an added submission instruction. Raw completions
