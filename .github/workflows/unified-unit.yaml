@@ -440,12 +440,13 @@ jobs:
         # Pull through Google's Docker Hub mirror: unauthenticated Docker Hub pulls from
         # shared runner addresses hit its rate limit. The tag keeps the names the tests use.
         run: |
-          for image in busybox:1.36 ubuntu:24.04; do
+          for image in busybox:1.36 ubuntu:24.04 python:3.12-slim; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
           uv run --package marin-rolloutengine --frozen --group test pytest \
             -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_http_service.py \
             lib/shellbox/tests/test_daytona_machine.py \
             lib/rolloutengine/tests/test_rollout.py -m docker -q
 

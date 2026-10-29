@@ -48,7 +48,8 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.sandbox import resolve_egress_policy, validate_sandbox_services
+from iris.cluster.runtime.sandbox import resolve_egress_policy
+from iris.cluster.runtime.task_spec import normalize_task_request, primary_service, validate_task_services
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -658,14 +659,12 @@ def _validate_launch_profile(
             "submit without a workspace.",
         )
     _validate_egress(request)
-    if request.environment.sandbox_services and (
-        BackendCapability.SANDBOX_SERVICE_GROUPS not in dependencies.runtime.backend.descriptor.capabilities
+    if len(request.environment.services) > 1 and (
+        BackendCapability.TASK_SERVICES not in dependencies.runtime.backend.descriptor.capabilities
     ):
-        raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support sandbox service groups")
+        raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-service tasks")
     try:
-        validate_sandbox_services(
-            request.container_profile, request.egress_policy, request.environment, request.resources, request.task_image
-        )
+        validate_task_services(request.container_profile, request.egress_policy, request.environment)
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
@@ -885,6 +884,9 @@ def _store_launch_payload(
         del normalized.entrypoint.workdir_files[name]
         normalized.entrypoint.workdir_file_refs[name] = blob_id
         logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
+    primary = primary_service(normalized.environment)
+    if primary.HasField("runtime_entrypoint"):
+        primary.runtime_entrypoint.CopyFrom(normalized.entrypoint)
     return normalized
 
 
@@ -989,6 +991,13 @@ def launch_job(
     The job is expanded into tasks based on the replicas field
     (defaulting to 1). Each task has ID "/job/.../index".
     """
+    normalized = controller_pb2.Controller.LaunchJobRequest()
+    normalized.CopyFrom(request)
+    request = normalized
+    try:
+        normalize_task_request(request)
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     requested_job_id = _validate_launch_request(request)
     launch = _launch_identity(dependencies, request, ctx, requested_job_id)
     band = _resolve_launch_priority(dependencies, request, launch)

@@ -260,9 +260,9 @@ def exec_in_container(
             job = reads.get_job_detail(snapshot, task_id.parent)
         assert job is not None
         environment = proto_from_json(job.environment_json, job_pb2.EnvironmentConfig)
-        if container_name in ("task", environment.primary_container_name or "task"):
+        if container_name in ("task", environment.primary_service or "task"):
             container_name = ""
-        elif container_name not in {service.name for service in environment.sandbox_services}:
+        elif container_name not in {service.name for service in environment.services}:
             raise ConnectError(Code.INVALID_ARGUMENT, "Exec target is not a declared task container")
 
     worker_request = worker_pb2.Worker.ExecInContainerRequest(

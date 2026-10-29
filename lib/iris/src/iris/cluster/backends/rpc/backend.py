@@ -325,8 +325,10 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-        if request.environment.sandbox_services:
-            return "Sandbox service groups require the Kubernetes backend"
+        if len(request.environment.services) > 1:
+            return "Multi-service tasks require the Kubernetes backend"
+        if request.environment.services and not request.environment.services[0].HasField("runtime_entrypoint"):
+            return "The worker backend requires an Iris command as its primary service startup"
         return None
 
     def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:

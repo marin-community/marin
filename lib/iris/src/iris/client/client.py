@@ -58,7 +58,9 @@ from iris.cluster.constraints import (
     region_constraint,
 )
 from iris.cluster.egress import parse_egress_rules
+from iris.cluster.entrypoint import build_runtime_entrypoint
 from iris.cluster.log_keys import build_log_source
+from iris.cluster.runtime.task_spec import normalize_task_request
 from iris.cluster.types import (
     CoschedulingConfig,
     EndpointAccess,
@@ -68,6 +70,7 @@ from iris.cluster.types import (
     Namespace,
     ResourceSpec,
     TaskAttempt,
+    TaskSpec,
     adjust_tpu_replicas,
 )
 from iris.resources.state import TERMINAL_TASK_STATES, JobState, TaskState, is_job_finished
@@ -939,6 +942,106 @@ class IrisClient:
         egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
     ) -> Job:
+        """Submit a single Iris command through the named-service task model."""
+        return self._submit(
+            entrypoint=entrypoint,
+            name=name,
+            resources=resources,
+            environment=environment,
+            ports=ports,
+            scheduling_timeout=scheduling_timeout,
+            constraints=constraints,
+            coscheduling=coscheduling,
+            replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
+            timeout=timeout,
+            user=user,
+            preemption_policy=preemption_policy,
+            existing_job_policy=existing_job_policy,
+            task_image=task_image,
+            priority_band=priority_band,
+            container_profile=container_profile,
+            egress_policy=egress_policy,
+            egress_allow=egress_allow,
+            submit_argv=submit_argv,
+        )
+
+    def submit_task(
+        self,
+        task: TaskSpec,
+        name: str,
+        ports: list[str] | None = None,
+        scheduling_timeout: Duration | None = None,
+        constraints: list[Constraint] | None = None,
+        coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
+        timeout: Duration | None = None,
+        user: str | None = None,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[str] = (),
+        submit_argv: list[str] | None = None,
+    ) -> Job:
+        """Submit a complete named service set with one primary lifecycle owner."""
+        return self._submit(
+            task=task,
+            entrypoint=None,
+            resources=task.primary_service.resources,
+            environment=task.primary_service.environment or EnvironmentSpec(setup_scripts=[]),
+            name=name,
+            ports=ports,
+            scheduling_timeout=scheduling_timeout,
+            constraints=constraints,
+            coscheduling=coscheduling,
+            replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
+            timeout=timeout,
+            user=user,
+            preemption_policy=preemption_policy,
+            existing_job_policy=existing_job_policy,
+            priority_band=priority_band,
+            container_profile=container_profile,
+            egress_policy=egress_policy,
+            egress_allow=egress_allow,
+            submit_argv=submit_argv,
+        )
+
+    def _submit(
+        self,
+        entrypoint: Entrypoint | None,
+        name: str,
+        resources: ResourceSpec,
+        environment: EnvironmentSpec | None = None,
+        ports: list[str] | None = None,
+        scheduling_timeout: Duration | None = None,
+        constraints: list[Constraint] | None = None,
+        coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
+        timeout: Duration | None = None,
+        user: str | None = None,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+        egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[str] = (),
+        submit_argv: list[str] | None = None,
+        task: TaskSpec | None = None,
+    ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
         Args:
@@ -1042,8 +1145,6 @@ class IrisClient:
                     sync_packages=environment.sync_packages,
                     secrets=environment.secrets,
                     secret_behavior=environment.secret_behavior,
-                    sandbox_services=environment.sandbox_services,
-                    primary_container_name=environment.primary_container_name,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
@@ -1080,6 +1181,21 @@ class IrisClient:
             if environment.secret_behavior == SecretBehavior.INHERIT:
                 supplied = set(environment_proto.secrets) | set(environment_proto.env_vars)
                 environment_proto.secrets.update(forwarded_secrets(exclude=supplied))
+        if task is not None:
+            environment_proto = task.to_proto(environment_proto)
+        normalized = controller_pb2.Controller.LaunchJobRequest(
+            environment=environment_proto,
+            task_image=task_image or "",
+        )
+        if task is None:
+            normalized.resources.CopyFrom(resources_proto)
+        if task is not None:
+            normalized.ClearField("resources")
+        if entrypoint is not None:
+            normalized.entrypoint.CopyFrom(build_runtime_entrypoint(entrypoint, environment_proto))
+        normalize_task_request(normalized)
+        environment_proto = normalized.environment
+        resources_proto = normalized.resources
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 

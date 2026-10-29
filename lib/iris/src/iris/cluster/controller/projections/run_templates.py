@@ -35,6 +35,7 @@ from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.projections.base import LazyFillGuard, Projection
 from iris.cluster.controller.schema import job_config_table, job_workdir_files_table
 from iris.cluster.egress import parse_egress_rules
+from iris.cluster.runtime.task_spec import normalize_task_request, primary_service
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -92,6 +93,11 @@ def build_run_request_fields(
     )
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
+    if request.environment.services:
+        primary = primary_service(request.environment)
+        if primary.HasField("runtime_entrypoint"):
+            primary.runtime_entrypoint.workdir_files.update(workdir_files)
+    normalize_task_request(request)
     return request
 
 

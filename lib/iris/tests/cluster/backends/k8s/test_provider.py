@@ -78,12 +78,24 @@ def service_group_request():
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.task_image = "example.test/task@sha256:" + "a" * 64
-    request.environment.sandbox_services.add(
+    request.environment.primary_service = "task"
+    primary = request.environment.services.add(
+        name="task",
+        image=request.task_image,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    primary.runtime_entrypoint.CopyFrom(request.entrypoint)
+    request.environment.services.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-    )
+    ).image_command.SetInParent()
+    request.ClearField("entrypoint")
+    request.ClearField("resources")
+    request.ClearField("task_image")
+    request.environment.ClearField("env_vars")
     return request
 
 
@@ -144,8 +156,10 @@ def test_submitted_credentials_use_attempt_secret_and_are_collected(k8s, profile
         job_pb2.EGRESS_POLICY_NONE if profile == job_pb2.CONTAINER_PROFILE_SANDBOX else job_pb2.EGRESS_POLICY_UNSPECIFIED
     )
     req.environment.secrets.update({"custom": "submitted-hf-value", "another": "submitted-api-value"})
-    req.environment.secrets.update({"CW_KEY_ID": "personal-key", "CW_KEY_SECRET": "personal-secret"})
-    req.environment.env_vars.update({"FLAG": "keep", "HF_TOKEN": "explicit-env"})
+    credential_name = "JUDGE_KEY" if profile == job_pb2.CONTAINER_PROFILE_SANDBOX else "HF_TOKEN"
+    if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        req.environment.secrets.update({"CW_KEY_ID": "personal-key", "CW_KEY_SECRET": "personal-secret"})
+    req.environment.env_vars.update({"FLAG": "keep", credential_name: "explicit-env"})
     try:
         assert provider.sync(make_batch(tasks_to_run=[req])) == []
         pod = k8s.list_json(K8sResource.PODS)[0]
@@ -155,7 +169,7 @@ def test_submitted_credentials_use_attempt_secret_and_are_collected(k8s, profile
         env = {entry["name"]: entry.get("value") for entry in container["env"]}
         assert env["FLAG"] == "keep"
         assert env["RIGGING_SECRETS_DIR"] == "/run/rigging/secrets"
-        assert env["HF_TOKEN"] == "explicit-env"
+        assert env[credential_name] == "explicit-env"
         volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "job-secrets")
         secret_name = volume["secret"]["secretName"]
         assert not any(v.get("secret", {}).get("secretName") == "iris-storage-secrets" for v in pod["spec"]["volumes"])
@@ -229,6 +243,111 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
     assert update.new_state == job_pb2.TASK_STATE_RUNNING
     assert update.status_message == "finalizing task outputs"
     assert release_marker == b""
+
+
+@pytest.mark.parametrize(
+    "exited_container, exit_code, expected_state",
+    [
+        ("task", 0, job_pb2.TASK_STATE_SUCCEEDED),
+        ("task", 7, job_pb2.TASK_STATE_FAILED),
+        ("service-runtime", 0, job_pb2.TASK_STATE_FAILED),
+        ("service-runtime", 7, job_pb2.TASK_STATE_FAILED),
+    ],
+)
+def test_default_service_group_member_exit_completes_task_and_reclaims_peers(
+    provider, k8s, service_group_request, exited_container, exit_code, expected_state
+):
+    request = service_group_request
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+    entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)
+    assert provider.sync(make_batch(tasks_to_run=[request])) == []
+    [pod] = k8s.list_json(K8sResource.PODS)
+    pod_name = pod["metadata"]["name"]
+    pod["status"] = {
+        "phase": "Running",
+        "containerStatuses": [
+            {
+                "name": name,
+                "state": {"terminated": {"exitCode": exit_code}} if name == exited_container else {"running": {}},
+            }
+            for name in ("task", "service-runtime")
+        ],
+    }
+    k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+
+    [update] = provider.sync(make_batch(running_tasks=[entry]))
+
+    assert update.new_state == expected_state
+    assert update.exit_code == exit_code
+    assert provider.sync(make_batch()) == []
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
+@pytest.mark.parametrize(
+    "exit_code, expected_state", [(0, job_pb2.TASK_STATE_SUCCEEDED), (7, job_pb2.TASK_STATE_FAILED)]
+)
+def test_default_service_group_waits_for_output_upload_then_keeps_primary_outcome(
+    k8s, service_group_request, monkeypatch, exit_code, expected_state
+):
+    current_time = 0.0
+    monkeypatch.setattr("iris.cluster.backends.k8s.tasks.time.monotonic", lambda: current_time)
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(task_outputs=TaskOutputPolicy(finalization_timeout=Duration.from_seconds(1))),
+        cluster_scan_interval=0.0,
+    )
+    request = service_group_request
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+    entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)
+    try:
+        assert provider.sync(make_batch(tasks_to_run=[request])) == []
+        [pod] = k8s.list_json(K8sResource.PODS)
+        pod_name = pod["metadata"]["name"]
+        uploader = {"name": "output-uploader", "state": {"running": {}}}
+        pod["status"] = {
+            "phase": "Running",
+            "containerStatuses": [
+                {"name": "task", "state": {"terminated": {"exitCode": exit_code}}},
+                {"name": "service-runtime", "state": {"running": {}}},
+                uploader,
+            ],
+        }
+        k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+
+        [pending] = provider.sync(make_batch(running_tasks=[entry]))
+
+        assert pending.new_state == job_pb2.TASK_STATE_RUNNING
+        assert pending.status_message == "finalizing task outputs"
+        assert k8s.read_file(pod_name, OUTPUT_RELEASE_PATH, container="output-uploader") == b""
+        assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+        current_time = 2.0
+        uploader["state"] = {
+            "terminated": {
+                "exitCode": 0,
+                "message": json.dumps(
+                    {
+                        "state": "TASK_OUTPUT_ARCHIVE_STATE_UPLOADED",
+                        "uri": "s3://bucket/tmp/outputs.tar.zst",
+                        "size_bytes": "42",
+                    }
+                ),
+            }
+        }
+        k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+
+        [finished] = provider.sync(make_batch(running_tasks=[entry]))
+
+        assert finished.new_state == expected_state
+        assert finished.exit_code == exit_code
+        assert finished.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+        assert finished.output_archive.uri == "s3://bucket/tmp/outputs.tar.zst"
+        assert provider.sync(make_batch()) == []
+        assert k8s.get_json(K8sResource.PODS, pod_name) is None
+    finally:
+        provider.close()
 
 
 def test_sync_output_timeout_preserves_successful_task_outcome(k8s, monkeypatch):
