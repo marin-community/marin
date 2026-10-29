@@ -24,6 +24,7 @@ from experiments.post_training.snowball_rl_scoring import (
     PASS_RATES_NAME,
     panel_scores,
     read_pass_rates,
+    task_manifest,
 )
 
 
@@ -32,7 +33,7 @@ def _write_pass_rates(run_output: str, output: str) -> Artifact:
     tasks = defaultdict(list)
     for row in rows:
         tasks[row["item"]].append(row)
-    expected = set(presets.task_manifest(StoragePath(presets.default_selection().path())))
+    expected = set(task_manifest(StoragePath(presets.default_selection().path())))
     if set(tasks) != expected:
         raise ValueError("pass-rate task IDs differ from the pinned development panel")
     if any(len(group) != EVALUATION.answers or not any(row["scored"] for row in group) for group in tasks.values()):
