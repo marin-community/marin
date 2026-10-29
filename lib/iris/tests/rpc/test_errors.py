@@ -12,6 +12,7 @@ from iris.rpc.errors import (
     connect_error_sanitized,
     connect_error_with_traceback,
     extract_error_details,
+    format_connect_error,
     poll_with_retries,
 )
 from rigging.timing import Deadline, ExponentialBackoff
@@ -305,3 +306,15 @@ def test_poll_with_retries_raises_non_retryable_immediately() -> None:
         )
     assert exc_info.value.code == Code.NOT_FOUND
     assert call_count == 1
+
+
+@pytest.mark.parametrize("with_traceback", [False, True])
+def test_format_connect_error_includes_code_reason_and_server_traceback(with_traceback):
+    try:
+        raise ValueError("invalid routing")
+    except ValueError as exc:
+        factory = connect_error_with_traceback if with_traceback else connect_error_sanitized
+        error = factory(Code.INVALID_ARGUMENT, "children cannot be federated", exc=exc)
+    message = format_connect_error(error)
+    assert message.startswith("INVALID_ARGUMENT: children cannot be federated")
+    assert ("ValueError: invalid routing" in message) is with_traceback

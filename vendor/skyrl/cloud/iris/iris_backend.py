@@ -27,6 +27,7 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 from iris.client.client import IrisClient, Job
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, infer_preemptible_constraint
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
@@ -812,6 +813,12 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
 
 def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
+    if get_job_info() is not None and (args.target_cluster or args.parent_cluster_config):
+        raise ValueError(
+            "In-task SkyRL launches must use the coordinator's controller. "
+            "Clear target_cluster and parent_cluster_config to submit through IrisClient.in_cluster; "
+            "to use another cluster, submit a new root job from outside the task."
+        )
     if not args.job_name:
         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
 

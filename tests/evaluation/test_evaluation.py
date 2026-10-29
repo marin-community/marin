@@ -16,6 +16,8 @@ from unittest.mock import patch
 import click
 import pytest
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
@@ -2803,3 +2805,35 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
+
+
+@pytest.mark.parametrize("code", [Code.NOT_FOUND, Code.PERMISSION_DENIED])
+def test_inference_readiness_retries_missing_registration_but_preserves_access_errors(monkeypatch, code):
+    session = replace(_remote_session(), jobs=())
+    addresses = iter((ConnectError(code, "registry response"), "http://inference:8000"))
+    probed = []
+
+    def resolve_endpoint(_name):
+        result = next(addresses)
+        if isinstance(result, ConnectError):
+            raise result
+        return result
+
+    def probe(url, *, timeout):
+        probed.append(url)
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(
+        "marin.inference.iris.iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=resolve_endpoint)),
+    )
+    monkeypatch.setattr("marin.inference.iris.requests.get", probe)
+    monkeypatch.setattr("marin.inference.iris.time", SimpleNamespace(sleep=lambda _interval: None))
+    if code == Code.NOT_FOUND:
+        session.wait_until_ready()
+        assert probed == ["http://inference:8000/v1/models"]
+    else:
+        with pytest.raises(ConnectError) as raised:
+            session.wait_until_ready()
+        assert raised.value.code == Code.PERMISSION_DENIED
+        assert not probed

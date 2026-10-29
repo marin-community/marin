@@ -16,6 +16,8 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 import requests
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
@@ -192,8 +194,11 @@ class RemoteInferenceSession:
                 )
                 if response.status_code == 200:
                     return
-            except (requests.RequestException, ConnectionError):
+            except requests.RequestException:
                 pass
+            except ConnectError as exc:
+                if exc.code != Code.NOT_FOUND:
+                    raise
             endpoint_deadline.raise_if_expired(timeout_message)
             time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
