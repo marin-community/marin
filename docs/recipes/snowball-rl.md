@@ -60,7 +60,71 @@ Repeat the original `--init` when continuing a run with custom initial weights.
 Use `--replicates N` for 1–5 copies of a short or medium preset, sharing a seed. Controls use
 `--control --replicates N` from a clean checkout and fixed default inputs, with the
 commit in their shared artifact names. Data-medium uses learning-medium's control.
-Calibration and comparison verdicts are pending.
+
+
+## Compare with controls
+
+Short and medium presets write `gate_report.json` and `gate_report.md` after the
+run. The status block shows `pass`, `fail` or `invalid`, a change label and the
+report path. Train-long has no verdict. A crashed run reports `fail` with its Iris
+job ID.
+
+The gate reads the exact control runs pinned in `snowball_rl_gate.CONTROLS`.
+Controls share the experiment's seed, selection, initializer and preset revision.
+Data-medium compares against learning-medium's control. A control refresh adds a
+pin after its replicates finish; controls with the same preset revision pool
+their deviations from each pin's own mean.
+
+Each guard compares the candidate replicate mean with the control mean, signed
+so positive means better. Its tolerance is
+`t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, where `k` is the number
+of guards and `sd` is calibrated run-to-run spread. Update time first reduces
+each run's measured updates to their median; other metrics use their mean.
+A guard fails below the negative tolerance. Declared reported metrics use `k=1`
+in both directions and determine the label with the verdict. Labels are
+`improves`, `trade-off`, `regression` and `no change`. Expanded panel statistics
+are detail rows: their comparisons use `k` equal to the detail count, and they
+do not determine the label.
+
+Every planned batch or update must finish, losses and gradients must be finite,
+at least 99% of panel tasks must score, and grader infrastructure failures must
+stay at or below 1%. Speed replies must all have the fixed length. A mismatched
+control pin, preset revision or heldout panel, a missing guard, or a mismatch
+guard with no measured tokens or zero observed control variation produces
+`invalid` and a reason.
+
+Recorded failure counts can overlap. The report gives lower and upper bounds on
+the fraction of affected answers: the invariant passes when its upper bound is
+at most 1% and fails when its lower bound exceeds 1%. A candidate whose bounds
+straddle 1% is `invalid` when every other invariant and guard passes; an
+independent invariant or guard failure gives `fail`. An ambiguous control is
+`invalid`. Both bounds remain in the report.
+
+For another initializer, the report includes its update-0 score and final score
+minus initial score. These candidate values have an unavailable comparison when
+the controls have no update-0 evaluation.
+
+Re-score a recorded run with the current gate, without allocating GPUs:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl_gate \
+  --preset learning-medium --candidate RUN_NAME[@VERSION]
+uv run python -m experiments.post_training.snowball_rl_gate \
+  --preset speed-medium --leave-out r0
+```
+
+Reports write into the caller's run namespace under `MARIN_PREFIX`. Recorded controls are read-only.
+The host status lists changed RL paths against the control commit, including
+uncommitted edits; without local git metadata it gives a reason. This list does
+not change the verdict.
+
+`snowball_pass_rates` uses the same generate-only builder to answer every panel
+task eight times at temperature 1. Its versioned `pass_rates.parquet` contains
+task ID, initializer revision, passed answers and scored samples. Every task has
+eight attempts; grading errors are excluded from its scored-sample denominator.
+Heldout panel reports depend on this artifact and join its rows by task ID for easy (pass rate above 0.7), learnable (0.1–0.7) and hard
+(below 0.1) means. These bands are reported only. The artifact name pins the
+initializer revision; measure it again when that revision changes.
 
 ## Tasks and evaluation
 
@@ -72,6 +136,8 @@ the admitted FULL corpus and immutable recipe versions. The manifest provides
 task IDs, family, AAII category, agentic flag and grader kind.
 
 `PanelEvaluator` supplies native evaluation callbacks, sampling settings and versioned validation data sources.
+
+Reports join evaluation answers to the run's task manifest by TaskSpec ID and keep attempts and weight steps separate. Verifier scores are normalized by their declared bounds. The equal-family mean first averages each task's scored answers, then tasks within a family, then families. Scored coverage is reported separately.
 
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
 update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates,

@@ -22,6 +22,7 @@ from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, 
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
     ArtifactDataSource,
@@ -514,7 +515,10 @@ PRESETS = MappingProxyType(
                 ),
                 updates=100,
                 measured=range(1, 101),
-                evaluations=(replace(_PANEL, every=10, at_start=True), replace(EVALUATIONS["panel-910"], post_run=True)),
+                evaluations=(
+                    replace(_PANEL, every=10, at_start=True),
+                    replace(EVALUATIONS["panel-910"], post_run=True),
+                ),
                 checkpoint_every=10,
                 gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
             ),
@@ -531,7 +535,7 @@ TRAIN_LONG_RECIPES = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
-        return f"checkpoints/snowball-rl/control/{preset.name}-{provenance.base_commit}-r{replicate}"
+        return control_name(preset.name, provenance.base_commit, replicate)
     name = f"checkpoints/snowball-rl/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
@@ -719,3 +723,28 @@ def published_artifact(value: str) -> ArtifactStep:
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
+
+
+def control_name(preset: str, commit: str, replicate: int) -> str:
+    return f"checkpoints/snowball-rl/control/{preset}-{commit}-r{replicate}"
+
+
+def run_command(*, help_text: str | None = None):
+    def decorate(function):
+        options = (
+            (("--preset", "preset_name"), {"required": True, "type": click.Choice(sorted(PRESETS))}),
+            (("--set", "settings"), {"multiple": True}),
+            (("--tasks", "tasks_name"), {}),
+            (("--init", "init_name"), {}),
+            (("--resume-from", "resume_name"), {}),
+            (("--layout", "layout_name"), {"type": click.Choice(sorted(TRAIN_LONG_RECIPES))}),
+            (("--eval", "evaluations"), {"multiple": True}),
+            (("--replicates",), {"type": click.IntRange(1, 5), "default": 1}),
+            (("--control",), {"is_flag": True}),
+        )
+        command = rl_build_options(function)
+        for declarations, attributes in reversed(options):
+            command = click.option(*declarations, **attributes)(command)
+        return click.command(help=help_text)(command)
+
+    return decorate
