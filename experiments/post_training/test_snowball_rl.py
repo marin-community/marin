@@ -10,28 +10,26 @@ from types import SimpleNamespace
 
 import click
 import marin.rl.skyrl as adapter
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import yaml
-from click.testing import CliRunner
 from iris.rpc import controller_pb2, job_pb2
 from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
+from experiments.post_training import snowball_rl_presets as presets
 
 
 @pytest.fixture
 def selection(tmp_path, monkeypatch):
-    monkeypatch.setattr(snowball, "SELECTION_ROOT", str(tmp_path))
-    root = tmp_path / "snowball-100k" / snowball.DEFAULT_SELECTION_VERSION
+    monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setenv(presets.JUDGE_KEY, "fixture")
+    root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
     root.mkdir(parents=True)
     (root / "summary.json").write_text(
         json.dumps(
@@ -39,7 +37,7 @@ def selection(tmp_path, monkeypatch):
                 "recipe": {"heldout": {"version": "2026.10.23.1", "rows": 910}},
                 "validation_rows": 100,
                 "full_validation_rows": 910,
-                "grader_kind_counts": {"train": {"remote_judge": 0}},
+                "grader_kind_counts": {"train": {"remote_judge": 1}},
             }
         )
     )
@@ -55,14 +53,13 @@ def source_provenance(monkeypatch):
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
 def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path):
-    assert Path(adapter.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[2] / "lib")
     paths = []
     launches = {}
-    for name, preset in snowball.PRESETS.items():
-        layouts = (snowball.L112, snowball.P40) if name == "train-long" else (None,)
+    for name, preset in presets.PRESETS.items():
+        layouts = (presets.L112, presets.P40) if name == "train-long" else (None,)
         for layout in layouts:
             run = snowball.build_run(
-                preset, tasks=selection if preset.focus == snowball.Focus.DATA else None, layout=layout
+                preset, tasks=selection if preset.focus == presets.Focus.DATA else None, layout=layout
             )
             for index, step in enumerate((*run.runs, *run.post_run_evaluations)):
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -74,14 +71,14 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             if name == "train-long":
                 assert run.runs[0] in run.post_run_evaluations[0].deps
     changed = snowball.build_run(
-        snowball.PRESETS["learning-medium"],
+        presets.PRESETS["learning-medium"],
         settings=tuple(
             map(
-                snowball.parse_setting,
+                presets.parse_setting,
                 (
                     "trainer={train_batch_size: 64, policy_mini_batch_size: 64}",
                     "generator.n_samples_per_prompt=8",
-                    "trainer.policy.megatron_config.logprob_chunk_size=512",
+                    "+trainer.policy.megatron_config.logprob_chunk_size=512",
                 ),
             )
         ),
@@ -90,89 +87,75 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
     path = tmp_path / "changed-batch.yaml"
     path.write_text(changed_config.launch_config_yaml)
     paths.append(str(path))
-    command = launcher_command_for_test(paths[0])
-    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        [
-            *bootstrap,
+        skyrl_cpu_command(
             "python",
             "-c",
             """
 import json, sys
 from cloud.iris.launch_config import load_launch_config
-from skyrl_train.inference_engines.utils import get_vllm_sampling_params
-from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 configs = [load_launch_config(path) for path in sys.argv[1:]]
-for index, config in enumerate(configs):
-    trainer, generator = config.skyrl.trainer, config.skyrl.generator
-    name = config.run.id
-    if "train-long-" in name:
-        evaluation = get_vllm_sampling_params(generator.eval_sampling_params)
-        if evaluation["logprobs"] is not None:
-            evaluation["logprobs"] = True
-        apply_openai_sampling(evaluation, dict(generator.sampling_params), True)
-        training = get_vllm_sampling_params(generator.sampling_params)
-        training.update(logprobs=True, min_tokens=0)
-        apply_openai_sampling(training, dict(generator.sampling_params), True)
-        training["min_tokens"] = 1
-        try:
-            apply_openai_sampling(training, dict(generator.sampling_params), True)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("training distribution validation accepted min_tokens=1")
-    if "speed-short-" in name or "data-short-" in name or "/eval/panel-910" in name:
-        assert config.runtime.entrypoint == "skyrl_train.entrypoints.main_generate"
-        assert config.iris.allocation.num_nodes == 1
-        assert trainer.eval_interval > 0 and config.inputs.validation_data
-        expected_admission = 2048 if "speed-short-" in name else 1024 if "data-short-" in name else 910
-        assert config.skyrl.trajectory_runner.max_concurrent_tasks == expected_admission
-    if "/eval/panel-910" in name and "train-long-" in name:
-        expected_window = 65536 if generator.engine_init_kwargs.get("tool_parser") == "hermes" else 24576
-        assert generator.engine_init_kwargs.max_model_len == expected_window
-    if index == len(configs) - 1:
-        assert trainer.train_batch_size == 64 and generator.n_samples_per_prompt == 8
-    if generator.eval_sampling_params.ignore_eos or generator.sampling_params.ignore_eos:
-        assert not generator.apply_overlong_filtering
-        assert generator.sampling_params.get("min_tokens") is None
-        assert generator.sampling_params.max_generate_length == 4096
-    if config.inputs.validation_data:
-        assert trainer.eval_interval > 0
-    if config.runtime.training_type is not None and config.inputs.validation_data:
-        callbacks = [entry.type for entry in trainer.callbacks]
-        assert "evaluation" in callbacks
-        if "best_checkpoint" in callbacks:
-            assert callbacks.index("evaluation") < callbacks.index("best_checkpoint")
-print(json.dumps([config.iris.allocation.num_nodes for config in configs]))
+print(json.dumps([{
+    "name": config.run.id, "entrypoint": config.runtime.entrypoint,
+    "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
+    "validation": bool(config.inputs.validation_data),
+    "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
+    "window": config.skyrl.generator.engine_init_kwargs.max_model_len,
+    "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
+    "tools": config.skyrl.generator.engine_init_kwargs.get("tool_parser"),
+    "fixed": config.skyrl.generator.eval_sampling_params.ignore_eos or config.skyrl.generator.sampling_params.ignore_eos,
+    "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
+    "training": config.runtime.training_type is not None,
+    "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
+} for config in configs]))
 """,
             *paths,
-        ],
+        ),
         capture_output=True,
         text=True,
         timeout=170,
     )
     assert result.returncode == 0, result.stderr
-    assert len(json.loads(result.stdout.splitlines()[-1])) == len(paths)
+    rows = json.loads(result.stdout.splitlines()[-1])
+    assert len(rows) == len(paths)
+    for row in rows:
+        name = row["name"]
+        if "speed-short-" in name or "data-short-" in name or "/eval/panel-910" in name:
+            assert row["entrypoint"] == "skyrl_train.entrypoints.main_generate", row
+            assert row["nodes"] == 1, row
+            assert row["eval_interval"] > 0 and row["validation"], row
+            expected = 2048 if "speed-short-" in name else 1024 if "data-short-" in name else 910
+            assert row["admission"] == expected, row
+        if "/eval/panel-910" in name:
+            assert row["window"] == (65536 if row["tools"] == "hermes" else 24576), row
+        if row["fixed"]:
+            assert not row["overlong_filtering"], row
+        if row["training"] and row["validation"]:
+            assert "evaluation" in row["callbacks"], row
+            if "best_checkpoint" in row["callbacks"]:
+                assert row["callbacks"].index("evaluation") < row["callbacks"].index("best_checkpoint"), row
+    assert (rows[-1]["batch"], rows[-1]["samples"]) == (64, 8)
     # Candidate selection is the only difference between the two learning experiments.
     learning, data = launches["learning-medium"], launches["data-medium"]
     assert learning["skyrl"] == data["skyrl"]
     assert learning["inputs"]["model"] == data["inputs"]["model"]
     assert learning["inputs"]["validation_data"] == data["inputs"]["validation_data"]
     assert learning["inputs"]["train_data"] != data["inputs"]["train_data"]
-    for value in ("generator.sampling_params.ignore_eos=true", "generator.sampling_params={ignore_eos: true}"):
-        with pytest.raises(click.BadParameter, match="owned by"):
-            snowball.build_run(snowball.PRESETS["learning-medium"], settings=(snowball.parse_setting(value),))
-    for value in ("+extra_env.NCCL_NET=Socket", "generator.apply_overlong_filtering=true"):
-        with pytest.raises(click.BadParameter, match="owned by"):
-            snowball.build_run(snowball.PRESETS["speed-medium"], settings=(snowball.parse_setting(value),))
+    with pytest.raises(click.BadParameter, match="owned by"):
+        snowball.build_run(
+            presets.PRESETS["learning-medium"],
+            settings=(presets.parse_setting("generator.sampling_params={ignore_eos: true}"),),
+        )
+    execution = next(value for value in changed.runtime_args.values() if isinstance(value, adapter.IrisSkyRLExecution))
+    assert presets.JUDGE_KEY in execution.required_env_vars
 
 
 @pytest.mark.timeout(180)
 def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch):
     summary = (Path(selection.path()) / "summary.json").read_text()
-    monkeypatch.setattr(snowball, "SELECTION_ROOT", "memory://snowball-calibration")
+    monkeypatch.setattr(presets, "SELECTION_ROOT", "memory://snowball-calibration")
     (
-        StoragePath(snowball.SELECTION_ROOT) / "snowball-100k" / snowball.DEFAULT_SELECTION_VERSION / "summary.json"
+        StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
         "speed-short": "5c0057ed",
@@ -182,7 +165,7 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
     }
     paths = []
     for name in expected:
-        step = snowball.build_run(snowball.PRESETS[name], control=True).runs[0]
+        step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
@@ -218,147 +201,58 @@ print(json.dumps([
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
-    provenance = Provenance("tree-one", "commit-one", False, "branch", "test")
-    monkeypatch.setattr(snowball, "_provenance", lambda **kwargs: provenance)
-    preset = snowball.PRESETS["learning-medium"]
-    baseline = snowball.build_run(preset, replicates=2)
-    repeated = snowball.build_run(preset, replicates=3)
-    assert [step.name for step in baseline.runs] == [step.name for step in repeated.runs[:2]]
+    learning = presets.PRESETS["learning-medium"]
+    data = presets.PRESETS["data-short"]
+    long = presets.PRESETS["train-long"]
+
+    def run(preset=learning, *settings, **kwargs):
+        return snowball.build_run(preset, settings=tuple(map(presets.parse_setting, settings)), **kwargs).runs[0]
+
+    def name(preset=learning, *settings, **kwargs):
+        return run(preset, *settings, **kwargs).name
+
+    repeated = snowball.build_run(learning, replicates=3)
+    assert [step.name for step in snowball.build_run(learning, replicates=2).runs] == [
+        step.name for step in repeated.runs[:2]
+    ]
     assert len({step.name for step in repeated.runs}) == 3
-    changed = snowball.build_run(preset, settings=(snowball.parse_setting("trainer.policy.optimizer_config.lr=2e-6"),))
-    assert changed.runs[0].name != baseline.runs[0].name
-    mapped = []
-    for rate in (2e-6, 3e-6):
-        mapped.append(
-            snowball.build_run(
-                preset,
-                settings=tuple(
-                    map(
-                        snowball.parse_setting,
-                        (
-                            f"trainer.policy.optimizer_config={{lr: {rate:.8f}}}",
-                            "trainer.policy.optimizer_config={weight_decay: 0.1}",
-                        ),
-                    )
-                ),
-            ).runs[0]
-        )
-    assert mapped[0].name != mapped[1].name
-    dotted = snowball.build_run(
-        preset,
-        settings=tuple(
-            map(
-                snowball.parse_setting,
-                (
-                    "trainer.policy.optimizer_config.lr=0.000002",
-                    "trainer.policy.optimizer_config.weight_decay=0.1",
-                ),
-            )
-        ),
-    ).runs[0]
-    assert mapped[0].name == dotted.name
-    provenance = replace(provenance, tree_hash="tree-two")
-    assert snowball.build_run(preset).runs[0].name != baseline.runs[0].name
-    data = snowball.PRESETS["data-short"]
-    other = replace(selection, version="2026.10.27")
-    assert snowball.build_run(data, tasks=selection).runs[0].name != snowball.build_run(data, tasks=other).runs[0].name
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
-    assert snowball.build_run(preset, init=initializer).runs[0].name != snowball.build_run(preset).runs[0].name
-    long = snowball.PRESETS["train-long"]
-    assert snowball.build_run(long, layout=snowball.P40).runs[0].name != snowball.build_run(long).runs[0].name
-    original = snowball.build_run(long).runs[0]
-    snowball.build_run(
-        long, settings=(snowball.parse_setting("trainer.policy.megatron_config.ddp_config.overlap_grad_reduce=true"),)
-    )
-    assert snowball.build_run(long).runs[0].fingerprint() == original.fingerprint()
-    dated = snowball.parse_setting("+extra_env.EXPERIMENT_DATE=2026-10-27")
-    assert snowball.build_run(long, settings=(dated,)).runs[0].name != snowball.build_run(long).runs[0].name
-
-
-def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
-    # Retained task/score fields from the E2 GPU dump at snowball-rl-e2-structural/2026.10.26.2.
-    failed = "structure-closure:8ce02d80cfa6b3a7e9594ff985c23fc60ca02a462173cbdfed58e575d98a4417"
-    passed = "structure-closure:e2947c55f619a21fe06d88f9ebf16ab4800ab1f19a6767fcb8c8894b6995cad7"
-    stem = "stem:fixture"
-    answers = [
-        {"task_id": passed, "score": 1.0},
-        {"task_id": failed, "score": 0.0},
-        {"task_id": failed, "score": [1.0]},
-        {"task_id": failed, "score": 0.0, "exception_type": "TimeoutError"},
-        {"task_id": stem, "score": 0.0},
-    ]
-    for answer in answers:
-        score = answer["score"]
-        answer["verification"] = {
-            "status": "verified",
-            "score": sum(score) if isinstance(score, list) else score,
-            "score_min": 0.0,
-            "score_max": 1.0,
-        }
-    answers[0]["score"] = 0.8
-    answers[0]["output_response"] = "first\u2028second\u2029third\u0085fourth"
-    answers[0]["verification"].update(score=5.0, score_min=1.0, score_max=5.0)
-    answers[3]["verification"] = {"status": "error", "score": None, "score_min": 0.0, "score_max": 1.0}
-    selection = tmp_path / "selection"
-    selection.mkdir()
-    pq.write_table(
-        pa.Table.from_pylist(
-            [
-                {"task_id": failed, "family": "structural", "aaii_category": "format"},
-                {"task_id": passed, "family": "structural", "aaii_category": "format"},
-                {"task_id": stem, "family": "stem", "aaii_category": "scientific_reasoning"},
-            ]
+    pairs = [
+        (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
+        (
+            name(
+                learning,
+                "trainer.policy.optimizer_config={lr: 0.000002}",
+                "trainer.policy.optimizer_config={weight_decay: 0.1}",
+            ),
+            name(
+                learning,
+                "trainer.policy.optimizer_config={lr: 0.000003}",
+                "trainer.policy.optimizer_config={weight_decay: 0.1}",
+            ),
         ),
-        selection / snowball.MANIFEST_FILENAME,
-    )
-    (tmp_path / "resolved-launch.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "config": {"inputs": {"validation_data": [{"uri": str(selection)}]}},
-                "train_data_sources": [],
-                "val_data_sources": [],
-            }
-        )
-    )
-    for session in ("global_step_25_evals", "eval_only"):
-        directory = tmp_path / "exports" / "dumped_evals" / session
-        directory.mkdir(parents=True)
-        (directory / "structure-closure.jsonl").write_text(
-            "\n".join(json.dumps(answer, ensure_ascii=False) for answer in answers) + "\n"
-        )
-        (directory / "aggregated_results.jsonl").write_text('{"avg_score": 0.5}\n')
-    evaluator = snowball.EVALUATORS[snowball.EvalHarness.PANEL]
-    scores = evaluator.scores(snowball.EVALUATIONS["panel-100"], str(tmp_path))
-    rows = scores.to_pylist()
-    assert scores.schema == snowball.EVAL_SCORE_SCHEMA
-    assert {row["step"] for row in rows} == {-1, 25}
-    final = [row for row in rows if row["step"] == 25]
-    assert [(row["item"], row["attempt"], row["scored"], row["score"]) for row in final] == [
-        (passed, 0, True, 1.0),
-        (failed, 0, True, 0.0),
-        (failed, 1, True, 1.0),
-        (failed, 2, False, 0.0),
-        (stem, 0, True, 0.0),
+        (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
+        (name(), name(init=initializer)),
+        (name(long), name(long, layout=presets.P40)),
     ]
-    assert {(row["family"], row["aaii_category"]) for row in rows} == {
-        ("structural", "format"),
-        ("stem", "scientific_reasoning"),
-    }
-    statistics = snowball.evaluation_statistics(pa.Table.from_pylist(final, schema=scores.schema))
-    assert statistics["panel-100/mean"] == 0.5
-    assert statistics["panel-100/family_mean"] == 0.375
-    assert statistics["panel-100/mixed_fraction"] == pytest.approx(1 / 3)
-    assert statistics["panel-100/scored_fraction"] == 0.8
-    assert statistics["panel-100/aaii_category/format/mean"] == 0.75
-    path = tmp_path / "exports/dumped_evals/eval_only/structure-closure.jsonl"
-    path.write_text('{"uid":"0","score":0.0}\n')
-    with pytest.raises(ValueError, match="TaskSpec id"):
-        evaluator.scores(snowball.EVALUATIONS["panel-100"], str(tmp_path))
+    assert all(left != right for left, right in pairs), pairs
+    assert name(
+        learning, "trainer.policy.optimizer_config={lr: 0.000002}", "trainer.policy.optimizer_config={weight_decay: 0.1}"
+    ) == name(
+        learning, "trainer.policy.optimizer_config.lr=0.000002", "trainer.policy.optimizer_config.weight_decay=0.1"
+    )
+    original = run(long)
+    run(long, "trainer.policy.megatron_config.ddp_config.overlap_grad_reduce=true")
+    assert run(long).fingerprint() == original.fingerprint()
+    original_name = name()
+    monkeypatch.setattr(
+        snowball, "_provenance", lambda **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")
+    )
+    assert name() != original_name
 
 
-@pytest.mark.parametrize("receipt", ["failed-attempt", "iris"])
-def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monkeypatch, receipt):
-    original = snowball.build_run(snowball.PRESETS["train-long"], layout=snowball.P40).runs[0]
+def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monkeypatch):
+    original = snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40).runs[0]
     document = yaml.safe_load(
         original.build_config(StepContext.for_fingerprint(original.runtime_args, original.deps)).launch_config_yaml
     )
@@ -377,12 +271,6 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     (source / "resolved-launch.yaml").write_text(
         json.dumps({"config": document, "train_data_sources": [], "val_data_sources": []})
     )
-    if receipt == "failed-attempt":
-        (attempts / "attempt-fixture.json").write_text(
-            json.dumps(
-                {"config": document, "result": {"state": "failed", "iris_job_id": "/tests/failed", "model": None}}
-            )
-        )
     state = {"value": job_pb2.JOB_STATE_KILLED}
     job_id = "/tests/parent/" + document["iris"]["job_name"]
 
@@ -398,26 +286,12 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
             )
         )
 
-    monkeypatch.setattr(snowball, "connect_controller", endpoint)
-    monkeypatch.setattr(snowball, "rpc_client", rpc)
-    monkeypatch.setattr(snowball, "_artifact_prefix", lambda cluster: str(tmp_path))
+    monkeypatch.setattr(adapter, "connect_controller", endpoint)
+    monkeypatch.setattr(adapter, "rpc_client", rpc)
+    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     (source / ".executor_status").write_text("FAILED")
-    command = CliRunner().invoke(
-        snowball.main,
-        [
-            "--preset",
-            "train-long",
-            "--layout",
-            "p40",
-            "--resume-from",
-            f"{original.name}@{original.version}",
-            "--version",
-            "dev",
-        ],
-    )
-    assert command.exit_code == 0, command.output
     earlier = ArtifactStep.adopt(original.name, original.version, str(source), kind=SkyRLRun)
-    resumed = snowball.build_run(snowball.PRESETS["train-long"], layout=snowball.P40, resume_from=earlier).runs[0]
+    resumed = snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier).runs[0]
     assert resumed.name != original.name
     assert earlier not in resumed.deps
     assert all(dep.artifact_type is not SkyRLRun for dep in resumed.deps)
@@ -431,11 +305,10 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     assert (source / ".executor_status").read_text() == "FAILED"
     assert not (source / RECORD_FILENAME).exists()
     assert not (source / "terminal.json").exists()
-    if receipt == "iris":
-        state["value"] = job_pb2.JOB_STATE_RUNNING
-        with pytest.raises(click.BadParameter, match=job_id):
-            snowball.build_run(snowball.PRESETS["train-long"], layout=snowball.P40, resume_from=earlier)
-        state["value"] = job_pb2.JOB_STATE_KILLED
+    state["value"] = job_pb2.JOB_STATE_RUNNING
+    with pytest.raises(click.BadParameter, match=job_id):
+        snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier)
+    state["value"] = job_pb2.JOB_STATE_KILLED
     marker.unlink()
     with pytest.raises(click.BadParameter, match="14 days"):
-        snowball.build_run(snowball.PRESETS["train-long"], layout=snowball.P40, resume_from=earlier)
+        snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier)

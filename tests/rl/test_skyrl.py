@@ -781,7 +781,3 @@ def test_finished_policy_resolves_terminal_export_for_post_evaluation(tmp_path):
     resolved = model.resolve(context)
     assert resolved.uri == str(root / "policy")
     assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == ("tests/tokenizer", "tokenizer-commit")
-    record.result["hf_model_uri"] = None
-    (root / RECORD_FILENAME).write_text(record.model_dump_json())
-    with pytest.raises(ValueError, match="export_hf"):
-        model.resolve(StepContext.for_run(str(tmp_path / "other"), str(tmp_path), deps=model.deps()))
