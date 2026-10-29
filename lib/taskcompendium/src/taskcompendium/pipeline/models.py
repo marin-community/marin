@@ -122,6 +122,8 @@ class Controls:
     expected partial reward. When ``negative`` supplies no submission, the task is graded on an
     empty submission, which must score zero; a sandbox grader grades it in a fresh grading machine.
     A task with a golden is graded on both, so a grader that ignores the submission cannot pass.
+    A judge-graded task whose grader scores an empty reply zero without calling the judge has no
+    empty control beside its golden, because a judge control must reach the judge.
     ``memory_mb`` sizes each fresh grading machine. Judge-graded tasks use the campaign's explicit
     remote judge connection rather than a network-denied grading machine.
     """

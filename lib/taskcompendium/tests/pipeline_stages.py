@@ -14,8 +14,10 @@ import pyarrow.parquet as pq
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, DockerImage, Machine, MachineFactory, MachineSpec, PackageSpec
+from verifyit.spec import EmptyOutputPolicy, JudgeSpec
 
 from taskcompendium.convert.answers import numeric_answer_task, source_defect
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     CommandSemantics,
     EnvironmentRequirements,
@@ -128,6 +130,26 @@ def script_graded(task: TaskSpec, script: bytes, *, answer_path: str | None = "/
     return TaskSpec.model_validate_json(
         task.model_copy(update={"grader": grader, "resources": resources}).model_dump_json()
     )
+
+
+def judge_graded(
+    task: TaskSpec, reference: str, *, empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
+) -> TaskSpec:
+    """``task`` graded against ``reference`` by a judge whose verdict label ``PASS`` scores 1 and ``FAIL`` 0."""
+    grader = verifyit_package(
+        JudgeSpec(
+            references=(reference,),
+            rubric="labels",
+            system_prompt="Grade the candidate.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+            exact_gate=False,
+            empty_output=empty_output,
+        ),
+        environment=GRADER_ENVIRONMENT,
+    ).grader
+    return TaskSpec.model_validate_json(task.model_copy(update={"grader": grader}).model_dump_json())
 
 
 def fixture_recipe(

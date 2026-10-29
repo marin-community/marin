@@ -440,7 +440,9 @@ pipeline grades `golden(task)`, which must score 1, unless the declaration has n
 `golden` or it returns `None` because the task has no known answer. It also grades
 `negative(task)` when supplied, otherwise an empty submission. A task with a
 golden is graded on both, so a grader that ignores the submission and rewards an
-unchanged workspace is caught even though the golden passes.
+unchanged workspace is caught even though the golden passes. A judge-graded task
+whose grader scores an empty reply 0 without calling the judge is graded on its
+golden alone, because a judge control must reach the judge.
 A negative must score zero unless `negative_reward(task)` declares its expected
 partial reward. MultiChallenge uses this to account for `NO` criteria that an
 empty reply satisfies. A grader that

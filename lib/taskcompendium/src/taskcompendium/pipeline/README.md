@@ -76,7 +76,9 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
      `golden` or it returns `None`;
    - `negative(task)` when supplied, otherwise an empty submission, which
      shows that the grader runs and does not reward a submission that does
-     nothing. A task with a golden is graded on both. A sandbox grader runs
+     nothing. A task with a golden is graded on both, except a judge-graded
+     task whose grader scores an empty reply 0 without calling the judge,
+     which is graded on its golden alone. A sandbox grader runs
      on the empty submission in a fresh machine of its image, with an empty
      answer file where it reads one, a conversation ending in an empty reply,
      and an empty workspace. The control passes when the grader scores it 0

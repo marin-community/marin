@@ -12,7 +12,15 @@ from typing import Any, Protocol
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureClosureSpec
+from verifyit.spec import (
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    MathSpec,
+    McqSpec,
+    NumericSpec,
+    StructureClosureSpec,
+)
 
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -180,9 +188,18 @@ async def _control_checks(
         checks.append(await _control(task, "negative", negative, expected, sandbox, judge_connection))
     elif sandbox is not None:
         checks.append(await _empty_sandbox_control(task, sandbox))
-    else:
+    elif golden is None or not _judge_zeroes_empty_reply(task):
         checks.append(await _control(task, "empty", _empty_submission(task), 0.0, None, judge_connection))
     return VerificationReport(checks)
+
+
+def _judge_zeroes_empty_reply(task: TaskSpec) -> bool:
+    """Whether the judge grader scores an empty reply zero itself, so the judge never sees it."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        return False
+    spec = verifyit_spec(grader)
+    return isinstance(spec, JudgeSpec) and spec.empty_output is EmptyOutputPolicy.ZERO
 
 
 def _selected_machine(

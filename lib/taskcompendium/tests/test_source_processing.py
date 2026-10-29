@@ -15,13 +15,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
 from zephyr.readers import load_jsonl
 
-from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
@@ -51,12 +49,12 @@ from taskcompendium.pipeline.stages import AuditExecution, prepare_source
 from taskcompendium.runtime.resources import inline_resource
 
 from .pipeline_stages import (
-    GRADER_ENVIRONMENT,
     SOURCE_FILES,
     FixtureGradingMachines,
     UnavailableImages,
     convert_svamp,
     fixture_recipe,
+    judge_graded,
     review_config,
     script_graded,
     svamp_row_task,
@@ -127,20 +125,8 @@ def convert_mixed_graders(row: RawRow, context: ConversionContext) -> TaskSpec |
         return task
     if kind == "none":
         grader = NoGrader(reason="The source evaluator is unavailable")
-    else:
-        grader = verifyit_package(
-            JudgeSpec(
-                references=(row.data["Answer"],),
-                rubric="labels",
-                system_prompt="Grade the candidate.",
-                prompt_template="Reference: {reference}\nCandidate: {candidate}",
-                label_scores={"PASS": 1.0, "FAIL": 0.0},
-                model="fixture-judge",
-                exact_gate=False,
-            ),
-            environment=GRADER_ENVIRONMENT,
-        ).grader
-    return TaskSpec.model_validate_json(task.model_copy(update={"grader": grader}).model_dump_json())
+        return TaskSpec.model_validate_json(task.model_copy(update={"grader": grader}).model_dump_json())
+    return judge_graded(task, row.data["Answer"])
 
 
 def apple_rows(count: int) -> list[dict]:

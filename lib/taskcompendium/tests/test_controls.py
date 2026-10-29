@@ -21,7 +21,8 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import SchemaFormat
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import EmptyOutputPolicy, SchemaFormat
 
 from taskcompendium.convert.answers import (
     json_schema_task,
@@ -47,6 +48,7 @@ from .pipeline_stages import (
     FixtureGradingMachines,
     ShellSimImages,
     UnavailableImages,
+    judge_graded,
     script_graded,
 )
 
@@ -233,6 +235,26 @@ def test_golden_does_not_hide_a_grader_that_ignores_the_submission():
 def test_declared_negative_replaces_the_empty_control_beside_a_golden():
     controls = Controls(golden=reference_reply, negative=wrong_reply)
     assert checks(in_process_task("numeric"), controls) == {"golden": PASS, "negative": PASS}
+
+
+@pytest.mark.parametrize(
+    "empty_output,expected",
+    [
+        (EmptyOutputPolicy.ZERO, {"golden": PASS}),
+        (EmptyOutputPolicy.GRADE, {"golden": PASS, "empty": DEFECT}),
+    ],
+    ids=["zeroed_before_the_judge", "graded_by_the_judge"],
+)
+def test_judge_golden_has_an_empty_control_only_when_the_judge_grades_empty_replies(
+    judge_server, empty_output, expected
+):
+    task = judge_graded(in_process_task("numeric"), "7", empty_output=empty_output)
+    connection = JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret")
+
+    report = control_suite(Controls(golden=lambda task: answer_reply(task, "7")), None, connection).run(task)
+
+    assert {check.check: check.status for check in report.checks} == expected
+    assert len(judge_server.requests) == len(expected)
 
 
 @pytest.mark.parametrize(
