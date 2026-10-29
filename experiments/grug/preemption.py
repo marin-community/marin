@@ -5,8 +5,9 @@
 
 import signal
 import threading
+from collections.abc import Callable
 from types import FrameType
-from typing import Callable, Self
+from typing import Self
 
 import jax
 import numpy as np
