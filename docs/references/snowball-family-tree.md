@@ -109,16 +109,17 @@ URLs are relative, and executable scripts use packaged files to satisfy Marina's
 content security policy.
 
 Do not use `--allow-dirty` for a public tree release. Marina's default release
-checks reject dirty checkouts and commits other than current remote main. Moving
-this package from `applets/` to `apps/` would use the same release mechanism;
-merging source or deploying Marina does not publish either kind of package.
+checks reject dirty checkouts and commits other than current remote main. The
+source now lives under `apps/`; its UUID and release mechanism are unchanged.
+Merging source or deploying Marina does not publish the app.
 
 If the selected live package differs from main, record the difference and its
 reason in the relevant tree PR or tracking issue before publishing. Resolve
 unrecorded source provenance by comparing the live package with checked-in source.
-After release, record the published version, immutable revision URL and main commit
-in the PR or issue, and confirm the stable tree URL serves that revision. A version
-conflict requires inspecting the newly selected revision before deciding to retry.
+For a manual release, record the published version, immutable revision URL and
+main commit in the PR or issue, and confirm the stable tree URL serves that
+revision. A version conflict requires inspecting the newly selected revision
+before deciding to retry.
 This keeps source review and the public release record linked even for batch releases.
 
 ### Nightly publication

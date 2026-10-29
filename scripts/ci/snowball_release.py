@@ -10,7 +10,7 @@ from typing import Any
 
 import click
 
-APP_DIR = "infra/marina/applets/snowball_family_tree"
+APP_DIR = "infra/marina/apps/snowball_family_tree"
 
 
 def marina(*arguments: str) -> dict[str, Any]:
