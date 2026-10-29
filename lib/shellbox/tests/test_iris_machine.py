@@ -417,30 +417,41 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
 
 
 @pytest.mark.parametrize("task_missing", [False, True])
-def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path, task_missing):
+@pytest.mark.parametrize("grouped", [False, True])
+def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
+    monkeypatch, tmp_path, task_missing, grouped
+):
     task = LocalTask(TaskState.PENDING)
     current_status = task.status
-
-    def status():
-        nonlocal task_missing
-        if task_missing:
-            task_missing = False
-            raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
-        return current_status()
-
-    task.status = status
     job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     workdir = tmp_path / "workspace"
-    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+    spec = MachineSpec(source=RegistryImage("example.test/prepared@sha256:" + "a" * 64), workdir=str(workdir))
     existing, _ = local_machine(tmp_path)
 
     async def scenario():
-        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
-        creation = asyncio.create_task(factory.create(spec))
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        pending = asyncio.Event()
+
+        def status():
+            nonlocal task_missing
+            loop.call_soon_threadsafe(pending.set)
+            if task_missing:
+                task_missing = False
+                raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
+            return current_status()
+
+        task.status = status
+        creation = asyncio.create_task(
+            factory.create_group(ServiceGroupSpec(spec, (ServiceSpec("runtime", spec),)))
+            if grouped
+            else factory.create(spec)
+        )
+        await asyncio.wait_for(pending.wait(), timeout=5)
         command = asyncio.create_task(existing.run(Command(("printf", "ready"))))
         done, _ = await asyncio.wait((command,), timeout=5)
         task.state = TaskState.RUNNING
@@ -451,6 +462,40 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
         finally:
             await command
             await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_cancelled_factory_wait_reclaims_the_submitted_job(monkeypatch, tmp_path, grouped):
+    task = LocalTask(TaskState.PENDING)
+    job = LocalJob(task)
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("example.test/prepared@sha256:" + "a" * 64), workdir=str(tmp_path))
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        pending = asyncio.Event()
+        current_status = task.status
+
+        def status():
+            loop.call_soon_threadsafe(pending.set)
+            return current_status()
+
+        task.status = status
+        creation = asyncio.create_task(
+            factory.create_group(ServiceGroupSpec(spec, (ServiceSpec("runtime", spec),)))
+            if grouped
+            else factory.create(spec)
+        )
+        await asyncio.wait_for(pending.wait(), timeout=5)
+        creation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await creation
+        assert job.cancelled
 
     asyncio.run(scenario())
 
