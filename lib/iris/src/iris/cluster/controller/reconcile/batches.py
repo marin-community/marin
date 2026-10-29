@@ -172,11 +172,8 @@ def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: in
         now_ms,
         action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
     )
-    should_cascade = True
-    if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
-        policy = overlay.job_preemption_policy(job_id)
-        should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
-    if should_cascade:
+    policy = overlay.job_preemption_policy(job_id)
+    if policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
         _cascade_to_children(
             overlay,
             job_id,

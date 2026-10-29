@@ -7,7 +7,7 @@ from iris.rpc import job_pb2
 
 
 def test_root_cancellation_terminates_only_live_descendants(journey):
-    root = journey.submit("root")
+    root = journey.submit("root", preemption_policy=job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN)
     journey.settle()
     finished_child = journey.submit_child(root, "finished")
     journey.settle()
@@ -76,3 +76,42 @@ def test_finished_parent_refuses_a_new_child(journey):
 
     with pytest.raises(ConnectError, match="has terminated"):
         journey.submit_child(root, "late-child")
+
+
+@pytest.mark.parametrize("tasks", [1, 4])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
+        job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN,
+        job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN,
+    ],
+)
+def test_successful_parent_respects_child_lifetime_policy(journey, tasks, policy):
+    root = journey.submit("export", tasks=tasks, preemption_policy=policy)
+    journey.settle()
+    child = journey.submit_child(root, "evaluation")
+    grandchild = journey.submit_child(child, "scoring")
+    journey.settle()
+    assert journey.job(child).state == job_pb2.JOB_STATE_RUNNING
+    assert journey.job(grandchild).state == job_pb2.JOB_STATE_RUNNING
+
+    journey.succeed_all(root)
+    journey.settle()
+
+    assert journey.job(root).state == job_pb2.JOB_STATE_SUCCEEDED
+    preserves_children = policy == job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN or (
+        policy == job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED and tasks > 1
+    )
+    if preserves_children:
+        assert journey.job(child).state == job_pb2.JOB_STATE_RUNNING
+        assert journey.job(grandchild).state == job_pb2.JOB_STATE_RUNNING
+        journey.succeed(grandchild[0])
+        journey.settle()
+        journey.succeed(child[0])
+        journey.settle()
+        assert journey.job(child).state == job_pb2.JOB_STATE_SUCCEEDED
+        assert journey.job(grandchild).state == job_pb2.JOB_STATE_SUCCEEDED
+    else:
+        assert journey.job(child).state == job_pb2.JOB_STATE_KILLED
+        assert journey.job(grandchild).state == job_pb2.JOB_STATE_KILLED

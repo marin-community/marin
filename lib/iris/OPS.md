@@ -261,11 +261,17 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
 - **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
   gang all at once, so a busy cluster holds all of it. Same-band jobs queue
   behind each other; they do not preempt.
-- **`--timeout` covers the queue wait, and killing the coordinator kills the
-  gang.** A contested fleet can hold a gang for hours before admitting it; when
-  the coordinator's deadline passes, its children are torn down mid-run (the
-  tasks report `killed` with a preemption each). Size the timeout for wait plus
-  run.
+- **The coordinator and its children have separate clocks.** A child's Iris
+  execution timeout starts when its attempt begins execution, not while its
+  Pods are `SchedulingGated` in Kueue. A running CPU coordinator's execution
+  timeout continues while it waits for that child. Application deadlines for
+  endpoint readiness or evaluation completion also keep running unless the
+  application explicitly starts them after admission. Size the coordinator's
+  `--timeout` and those deadlines for queue wait plus setup and execution;
+  size the child's execution timeout for its own work. A separate
+  `scheduling_timeout`, when configured, limits scheduling wait. Cancelling a
+  coordinator explicitly also cancels its descendants; do not use cancellation
+  merely to release the coordinator while child work is still needed.
 
 Reading a job's output needs a CoreWeave object-storage key exported as
 `CW_KEY_ID`/`CW_KEY_SECRET`; without one, `s3://marin-us-east-02a` raises

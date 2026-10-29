@@ -191,6 +191,7 @@ class JourneyWorld:
         execution_timeout: float | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
     ) -> JobRef:
         return self._launch(
             JobName.root(user, name),
@@ -203,6 +204,7 @@ class JourneyWorld:
             execution_timeout=execution_timeout,
             required_attributes=required_attributes,
             include_resources=include_resources,
+            preemption_policy=preemption_policy,
         )
 
     def submit_child(
@@ -236,6 +238,7 @@ class JourneyWorld:
         execution_timeout: float | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
+        preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
     ) -> JobRef:
         entrypoint = job_pb2.RuntimeEntrypoint()
         entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
@@ -246,6 +249,7 @@ class JourneyWorld:
             replicas=tasks,
             max_retries_failure=failure_retries,
             max_retries_preemption=preemption_retries,
+            preemption_policy=preemption_policy,
             # The public journey vocabulary counts retries. Unless a journey is
             # specifically about the job-wide budget, allow those retries at
             # the aggregate level too.
