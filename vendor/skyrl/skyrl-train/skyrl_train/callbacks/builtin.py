@@ -249,11 +249,20 @@ class HarborEvaluationCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
+    def __init__(
+        self,
+        *,
+        cohorts: list[dict],
+        timeout: float,
+        minimum_coverage: float,
+        daytona_api_key_env: str,
+        minimum_native_coverage: float,
+    ):
         self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
         self.timeout = timeout
         self.minimum_coverage = minimum_coverage
         self.daytona_api_key_env = daytona_api_key_env
+        self.minimum_native_coverage = minimum_native_coverage
 
     async def collect_evaluation(self, state, *, trainer, pool):
         client = trainer.inference_engine_client
@@ -281,7 +290,7 @@ class HarborEvaluationCallback(TrainerCallback):
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        metrics["eval/selection_eligible"] = 1.0
+        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
         for cohort in self.cohorts:
             name = cohort["name"]
             prefix = f"eval/harbor/{name}/"

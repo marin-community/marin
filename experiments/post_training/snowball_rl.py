@@ -185,17 +185,24 @@ def _provenance(*, control: bool) -> Provenance:
 
 def _callbacks(preset: presets.Preset, evaluations: tuple[presets.Evaluation, ...], expected_tasks: int) -> list[dict]:
     callbacks = []
+    minimum_scored_tasks = math.ceil(presets.MINIMUM_PANEL_COVERAGE * expected_tasks)
     if preset.checkpoint_every:
         callbacks.append({"type": "checkpoint", "save_steps": preset.checkpoint_every})
     for evaluation in evaluations:
-        callbacks.extend(presets.EVALUATORS[evaluation.harness].callbacks(evaluation, updates=preset.updates))
+        entries = presets.EVALUATORS[evaluation.harness].callbacks(evaluation, updates=preset.updates)
+        for entry in entries:
+            for cohort in entry.get("cohorts", ()):
+                count = len(cohort["job"]["tasks"])
+                expected_tasks += count
+                minimum_scored_tasks += math.ceil(entry["minimum_coverage"] * count)
+        callbacks.extend(entries)
     if preset.focus == presets.Focus.TRAIN:
         callbacks.extend(
             [
                 {
                     "type": "best_checkpoint",
                     "expected_tasks": expected_tasks,
-                    "minimum_scored_tasks": math.ceil(0.99 * expected_tasks),
+                    "minimum_scored_tasks": minimum_scored_tasks,
                 },
                 {
                     "type": "hf_model_save",
@@ -389,6 +396,8 @@ def build_run(
     missing = sorted(key for key in required if not os.environ.get(key))
     if missing:
         raise click.BadParameter(f"missing required credentials: {', '.join(missing)}")
+    if any(evaluation.harness == presets.EvalHarness.HARBOR for evaluation in in_run):
+        preset = replace(preset, gaps=(*preset.gaps, presets.Gap.HARBOR_ON_DAYTONA))
     config = training_config(preset, settings, in_run)
     preset = replace(preset, updates=config["trainer"]["max_steps"])
     model = _model_input(init)
@@ -396,7 +405,7 @@ def build_run(
     validation_data = ()
     for evaluation in in_run:
         evaluation_tasks = evaluation.tasks(selection, default)
-        validation_data = presets.EVALUATORS[evaluation.harness].configure(evaluation, config, evaluation_tasks)
+        validation_data += presets.EVALUATORS[evaluation.harness].configure(evaluation, config, evaluation_tasks)
         if preset.recipe.layout.role_plan.generate_only:
             config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(
                 evaluation, evaluation_tasks

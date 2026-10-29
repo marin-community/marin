@@ -80,8 +80,21 @@ Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
 `exports/dumped_evals/`. The canonical `terminal.json` records the result and Iris
 job ID. Inspect both the artifacts and job before treating a run as successful.
 
-The `Evaluator` interface supplies configuration, callbacks and required environment names for presets. Harbor-on-Daytona support is a follow-up; internal panels are the current
-implementation. Training tasks with remote judges require `TOGETHER_API_KEY` in
+The `Evaluator` interface supplies configuration, callbacks and required environment names for presets. Add `--eval harbor-smartie` to train-long for 30 tasks each from
+BFCL-Parity, SWE-bench Verified and OpenThoughts-TBLite, with immutable Git
+revisions in `experiments/post_training/snowball_rl_harbor.yaml`. Harbor runs
+Terminus-2 agents in Daytona sandboxes against the run's engine endpoint, at the
+same weight steps as the panel. Its cohort scores are reported separately from
+the panel; they contribute to train-long's best-checkpoint selection.
+Selection requires at least 99% native panel coverage and at least 90% coverage
+within each Harbor cohort.
+
+Harbor requires `DAYTONA_EVAL_API_KEY` in the submitting environment. A Harbor
+exception or timeout stops training; checkpoint continuation uses the same
+`--resume-from` path. Metrics are under `eval/harbor/<cohort>/*`, and trial
+artifacts are under `exports/inline_harbor/`.
+
+Training tasks with remote judges require `TOGETHER_API_KEY` in
 the submitting environment; every run forwards its required keys through Iris.
 
 ## Which experiment to run
@@ -110,6 +123,7 @@ the submitting environment; every run forwards its required keys through Iris.
 | no-grading-timer | generation includes grader tails; add separate grader timings |
 | eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling belongs with the Phase 1.5 panel and new controls. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
+| harbor-on-daytona | the optional Harbor evaluation depends on Daytona and is reported separately from panel measurements |
 
 Speed-short measures engines only. A speed claim also needs speed-medium, whose
 mismatch guard compares engine and trainer log-probabilities on trained tokens.
