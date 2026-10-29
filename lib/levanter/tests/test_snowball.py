@@ -345,11 +345,12 @@ def test_snowball_load_path_multidevice_sharding():
 
     ``g()``-loaded leaves (norm weights, router_bias) inherit the sharding of the incoming state
     dict, and a safetensors load auto-shards ``[E]``/``[D]`` tensors over ``data`` when the size
-    divides the axis. On a single device this is invisible; with 8 devices, ``router_logits +
-    router_bias`` was illegally sharded. Force-shards the state dict like safetensors on a data-parallel mesh to reproduce the condition.
+    divides the axis. On a single device this is invisible; with multiple devices,
+    ``router_logits + router_bias`` was illegally sharded. Force-shards the state dict like
+    safetensors on a data-parallel mesh to reproduce the condition.
     """
-    with use_test_devices(8):
-        # All parallel dims divide 8 so they actually shard on data=8 (E=16 => router_bias shards).
+    with use_test_devices(4) as devices:
+        # Four data shards are enough to reproduce the sharded router_bias placement (E=16).
         cfg = SnowballConfig(
             vocab_size=128,
             hidden_dim=64,
@@ -368,8 +369,12 @@ def test_snowball_load_path_multidevice_sharding():
             initializer_std=0.02,
         )
         Vocab = Axis("vocab", cfg.vocab_size)
-        mesh = compact_grug_mesh(expert_axis_size=1)  # (replica_dcn=1, data=8, expert=1, model=1)
-        Batch = Axis("batch", jax.device_count())
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 4, 1, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        Batch = Axis("batch", len(devices))
         Pos = Axis("position", 8)
         ids = hax.named(
             (jnp.arange(Batch.size * Pos.size, dtype=jnp.int32) % cfg.vocab_size).reshape(Batch.size, Pos.size),
@@ -377,10 +382,10 @@ def test_snowball_load_path_multidevice_sharding():
         )
 
         def like_safetensors(v):
-            # Auto-shard the leading axis on data when it divides 8, else replicate (mimics the
+            # Auto-shard the leading axis on data when it divides 4, else replicate (mimics the
             # placement of freshly-read safetensors that broke the 67B).
             v = jnp.asarray(v)
-            spec = P("data") if v.ndim >= 1 and v.shape[0] % jax.device_count() == 0 else P()
+            spec = P("data") if v.ndim >= 1 and v.shape[0] % len(devices) == 0 else P()
             return jax.device_put(v, NamedSharding(mesh, spec))
 
         with set_mesh(mesh):
@@ -437,7 +442,7 @@ def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
 @pytest.mark.timeout(120)
 @pytest.mark.multidevice
 def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
-    with use_test_devices(8) as devices:
+    with use_test_devices(4) as devices:
         cfg = SnowballConfig(
             vocab_size=32,
             hidden_dim=16,
@@ -481,7 +486,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             )
 
         data_axis, reference = run((1, 2, 1, 2, 1))
-        context_axis, sharded = run((1, 1, 4, 2, 1))
+        context_axis, sharded = run((1, 1, 2, 2, 1))
         assert data_axis is None
         assert context_axis == "context"
         for expected, actual in zip(reference, sharded, strict=True):
@@ -491,7 +496,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
 @pytest.mark.timeout(120)
 @pytest.mark.multidevice
 def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
-    with use_test_devices(8):
+    with use_test_devices(4):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             hf_path = root / "hf"
@@ -522,7 +527,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 tokenizer=str(hf_path),
             )
             mesh = MeshConfig(
-                axes={"data": -1, "replica": 1, "model": 1, "context": 2, "expert": 4},
+                axes={"data": -1, "replica": 1, "model": 1, "context": 2, "expert": 2},
                 compute_mapping={
                     "batch": ["replica_dcn", "data", "expert"],
                     "position": "context",

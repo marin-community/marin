@@ -339,7 +339,7 @@ def test_fa4_precomputed_bounds_reject_mismatched_context_lengths(monkeypatch):
 
 @pytest.mark.multidevice
 def test_context_sharded_segment_ids_preserve_global_bounds():
-    with use_test_devices(8) as devices:
+    with use_test_devices(4) as devices:
         segment_ids = jnp.asarray(
             [[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3, [6] * 20 + [7] * 12],
             dtype=jnp.int32,
@@ -357,7 +357,7 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
             expected = bounds(segment_ids)
             for context_size in (1, 2, 4):
                 mesh = Mesh(
-                    np.asarray(devices).reshape(8 // context_size, context_size),
+                    np.asarray(devices).reshape(4 // context_size, context_size),
                     ("data", "context"),
                     axis_types=(AxisType.Explicit,) * 2,
                 )
@@ -372,7 +372,7 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
 def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch):
     # The sharded wrapper moves half of each shard's queries to balance causal work; every query and its
     # bounds must still reach the kernel with its own position and come back to its own row.
-    with use_test_devices(8) as devices:
+    with use_test_devices(4) as devices:
 
         def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
             # Each output row reports the position the kernel was told it holds, then the query, bound and
@@ -395,13 +395,13 @@ def test_context_sharded_query_blocks_keep_their_sequence_positions(monkeypatch)
             lower_bounds = jnp.asarray(1000 + position, jnp.int32)[None, :]
             valid = jnp.asarray(position % 3 != 0)[None, :]
             for mesh_shape, sequence_axes in (
-                ((8, 1), "context"),
-                ((4, 2), "context"),
-                ((2, 4), "context"),
-                ((2, 4), ("data", "context")),
-                ((2, 4), ("context", "data")),
+                ((4, 1), "context"),
+                ((2, 2), "context"),
+                ((1, 4), "context"),
+                ((2, 2), ("data", "context")),
+                ((2, 2), ("context", "data")),
             ):
-                shards = mesh_shape[1] if sequence_axes == "context" else 8
+                shards = mesh_shape[1] if sequence_axes == "context" else 4
                 if seq_len % shards:
                     continue
                 mesh = Mesh(

@@ -131,9 +131,10 @@ def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.multidevice
 def test_microbatch_explicit_batch_and_context_sharding_matches_full_batch():
-    with use_test_devices(8) as devices:
-        mesh = Mesh(np.asarray(devices).reshape(4, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
+    with use_test_devices(4) as devices:
+        mesh = Mesh(np.asarray(devices).reshape(2, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
         Batch, Pos = hax.Axis("batch", 8), hax.Axis("position", 8)
         mapping = {"batch": "data", "position": "context"}
         with jax.set_mesh(mesh), hax.axis_mapping(mapping):

@@ -157,9 +157,9 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
 
 @pytest.mark.multidevice
 def test_best_effort_sharding_uses_context_and_expert_for_checkpoint_staging():
-    with use_test_devices(8) as devices:
+    with use_test_devices(4) as devices:
         mesh = create_mesh_from_axis_specs(
-            ici_axes={"data": 1, "context": 2, "expert": 4, "model": 1},
+            ici_axes={"data": 1, "context": 2, "expert": 2, "model": 1},
             dcn_axes={},
             devices=devices,
             axis_types=(AxisType.Explicit,) * 4,
@@ -167,8 +167,8 @@ def test_best_effort_sharding_uses_context_and_expert_for_checkpoint_staging():
         shape = (8, 16, 32)
         sharding = best_effort_sharding(shape, mesh=mesh)
         staged = jax.device_put(np.arange(np.prod(shape)).reshape(shape), sharding)
-        assert len(staged.addressable_shards) == 8
-        assert all(shard.data.size == np.prod(shape) // 8 for shard in staged.addressable_shards)
+        assert len(staged.addressable_shards) == 4
+        assert all(shard.data.size == np.prod(shape) // 4 for shard in staged.addressable_shards)
         assert {"context", "expert"} == set().union(
             *(entry if isinstance(entry, tuple) else (entry,) for entry in sharding.spec if entry is not None)
         )

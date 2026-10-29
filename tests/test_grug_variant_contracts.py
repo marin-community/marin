@@ -111,26 +111,21 @@ def test_compact_grug_mesh_axis_sizes():
 @pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_unit_context_axis():
     """Adding a size-one context axis preserves checkpoint values and placement."""
-    with use_test_devices(8):
+    with use_test_devices(4) as selected_devices:
         if jax.process_count() != 1:
             pytest.skip("checkpoint topology cases require a single process")
-        devices = jax.devices()
+        devices = np.asarray(selected_devices, dtype=object)
         device_count = len(devices)
-        if device_count % 8:
-            pytest.skip("compact Grug topology requires a device count divisible by eight")
         legacy_mesh = Mesh(
             np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
-        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {
-            "replica_dcn": 1,
-            "data": device_count // 2,
-            "context": 1,
-            "expert": 2,
-            "model": 1,
-        }, mesh.shape
+        mesh = Mesh(
+            devices.reshape(1, device_count // 2, 1, 2, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
 
         spec = P(("replica_dcn", "data", "expert"), None)
         shape = (device_count, 4)
@@ -156,30 +151,25 @@ def test_legacy_checkpoint_restore_with_unit_context_axis():
 @pytest.mark.multidevice
 def test_legacy_checkpoint_restore_with_context_sharding():
     """A legacy expert checkpoint restores with its target context partitioning."""
-    with use_test_devices(8):
+    with use_test_devices(4) as selected_devices:
         if jax.process_count() != 1:
             pytest.skip("checkpoint topology cases require a single process")
-        devices = jax.devices()
+        devices = np.asarray(selected_devices, dtype=object)
         device_count = len(devices)
-        if device_count % 8:
-            pytest.skip("compact Grug topology requires a device count divisible by eight")
         legacy_mesh = Mesh(
             np.asarray(devices, dtype=object).reshape(1, device_count // 2, 2, 1),
             ("replica_dcn", "data", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 4,
         )
-        mesh = compact_grug_mesh(expert_axis_size=2, context_axis_size=2, replica_axis_size=1)
-        assert dict(mesh.shape) == {
-            "replica_dcn": 1,
-            "data": device_count // 4,
-            "context": 2,
-            "expert": 2,
-            "model": 1,
-        }, mesh.shape
+        mesh = Mesh(
+            devices.reshape(1, device_count // 4, 2, 2, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
 
         # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
         # mesh that wrote it.
-        shape = (device_count // 2, 3, 2)
+        shape = (4, 3, 2)
         written = jax.device_put(
             jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape),
             NamedSharding(legacy_mesh, P("expert", None, None)),

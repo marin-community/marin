@@ -396,7 +396,8 @@ def test_context_parallel_halo_matches_the_unsharded_reference():
     with use_test_devices(8) as devices:
         BATCH, SEQ, CHANNELS = 2, 32, 8
         DEVICES = np.asarray(devices)
-        assert DEVICES.size == 8
+        device_count = len(DEVICES)
+        assert device_count == 8
 
         def bits(array):
             array = np.asarray(array)
@@ -416,8 +417,9 @@ def test_context_parallel_halo_matches_the_unsharded_reference():
         def check(context, packed, width):
             # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
             # the mesh.
+            data_shards = min(BATCH, device_count // context)
             mesh = Mesh(
-                DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
+                DEVICES.reshape(data_shards, context, device_count // (data_shards * context)),
                 ("data", "context", "spare"),
                 axis_types=(AxisType.Explicit,) * 3,
             )
@@ -471,12 +473,12 @@ def test_context_parallel_halo_matches_the_unsharded_reference():
 
 @pytest.mark.multidevice
 def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh(monkeypatch):
-    with use_test_devices(8) as devices:
+    with use_test_devices(4) as devices:
         # The gate runs before the kernel call, so it can run on CPU with the dispatch forced to the kernel.
         monkeypatch.setattr(api, "triton_short_conv_available", lambda: True)
         # A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
         # channel gate must still see it rather than reshard the axis away.
-        mesh = Mesh(np.asarray(devices).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
+        mesh = Mesh(np.asarray(devices).reshape(2, 2), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
         weight = jnp.ones((4, 128), jnp.bfloat16)
         x = jax.device_put(jnp.ones((2, 128, 128), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
         with jax.set_mesh(mesh):

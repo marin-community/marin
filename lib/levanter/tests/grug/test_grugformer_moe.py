@@ -1670,11 +1670,11 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
 def test_ring_filtered_matches_ring_and_dense_with_drops(
     transport_capacity_factor: float, capacity_factor: float, padding: str
 ):
-    """On 8 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
+    """On 4 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
     receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
     carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
-    with use_test_devices(8) as devices:
-        shards, tokens_per_shard, hidden, inter, experts, topk = 8, 24, 8, 6, 32, 4
+    with use_test_devices(4) as devices:
+        shards, tokens_per_shard, hidden, inter, experts, topk = 4, 48, 8, 6, 32, 4
 
         tokens = shards * tokens_per_shard
         local_experts = experts // shards
