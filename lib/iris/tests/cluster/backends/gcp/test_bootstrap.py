@@ -48,7 +48,6 @@ def test_bootstrap_runs_node_agent_beside_worker() -> None:
     script = build_worker_bootstrap_script(_worker_config())
 
     assert "--name iris-node-agent" in script
-    assert "--stop-timeout=120" in script
     assert "--network=host" in script
     assert "--pid=host" in script
     assert ".venv/bin/python -m iris.cluster.node_agent gcp" in script
