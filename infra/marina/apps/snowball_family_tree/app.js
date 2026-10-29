@@ -661,7 +661,7 @@ for (const select of [$("#family"), $("#timeline-family")]) {
 }
 $("#timeline-family").value = FAMILY_10T;
 $("#coverage").textContent =
-  "Evidence: GitHub issues + comments · Discord threads · model cards\nGraph data and token-count extracts packaged with this applet; source links open the original records.";
+  "Evidence: GitHub issues + comments · Discord threads · model cards\nGraph data and token-count extracts packaged with this app; source links open the original records.";
 $("#unplaced").innerHTML = (DATA.unplaced || []).length
   ? "<strong>Provenance still unresolved:</strong> " +
     DATA.unplaced

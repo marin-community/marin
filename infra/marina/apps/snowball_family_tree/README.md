@@ -37,7 +37,7 @@ and Read all views derive from it. Copy a nearby node and preserve its fields.
   `label`, `url` and optional `note`; create a node when a checkpoint needs its own
   children or training-stage description.
 
-The applet is public. Use public source links and small numeric extracts under
+The app is public. Use public source links and small numeric extracts under
 `evidence/` when needed. Keep credentials, private logs and local paths out of the
 graph and bundle. Refresh the snapshot date in `graph-data.json` and the displayed
 dates in `index.html` when rechecking evidence. Update the node count in the
@@ -52,10 +52,10 @@ every visible node is placed once and every parent arrow ends at its child,
 then validate the package and preview it:
 
 ```bash
-node infra/marina/applets/snowball_family_tree/verify_layout.js
-uv run marina validate infra/marina/applets/snowball_family_tree
-uv run marina release infra/marina/applets/snowball_family_tree --dry-run --json
-uv run marina release infra/marina/applets/snowball_family_tree --local --json
+node infra/marina/apps/snowball_family_tree/verify_layout.js
+uv run marina validate infra/marina/apps/snowball_family_tree
+uv run marina release infra/marina/apps/snowball_family_tree --dry-run --json
+uv run marina release infra/marina/apps/snowball_family_tree --local --json
 ```
 
 Open the printed local URL. Search for the new model, expand it, check its selected
@@ -65,6 +65,6 @@ verify both stop. Each build recreates `dist/`; commit source files only.
 
 Open a focused Marin PR with the model IDs, parent evidence and validation results.
 For public updates, follow the existing UUID and current-version procedure in the
-[maintenance guide](../../../../docs/references/snowball-family-tree.md#maintain-the-applet)
-and the `marina-applet` skill. Updating the source in a PR does not automatically
+[maintenance guide](../../../../docs/references/snowball-family-tree.md#maintain-the-app)
+and the `marina-app` skill. Updating the source in a PR does not automatically
 publish a new public revision.
