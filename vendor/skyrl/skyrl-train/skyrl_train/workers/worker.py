@@ -106,8 +106,6 @@ class DistributedTorchRayActor:
         world_size,
         rank,
         local_rank,
-        master_addr,
-        master_port,
         sequence_parallel_size,
         record_memory=False,
         pin_to_ray_gpu_id=False,
@@ -122,10 +120,8 @@ class DistributedTorchRayActor:
         self._world_size = world_size
         self._rank = rank
         self._local_rank = local_rank
-        self._master_addr = master_addr if master_addr else self._get_current_node_ip()
-        self._master_port = master_port if master_port else self._get_free_port()
-        os.environ["MASTER_ADDR"] = self._master_addr
-        os.environ["MASTER_PORT"] = str(self._master_port)
+        self._master_addr = self._get_current_node_ip() if rank == 0 else None
+        self._master_port = self._get_free_port() if rank == 0 else None
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
         # Device pinning. `LOCAL_RANK` is consumed by every strategy's
@@ -225,12 +221,14 @@ class DistributedTorchRayActor:
     def get_node_local_rank(self):
         return self._local_rank
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         # Device-pinned NCCL PG init via the shared helper — pins set_device(LOCAL_RANK) and
         # passes device_id so ProcessGroupNCCL never guesses the device (fixes the cw-rno2a
         # unmasked-CVD collective deadlock; see init_worker_process_group_with_device).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # setup device mesh
@@ -635,8 +633,6 @@ class PPORayActorGroup:
                 world_size=world_size,
                 rank=0,
                 local_rank=0,
-                master_addr=None,
-                master_port=None,
                 sequence_parallel_size=self.sequence_parallel_size,
                 record_memory=self.record_memory,
                 pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -653,8 +649,6 @@ class PPORayActorGroup:
                 world_size=world_size,
                 rank=0,
                 local_rank=0,
-                master_addr=None,
-                master_port=None,
                 sequence_parallel_size=self.sequence_parallel_size,
                 record_memory=self.record_memory,
                 pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -663,7 +657,6 @@ class PPORayActorGroup:
         self._actor_handlers = [master_actor]
         # Create worker actors
         if world_size > 1:
-            master_addr, master_port = ray.get(master_actor.get_master_addr_port.remote())
             for rank in range(1, world_size):
                 local_rank = rank % self._num_gpus_per_node
 
@@ -686,8 +679,6 @@ class PPORayActorGroup:
                         world_size=world_size,
                         rank=rank,
                         local_rank=local_rank,
-                        master_addr=master_addr,
-                        master_port=master_port,
                         sequence_parallel_size=self.sequence_parallel_size,
                         record_memory=self.record_memory,
                         pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -704,8 +695,6 @@ class PPORayActorGroup:
                         world_size=world_size,
                         rank=rank,
                         local_rank=local_rank,
-                        master_addr=master_addr,
-                        master_port=master_port,
                         sequence_parallel_size=self.sequence_parallel_size,
                         record_memory=self.record_memory,
                         pin_to_ray_gpu_id=self._pin_to_ray_gpu_id,
@@ -713,9 +702,13 @@ class PPORayActorGroup:
                     )
                 self._actor_handlers.append(worker_actor)
 
+        # Await every constructor before starting the collective rendezvous.
+        addresses = ray.get([actor.get_master_addr_port.remote() for actor in self._actor_handlers])
+        master_addr, master_port = addresses[0]
+
         # Initialize process group
         logger.info("Initializing process group for RayActorGroup")
-        ray.get([actor.init_worker_process_group.remote() for actor in self._actor_handlers])
+        ray.get([actor.init_worker_process_group.remote(master_addr, master_port) for actor in self._actor_handlers])
         logger.info("Initialized process group for RayActorGroup")
         self.actor_infos = [ActorInfo(actor, ray.get(actor.get_mesh_rank.remote())) for actor in self._actor_handlers]
         logger.info(f"Mesh Ranks: {[actor_info.rank for actor_info in self.actor_infos]}")

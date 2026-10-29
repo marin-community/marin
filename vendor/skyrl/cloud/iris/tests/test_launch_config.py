@@ -501,3 +501,14 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     OmegaConf.save(config, resolved)
     reloaded = load_launch_config(resolved)
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
+
+
+@pytest.mark.parametrize(("interval", "expected"), [(None, 0.0), (0.25, 0.25)])
+def test_iris_launch_starts_workers_together_unless_stagger_requested(tmp_path, interval, expected):
+    raw = _raw_config()
+    if interval is not None:
+        raw["skyrl"]["trajectory_runner"] = {"rollout_workers": {"start_interval_seconds": interval}}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    assert config.skyrl.trajectory_runner.rollout_workers.start_interval_seconds == expected

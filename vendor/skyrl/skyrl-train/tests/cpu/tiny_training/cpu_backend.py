@@ -148,7 +148,9 @@ class CPUPolicyWorker(PolicyWorkerBase):
     def device(self) -> torch.device:
         return torch.device("cpu")
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
+        os.environ["MASTER_ADDR"] = master_addr
+        os.environ["MASTER_PORT"] = str(master_port)
         dist.init_process_group("gloo", rank=self._rank, world_size=self._world_size)
         self.mesh_rank = MeshRank(
             dp=self._rank,
