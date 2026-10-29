@@ -4,7 +4,7 @@
 """Original Evalchemy classification prompts, prepared for Verifyit's labels rubric.
 
 SimpleQA's prompt is from OpenAI simple-evals (MIT); its license is retained in
-`evalchemy_simpleqa.LICENSE`. FinanceBench uses Marin's answer-equivalence
+`assets/simpleqa.LICENSE`. FinanceBench uses Marin's answer-equivalence
 protocol. Both always call the judge, including empty and exact candidates.
 """
 

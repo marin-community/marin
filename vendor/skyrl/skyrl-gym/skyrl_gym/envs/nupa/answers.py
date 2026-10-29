@@ -3,8 +3,8 @@
 These helpers reproduce Evalchemy's NUPA-Loose permissive extraction and
 component semantics (marin-community/evalchemy, ``eval/chat_benchmarks/NUPA-Loose``)
 so RL rewards match the NUPA5K-Loose policy eval. Correctness itself is graded
-by ``verifyit.adapters.evalchemy_nupa.grade_nupa_answer``; these callbacks only
-prepare representations.
+by ``taskcompendium.importers.evalchemy.scorers.nupa.grade_nupa_answer``;
+these callbacks only prepare representations.
 """
 
 from __future__ import annotations
