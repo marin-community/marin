@@ -76,7 +76,6 @@ def _observations_by_uid(
 
 
 def _running_handle_exits_on_term():
-    """A container that completes graceful shutdown after SIGTERM."""
     handle = create_mock_container_handle()
     stopped = threading.Event()
     handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]

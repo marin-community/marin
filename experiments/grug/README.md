@@ -75,10 +75,9 @@ Grug dispatch gives Iris tasks a 60 second shutdown budget. Override it on the
 launching job with `-e IRIS_PREEMPTION_GRACE_SECONDS <seconds>`; the dispatcher
 forwards that setting to training tasks. Values from 1 to 110 seconds are
 supported. Iris gives the task Pod and worker
-five additional seconds before force termination. The 60 second value is an
-initial validation setting, not a measured guarantee. Measure the slowest
-training step, pending save, commit, and process teardown before choosing a
-production value.
+five additional seconds before force termination. The 60 second value has not
+been validated. Measure the slowest training step, pending save, commit, and
+process teardown before choosing a production value.
 
 ## Visual diff for template variants
 

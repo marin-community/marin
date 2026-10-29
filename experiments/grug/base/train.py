@@ -641,7 +641,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
             if not preempted:
                 state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
