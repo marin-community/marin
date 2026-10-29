@@ -3,6 +3,7 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,7 +19,14 @@ from skyrl_train.entrypoints.main_base import (
     config_dir,
 )
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
+from skyrl_train.inference_observability import trainer_metrics
+from skyrl_train.metric_names import (
+    EVAL_OUTCOME_METRIC_PREFIX,
+    GENERATE_OUTCOME_METRIC_PREFIX,
+    PROMPTS_DROPPED_TOO_LONG_METRIC,
+)
+from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -44,6 +52,12 @@ async def load_initial_policy_adapter(inference_engine_client: PolicyAdapterClie
 
 
 class EvalOnlyEntrypoint(BasePPOExp):
+    def get_colocate_pg(self, timeout: int | None = None) -> None:
+        return None
+
+    def get_policy_pg(self, timeout: int | None = None) -> None:
+        return None
+
     def get_train_dataset(self):
         """Override to avoid requiring a train dataset for eval-only runs."""
         return None
@@ -69,8 +83,10 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
+        local_vllm = self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm"
         try:
             await trajectory_runner.startup()
+            started = time.perf_counter()
             results: dict[str, Any] = await evaluate(
                 eval_dataloader=build_eval_dataloader(self.cfg, self.eval_dataset),
                 trajectory_runner=trajectory_runner,
@@ -79,6 +95,32 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 tokenizer=self.tokenizer,
                 trajectory_sink=trajectory_sink,
             )
+            elapsed = time.perf_counter() - started
+            tokens = results["eval/all/response_tokens"]
+            results.update(
+                {
+                    "generate/wall_seconds": elapsed,
+                    "generate/response_tokens": tokens,
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
+                    **{
+                        GENERATE_OUTCOME_METRIC_PREFIX + key.removeprefix(EVAL_OUTCOME_METRIC_PREFIX): value
+                        for key, value in results.items()
+                        if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
+                    },
+                }
+            )
+            if local_vllm:
+                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
+                results.update(
+                    {
+                        f"generate/{key}": value
+                        for key, value in trainer_metrics(snapshot).items()
+                        if key.startswith("vllm/")
+                    }
+                )
+                results["generate/vllm/generation_tokens"] = generated_tokens
+                results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / num_rollout_gpus(self.cfg)
         finally:
             try:
                 await trajectory_runner.shutdown()

@@ -61,7 +61,6 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.algorithm_registry import AdvantageEstimator
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
@@ -128,10 +127,12 @@ from skyrl_train.utils.utils import (
     moe_router_replay_requested,
     policy_per_gpu_bundles_enabled,
     policy_force_cvd_mask_enabled,
+    num_rollout_gpus,
 )
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
+from skyrl_train.metric_names import PROMPTS_DROPPED_TOO_LONG_METRIC
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.callbacks.base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
@@ -1392,6 +1393,7 @@ class RayPPOTrainer:
             if self._control.should_log:
                 log_payload = {
                     **self.all_metrics,
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.train_dataset.prompts_dropped_too_long,
                     **{f"timing/{k}": v for k, v in self.all_timings.items()},
                     **get_system_memory_metrics(),
                 }
@@ -1479,7 +1481,6 @@ class RayPPOTrainer:
         if not self._training_metrics_enabled:
             return
         placement = self.cfg.trainer.placement
-        generator = self.cfg.generator
         consumed = consumed_work(training_input)
         self.all_metrics.update(
             async_step_metrics(
@@ -1491,12 +1492,7 @@ class RayPPOTrainer:
                 consumed_loss_tokens=consumed.loss_tokens,
                 consumed_response_tokens=consumed.response_tokens,
                 policy_gpus=placement.policy_num_nodes * placement.policy_num_gpus_per_node,
-                inference_gpus=(
-                    generator.num_inference_engines
-                    * generator.inference_engine_tensor_parallel_size
-                    * generator.inference_engine_pipeline_parallel_size
-                    * generator.inference_engine_data_parallel_size
-                ),
+                inference_gpus=num_rollout_gpus(self.cfg),
             )
         )
 
@@ -2648,6 +2644,8 @@ class RayPPOTrainer:
                 lambd=lambd,
                 grpo_norm_by_std=grpo_norm_by_std,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
             traj_ids = (
                 torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
@@ -2680,6 +2678,8 @@ class RayPPOTrainer:
                 exclude_from_baseline=exclude_from_baseline,
                 token_level_shaping=token_level_shaping,
                 group_advantage_invariant=self.group_advantage_invariant,
+                metrics=self.all_metrics,
+                pad_size=data.metadata.get("pad_size", 0),
             )
         data["returns"] = returns
         data["advantages"] = advantages
@@ -2689,17 +2689,14 @@ class RayPPOTrainer:
         num_samples = len(token_level_rewards)
 
         return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        if (
-            self.cfg.trainer.algorithm.advantage_estimator == AdvantageEstimator.GRPO
-            and not self.cfg.trainer.step_wise_training
-        ):
-            self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(
-                data.metadata["uids"][: num_samples - pad_size], return_sums
-            )
+        reward_groups = np.asarray(data.metadata["uids"][: num_samples - pad_size])
+        group_rewards = return_sums
         if self.cfg.trainer.step_wise_training:
-            avg_rewards: float = return_sums[data["is_last_step"][: num_samples - pad_size]].mean().item()
-        else:
-            avg_rewards: float = return_sums.mean().item()
+            final_steps = data["is_last_step"][: num_samples - pad_size].bool()
+            reward_groups = reward_groups[final_steps.cpu().numpy()]
+            group_rewards = group_rewards[final_steps]
+        self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(reward_groups, group_rewards)
+        avg_rewards = group_rewards.mean().item()
 
         avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")

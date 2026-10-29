@@ -6,7 +6,7 @@ role claims, physical bundles, and placement arithmetic used before Iris submiss
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -130,6 +130,10 @@ class SkyRLRolePlan:
         gpu_widths = {bundle.gpus_per_node for bundle in self.bundles}
         if len(gpu_widths) > 1:
             raise ValueError(f"Iris role bundles require one GPUs-per-node value; got {sorted(gpu_widths)}")
+
+    @property
+    def gpus_per_node(self) -> int:
+        return self.bundles[0].gpus_per_node
 
     def claim(self, role_id: str) -> ModelRoleClaim:
         matches = [claim for claim in self.claims if claim.role_id == role_id]
@@ -399,6 +403,15 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     claims.extend(_teacher_claims(config))
     claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
+
+
+def derive_generation_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
+    """Derive the local inference footprint for evaluation-only launches."""
+    values = _role_plan_values(config)
+    if not values.run_engines_locally:
+        return derive_role_plan(config)
+    values = replace(values, colocate_all=False)
+    return _role_plan((_rollout_claim(config, values),), values)
 
 
 def derive_policy_export_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:

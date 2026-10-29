@@ -15,7 +15,9 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
+from taskcompendium.grading_result import Outcome
 from skyrl_train.evaluate import evaluation_dump_dir
+from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC
 from skyrl_train.config.utils import get_default_config
@@ -23,7 +25,13 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
-from tests.cpu.tiny_training.cat_count import FAST_STEPS, RUN_TIMEOUT_SECONDS, cat_count_config, run_cat_count
+from tests.cpu.tiny_training.cat_count import (
+    FAST_STEPS,
+    RUN_TIMEOUT_SECONDS,
+    cat_count_config,
+    run_cat_count,
+    run_cat_count_generate,
+)
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
 from tests.cpu.tiny_training.experiment import read_metrics
 
@@ -97,9 +105,13 @@ def train(
         OmegaConf.update(cfg, "trainer.callbacks", callbacks, force_add=True)
     if flipped:
         cfg.trainer.algorithm.advantage_estimator = "cat_count_flipped_grpo"
+    return run_process(forkserver_context, root, cfg)
+
+
+def run_process(forkserver_context, root, cfg, runner=run_cat_count):
     worker_env = {key: os.environ[key] for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID")}
     start = time.perf_counter()
-    process = forkserver_context.Process(target=run_cat_count, args=(cfg, worker_env))
+    process = forkserver_context.Process(target=runner, args=(cfg, worker_env))
     process.start()
     process.join(RUN_TIMEOUT_SECONDS)
     if process.exitcode is None:
@@ -215,6 +227,7 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert any(row["policy/ppo_clip_ratio"] > 0 for row in training)
     assert all("environment/exact" in row for row in training)
     assert any("environment/exact_n20" in row for row in training)
+    assert all(sum(row[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == 32 for row in training)
     checkpoint = torch.load(root / f"ckpts/global_step_{FAST_STEPS}/policy/rank_0.pt", weights_only=False)
     optimizer_steps = [state["step"].item() for state in checkpoint["optimizer"]["state"].values()]
     assert optimizer_steps and set(optimizer_steps) == {2 * FAST_STEPS}
@@ -285,6 +298,108 @@ def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, for
     print(f"CAT_COUNT_CPU seed=0 positive_scores={before}->{after}")
 
 
+@pytest.mark.timeout(2 * RUN_TIMEOUT_SECONDS)
+# Step-wise training has distinct estimator forwarding and evaluation projection branches.
+@pytest.mark.parametrize("step_wise", [False, True])
+def test_cat_count_rloo_n_preserves_metrics_across_resume(
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
+):
+    root = tmp_path / "rloo-n"
+    for steps, resume in ((2, False), (4, True)):
+        cfg = cat_count_config(root, cat_count_policy, steps=steps, resume=resume, eval_interval=3)
+        cfg.trainer.algorithm.advantage_estimator = "rloo_n"
+        cfg.trainer.step_wise_training = step_wise
+        cfg.trainer.algorithm.group_advantage_min_size = 2
+        cfg.trainer.train_batch_size = 5
+        cfg.trainer.policy_mini_batch_size = 5
+        cfg.trainer.placement.policy_num_gpus_per_node = 3
+        cfg.trainer.micro_train_batch_size_per_gpu = 1
+        cfg.trainer.micro_forward_batch_size_per_gpu = 1
+        cfg.generator.n_samples_per_prompt = 2
+        for filename in (cfg.data.train_data[0], cfg.data.val_data[0]):
+            path = Path(filename)
+            row = json.loads(path.read_text().splitlines()[0])
+            row["prompt"][0]["content"] = "cat " * 200
+            with path.open("a") as handle:
+                handle.write(json.dumps(row) + "\n")
+        records = run_process(forkserver_context, root, cfg)
+        training = [row for row in records if "policy/raw_grad_norm" in row]
+        assert [row["step"] for row in training] == list(range(1, steps + 1))
+        assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
+        assert all(
+            row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training
+        )
+        assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
+        assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
+        assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
+
+
+@pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
+def test_cat_count_generate_preserves_task_ids_and_token_metrics(
+    tmp_path, cat_count_policy, cat_count_session, forkserver_context
+):
+    root = tmp_path / "generate"
+    cfg = cat_count_config(root, cat_count_policy)
+    environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+
+    def task(n, identifier, extra_info):
+        row = {
+            "prompt": [{"role": "user", "content": PROMPT.format(N=n)}],
+            "env_class": "cat_count",
+            "data_source": "train",
+            "extra_info": {"n": n, "data_source": "train", **extra_info},
+        }
+        lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
+        spec = lowered.task.model_copy(update={"id": identifier})
+        return lowered.model_copy(update={"task": spec})
+
+    expected = {f"stable-cat-count-{n}": PROMPT.format(N=n) for n in (7, 1, 4, 2)}
+    tasks = [task(n, f"stable-cat-count-{n}", {}) for n in (7, 1, 4, 2)]
+    tasks.append(task(2, "rollout-error", {"n": "invalid"}))
+    expected["rollout-error"] = PROMPT.format(N=2)
+    path = root / "data" / "permuted.parquet"
+    overlong = task(2, "overlong", {})
+    context = overlong.task.context.model_copy(
+        update={"events": (overlong.task.context.events[0].model_copy(update={"content": "cat " * 200}),)}
+    )
+    spec = overlong.task.model_copy(update={"context": context})
+    write_tasks(path, [*reversed(tasks), overlong.model_copy(update={"task": spec})])
+    cfg.data.val_data = [str(path)]
+    cfg.generator.num_inference_engines = 2
+    cfg.generator.eval_n_samples_per_prompt = 2
+    cfg.generator.eval_sampling_params.ignore_eos = True
+    cfg.generator.eval_sampling_params.max_generate_length = 8
+    records = run_process(forkserver_context, root, cfg, run_cat_count_generate)
+    assert len(records) == 1
+    metrics = records[0]
+    rows = [
+        json.loads(line)
+        for line in (Path(evaluation_dump_dir(str(root / "exports"), None)) / "train.jsonl").read_text().splitlines()
+    ]
+    assert metrics["generate/prompts_dropped_too_long"] == 1
+    assert len(rows) == 2 * len(expected)
+    assert {row["task_id"] for row in rows} == expected.keys()
+    assert all(expected[row["task_id"]] in row["input_prompt"] and row["uid"] != row["task_id"] for row in rows)
+    assert all(len(row["response_token_ids"]) == 8 for row in rows if not row["task_id"].startswith("rollout-error"))
+    tokens = sum(len(row["response_token_ids"]) for row in rows)
+    assert metrics["generate/response_tokens"] == tokens
+    assert metrics["generate/wall_seconds"] > 0
+    generated_tokens = 2 * len(expected) * 8
+    assert metrics["generate/vllm/generation_tokens"] == generated_tokens
+    assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
+        generated_tokens / metrics["generate/wall_seconds"] / 2
+    )
+    assert metrics["generate/vllm/num_engines"] == 2
+    assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
+        "graded": 8,
+        "submission_failure": 0,
+        "invalid_task": 0,
+        "infra_error": 0,
+        "unavailable": 2,
+    }
+    assert metrics["generate/outcome/rollout_failure"] == 2
+
+
 @pytest.mark.nightly
 @pytest.mark.parametrize("seed", [0, 1])
 def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count_session, forkserver_context, seed):
@@ -306,8 +421,15 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
     first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1)
+    before_resume = len(cat_count_session)
     resumed = train(forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
-    assert scores(resumed)[len(scores(first))] == scores(first)[-1]
+    resumed_steps = {
+        int(row["attributes"]["step"])
+        for row in cat_count_session[before_resume:]
+        if row["name"] == "work_completed" and row["attributes"].get("work_kind") == "policy_step"
+    }
+    assert resumed_steps == set(range(5, 101))
+    assert scores(resumed)[: len(scores(first))] == scores(first)
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4
     training = [row for row in resumed if "policy/raw_grad_norm" in row]
     assert [row["trainer/global_step"] for row in training] == list(range(1, 101))

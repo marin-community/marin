@@ -652,6 +652,16 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
+def num_rollout_gpus(cfg: DictConfig) -> int:
+    generator = cfg.generator
+    return (
+        generator.num_inference_engines
+        * generator.inference_engine_tensor_parallel_size
+        * generator.inference_engine_pipeline_parallel_size
+        * generator.inference_engine_data_parallel_size
+    )
+
+
 def validate_generator_cfg(cfg: DictConfig):
     """Validates the correctness of generator-related config.
 
@@ -681,7 +691,7 @@ def validate_generator_cfg(cfg: DictConfig):
         )
 
     # TODO(tgriggs): use a more modular config validation
-    if cfg.trainer.logger == "wandb":
+    if "wandb" in ([cfg.trainer.logger] if isinstance(cfg.trainer.logger, str) else cfg.trainer.logger):
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":

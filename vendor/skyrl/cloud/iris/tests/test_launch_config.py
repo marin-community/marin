@@ -269,7 +269,7 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     raw["skyrl"]["trainer"]["placement"]["colocate_all"] = False
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"max_staleness_steps": max_staleness_steps}
     raw["skyrl"]["trainer"]["algorithm"]["off_policy_correction"] = "none"
-    raw["iris"]["allocation"]["num_nodes"] = 2
+    raw["iris"]["allocation"]["num_nodes"] = 1 if entrypoint == "generate" else 2
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 

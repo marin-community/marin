@@ -1,5 +1,6 @@
 """Convert common rollout records into whole-trajectory or per-step training data."""
 
+from collections import Counter
 from collections.abc import Sequence
 import copy
 from dataclasses import dataclass, replace
@@ -22,7 +23,7 @@ from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.metric_names import TASK_ROLLOUT_METRIC_PREFIX
+from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
     get_batch_failure_metrics,
@@ -354,6 +355,7 @@ def _training_batch(
         rollout_metrics={},
         rollout_logprobs=logprobs if logprobs_required else None,
         exclude_from_baseline=[not decision.disposition.baseline_eligible for decision in decisions],
+        task_ids=[rollout.task_id for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
     _attach_failure_channels(batch, decisions)
@@ -508,6 +510,13 @@ def _task_error_policies(
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
+    outcomes = Counter(rollout.grade.status for rollout in rollouts)
+    metrics.update(
+        {f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome}
+    )
+    metrics[f"{GENERATE_OUTCOME_METRIC_PREFIX}rollout_failure"] = float(
+        sum(rollout.failure is not None for rollout in rollouts)
+    )
     failed = [
         rollout
         for rollout in rollouts
