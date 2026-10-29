@@ -8,6 +8,18 @@ tasks (controlled by `replicas`). Tasks are independently scheduled, retried,
 and tracked. Job state is derived from task state counts -- there is no
 independent job state machine.
 
+## Child job lifetime
+
+A job's `preemption_policy` also controls whether its descendants survive when
+its own tasks finish. `PRESERVE_CHILDREN` lets existing children continue after
+parent success or failure; `TERMINATE_CHILDREN` terminates unfinished descendants.
+When unspecified, single-task jobs default to `TERMINATE_CHILDREN` and multi-task
+jobs default to `PRESERVE_CHILDREN`. Set the policy explicitly on coordinators
+that submit asynchronous export or evaluation jobs and exit before they finish.
+
+Explicit cancellation always cancels the job and its descendants, regardless of
+this policy. A terminated parent cannot accept new child submissions.
+
 ## State Diagram
 
 ```
