@@ -18,6 +18,7 @@ from marin.evaluation.selection import SELECTIONS_TABLE
 from marin.evaluation.task_driver import (
     ATTEMPTS_TABLE,
     RUN_OBJECT,
+    EvaluationInfrastructureError,
     EvaluationRunConfig,
     JudgeIdentity,
     ModelIdentity,
@@ -167,7 +168,7 @@ async def test_driver_preserves_cohort_trials_and_resumes_failed_attempt_without
         )
 
     output = str(tmp_path / "results")
-    with pytest.raises(RuntimeError, match="raw evidence is saved"):
+    with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
         await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
     first = ReadView(output)
     failed = [row for row in first.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "infra_error"]
@@ -188,6 +189,25 @@ async def test_driver_preserves_cohort_trials_and_resumes_failed_attempt_without
     assert all(sample.prompt_messages[0].content.endswith(("/0", "/1")) for sample in samples)
     assert json.loads(final.read_blob(RUN_OBJECT))["config"]["source_limit"] == 2
     assert not any("summary" in key for key in json.loads(final.read_blob(RUN_OBJECT)))
+
+
+@pytest.mark.asyncio
+async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, published_corpora, run_config):
+    async def model(_request):
+        raise RuntimeError("model adapter bug")
+
+    output = str(tmp_path / "unexpected-error")
+    with pytest.raises(ExceptionGroup) as failure:
+        await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
+    assert failure.value.subgroup(RuntimeError) is not None
+    assert failure.value.subgroup(EvaluationInfrastructureError) is None
+    reader = ReadView(output)
+    failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert failed
+    assert all((row["retry"], row["outcome"]) == (0, "infra_error") for row in failed)
+    assert all(
+        json.loads(reader.read_blob(row["result_blob"]))["failure"]["exception_type"] == "RuntimeError" for row in failed
+    )
 
 
 @pytest.mark.asyncio
@@ -613,7 +633,7 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
                 (corpus,), output, unpaired_config, model, machine_factories={}, judge_connection=unpaired_connection
             )
     assert model_requests == judge_requests == []
-    with pytest.raises(RuntimeError, match="raw evidence is saved"):
+    with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
         await run_evaluation((corpus,), output, config, model, machine_factories={}, judge_connection=connection)
     reader = ReadView(output)
     failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "infra_error"]
@@ -796,7 +816,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
         )
         model = ChatModel(client, "fixture", 16)
-        with pytest.raises(RuntimeError, match="raw evidence is saved"):
+        with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
             await run_evaluation(mixed_corpora, output, config, model, **arguments)
         first = ReadView(output)
         failed = [
@@ -948,17 +968,17 @@ async def test_malformed_nonfinite_likelihood_retains_archive_safe_wire_evidence
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_kind", ["http-404", "missing-usage", "empty-choices"])
+@pytest.mark.parametrize("failure_kind", ["http-503", "missing-usage", "empty-choices"])
 async def test_generation_failure_archives_provider_body_and_resumes_only_failed_attempt(
     tmp_path, published_corpora, run_config, failure_kind
 ):
     requests = []
-    provider_error = {"error": {"message": "unknown served model", "type": "NotFoundError", "code": 404}}
+    provider_error = {"error": {"message": "temporarily unavailable", "type": "ServiceUnavailableError", "code": 503}}
 
     def serve(request):
         requests.append(json.loads(request.content))
-        if len(requests) == 1 and failure_kind == "http-404":
-            return httpx.Response(404, json=provider_error)
+        if len(requests) == 1 and failure_kind == "http-503":
+            return httpx.Response(503, json=provider_error)
         response = {
             "id": "generation-response",
             "object": "chat.completion",
@@ -982,14 +1002,14 @@ async def test_generation_failure_archives_provider_body_and_resumes_only_failed
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
     ) as client:
         model = ChatModel(client, "fixture", 16)
-        with pytest.raises(RuntimeError, match="raw evidence is saved"):
+        with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
             await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
         reader = ReadView(output)
         failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "infra_error"]
         assert len(failed) == 1
         raw = json.loads(reader.read_blob(failed[0]["result_blob"]))
         evidence = raw["failure_evidence"]
-        if failure_kind == "http-404":
+        if failure_kind == "http-503":
             assert evidence["provider_error"] == provider_error["error"]
         else:
             assert evidence["response"]["id"] == "generation-response"

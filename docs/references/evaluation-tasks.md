@@ -127,6 +127,19 @@ lifetime. `--cpu`, `--memory`, `--disk` and `--timeout` override these resources
 cluster in the same region as the corpora, output and inference endpoint. The
 endpoint must already serve the model recorded in the run configuration.
 
+Both local and Iris execution make up to three passes with Marin's standard
+exponential backoff; `--max-attempts` changes the total pass limit. Each pass
+processes every supplied corpus before reporting temporary infrastructure
+failures. Later passes resume only failed attempts at the same output root,
+with the same source selection and seeds; successful grades, including scores
+of zero, are retained. Every physical retry remains in `evaluation_attempts`.
+The solver SDK's automatic retries stay disabled. Solver authentication and
+permanent request errors, configuration errors and unexpected exceptions
+propagate without this retry. Graders retain their existing infrastructure
+outcome classifications and transport policies. An exhausted run preserves its
+evidence and fails with
+`EvaluationInfrastructureError`; rerun the same command to resume it.
+
 `endpoint.txt` contains the OpenAI-compatible base URL. Use the credential
 environment variable appropriate to that endpoint; `--api-key-env` changes its
 name. Judge tasks additionally accept `--judge-endpoint` and

@@ -14,13 +14,13 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from marin.evaluation.likelihood import VllmLikelihood
-from marin.evaluation.task_driver import EvaluationRunConfig, run_evaluation
+from marin.evaluation.task_driver import EvaluationInfrastructureError, EvaluationRunConfig, run_evaluation
 from openai import AsyncOpenAI
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret, require_secret
-from rigging.timing import Duration
+from rigging.timing import Duration, retry_with_backoff
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.models import MachineRuntimeSpec
@@ -30,6 +30,7 @@ from transformers import AutoTokenizer
 from verifyit.modes.grade_judge import JudgeConnection
 
 DEFAULT_CLUSTER = "cw-us-east-02a"
+DEFAULT_MAX_ATTEMPTS = 3
 WORKER_TIMEOUT = 36 * 60 * 60
 SOLVER_ENDPOINT = "EVALUATION_SOLVER_ENDPOINT"
 SOLVER_API_KEY = "EVALUATION_SOLVER_API_KEY"
@@ -90,7 +91,28 @@ async def execute(
         )
 
 
-def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConfig) -> None:
+def execute_with_retries(
+    datasets: tuple[str, ...],
+    output: str,
+    config: EvaluationRunConfig,
+    endpoint: str,
+    api_key: str,
+    judge_connection: JudgeConnection | None,
+    *,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> None:
+    """Resume infrastructure failures with the same run identity and Marin's standard backoff."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    retry_with_backoff(
+        lambda: asyncio.run(execute(datasets, output, config, endpoint, api_key, judge_connection)),
+        retryable=lambda error: isinstance(error, EvaluationInfrastructureError),
+        max_attempts=max_attempts,
+        operation="TaskSpec evaluation",
+    )
+
+
+def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConfig, max_attempts: int) -> None:
     """Read connections from Iris secret files outside the grader machines."""
     logging.basicConfig(level=logging.INFO)
     # Iris endpoint URLs can contain scoped credentials.
@@ -98,8 +120,14 @@ def run_worker(datasets: tuple[str, ...], output: str, config: EvaluationRunConf
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
-    asyncio.run(
-        execute(datasets, output, config, require_secret(SOLVER_ENDPOINT), require_secret(SOLVER_API_KEY), judge)
+    execute_with_retries(
+        datasets,
+        output,
+        config,
+        require_secret(SOLVER_ENDPOINT),
+        require_secret(SOLVER_API_KEY),
+        judge,
+        max_attempts=max_attempts,
     )
 
 
@@ -113,6 +141,7 @@ def submit_evaluation(
     resources: ResourceSpec,
     timeout: int,
     secrets: dict[str, str],
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
     if any(not StoragePath(root).is_remote for root in (*datasets, output)):
@@ -120,7 +149,7 @@ def submit_evaluation(
             "Iris evaluation requires shared object-storage corpus and output roots; use --local for local files"
         )
     return client.submit(
-        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, execution_config(config)),
+        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, execution_config(config), max_attempts),
         name=name,
         resources=resources,
         environment=EnvironmentSpec(
@@ -162,7 +191,15 @@ def main() -> None:
     parser.add_argument("--disk", default="64g")
     parser.add_argument("--timeout", type=int, default=WORKER_TIMEOUT, help="Iris worker lifetime in seconds.")
     parser.add_argument("--no-wait", action="store_true", help="Return after Iris submission.")
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help="Total passes for infrastructure failures; successful attempts are retained between passes.",
+    )
     arguments = parser.parse_args()
+    if arguments.max_attempts < 1:
+        parser.error("--max-attempts must be positive")
     config = EvaluationRunConfig.model_validate_json(StoragePath(arguments.config).read_text())
     base_url = arguments.endpoint_file.read_text().strip() if arguments.endpoint_file else arguments.endpoint
     datasets = tuple(arguments.dataset)
@@ -176,7 +213,9 @@ def main() -> None:
         logging.basicConfig(level=logging.INFO)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
-        asyncio.run(execute(datasets, arguments.output, config, base_url, api_key, judge))
+        execute_with_retries(
+            datasets, arguments.output, config, base_url, api_key, judge, max_attempts=arguments.max_attempts
+        )
         return
     secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
     if arguments.judge_endpoint:
@@ -192,6 +231,7 @@ def main() -> None:
             resources=ResourceSpec(cpu=arguments.cpu, memory=arguments.memory, disk=arguments.disk),
             timeout=arguments.timeout,
             secrets=secrets,
+            max_attempts=arguments.max_attempts,
         )
         print(job.job_id)
         if not arguments.no_wait:

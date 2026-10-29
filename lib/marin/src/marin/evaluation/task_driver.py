@@ -25,7 +25,7 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
-from openai import APIError
+from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.exact_chat import EXACT_CHAT_HARNESS, ExactChatHarness
@@ -41,7 +41,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
     TraceMode,
 )
-from shellbox.machine import MachineFactory
+from shellbox.machine import MachineFactory, MachineTerminated
 from taskcompendium.evaluation import (
     ChatGeneration,
     ChoiceLikelihood,
@@ -67,6 +67,14 @@ from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Se
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
 DRIVER_REVISION = "2026.10.28.4"
+
+
+class EvaluationInfrastructureError(RuntimeError):
+    """All corpora were processed, but infrastructure failures remain eligible for resume."""
+
+
+def _permanent_api_error(error: BaseException | None) -> bool:
+    return isinstance(error, APIStatusError) and error.status_code < 500 and error.status_code not in (408, 409, 429)
 
 
 class RunModel(BaseModel):
@@ -269,6 +277,7 @@ async def _score_likelihood(
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
     results = []
     failure_evidence = None
+    permanent_error = None
     outcome = Outcome.GRADED
     error = None
     try:
@@ -286,6 +295,8 @@ async def _score_likelihood(
             failure_evidence = failure.evidence
         elif isinstance(failure, APIError):
             failure_evidence = {"provider_error": failure.body}
+        if _permanent_api_error(failure):
+            permanent_error = failure
     metrics = (
         likelihood_metrics(
             operation,
@@ -351,6 +362,8 @@ async def _score_likelihood(
         sum(value.prompt_tokens for value in usage if value is not None) if known_usage else None,
         sum(value.completion_tokens for value in usage if value is not None) if known_usage else None,
     )
+    if permanent_error is not None:
+        raise permanent_error
     return outcome
 
 
@@ -391,6 +404,7 @@ async def _score_generation(
     policy_model = partial(generation_turn, model=model, operation=operation)
 
     failure_evidence = None
+    permanent_error = None
     try:
         result = await engine.run_task(spec, policy_model)
         rollout, grade = result.rollout, result.grade
@@ -401,6 +415,11 @@ async def _score_generation(
             failure_evidence = {"response": cause.response, "response_json": cause.response_json}
         elif isinstance(cause, APIError):
             failure_evidence = {"provider_error": cause.body}
+        if cause is not None and (
+            _permanent_api_error(cause)
+            or not isinstance(cause, (APIError, ModelResponseError, ConnectionError, TimeoutError, MachineTerminated))
+        ):
+            permanent_error = cause
     if rollout.failure is not None or grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
         outcome = Outcome.INFRA_ERROR
     else:
@@ -435,6 +454,8 @@ async def _score_generation(
             else None
         ),
     )
+    if permanent_error is not None:
+        raise permanent_error
     return outcome
 
 
@@ -629,5 +650,7 @@ async def run_evaluation(
             for _ in range(config.concurrency):
                 group.create_task(consume())
         if failures:
-            raise RuntimeError(f"{failures} evaluation attempts failed; their raw evidence is saved for resume")
+            raise EvaluationInfrastructureError(
+                f"{failures} evaluation attempts failed; their raw evidence is saved for resume"
+            )
         store.seal()
