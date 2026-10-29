@@ -738,19 +738,19 @@ def control_name(preset: str, commit: str, replicate: int) -> str:
 def run_command(*, help_text: str | None = None):
     def decorate(function):
         options = (
-            (("--preset", "preset_name"), {"required": True, "type": click.Choice(sorted(PRESETS))}),
-            (("--set", "settings"), {"multiple": True}),
-            (("--tasks", "tasks_name"), {}),
-            (("--init", "init_name"), {}),
-            (("--resume-from", "resume_name"), {}),
-            (("--layout", "layout_name"), {"type": click.Choice(sorted(TRAIN_LONG_RECIPES))}),
-            (("--eval", "evaluations"), {"multiple": True, "type": click.Choice(sorted(EVALUATIONS))}),
-            (("--replicates",), {"type": click.IntRange(1, 5), "default": 1}),
-            (("--control",), {"is_flag": True}),
+            click.option("--preset", "preset_name", required=True, type=click.Choice(sorted(PRESETS))),
+            click.option("--set", "settings", multiple=True),
+            click.option("--tasks", "tasks_name"),
+            click.option("--init", "init_name"),
+            click.option("--resume-from", "resume_name"),
+            click.option("--layout", "layout_name", type=click.Choice(sorted(TRAIN_LONG_RECIPES))),
+            click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(EVALUATIONS))),
+            click.option("--replicates", type=click.IntRange(1, 5), default=1),
+            click.option("--control", is_flag=True),
         )
         command = rl_build_options(function)
-        for declarations, attributes in reversed(options):
-            command = click.option(*declarations, **attributes)(command)
+        for option in reversed(options):
+            command = option(command)
         return click.command(help=help_text)(command)
 
     return decorate
