@@ -55,17 +55,22 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-## Private service groups
+## Tasks and containers
 
-`shellbox.service` describes a task and its helper services independently of the
-backend. `ServiceGroupSpec` contains the task's `MachineSpec` and named
-`ServiceSpec` members. Each service has its own machine specification, optional
-image entrypoint/argument overrides, named endpoint ports and a `ReadinessProbe`.
-With no overrides, the service uses its image's ENTRYPOINT and CMD. Supply both
-fields to specify an exact command. Images must already contain their dependencies;
-group creation does not build or install them.
+`shellbox.task.TaskSpec` describes one or more named `ContainerSpec` members and
+names the primary container. Every member has a `MachineSpec`, optional named
+endpoints and readiness probe. A single-container task uses this same model:
+`factory.create(machine_spec)` normalizes to a one-container `TaskSpec` and calls
+`create_task`. The returned `Task` exposes all members through `containers` and
+its default execution handle through `primary`.
 
-The Iris factory implements `create_group(spec)`. It creates one CPU-only
+The primary stays alive for machine commands. Supporting containers use their
+image's ENTRYPOINT and CMD unless their container spec overrides them. Images
+must already contain their dependencies. Startup overrides on the primary are
+currently unsupported by these Shellbox backends. All members use the same
+network policy; backend admission applies the sandbox restrictions separately.
+
+The Iris factory implements `create_task(spec)`. Multi-container tasks create one CPU-only
 Kubernetes pod under gVisor, with separate container filesystems and a private
 shared loopback network. Service names and `task` resolve to `127.0.0.1` within
 that pod. `group.endpoint("runtime", "http")` returns the declared private
@@ -91,22 +96,25 @@ Start host capabilities before readiness when a service needs them:
 
 ```python
 from shellbox.http_service import serve_http
-from shellbox.service import ServiceEndpoint, ServiceGroupSpec, ServiceSpec
+from shellbox.task import ContainerSpec, ServiceEndpoint, TaskSpec
 
-spec = ServiceGroupSpec(
-    task=task_machine_spec,
-    services=(ServiceSpec(
-        name="runtime",
-        machine=runtime_machine_spec,
-        endpoints=(ServiceEndpoint("http", 8000),),
-        readiness=runtime_readiness_probe,
-    ),),
+spec = TaskSpec(
+    containers=(
+        ContainerSpec("agent", task_machine_spec),
+        ContainerSpec(
+            name="runtime",
+            machine=runtime_machine_spec,
+            endpoints=(ServiceEndpoint("http", 8000),),
+            readiness=runtime_readiness_probe,
+        ),
+    ),
+    primary="agent",
 )
-group = await factory.create_group(spec)
+group = await factory.create_task(spec)
 try:
-    async with serve_http(group.task, model_handler, port=18080):
+    async with serve_http(group.primary, model_handler, port=18080):
         await group.wait_ready()
-        result = await group.task.run(agent_command)
+        result = await group.primary.run(agent_command)
 finally:
     await group.close()
 ```
@@ -130,7 +138,7 @@ between trials. Download outputs through machine handles before closing them.
 
 Iris service groups require a Kubernetes controller advertising
 `sandbox-service-groups`; older controllers and Docker-worker backends reject it.
-`LocalMachineFactory.create_group` implements the same contract with bubblewrap:
+`LocalMachineFactory.create_task` implements the same contract with bubblewrap:
 members share a private loopback network and keep separate filesystems, PID, IPC
 and UTS namespaces. Concurrent groups may use the same ports. Group names resolve
 only inside their own network. Neither implementation falls back to host
@@ -326,7 +334,7 @@ are mounted into this root. OCI `ENV` becomes the machine environment; use
 `MachineSpec(image, workdir="")` to select the image's working directory instead
 of the API default `/workspace`. Only root image users are currently supported.
 A service starts its image's `ENTRYPOINT` and `CMD` unless its
-`ServiceSpec` overrides them. Image defaults cannot grant host environment
+`ContainerSpec` overrides them. Image defaults cannot grant host environment
 variables. Images need `/bin/sh`, `sleep` and `tar` for exec and transfers; timed readiness
 and `serve_http` additionally require Python 3. `LocalMachineFactory(umoci=...)`
 selects an explicit unpacker. No Docker daemon runs inside the guest.

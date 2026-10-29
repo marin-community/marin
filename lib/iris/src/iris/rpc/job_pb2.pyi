@@ -617,7 +617,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "secrets", "setup_scripts", "sandbox_services")
+    __slots__ = ("env_vars", "secrets", "setup_scripts", "sandbox_services", "primary_container_name")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -636,11 +636,13 @@ class EnvironmentConfig(_message.Message):
     SECRETS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     SANDBOX_SERVICES_FIELD_NUMBER: _ClassVar[int]
+    PRIMARY_CONTAINER_NAME_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
     secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
     sandbox_services: _containers.RepeatedCompositeFieldContainer[SandboxServiceSpec]
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., sandbox_services: _Optional[_Iterable[_Union[SandboxServiceSpec, _Mapping]]] = ...) -> None: ...
+    primary_container_name: str
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., sandbox_services: _Optional[_Iterable[_Union[SandboxServiceSpec, _Mapping]]] = ..., primary_container_name: _Optional[str] = ...) -> None: ...
 
 class SandboxServiceSpec(_message.Message):
     __slots__ = ("name", "image", "workdir", "env_vars", "resources", "entrypoint", "arguments")

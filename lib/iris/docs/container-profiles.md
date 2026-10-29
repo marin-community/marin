@@ -140,6 +140,20 @@ the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
 
+### Task containers
+
+The Kubernetes execution path normalizes each request to a `TaskSpec` with named
+containers and a primary container. Ordinary submissions become a one-container
+task. Isolation policy is applied after this normalization, so the same container
+renderer handles ordinary jobs and sandbox groups. The existing submission API
+and wire fields remain the input format: the task's image, environment and
+entrypoint describe the primary, and `sandbox_services` describe its peers.
+
+`EnvironmentSpec.primary_container_name` gives the primary a logical name;
+omitting it uses `task`. Exec accepts that name, while its physical Kubernetes
+container and task lifecycle identity remain `task`. Peer resources are included
+in the job reservation; normalization assigns the remainder to the primary.
+
 ### Private service groups
 
 Shellbox service groups use a typed `EnvironmentConfig.sandbox_services` list
@@ -155,7 +169,7 @@ setup scripts and secrets are rejected. Task and service environments reject
 cloud-storage and controller credential variables.
 
 The task and services have separate filesystems and PID namespaces but share
-pod loopback. `/etc/hosts` maps the declared service names and `task` to
+pod loopback. `/etc/hosts` maps the declared container names and `task` to
 `127.0.0.1`; there is no external DNS. The pod runs under gVisor, without service
 account tokens or credential-bearing infrastructure sidecars, with root users,
 all capabilities dropped and privilege escalation disabled. A dedicated policy

@@ -34,12 +34,14 @@ class _RecordingClusterClient:
     captured_secrets: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
     captured_setup_scripts: list = field(default_factory=list)
+    captured_primary_container_name: str = ""
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
             self.captured_env = dict(environment.env_vars)
             self.captured_secrets = dict(environment.secrets)
             self.captured_setup_scripts = list(environment.setup_scripts)
+            self.captured_primary_container_name = environment.primary_container_name
         if constraints:
             self.captured_constraints = list(constraints)
         return job_id or JobName.root("test", "dummy")
@@ -108,7 +110,7 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    env = EnvironmentSpec(env_vars={"MY_VAR": "child_override", "CHILD_ONLY": "yes"})
+    env = EnvironmentSpec(env_vars={"MY_VAR": "child_override", "CHILD_ONLY": "yes"}, primary_container_name="agent")
     parent_env = {"MY_VAR": "parent_value", "PARENT_ONLY": "yes"}
 
     with (
@@ -120,6 +122,7 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["MY_VAR"] == "child_override"
     assert stub.captured_env["CHILD_ONLY"] == "yes"
     assert stub.captured_env["PARENT_ONLY"] == "yes"
+    assert stub.captured_primary_container_name == "agent"
 
 
 def test_submitter_credentials_use_files_and_respect_isolation(capturing_client, monkeypatch):
@@ -316,12 +319,13 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
             Entrypoint.from_command("sleep", "infinity"),
             "sandbox",
             ResourceSpec(cpu=1, memory="1g"),
-            environment=EnvironmentSpec(env_vars={"TASK_VAR": "1"}),
+            environment=EnvironmentSpec(env_vars={"TASK_VAR": "1"}, primary_container_name="agent"),
             container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
         )
 
     assert stub.captured_env == {"TASK_VAR": "1"}
     assert stub.captured_setup_scripts == []
+    assert stub.captured_primary_container_name == "agent"
 
 
 def test_task_client_presents_the_task_token_from_its_env(monkeypatch):

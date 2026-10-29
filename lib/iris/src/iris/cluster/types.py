@@ -790,6 +790,7 @@ class EnvironmentSpec:
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
     sandbox_services: Sequence[SandboxServiceSpec] = ()
+    primary_container_name: str = ""
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -849,6 +850,7 @@ class EnvironmentSpec:
             secrets=self.secrets,
             setup_scripts=setup_scripts,
             sandbox_services=[service.to_proto() for service in self.sandbox_services],
+            primary_container_name=self.primary_container_name,
         )
 
     def to_sandbox_proto(self) -> job_pb2.EnvironmentConfig:
@@ -868,6 +870,7 @@ class EnvironmentSpec:
             secrets=self.secrets,
             setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
             sandbox_services=[service.to_proto() for service in self.sandbox_services],
+            primary_container_name=self.primary_container_name,
         )
 
 

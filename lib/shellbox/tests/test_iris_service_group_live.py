@@ -34,7 +34,7 @@ from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.http_service import HttpRequest, HttpResponse, serve_http
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, Machine, MachineSpec, NetworkPolicy
-from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
+from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_cluster, pytest.mark.timeout(900)]
 
@@ -164,7 +164,7 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
         try:
             async with AsyncExitStack() as stack:
                 for marker in ("first", "second"):
-                    service = ServiceSpec(
+                    service = ContainerSpec(
                         "runtime",
                         machine,
                         endpoints=(ServiceEndpoint("http", RUNTIME_PORT),),
@@ -176,24 +176,32 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
                             interval=1,
                         ),
                     )
-                    group = await factory.create_group(ServiceGroupSpec(machine, (service,)))
+                    group = await factory.create_task(
+                        TaskSpec(
+                            containers=(
+                                ContainerSpec("task", machine),
+                                service,
+                            )
+                        )
+                    )
                     stack.push_async_callback(group.close)
                     groups.append(group)
-                    jobs.append(cast(IrisMachine, group.task).job.job_id)
+                    jobs.append(cast(IrisMachine, group.primary).job.job_id)
                     record_property("iris_job_" + marker, jobs[-1].to_wire())
                     await group.wait_ready()
                     assert (
                         await _output(
-                            group.task, ("python3", "-c", _FETCH, "http://" + group.endpoint("runtime", "http"))
+                            group.primary, ("python3", "-c", _FETCH, "http://" + group.endpoint("runtime", "http"))
                         )
                         == marker.encode()
                     )
                     assert (
-                        await _output(group.services["runtime"], ("cat", "/tmp/shellbox-live-state")) == marker.encode()
+                        await _output(group.containers["runtime"], ("cat", "/tmp/shellbox-live-state"))
+                        == marker.encode()
                     )
                     assert (
                         await _output(
-                            group.task,
+                            group.primary,
                             (
                                 "python3",
                                 "-c",
@@ -203,14 +211,14 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
                         )
                         == b"actor\n"
                     )
-                    for member in (group.task, *group.services.values()):
+                    for member in group.containers.values():
                         report = json.loads(await _output(member, ("python3", "-c", _ISOLATION, json.dumps(probes))))
                         assert report and all(report.values()), report
 
                 for group, marker in zip(groups, ("first", "second"), strict=True):
                     assert (
                         await _output(
-                            group.task, ("python3", "-c", _FETCH, "http://" + group.endpoint("runtime", "http"))
+                            group.primary, ("python3", "-c", _FETCH, "http://" + group.endpoint("runtime", "http"))
                         )
                         == marker.encode()
                     )
@@ -227,14 +235,14 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
                         )
                         return HttpResponse(response.status_code, response.content)
 
-                    async with serve_http(groups[0].task, model, port=RELAY_PORT) as relay:
+                    async with serve_http(groups[0].primary, model, port=RELAY_PORT) as relay:
                         answer = await _output(
-                            groups[0].services["runtime"], ("python3", "-c", _MODEL_REQUEST, relay + "/model")
+                            groups[0].containers["runtime"], ("python3", "-c", _MODEL_REQUEST, relay + "/model")
                         )
                         assert json.loads(answer) == {"answer": 42}
                         peer = json.loads(
                             await _output(
-                                groups[1].task,
+                                groups[1].primary,
                                 (
                                     "python3",
                                     "-c",
