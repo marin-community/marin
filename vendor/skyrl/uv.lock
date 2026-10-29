@@ -3154,21 +3154,16 @@ schema = [
 
 [package.metadata]
 requires-dist = [
-    { name = "emoji", marker = "extra == 'instructions'" },
-    { name = "immutabledict", marker = "extra == 'instructions'" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "langdetect", marker = "extra == 'instructions'" },
-    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym", "instructions"], marker = "extra == 'all'", editable = "../../lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../../lib/verifyit" },
     { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
-    { name = "nltk", marker = "extra == 'instructions'", specifier = ">=3.9.1" },
     { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
-    { name = "syllapy", marker = "extra == 'instructions'" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
     { name = "tomli-w", specifier = ">=1.2" },
 ]
-provides-extras = ["math", "schema", "judge", "reasoning-gym", "instructions", "all"]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
 
 [package.metadata.requires-dev]
 test = [
