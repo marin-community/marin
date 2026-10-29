@@ -12,11 +12,14 @@ import pytest
 from mariner import olmix
 from mariner.cli import INPUT_ERROR_STATUS, MIXTURES_TABLE, main
 from mariner.data import (
+    BASELINE,
     CALIBRATION_RUN,
+    DELETION,
     MAIN_SWARM,
     OLMIX_CAP,
     PAPER_TARGET_BUDGET,
     REPEAT,
+    SAMPLED,
     TRAINED_MARINER,
     TRAINED_OLMIX,
     mixture_weights,
@@ -32,6 +35,7 @@ from mariner.data import (
     swarm_from_runs,
     trained_counts,
 )
+from mariner.design import MIN_DISTANCE
 from mariner.evaluate import selection_metrics
 from mariner.fit import fit_objective
 from mariner.model import Anchor, Objective, ObjectiveFit, Swarm
@@ -290,6 +294,23 @@ def test_cli_design_counts_data_seeds_up_from_seed_and_repeats_the_calibration_m
     mixture = design.columns[design.columns.str.match("^(w|pf)__")]
     calibration = design.loc[design["run_label"] == CALIBRATION_RUN, mixture].to_numpy()
     np.testing.assert_array_equal(repeats[mixture].to_numpy(), np.repeat(calibration, 2, axis=0))
+
+
+# A design that ignored the fixed runs would draw, from these seeds, a candidate within 1e-3 of the UniMax baseline, of
+# the proportional baseline and of a removal run.
+@pytest.mark.parametrize("seed", [21, 26, 27])
+def test_cli_design_keeps_sampled_runs_min_distance_from_baselines_and_removals(tmp_path, seed):
+    partition, out = tmp_path / "partition.csv", tmp_path / "design.csv"
+    pd.DataFrame({"bucket_id": ["a", "b"], "pool_tokens": [3e9, 1e9]}).to_csv(partition, index=False)
+    command = ["design", "--partition", str(partition), "--target-budget", "2e9", "--candidates", "16"]
+    options = ["--seed", str(seed), "--repeats", "2", "--unimax-budget-fraction", "0.8"]
+    assert main([*command, *options, "--out", str(out)]) == 0
+    design = read_csv(out)
+    weights = design.filter(regex="^w__")
+    sampled = weights[design["design_kind"] == SAMPLED].to_numpy()
+    fixed = weights[design["design_kind"].isin([BASELINE, DELETION])].to_numpy()
+    least_distance = (0.5 * np.abs(sampled[:, None] - fixed[None]).sum(axis=2)).min()  # total variation
+    assert least_distance >= MIN_DISTANCE
 
 
 @pytest.mark.data_integration

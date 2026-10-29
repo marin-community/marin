@@ -66,7 +66,7 @@ from mariner.data import (
     swarm_from_runs,
     trained_counts,
 )
-from mariner.design import STRATIFIED, UNIMAX, proportional, sobol_candidates, stratified, swarm_table, unimax
+from mariner.design import STRATIFIED, UNIMAX, proportional, removals, sobol_candidates, stratified, swarm_table, unimax
 from mariner.evaluate import (
     MEASURED_COLUMN,
     PREDICTED_COLUMN,
@@ -444,7 +444,9 @@ def run_design(args: argparse.Namespace) -> int:
         UNIMAX: unimax(partition.pool_tokens, budget, UNIMAX_MAX_EPOCHS),
         STRATIFIED: stratified(len(partition.bucket_ids)),
     }
-    candidates = sobol_candidates(args.candidates, len(partition.bucket_ids), args.seed)
+    # A candidate within the least distance of a baseline or a removal would train a near-duplicate of that run.
+    fixed = np.vstack([*baselines.values(), removals(base)])
+    candidates = sobol_candidates(args.candidates, len(partition.bucket_ids), args.seed, existing=fixed)
     table = swarm_table(
         partition.bucket_ids,
         candidates,

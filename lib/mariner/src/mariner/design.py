@@ -7,8 +7,9 @@ A swarm trains one proxy run per row of ``swarm_table``: the baseline mixtures (
 calibrates the fit, UniMax and the stratified mixture), candidates drawn from a scrambled Sobol' sequence on the
 simplex, the proportional mixture with each bucket removed in turn, and repeats of the proportional mixture. The
 repeats are not fit rows; they anchor the floors. The paper's D-optimal selection among candidates is not part of this
-recipe, so every candidate is a run. After training, one adds ``observation_id`` and the ``bpb__<task_id>`` outcomes,
-and ``mariner.data.swarm_from_runs`` reads the table.
+recipe, so every candidate is a run, and ``mariner design`` keeps each at least ``MIN_DISTANCE`` in total variation from
+the other candidates, the baselines and the removals, so that no run near-duplicates another. After training, one adds
+``observation_id`` and the ``bpb__<task_id>`` outcomes, and ``mariner.data.swarm_from_runs`` reads the table.
 
 The candidates port the research code's ``sobol_weight_configs`` for one phase, and UniMax its
 ``compute_unimax_weights``. The README's "Research code" section gives the research code's location: the research
@@ -41,7 +42,7 @@ from mariner.data import (
 )
 
 MIN_WEIGHT = 2e-4  # candidate weights below this become zero
-MIN_DISTANCE = 0.001  # the least total variation distance between two candidates
+MIN_DISTANCE = 0.001  # the least total variation distance of a candidate from another or from an existing mixture
 SOBOL_CLIP = 1e-9  # keeps -log(u) finite and positive at the ends of the unit interval
 POINTS_PER_CANDIDATE = 1_000  # Sobol' points tried per requested candidate before giving up
 FIRST_BLOCK_EXPONENT = 3  # the first block holds 2**3 points
