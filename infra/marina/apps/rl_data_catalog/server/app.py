@@ -269,7 +269,13 @@ def create_api(services: AppletServices) -> FastAPI:
             )
         if record is None:
             raise HTTPException(404, "Archived review not found")
-        return {**record, "artifacts": [dict(row) for row in files]}
+        return {
+            "id": record["id"],
+            "source_id": record["source_id"],
+            "collection": record["collection"],
+            "updated_at": record["updated_at"],
+            "artifacts": [dict(row) for row in files],
+        }
 
     @api.get("/archive/reviews/{review_id}/artifacts/{path:path}")
     def archived_artifact(review_id: str, path: str) -> Response:

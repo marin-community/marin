@@ -1,6 +1,6 @@
 ---
-name: marina-applet
-description: Build, validate, release, inspect, query, roll back, or archive a Marina application. Maintained source apps and uploaded applets use Postgres packages and marina release, independently of Marina runtime deployment.
+name: marina-app
+description: Build, validate, release, inspect, query, roll back, or archive a Marina app. Maintained and ad hoc apps use Postgres packages and marina release, independently of Marina runtime deployment.
 ---
 
 # Work with Marina applications
@@ -10,9 +10,13 @@ sections of [the Marina reference](../../../infra/marina/README.md). Treat sourc
 CLI help and those docs as authoritative. Use the existing examples as package
 references.
 
-Every application uses `marina release`. Source under `infra/marina/apps/` and
-`infra/marina/applets/` has the same lifecycle. Marina image deployment and startup
-never publish packages, select application revisions, or run application migrations.
+Every application uses `marina release`. Check maintained source into
+`infra/marina/apps/`; release ad hoc apps from any local directory. Both store
+released packages in Postgres. Agent-created apps follow the same lifecycle.
+Use `marina apps` for management. The existing package format still uses
+`applet.toml` and `applet_id`; these do not define a separate app type.
+Marina image deployment and startup never publish packages, select application
+revisions, or run application migrations.
 Do not restart Marina to release an application.
 
 ## Source and package
@@ -24,7 +28,7 @@ the same `applet.toml`, as the named apps do for `infra/marina/web`. Keep existi
 names, database schemas and data locations when updating an application.
 
 Prefer plain HTML/JavaScript for small reports and Vue/Vite for substantial client
-state. UUID applets need relative asset/API URLs, Vite `base: "./"`, and hash routing.
+state. UUID apps need relative asset/API URLs, Vite `base: "./"`, and hash routing.
 Named applications may retain their existing route bases. Bundle dependencies;
 executable inline scripts and third-party script CDNs are blocked.
 
@@ -94,7 +98,7 @@ For maintained source, use a clean checkout at current remote main by default:
 
 ```bash
 uv run marina release-status my-app --json
-uv run marina applets versions UUID --json
+uv run marina apps versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
@@ -112,7 +116,7 @@ initial named registration and host bindings.
 The default origin is `https://marina.oa.dev`, authenticated through cached Marin
 login or ambient IAP credentials.
 
-An ad hoc applet without a declared `applet_id` or Git repository uses the same command:
+An ad hoc app without a declared `applet_id` or Git repository uses the same command:
 
 ```bash
 uv run marina release my-report --base-version 0 --json
@@ -135,11 +139,11 @@ in object storage. Key caches by source version/query and record freshness. Load
 remote data separately and select complete snapshots atomically.
 
 ```bash
-uv run marina applets table load UUID observations rows.parquet --url ORIGIN
-uv run marina applets sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
-uv run marina applets versions UUID --json
-uv run marina applets rollback UUID RETAINED_REVISION
-uv run marina applets archive UUID
+uv run marina apps table load UUID observations rows.parquet --url ORIGIN
+uv run marina apps sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
+uv run marina apps versions UUID --json
+uv run marina apps rollback UUID RETAINED_REVISION
+uv run marina apps archive UUID
 ```
 
 Repeated table loads append. `--replace` drops before separate insert requests;
@@ -148,7 +152,7 @@ restrictions are documented in the reference. Rollback selects a retained packag
 and does not reverse schema migrations. The registry retains the current revision
 and four other recent revisions.
 
-Unnamed applets default to private. Public mode is only for trusted GET/HEAD
+Unnamed apps default to private. Public mode is only for trusted GET/HEAD
 handlers and data intended for unrestricted disclosure; Marina cannot prove GET
 handlers have no side effects. Named apps stay private.
 

@@ -1,6 +1,10 @@
 dist/
-!examples/static-html-applet/dist/
-!examples/static-html-applet/dist/**
+!examples/static-html-app/dist/
+!examples/static-html-app/dist/**
+!examples/problem-set-app/dist/
+!examples/problem-set-app/dist/**
+!apps/rl_data_catalog/dist/
+!apps/rl_data_catalog/dist/**
 node_modules/
 .data/
 journeys-out/

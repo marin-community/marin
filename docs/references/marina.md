@@ -3,19 +3,28 @@
 Marina hosts independently released application packages behind authentication.
 Frontends, Python backends and current revisions live in Postgres. Every application
 uses `marina release`; restarting or deploying Marina updates the base runtime and
-preserves application selections. Merging source does not release it or load its data.
+preserves each app's selected revision. Merging source does not release it or load its data.
 
 ## Choose the application shape
 
-Use a static package for a report, a Python backend for validated APIs, and a named
-application when it needs stable named routes, scheduled jobs or the Loom panel for
-asking an agent to work on the application. These
-are capabilities of the same release mechanism. Maintained source under
-`infra/marina/apps/` and `infra/marina/applets/` follows the same workflow.
+Use a static package for a report and add a Python backend when it needs APIs.
+Either can be a named app when it needs stable named routes, scheduled jobs or
+the Loom panel for asking an agent to work on the application. Naming adds
+capabilities to the same release mechanism.
 
-Ordinary applets have stable `/a/<uuid>/` URLs on an isolated origin. Named apps such
+Maintained app source is checked in under `infra/marina/apps/`. Ad hoc apps can
+be released from any local directory without checking in their source. Both
+store their released code in Postgres and use the same commands. Whether an
+agent or a person created an app does not change its lifecycle.
+
+The package format retains the filename `applet.toml` and UUID field `applet_id`
+so existing released revisions remain valid. These spellings do not describe
+a separate app type. Use `marina apps` for release history, access modes, data,
+rollback and archive operations.
+
+Ordinary apps have stable `/a/<uuid>/` URLs on an isolated origin. Named apps such
 as Echo and EvalDash retain `/echo/` and `/evaldash/` on Marina. Initial named registration
-requires an operator. External storage URLs and job credentials need explicit base-runtime
+requires an operator. The app's `data_url` and job credentials need explicit base-runtime
 configuration; uploaded packages cannot allocate infrastructure or grant themselves
 new credentials.
 
@@ -26,8 +35,8 @@ credentials or failure isolation need their own service project under the
 
 ## Build and release
 
-Start with `infra/marina/examples/problem-set-applet/` for Python/Postgres or
-`infra/marina/examples/vue-applet/` for Vue. A package contains `applet.toml`,
+Start with `infra/marina/examples/problem-set-app/` for Python/Postgres or
+`infra/marina/examples/vue-app/` for Vue. A package contains `applet.toml`,
 `dist/index.html`, browser assets, and optional Python modules. Maintained source
 declares its stable `applet_id` UUID and optional repository-relative
 `source_paths` for shared build inputs in the same `applet.toml`.
@@ -44,7 +53,7 @@ maintained source default to a clean checkout at the current remote main:
 
 ```bash
 uv run marina release-status my-app --json
-uv run marina applets versions UUID --json
+uv run marina apps versions UUID --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
@@ -76,7 +85,7 @@ handover, see the [Marina reference](https://github.com/marin-community/marin/bl
 
 ## Frontend and API
 
-Use relative asset/API URLs in UUID applets. Vue/Vite packages use `base: "./"` and
+Use relative asset/API URLs in UUID apps. Vue/Vite packages use `base: "./"` and
 hash routing so stable and versioned URLs both work. Bundle dependencies into
 `dist/`; executable inline scripts and third-party script CDNs are blocked.
 
@@ -86,7 +95,7 @@ navigation and the agent panel. Updating those components requires releasing the
 consuming app; the base runtime does not ship frontend code.
 
 A Python factory returns an ASGI application, or `marina.apps.registered_api(api)`
-for explicitly annotated MCP operations. The factory's `services` argument supplies the selected applet UUID,
+for explicitly annotated MCP operations. The factory's `services` argument supplies the selected app UUID,
 revision, name, data URL and a role-scoped `engine()`. Read authenticated identity
 through `rigging.server_auth.get_verified_identity()`.
 
@@ -113,8 +122,8 @@ Choose the serving data path before building the backend:
 For small scalar datasets:
 
 ```bash
-uv run marina applets table load UUID observations rows.parquet --url ORIGIN
-uv run marina applets sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
+uv run marina apps table load UUID observations rows.parquet --url ORIGIN
+uv run marina apps sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
 ```
 
 Omitting `--url` targets production. Use the printed origin/UUID while a local
@@ -130,16 +139,16 @@ released packages before execution; an in-flight job keeps its snapshot while th
 next execution selects newly released code.
 
 ```bash
-uv run marina applets versions UUID --json
-uv run marina applets rollback UUID RETAINED_REVISION
-uv run marina applets archive UUID
+uv run marina apps versions UUID --json
+uv run marina apps rollback UUID RETAINED_REVISION
+uv run marina apps archive UUID
 ```
 
 Rollback explicitly selects a retained package; database migrations are not reversed.
 The registry retains the current revision and four other recent revisions. A runtime
 rollback must still support the active package APIs and dependency requirements.
 
-Applets default to private. Public mode exposes GET/HEAD only on the public applet
+Apps default to private. Public mode exposes GET/HEAD only on the public app
 origin and must contain only data and trusted handlers intended for unrestricted
 access. Named apps stay private. See the [reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)
 for mode changes, query limits, deployment gates and recovery.

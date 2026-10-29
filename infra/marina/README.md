@@ -12,15 +12,23 @@ or frontend bundles. A restart loads the same selected packages from Postgres.
 See [Building Marina apps](../../docs/references/marina.md) for product guidance and
 [RL Data Atlas](../../docs/references/rl-data-atlas.md) for Atlas's separate data loader.
 
-The [Python playground](applets/python_playground/README.md) provides trusted Python
+The [Python playground](apps/python_playground/README.md) provides trusted Python
 execution with saved files and report previews. Its README covers local previews,
 storage limits, examples, the agent pane and project uploads.
 
 ## Source and package layout
 
-Maintained sources live in `apps/<name>/` or `applets/<name>/`. Both directories use
-the same manifest, builder, registry and release command. The directory name does
-not select a deployment mechanism.
+Maintained app source is checked in under `apps/<name>/`. Ad hoc apps can be
+released from any local directory without checking in their source. Every app's
+released frontend, Python code and selected revision live in Postgres and use
+the same `marina release` lifecycle.
+
+Named apps add stable routes and infrastructure-approved capabilities to this
+same package model. Source location does not grant those capabilities.
+The package filename `applet.toml`, field `applet_id`, and runtime API/database
+identifiers retain their existing spellings so stored revisions remain valid;
+they do not identify a separate kind of app. Use `marina apps` to inspect and
+manage all released apps.
 
 ```text
 my-app/
@@ -45,7 +53,7 @@ modules. Python files below tests, journeys, web, dependencies and caches are
 excluded. Only `dist/` is browser-readable. Limits are 25 MiB total, 8 MiB per file,
 and 2,000 regular files; large payloads belong in object storage.
 
-Most applets use `/a/<uuid>/` on the isolated authenticated applet origin. A manifest
+Most apps use `/a/<uuid>/` on the isolated authenticated app origin. A manifest
 with `name = "echo"` registers the stable authenticated route `/echo/`. Initial named
 registration requires an operator, and names cannot change on later releases.
 Echo, EvalDash, TaskTrove and Zephyr keep their existing names, UUID
@@ -53,7 +61,7 @@ bindings in `applet.toml`, data locations and database schemas.
 
 Named applications can declare an allowed `data_url`, scheduled jobs and an agent
 panel. These capabilities are checked by the server against `runtime.toml`.
-Ordinary unnamed applets cannot request them. Named applications remain private.
+Ordinary unnamed apps cannot request them. Named applications remain private.
 
 ## Release an application
 
@@ -69,7 +77,7 @@ From a clean checkout at the current remote main:
 
 ```bash
 uv run marina release-status my-app --json
-uv run marina applets versions 01234567-89ab-cdef-0123-456789abcdef --json
+uv run marina apps versions 01234567-89ab-cdef-0123-456789abcdef --json
 uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
@@ -104,7 +112,7 @@ be tracked by default. When `applet_id` is set, the default release checks clean
 current main before and after the build and records its commit, source path and
 hashes of the app and declared shared inputs in `dist/marina-release.json`.
 The metadata contains no publisher identity and is
-public when the applet is public.
+public when the app is public.
 
 Use `--allow-dirty` to explicitly release from a branch or uncommitted checkout.
 It bypasses the Git and tracked-file checks and omits verified source metadata;
@@ -119,7 +127,7 @@ released package has no source metadata.
 Fetch main before assessing freshness. Declare repository-relative shared build inputs in `source_paths`; the four named
 apps include `infra/marina/web`. Runtime dependencies can also affect behavior.
 
-An ad hoc applet can use the same command without a Git repository or declared `applet_id`:
+An ad hoc app can use the same command without a Git repository or declared `applet_id`:
 
 ```bash
 uv run marina release my-report --base-version 0 --json
@@ -169,7 +177,7 @@ Journeys explicitly install packages into their local test database as well.
 
 ## Frontends
 
-Use relative asset/API URLs for UUID applets so both the stable URL and
+Use relative asset/API URLs for UUID apps so both the stable URL and
 `/a/<uuid>/v/<revision>/` work. Vite applications use `base: "./"` and hash routing.
 Named applications can retain their existing `/<name>/` router base and API paths.
 Their stable frontend routes use revalidation; immutable revision URLs retain
@@ -220,7 +228,7 @@ engine assumes the application's role and searches its schema. Read the caller
 through `rigging.server_auth.get_verified_identity()`.
 
 Registry and Python backend engines retain up to two idle connections and allow
-two additional connections while busy. The generic applet SQL endpoint retains up
+two additional connections while busy. The generic app SQL endpoint retains up
 to four role/schema pools per worker, each with one idle connection and one overflow
 connection. It resets session settings, temporary objects and advisory locks after
 each SQL request. Eviction and shutdown dispose idle pools; active queries finish
@@ -236,9 +244,9 @@ compatible with retained revisions and requests/jobs already running old code.
 `marina migrate` upgrades only Marina's registry and base database provisioning.
 
 Named applications adopt their existing schema in place on first release. Tables
-and their dependent sequences move to the applet role; data is neither copied nor
+and their dependent sequences move to the app role; data is neither copied nor
 reloaded. Existing reader grants on the four maintained schemas are retained.
-Ordinary applets own `applet_<uuid-without-hyphens>`. Every application role inherits
+Ordinary apps own `applet_<uuid-without-hyphens>`. Every application role inherits
 `marina_reader` for cross-application reads and writes only its own schema.
 
 Backends are trusted Python plugins sharing Marina's process, installed packages,
@@ -331,11 +339,11 @@ and select complete snapshots atomically; preserve the last good snapshot on fai
 For small scalar tables:
 
 ```bash
-uv run marina applets table load UUID observations rows.parquet --url ORIGIN
-uv run marina applets sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
-uv run marina applets versions UUID --json
-uv run marina applets rollback UUID RETAINED_REVISION
-uv run marina applets archive UUID
+uv run marina apps table load UUID observations rows.parquet --url ORIGIN
+uv run marina apps sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
+uv run marina apps versions UUID --json
+uv run marina apps rollback UUID RETAINED_REVISION
+uv run marina apps archive UUID
 ```
 
 Table loading accepts JSON arrays, JSONL, CSV and Parquet scalar columns. Repeated
@@ -348,21 +356,21 @@ The registry retains the current revision and four other recent revisions.
 Rollback explicitly selects a retained revision; it does not reverse database
 migrations. Archival hides an application while preserving its schema and revisions.
 
-Applets default to private. Use `release --mode public` or `applets mode UUID public`
-only for data and trusted GET handlers intended for the internet. Public applets
+Apps default to private. Use `release --mode public` or `apps mode UUID public`
+only for data and trusted GET handlers intended for the internet. Public apps
 use `https://public.applets.marina.oa.dev`; that service admits only GET and HEAD
 and exposes no SQL, publication, MCP or named-app routes. Marina cannot prove that
 a GET handler is free of side effects.
 
-## Named applet hosts
+## Named app hosts
 
-Named applet hosts are stored in `marina.applet_hosts` in Postgres. Every request
+Named app hosts are stored in `marina.applet_hosts` in Postgres. Every request
 resolves the hostname there, so rebinding a host reaches all serving Cloud Run
-revisions without a deployment. Each bound host serves only its assigned applet
+revisions without a deployment. Each bound host serves only its assigned app
 behind the same authentication. Its root redirects to `/v/<current>/`; assets,
-queries, and Python APIs remain pinned to that applet revision. Existing URLs on
+queries, and Python APIs remain pinned to that app revision. Existing URLs on
 `MARINA_APPLET_ORIGIN` remain valid.
-Named-host files require cache revalidation because a different applet can reuse
+Named-host files require cache revalidation because a different app can reuse
 the same `/v/<revision>/` paths after a binding changes.
 
 Pulumi's `marin-marina:applet_domains` lists only the hostnames whose DNS records
@@ -370,9 +378,9 @@ and Cloud Run domain mappings it provisions. Provision a new hostname through
 Pulumi, then bind it with an identity listed in `MARINA_APPLET_OPERATORS`:
 
 ```bash
-uv run marina applets hosts list
-uv run marina applets hosts bind filer.marina.oa.dev 7f536ce3-0562-40f1-b209-e6110d8ab4e8
-uv run marina applets hosts unbind filer.marina.oa.dev
+uv run marina apps hosts list
+uv run marina apps hosts bind filer.marina.oa.dev 7f536ce3-0562-40f1-b209-e6110d8ab4e8
+uv run marina apps hosts unbind filer.marina.oa.dev
 ```
 
 The operator list is configured with `marin-marina:applet_operators`. An empty
@@ -380,16 +388,16 @@ list disables host management through the API. The commands use
 `/api/marina/applet-hosts` on the canonical Marina origin. Rebinding and unbinding
 do not change DNS. Unbinding retains a disabled hostname record that returns 404,
 so the hostname cannot expose Marina's control routes. Marina's canonical, shared
-applet, public applet, and legacy app hosts cannot be rebound through this API.
+app, public app, and legacy app hosts cannot be rebound through this API.
 
 Pulumi passes the provisioned hostname list as `MARINA_APPLET_DOMAINS`, without
-applet UUIDs. A listed hostname returns 404 until it has an enabled database
+app UUIDs. A listed hostname returns 404 until it has an enabled database
 binding. Other hosts bypass the registry lookup. Binding an unprovisioned
 hostname is rejected; unbinding an unknown binding returns 404.
 
 The deployment migration imports the existing Filer binding once, before the
 new service takes traffic. It leaves subsequent rebindings and deletions alone.
-Fresh databases without the production Filer applet start with no bindings.
+Fresh databases without the production Filer app start with no bindings.
 
 ## Base runtime deployment and first cutover
 
