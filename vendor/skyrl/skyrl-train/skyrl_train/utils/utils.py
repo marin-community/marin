@@ -652,6 +652,16 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
         )
 
 
+def num_rollout_gpus(cfg: DictConfig) -> int:
+    generator = cfg.generator
+    return (
+        generator.num_inference_engines
+        * generator.inference_engine_tensor_parallel_size
+        * generator.inference_engine_pipeline_parallel_size
+        * generator.inference_engine_data_parallel_size
+    )
+
+
 def validate_generator_cfg(cfg: DictConfig):
     """Validates the correctness of generator-related config.
 

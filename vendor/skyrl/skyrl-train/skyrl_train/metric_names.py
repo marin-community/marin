@@ -23,3 +23,5 @@ TIS_TITO_FULL_DECLINE_METRIC_PREFIX = "generate/tis/tito_full/decline/"
 CORRECTION_WEIGHT_MEAN_METRIC = "policy/correction/weight_mean"
 CORRECTION_TRUNCATED_FRACTION_METRIC = "policy/correction/truncated_fraction"
 CORRECTION_MASKED_FRACTION_METRIC = "policy/correction/masked_fraction"
+
+PROMPTS_DROPPED_TOO_LONG_METRIC = "generate/prompts_dropped_too_long"
