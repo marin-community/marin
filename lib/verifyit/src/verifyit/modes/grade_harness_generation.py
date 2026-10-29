@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from verifyit.adapters.evalchemy_math import END_OF_TURN_SEQUENCES
+from verifyit.adapters.evalchemy_code import END_OF_TURN
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.adapters.harness_native import exact_match
 from verifyit.grade import InvalidTask, Reward, read_output, scored
@@ -17,7 +17,7 @@ from verifyit.modes.grade_exact import grade_collection_f1
 from verifyit.spec import HarnessGenerationProfile, HarnessGenerationSpec
 
 INVALID_ANSWER = "[invalid]"
-GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN_SEQUENCES)
+GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN)
 COMPLETION_REQUEST_STOPS = ("\nYou are an AI assistant", "\nQuestion:", "\nQ:", "\n[Question]")
 GSM8K_REQUEST_STOPS = ("\nYou are an AI assistant", "Question:", "\nQ:", "\n[Question]")
 _NUMBER = r"-?\$?\d[\d,]*(?:\.\d+)?"
@@ -40,7 +40,7 @@ _DROP_ENTITY = re.compile(r"\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _ARTICLES = re.compile(r"\b(a|an|the)\b", re.UNICODE)
 
 
-def truncate_response(response: str, stops: tuple[str, ...] = END_OF_TURN_SEQUENCES) -> str:
+def truncate_response(response: str, stops: tuple[str, ...] = END_OF_TURN) -> str:
     indices = [index for stop in stops if (index := response.find(stop)) >= 0]
     return response[: min(indices)] if indices else response
 

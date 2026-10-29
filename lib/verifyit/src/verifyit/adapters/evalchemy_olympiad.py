@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from math_verify import parse, verify
 from sympy.core.relational import Relational
 
-from verifyit.adapters.evalchemy_math import END_OF_TURN_SEQUENCES
+from verifyit.adapters.evalchemy_code import END_OF_TURN
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.grade import Reward, invalid_task, scored
 
@@ -42,7 +42,7 @@ def reference_answers(raw: str | int | float | Sequence[str]) -> tuple[str, ...]
 
 def first_boxed_answer(response: str) -> str:
     """Extract the first source box before a task boundary, without removing reasoning."""
-    ends = [index for stop in END_OF_TURN_SEQUENCES if (index := response.find(stop)) >= 0]
+    ends = [index for stop in END_OF_TURN if (index := response.find(stop)) >= 0]
     response = response[: min(ends)] if ends else response
     starts = [index for marker in (r"\boxed", r"\fbox") if (index := response.find(marker)) >= 0]
     if not starts:

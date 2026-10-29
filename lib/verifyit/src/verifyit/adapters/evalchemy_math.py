@@ -14,24 +14,11 @@ from sympy.core.relational import Relational
 
 from verifyit.adapters.completion import final_text
 from verifyit.adapters.evalchemy_amc import last_boxed_answer
+from verifyit.adapters.evalchemy_code import END_OF_TURN
 from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
 from verifyit.grade import Reward, invalid_task, scored
 
-END_OF_TURN_SEQUENCES = (
-    "<|im_end|>",
-    "<|eot_id|>",
-    "<|end_of_text|>",
-    "<|endoftext|>",
-    "</s>",
-    "\nYou are an AI assistant",
-    "\nQuestion:",
-    "\nQ:",
-    "\n[Question]",
-    "\nUser:",
-    "\nuser\n",
-    "\nAssistant:",
-)
-CHAT_REQUEST_STOPS = END_OF_TURN_SEQUENCES[:4]
+CHAT_REQUEST_STOPS = END_OF_TURN[:4]
 
 
 def _symbol_free_relation(parsed: list) -> bool:
@@ -42,7 +29,7 @@ def _symbol_free_relation(parsed: list) -> bool:
 def final_boxed_answer(response: str) -> str:
     """Extract the source's last box in final content before a task boundary."""
     response = final_text(response)
-    stops = [index for stop in END_OF_TURN_SEQUENCES if (index := response.find(stop)) >= 0]
+    stops = [index for stop in END_OF_TURN if (index := response.find(stop)) >= 0]
     response = response[: min(stops)] if stops else response
     return last_boxed_answer(response)
 

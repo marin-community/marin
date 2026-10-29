@@ -168,7 +168,7 @@ def _rational_value(string: str) -> Fraction | None:
 
 
 @functools.lru_cache(maxsize=_PARSE_CACHE_SIZE)
-def _sympy_parses(string: str):
+def _sympy_expression(string: str):
     """Parse a LaTeX string, returning ``None`` if SymPy rejects it."""
     try:
         return parse_latex(string)
@@ -201,13 +201,13 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
     try:
         previous = signal.signal(signal.SIGALRM, on_timeout)
         signal.alarm(_SYMPY_TIMEOUT)
-        parsed_candidate = _sympy_parses(candidate)
+        parsed_candidate = _sympy_expression(candidate)
         if parsed_candidate is None:
             return False
         if candidate == reference:
             parsed_reference = parsed_candidate
         else:
-            parsed_reference = _sympy_parses(reference)
+            parsed_reference = _sympy_expression(reference)
             if parsed_reference is None:
                 return False
         return sympy.simplify(parsed_candidate - parsed_reference) == 0
