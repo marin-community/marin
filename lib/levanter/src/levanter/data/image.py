@@ -36,7 +36,7 @@ from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlBackedShardedDataSource,
-    WrappedHFDataSource,
+    datasource_from_hf_or_none,
     _iter_parquet_from_row,
     _sniff_format_for_dataset,
 )
@@ -385,6 +385,13 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     return AnyResolutionParams(grid_pinpoints, tile_size, vision_feature_height, max_num_patches)
 
 
+def _pad_or_trim_image_tiles(pixel_values: np.ndarray, num_tiles: int) -> np.ndarray:
+    if pixel_values.shape[0] >= num_tiles:
+        return pixel_values[:num_tiles]
+    padding = np.zeros((num_tiles - pixel_values.shape[0],) + pixel_values.shape[1:], dtype=pixel_values.dtype)
+    return np.concatenate([pixel_values, padding], axis=0)
+
+
 class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
     """
     A batch processor that converts conversation-format data into model-ready inputs.
@@ -439,7 +446,8 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
             # None if max_num_patches is not configured.
 
         "unpad_indices": np.ndarray or None,
-            # Shape: (num_image_tokens,) dtype: int32
+            # Shape: (max_features,) with a patch limit, otherwise (num_image_tokens,); dtype: int32.
+            # Entries after the unpadded feature count are zero padding.
             # Index mapping from HuggingFace's unpadded feature order to Levanter's padded order.
             # Used to reorder vision features after encoding to match HF's spatial unpadding.
             # Only computed for single-image anyres case; None otherwise.
@@ -650,15 +658,10 @@ class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
         grid_mask = np.zeros(total_patches, dtype=np.bool_)
         grid_mask[:valid_patches] = True
 
-        if actual_patches < total_patches:
-            pad_size = total_patches - actual_patches
-            padding = np.zeros((pad_size,) + pixel_values.shape[1:], dtype=pixel_values.dtype)
-            pixel_values = np.concatenate([pixel_values, padding], axis=0)
-        elif actual_patches > total_patches:
-            pixel_values = pixel_values[:total_patches]
+        if actual_patches > total_patches:
             grid_mask[:] = True
 
-        return pixel_values, grid_mask
+        return _pad_or_trim_image_tiles(pixel_values, total_patches), grid_mask
 
     def _create_loss_mask(self, input_ids: np.ndarray) -> np.ndarray:
         """Select assistant content and its terminator, including truncated responses."""
@@ -927,15 +930,8 @@ class ImageDatasetSourceConfig:
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Get a sharded data source for the specified split."""
         if self.id is not None:
-            try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
-            except ValueError as e:
-                if str(e).startswith("Bad split"):
-                    logger.warning(f"Split {split} not found for {self.id} {self.name}")
-                    return None
-                raise
-
-            if len(ds.shard_names) == 0:
+            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if ds is None:
                 return None
 
             def extract_fields(x: dict[str, Any]) -> dict[str, Any]:
@@ -1032,15 +1028,8 @@ class ConversationDatasetSourceConfig:
     def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Get a sharded data source for the specified split."""
         if self.id is not None:
-            try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
-            except ValueError as e:
-                if str(e).startswith("Bad split"):
-                    logger.warning(f"Split {split} not found for {self.id} {self.name}")
-                    return None
-                raise
-
-            if len(ds.shard_names) == 0:
+            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if ds is None:
                 return None
 
             def extract_fields(x: dict[str, Any]) -> ConversationDict:
@@ -1219,11 +1208,6 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
             return
 
         def prefetch_worker() -> None:
-            """Background worker that prefetches data sequentially.
-
-            Simple sequential prefetch - processes data from index 0 to end,
-            keeping the cache filled ahead of consumption.
-            """
             batch_size = 32
             next_idx = 0
 
@@ -1535,15 +1519,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
                     dtype=pixel_dtype,
                 )
             elif pixel_array.ndim == 4:
-                actual_num_patches = pixel_array.shape[0]
-                target_num_patches = self.NumPatches.size
-
-                if actual_num_patches < target_num_patches:
-                    pad_size = target_num_patches - actual_num_patches
-                    padding = np.zeros((pad_size,) + pixel_array.shape[1:], dtype=pixel_array.dtype)
-                    pixel_array = np.concatenate([pixel_array, padding], axis=0)
-                elif actual_num_patches > target_num_patches:
-                    pixel_array = pixel_array[:target_num_patches]
+                pixel_array = _pad_or_trim_image_tiles(pixel_array, self.NumPatches.size)
 
                 if self.pixel_dtype is not None:
                     pixel_array = pixel_array.astype(pixel_dtype)
@@ -1632,8 +1608,8 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     train_weights: Dict[str, float] = field(default_factory=dict)
     """Weights for each dataset source. They will be normalized to sum to 1."""
     shuffle: bool | int = False
-    """Whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length."""
+    """Shuffle each source before mixing: True for a full shuffle, False to preserve order,
+    or an integer for the per-source shuffle era length."""
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     mixture_block_size: int = 2048
     """Block size for the mixture dataset."""
