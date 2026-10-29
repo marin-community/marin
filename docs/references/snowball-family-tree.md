@@ -1,9 +1,9 @@
 # Snowball model family tree
 
 [Open the Snowball model family tree](https://public.applets.marina.oa.dev/a/d3b5517a-c119-4fd9-999d-362183422bf3/)
-to explore 130 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
+to explore 140 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
 without signing in. This is a curated snapshot of the evidence available on
-October 19, 2026. The stable URL opens the current applet revision.
+October 23, 2026. The stable URL opens the current applet revision.
 
 The lineage map opens with the whole tree visible and its shared pretrain centered.
 Click a node to expand its summary, algorithms, compute estimate and evidence.
@@ -49,6 +49,17 @@ fresh optimizer from `.32` step 14, then retains optimizer and step state across
 `.49` step 12 is a user-selected export with incomplete evaluation, not a
 complete-evaluation winner. Public model cards, pinned source configurations,
 W&B links and the complete recorded `.32` W&B archive support these nodes.
+
+The October 23 update adds the transfer experiments built from the sync Step92
+student. [The single-expert experiment](https://github.com/marin-community/marin/issues/9920)
+adds the CruxEval expert E and its plain-SFT, rejection-sampled SFT and on-policy
+distillation transfers back into Step92. [The two-expert experiment](https://github.com/marin-community/marin/issues/9984)
+adds the MMLU-Pro expert E₂, the mixed plain-SFT, mixed RS-SFT and multi-teacher
+on-policy distillation arms, and the task-arithmetic (a = b = 0.5) and TIES
+(d = 0.5) merges. Each merge has an arrow from Step92, E and E₂. Distillation
+teachers appear in node summaries, not as weight parents. Each node pins the
+weight revision named in its experiment record; later Hub commits changed only
+model cards.
 
 ## Maintain the applet
 
