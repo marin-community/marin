@@ -38,6 +38,7 @@ def _native(script, paths):
     return json.loads(result.stdout.splitlines()[-1])
 
 
+pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
 
