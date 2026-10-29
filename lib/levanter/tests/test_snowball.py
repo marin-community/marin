@@ -144,10 +144,10 @@ def test_snowball_config_hf_roundtrip():
     # from_hf_config still round-trips it (above) through its tolerant fallback tuples.
     validate_single_name_config(hf.to_dict(), cfg)
     assert "rms_norm_implementation" not in hf.to_dict()
-    assert "attention_gated_norm_implementation" not in hf.to_dict()
+    assert "gated_norm_implementation" not in hf.to_dict()
 
 
-def test_snowball_attention_gated_norm_fixed_schedule_matches_reference_and_vjp(monkeypatch):
+def test_snowball_gated_norm_fixed_schedule_matches_reference_and_vjp(monkeypatch):
     def reference_linear(x, weight):
         return jax.lax.dot_general(
             x,
@@ -182,7 +182,7 @@ def test_snowball_attention_gated_norm_fixed_schedule_matches_reference_and_vjp(
 
 
 @pytest.mark.timeout(120)
-def test_snowball_attention_gated_norm_fixed_schedule_matches_input_layout_on_four_cpu_devices():
+def test_snowball_gated_norm_fixed_schedule_matches_input_layout_on_four_cpu_devices():
     run_on_cpu_devices(
         """
         import equinox as eqx
@@ -266,14 +266,19 @@ def test_snowball_attention_gated_norm_fixed_schedule_matches_input_layout_on_fo
     )
 
 
-def test_snowball_attention_gated_norm_selector_preserves_state_dict():
+def test_snowball_gated_norm_selector_preserves_state_dict_and_propagates():
     native_cfg = _tiny_config()
-    fixed_cfg = dataclasses.replace(native_cfg, attention_gated_norm_implementation="fixed_schedule")
+    fixed_cfg = dataclasses.replace(native_cfg, gated_norm_implementation="fixed_schedule")
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         native = SnowballLMHeadModel.init(Axis("vocab", native_cfg.vocab_size), native_cfg, key=jax.random.key(23))
         fixed = SnowballLMHeadModel.init(Axis("vocab", fixed_cfg.vocab_size), fixed_cfg, key=jax.random.key(23))
         native_state = native.to_state_dict()
         fixed_state = fixed.to_state_dict()
+
+    assert fixed.transformer.embed_gated_norm.implementation == "fixed_schedule"
+    assert fixed.transformer.final_gated_norm.implementation == "fixed_schedule"
+    assert all(block.attn_gated_norm.implementation == "fixed_schedule" for block in fixed.transformer.blocks)
+    assert all(block.mlp_gated_norm.implementation == "native" for block in fixed.transformer.blocks)
 
     assert native_state.keys() == fixed_state.keys()
     for name in native_state:

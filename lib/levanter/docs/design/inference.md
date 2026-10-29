@@ -124,6 +124,15 @@ dtype and tile-boundary matrix, independent custom-VJP gradient references,
 forward and backward lowering checks, and an Explicit-mesh Snowball decode
 caller that checks K/V placement, cache dtype and sharding, and untouched slots.
 
+### Opt-in fixed-schedule GatedNorm
+
+Snowball’s `gated_norm_implementation="fixed_schedule"` selects the existing
+fixed-schedule contraction for the embedding gate, each block attention gate,
+and the final gate. The block MLP gate remains native. The default is
+`"native"`; the selector is runtime-only and is omitted from HF architecture
+configuration and checkpoint state. Gate parameter shapes, names,
+initialization order, and checkpoint identity remain unchanged.
+
 ### Opt-in shared weighted RMSNorm
 
 Snowball also exposes `rms_norm_implementation="reference"` or

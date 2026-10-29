@@ -473,8 +473,8 @@ class SnowballConfig(HFCompatConfig):
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
     projection_implementation: SnowballProjectionImplementation = "native"
-    # Runtime knob only; fixed-schedule attention gating is opt-in and does not affect other gates.
-    attention_gated_norm_implementation: SnowballGatedNormImplementation = "native"
+    # Runtime knob only; fixed-schedule gating is opt-in and does not affect the block MLP gate.
+    gated_norm_implementation: SnowballGatedNormImplementation = "native"
     # Runtime knob only; it is intentionally omitted from the HF architectural config.
     rms_norm_implementation: SnowballRMSNormImplementation = "native"
     # Runtime knob only; selects the accepted shared arithmetic for non-parametric Q/K RMSNorm.
@@ -486,11 +486,8 @@ class SnowballConfig(HFCompatConfig):
     def __post_init__(self) -> None:
         if self.projection_implementation not in ("native", "fixed_schedule"):
             raise ValueError(f"unknown Snowball projection implementation: {self.projection_implementation!r}")
-        if self.attention_gated_norm_implementation not in ("native", "fixed_schedule"):
-            raise ValueError(
-                "unknown Snowball attention gated-norm implementation: "
-                f"{self.attention_gated_norm_implementation!r}"
-            )
+        if self.gated_norm_implementation not in ("native", "fixed_schedule"):
+            raise ValueError("unknown Snowball gated-norm implementation: " f"{self.gated_norm_implementation!r}")
         if self.rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
             raise ValueError(f"unknown Snowball RMSNorm implementation: {self.rms_norm_implementation!r}")
         if self.qk_rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
@@ -1120,7 +1117,7 @@ class SnowballBlock(eqx.Module):
                 cfg.hidden_dim,
                 cfg.initializer_std,
                 key=gn_attn_key,
-                implementation=cfg.attention_gated_norm_implementation,
+                implementation=cfg.gated_norm_implementation,
             ),
             attn=SnowballAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
@@ -1232,11 +1229,21 @@ class SnowballTransformer(eqx.Module):
         return SnowballTransformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=embed_gn_key,
+                implementation=cfg.gated_norm_implementation,
+            ),
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=final_gn_key,
+                implementation=cfg.gated_norm_implementation,
+            ),
             config=cfg,
         )
 
