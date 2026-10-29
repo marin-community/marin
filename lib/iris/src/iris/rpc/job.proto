@@ -485,27 +485,33 @@ message EnvironmentConfig {
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.
   repeated string setup_scripts = 6;
-  // Credential-free containers sharing only the sandbox task's private network.
-  // Their resource reservations are included in the job's total resources.
-  repeated SandboxServiceSpec sandbox_services = 8;
-  // Logical name for the primary container; empty means "task". The runtime
-  // retains the physical container identity used by logs and task status.
-  string primary_container_name = 9;
+  // Canonical task description, including the primary service. Flat environment
+  // fields above are the derived primary projection used by worker runtimes.
+  repeated ServiceSpec services = 10;
+  string primary_service = 11;
 
-  // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
-  // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.
-  reserved 1, 3, 4, 5;
+  reserved 1, 3, 4, 5, 8, 9;
+  reserved sandbox_services, primary_container_name;
 }
 
-message SandboxServiceSpec {
+// Image startup inherits ENTRYPOINT/CMD when an override is absent.
+message ImageCommand {
+  CommandEntrypoint entrypoint = 1;
+  CommandEntrypoint arguments = 2;
+}
+
+message ServiceSpec {
   string name = 1;
   string image = 2;
   string workdir = 3;
   map<string, string> env_vars = 4;
   ResourceSpecProto resources = 5;
-  // Absence preserves the image's ENTRYPOINT or CMD respectively.
-  CommandEntrypoint entrypoint = 6;
-  CommandEntrypoint arguments = 7;
+  map<string, string> secrets = 6;
+  repeated string setup_scripts = 7;
+  oneof startup {
+    RuntimeEntrypoint runtime_entrypoint = 8;
+    ImageCommand image_command = 9;
+  }
 }
 
 // ============================================================================

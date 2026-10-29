@@ -161,24 +161,68 @@ def test_sandbox_rejects_workspace_bundle(service):
     assert "bundle" in str(exc.value.message)
 
 
+@pytest.mark.parametrize("credential_name", ["AWS_SECRET_ACCESS_KEY", "IRIS_CONTROLLER_ADDRESS"])
+def test_sandbox_singleton_rejects_cloud_and_controller_credentials_at_admission(service, credential_name):
+    request = _launch("/alice/singleton", SANDBOX)
+    request.environment.env_vars[credential_name] = "explicit-value"
+
+    with pytest.raises(ConnectError) as error:
+        _as("user", "alice", service.launch_job, request, None)
+
+    assert error.value.code == Code.INVALID_ARGUMENT
+
+
+@pytest.mark.parametrize("profile, credential_name", [(DEFAULT, "AWS_SECRET_ACCESS_KEY"), (SANDBOX, "JUDGE_KEY")])
+def test_singleton_keeps_permitted_explicit_credentials_and_setup(service, profile, credential_name):
+    request = _launch("/alice/singleton", profile)
+    request.environment.env_vars[credential_name] = "explicit-value"
+    request.environment.secrets["JUDGE_KEY"] = "explicit-secret"
+    request.environment.setup_scripts.append("prepare-judge")
+    response = _as("user", "alice", service.launch_job, request, None)
+
+    stored = _as(
+        "user",
+        "alice",
+        service.get_job_status,
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id),
+        None,
+    ).request
+
+    assert response.job_id == request.name
+    [primary] = stored.environment.services
+    assert credential_name in primary.env_vars
+    assert "JUDGE_KEY" in primary.secrets
+    assert list(primary.setup_scripts) == ["prepare-judge"]
+
+
 def _service_group_request():
     request = _launch("/alice/group", SANDBOX, job_pb2.EGRESS_POLICY_NONE)
     request.task_image = "example.test/task@sha256:" + "a" * 64
-    request.resources.cpu_millicores = 2000
-    request.resources.memory_bytes = 2 * 1024**3
-    request.environment.sandbox_services.add(
+    request.environment.primary_service = "agent"
+    primary = request.environment.services.add(
+        name="agent",
+        image=request.task_image,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    primary.runtime_entrypoint.CopyFrom(request.entrypoint)
+    request.environment.services.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-    )
+    ).image_command.SetInParent()
+    request.ClearField("entrypoint")
+    request.ClearField("resources")
+    request.task_image = ""
     return request
 
 
-def test_sandbox_service_group_persists_on_admission(service):
+@pytest.mark.parametrize("profile", [DEFAULT, SANDBOX])
+def test_service_group_persists_all_members_and_total_resources_on_admission(service, profile):
     service._controller.backend.descriptor = k8s_backend_descriptor()
     request = _service_group_request()
-    request.environment.primary_container_name = "agent"
+    request.container_profile = profile
     response = _as("user", "alice", service.launch_job, request, None)
     stored = _as(
         "user",
@@ -188,14 +232,33 @@ def test_sandbox_service_group_persists_on_admission(service):
         None,
     ).request
     assert stored.resources.cpu_millicores == 2000
-    assert stored.environment.sandbox_services[0].name == "runtime"
-    assert stored.environment.primary_container_name == "agent"
+    assert stored.resources.memory_bytes == 2 * 1024**3
+    assert [member.name for member in stored.environment.services] == ["agent", "runtime"]
+    assert stored.environment.primary_service == "agent"
+    assert [member.resources.cpu_millicores for member in stored.environment.services] == [1000, 1000]
+
+
+def test_worker_backend_rejects_multi_service_submission_before_persisting(service):
+    request = _service_group_request()
+    request.container_profile = DEFAULT
+
+    with pytest.raises(ConnectError) as error:
+        _as("user", "alice", service.launch_job, request, None)
+    assert error.value.code == Code.INVALID_ARGUMENT
+    with pytest.raises(ConnectError) as missing:
+        _as(
+            "user",
+            "alice",
+            service.get_job_status,
+            controller_pb2.Controller.GetJobStatusRequest(job_id=request.name),
+            None,
+        )
+    assert missing.value.code == Code.NOT_FOUND
 
 
 def test_service_exec_cannot_select_infrastructure_containers(service):
     service._controller.backend.descriptor = k8s_backend_descriptor()
     task = _service_group_request()
-    task.environment.primary_container_name = "agent"
     _as("user", "alice", service.launch_job, task, None)
     backend = service._controller.backend
     backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(stdout="runtime")
@@ -219,18 +282,16 @@ def test_service_exec_cannot_select_infrastructure_containers(service):
     backend.exec_in_container.assert_not_called()
 
 
-@pytest.mark.parametrize("location", ["task", "service", "secret", "egress", "alias"])
-def test_service_groups_reject_invalid_inputs_at_admission(service, location):
+@pytest.mark.parametrize("location", ["task", "service", "secret", "egress"])
+def test_sandbox_service_groups_reject_credentials_and_external_egress_at_admission(service, location):
     service._controller.backend.descriptor = k8s_backend_descriptor()
     request = _service_group_request()
     if location == "task":
-        request.environment.env_vars["AWS_SECRET_ACCESS_KEY"] = "private"
+        request.environment.services[0].env_vars["AWS_SECRET_ACCESS_KEY"] = "private"
     elif location == "service":
-        request.environment.sandbox_services[0].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
+        request.environment.services[1].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
     elif location == "secret":
-        request.environment.secrets["CW_KEY_SECRET"] = "private"
-    elif location == "alias":
-        request.environment.primary_container_name = "runtime"
+        request.environment.services[0].secrets["CW_KEY_SECRET"] = "private"
     else:
         request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
     with pytest.raises(ConnectError) as error:

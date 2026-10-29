@@ -106,14 +106,14 @@ class LocalClient:
 
 
 class SubmissionRecorded(Exception):
-    """Raised by ``RecordingClient.submit`` so ``create`` stops before polling the task."""
+    """Stop creation at the native Iris submission boundary."""
 
 
 class RecordingClient(LocalClient):
     def __init__(self):
         self.submitted: dict = {}
 
-    def submit(self, **kwargs):
+    def submit_task(self, **kwargs):
         self.submitted = kwargs
         raise SubmissionRecorded
 
@@ -123,7 +123,7 @@ class TaskClient(LocalClient):
         self.job = job
         self.submitted: dict = {}
 
-    def submit(self, **kwargs):
+    def submit_task(self, **kwargs):
         self.submitted = kwargs
         return self.job
 
@@ -196,10 +196,10 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(
     submitted_environments = []
 
     def submit(**kwargs):
-        submitted_environments.append(kwargs["environment"].env_vars)
+        submitted_environments.append(kwargs["task"].primary_service.env_vars)
         return job
 
-    client.submit = submit
+    client.submit_task = submit
     endpoint = LocalEndpoint()
     endpoint.url = "http://fixture"
     endpoint.credentials = None
@@ -552,7 +552,7 @@ class GroupRpc(LocalRpc):
         self.targets: set[str] = set()
 
     def list_backends(self, request):
-        return SimpleNamespace(backends=[SimpleNamespace(capabilities=["sandbox-service-groups"])])
+        return SimpleNamespace(backends=[SimpleNamespace(capabilities=["task-services"])])
 
     def exec_in_container(self, request, timeout_ms):
         self.targets.add(request.container_name)
@@ -598,13 +598,17 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
 
     asyncio.run(run())
     assert rpc.targets == {"", "runtime"}
-    assert client.submitted["resources"].cpu == 3
-    assert client.submitted["resources"].memory == 384 * 1024 * 1024
-    environment = client.submitted["environment"].to_sandbox_proto()
-    assert not environment.secrets
-    assert environment.sandbox_services[0].name == "runtime"
-    assert not environment.sandbox_services[0].HasField("entrypoint")
-    assert not environment.sandbox_services[0].HasField("arguments")
+    native_task = client.submitted["task"]
+    assert native_task.primary == "task"
+    assert [(service.name, service.resources.cpu, service.resources.memory) for service in native_task.services] == [
+        ("task", 2, 256 * 1024 * 1024),
+        ("runtime", 1, 128 * 1024 * 1024),
+    ]
+    assert native_task.primary_service.command.command == ["sh", "-c", iris_backend.IDLE_ENTRYPOINT]
+    runtime_service = native_task.services[1]
+    assert runtime_service.command is None
+    assert runtime_service.entrypoint is None
+    assert runtime_service.arguments is None
 
 
 def test_readiness_timeout_retries_without_stopping_runtime_or_leaving_probe_children(monkeypatch, tmp_path):

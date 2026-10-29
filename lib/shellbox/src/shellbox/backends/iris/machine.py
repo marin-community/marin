@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -23,12 +23,10 @@ from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.runtime.sandbox import (
-    SANDBOX_SERVICE_GROUP_CAPABILITY,
-    validate_sandbox_environment,
-    validate_sandbox_services,
-)
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, SandboxServiceSpec
+from iris.cluster.runtime.sandbox import validate_sandbox_environment
+from iris.cluster.runtime.task_spec import TASK_SERVICES_CAPABILITY
+from iris.cluster.types import Entrypoint, ResourceSpec, ServiceSpec
+from iris.cluster.types import TaskSpec as IrisTaskSpec
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -375,14 +373,9 @@ class IrisMachineFactory:
     async def _create(
         self,
         spec: MachineSpec,
-        source: RegistryImage,
-        services: tuple[SandboxServiceSpec, ...],
-        *,
-        primary_name: str,
+        task_spec: IrisTaskSpec,
     ) -> IrisMachine:
-        submission = asyncio.create_task(
-            asyncio.to_thread(self._submit_sync, spec, source, services, primary_name=primary_name)
-        )
+        submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, task_spec))
         try:
             machine = await asyncio.shield(submission)
         except asyncio.CancelledError:
@@ -421,13 +414,13 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("Private service groups accept no secret-enabled machine factory")
         if companions and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Iris multi-container tasks require denied external networking")
-        source = self._check_spec(primary.machine)
         services = tuple(
-            SandboxServiceSpec(
+            ServiceSpec(
                 name=service.name,
                 image=self._check_spec(service.machine).reference,
                 workdir=service.machine.workdir,
                 env_vars=service.machine.env,
+                command=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT) if service.name == spec.primary else None,
                 entrypoint=service.entrypoint,
                 arguments=service.arguments,
                 resources=ResourceSpec(
@@ -436,9 +429,9 @@ class IrisMachineFactory:
                     disk=(service.machine.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
             )
-            for service in companions
+            for service in spec.containers
         )
-        task = await self._create(primary.machine, source, services, primary_name=primary.name)
+        task = await self._create(primary.machine, IrisTaskSpec(services=services, primary=spec.primary))
         members = {
             service.name: IrisMachine(
                 task.endpoint,
@@ -458,10 +451,7 @@ class IrisMachineFactory:
     def _submit_sync(
         self,
         spec: MachineSpec,
-        source: RegistryImage,
-        services: tuple[SandboxServiceSpec, ...],
-        *,
-        primary_name: str,
+        task_spec: IrisTaskSpec,
     ) -> IrisMachine:
         info = get_job_info()
         if info is not None:
@@ -492,41 +482,31 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            environment = EnvironmentSpec(
-                setup_scripts=[],
-                env_vars={
-                    **spec.env,
-                    **{name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
-                },
-                sandbox_services=services,
-                primary_container_name=primary_name,
-            )
-            resources = ResourceSpec(
-                cpu=(spec.cpus or 1) + sum(service.resources.cpu for service in services),
-                memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024
-                + sum(int(service.resources.memory) for service in services),
-                disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024
-                + sum(int(service.resources.disk) for service in services),
-            )
-            if services:
-                validate_sandbox_services(
-                    job_pb2.CONTAINER_PROFILE_SANDBOX,
-                    EGRESS_POLICIES[spec.network],
-                    environment.to_sandbox_proto(),
-                    resources.to_proto(),
-                    source.reference,
+            if self.secret_env:
+                task_spec = replace(
+                    task_spec,
+                    services=tuple(
+                        (
+                            replace(
+                                service,
+                                env_vars={
+                                    **service.env_vars,
+                                    **{name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
+                                },
+                            )
+                            if service.name == task_spec.primary
+                            else service
+                        )
+                        for service in task_spec.services
+                    ),
                 )
+            if len(task_spec.services) > 1:
                 backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
-                if not any(SANDBOX_SERVICE_GROUP_CAPABILITY in backend.capabilities for backend in backends):
-                    raise UnsupportedMachineSpec("Controller does not advertise private sandbox service-group support")
-            job = client.submit(
-                # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
-                # capacity for the whole termination grace period.
-                entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
+                if not any(TASK_SERVICES_CAPABILITY in backend.capabilities for backend in backends):
+                    raise UnsupportedMachineSpec("Controller does not advertise task service support")
+            job = client.submit_task(
+                task=task_spec,
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=environment,
-                resources=resources,
-                task_image=source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
                 egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),

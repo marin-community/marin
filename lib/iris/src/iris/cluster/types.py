@@ -29,6 +29,7 @@ from rigging.secrets import SecretBehavior, validate_secret_name
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
+from iris.cluster.entrypoint import build_runtime_entrypoint
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -721,33 +722,6 @@ except BaseException as exc:
 """
 
 
-@dataclass(frozen=True)
-class SandboxServiceSpec:
-    """One credential-free container in a sandbox's private pod network."""
-
-    name: str
-    image: str
-    workdir: str
-    resources: ResourceSpec
-    env_vars: Mapping[str, str] = field(default_factory=dict)
-    entrypoint: tuple[str, ...] | None = None
-    arguments: tuple[str, ...] | None = None
-
-    def to_proto(self) -> job_pb2.SandboxServiceSpec:
-        spec = job_pb2.SandboxServiceSpec(
-            name=self.name,
-            image=self.image,
-            workdir=self.workdir,
-            resources=self.resources.to_proto(),
-            env_vars=self.env_vars,
-        )
-        if self.entrypoint is not None:
-            spec.entrypoint.CopyFrom(job_pb2.CommandEntrypoint(argv=self.entrypoint))
-        if self.arguments is not None:
-            spec.arguments.CopyFrom(job_pb2.CommandEntrypoint(argv=self.arguments))
-        return spec
-
-
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -789,8 +763,6 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
-    sandbox_services: Sequence[SandboxServiceSpec] = ()
-    primary_container_name: str = ""
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -849,8 +821,6 @@ class EnvironmentSpec:
             env_vars=merged_env_vars,
             secrets=self.secrets,
             setup_scripts=setup_scripts,
-            sandbox_services=[service.to_proto() for service in self.sandbox_services],
-            primary_container_name=self.primary_container_name,
         )
 
     def to_sandbox_proto(self) -> job_pb2.EnvironmentConfig:
@@ -869,8 +839,75 @@ class EnvironmentSpec:
             env_vars=dict(self.env_vars or {}),
             secrets=self.secrets,
             setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
-            sandbox_services=[service.to_proto() for service in self.sandbox_services],
-            primary_container_name=self.primary_container_name,
+        )
+
+
+@dataclass(frozen=True)
+class ServiceSpec:
+    """One named container, using either an Iris command or its image startup."""
+
+    name: str
+    image: str
+    resources: ResourceSpec
+    workdir: str = "/app"
+    env_vars: Mapping[str, str] = field(default_factory=dict)
+    entrypoint: tuple[str, ...] | None = None
+    arguments: tuple[str, ...] | None = None
+    command: "Entrypoint | None" = None
+    environment: EnvironmentSpec | None = None
+
+    def to_proto(self, environment: job_pb2.EnvironmentConfig | None = None) -> job_pb2.ServiceSpec:
+        if self.command is not None and (self.entrypoint is not None or self.arguments is not None):
+            raise ValueError("An Iris command cannot also override image ENTRYPOINT or CMD")
+        if environment is None:
+            environment = (self.environment or EnvironmentSpec(setup_scripts=[])).to_sandbox_proto()
+        spec = job_pb2.ServiceSpec(
+            name=self.name,
+            image=self.image,
+            workdir=self.workdir,
+            resources=self.resources.to_proto(),
+            env_vars={**environment.env_vars, **self.env_vars},
+            secrets=environment.secrets,
+            setup_scripts=environment.setup_scripts,
+        )
+        if self.command is not None:
+            spec.runtime_entrypoint.CopyFrom(build_runtime_entrypoint(self.command, environment))
+        else:
+            if environment.setup_scripts:
+                raise ValueError("Image startup cannot run Iris setup scripts; supply an Iris command")
+            spec.image_command.SetInParent()
+            if self.entrypoint is not None:
+                spec.image_command.entrypoint.argv.extend(self.entrypoint)
+            if self.arguments is not None:
+                spec.image_command.arguments.argv.extend(self.arguments)
+        return spec
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """A task's complete named container set and primary lifecycle owner."""
+
+    services: Sequence[ServiceSpec]
+    primary: str = "task"
+
+    def __post_init__(self) -> None:
+        names = [service.name for service in self.services]
+        if not names or len(set(names)) != len(names):
+            raise ValueError("A task requires a nonempty set of uniquely named services")
+        if self.primary not in names:
+            raise ValueError("The primary service must belong to the task")
+
+    @property
+    def primary_service(self) -> ServiceSpec:
+        return next(service for service in self.services if service.name == self.primary)
+
+    def to_proto(self, primary_environment: job_pb2.EnvironmentConfig) -> job_pb2.EnvironmentConfig:
+        return job_pb2.EnvironmentConfig(
+            services=[
+                service.to_proto(primary_environment if service.name == self.primary else None)
+                for service in self.services
+            ],
+            primary_service=self.primary,
         )
 
 

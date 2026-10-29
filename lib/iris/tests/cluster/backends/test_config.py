@@ -1966,7 +1966,16 @@ def test_k8s_dispatch_uses_configured_image_and_isolated_runtime_class(monkeypat
     try:
         request = make_run_req("/alice/runtime/0")
         request.container_profile = profile
-        request.environment.primary_container_name = "agent--main"
+        request.environment.primary_service = "agent--main"
+        primary = request.environment.services.add(
+            name="agent--main",
+            workdir="/app",
+            resources=request.resources,
+        )
+        primary.runtime_entrypoint.CopyFrom(request.entrypoint)
+        request.ClearField("entrypoint")
+        request.ClearField("resources")
+        request.environment.ClearField("env_vars")
         assert backend.sync(make_batch(tasks_to_run=[request])) == []
         [pod] = kubectl.list_json(K8sResource.PODS)
         assert pod["spec"]["containers"][0]["image"] == "registry.example/iris-task:abc1234"

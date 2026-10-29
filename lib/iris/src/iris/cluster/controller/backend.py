@@ -56,7 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
-from iris.cluster.runtime.sandbox import SANDBOX_SERVICE_GROUP_CAPABILITY
+from iris.cluster.runtime.task_spec import TASK_SERVICES_CAPABILITY
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -92,7 +92,7 @@ class BackendCapability(StrEnum):
     WORKER_FLEET = "worker-fleet"
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
-    SANDBOX_SERVICE_GROUPS = SANDBOX_SERVICE_GROUP_CAPABILITY
+    TASK_SERVICES = TASK_SERVICES_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +113,7 @@ class BackendDescriptor:
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
-                {BackendCapability.DIRECT_DISPATCH, BackendCapability.SANDBOX_SERVICE_GROUPS}
+                {BackendCapability.DIRECT_DISPATCH, BackendCapability.TASK_SERVICES}
                 if self.kind is BackendKind.KUBERNETES
                 else {BackendCapability.WORKER_FLEET}
             )
@@ -137,8 +137,8 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
         capabilities.append("workers")
     if BackendCapability.AUTOSCALER in descriptor.capabilities:
         capabilities.append("autoscaler")
-    if BackendCapability.SANDBOX_SERVICE_GROUPS in descriptor.capabilities:
-        capabilities.append(SANDBOX_SERVICE_GROUP_CAPABILITY)
+    if BackendCapability.TASK_SERVICES in descriptor.capabilities:
+        capabilities.append(TASK_SERVICES_CAPABILITY)
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
         capabilities=capabilities,

@@ -79,7 +79,7 @@ def _dispatch(
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
-    if request.environment.sandbox_services:
+    if len(request.environment.services) > 1 and request.egress_policy == job_pb2.EGRESS_POLICY_NONE:
         k8s.apply_json(build_service_group_network_policy(config.namespace))
     provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
     try:
@@ -1234,17 +1234,29 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.task_image = "example.test/task@sha256:" + "a" * 64
     request.resources.disk_bytes = 2 * 1024**3
-    request.environment.primary_container_name = "agent"
-    service = request.environment.sandbox_services.add(
+    request.environment.primary_service = "agent"
+    primary = request.environment.services.add(
+        name="agent",
+        image=request.task_image,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=3 * 1024**3, disk_bytes=1024**3),
+    )
+    primary.runtime_entrypoint.CopyFrom(request.entrypoint)
+    service = request.environment.services.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
         env_vars={"PUBLIC": "runtime-input"},
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, disk_bytes=1024**3),
     )
+    service.image_command.SetInParent()
     if override_command:
-        service.entrypoint.argv.extend(["python3"])
-        service.arguments.argv.extend(["server.py"])
+        service.image_command.entrypoint.argv.extend(["python3"])
+        service.image_command.arguments.argv.extend(["server.py"])
+    request.ClearField("entrypoint")
+    request.ClearField("resources")
+    request.ClearField("task_image")
+    request.environment.ClearField("env_vars")
     updates, resources = _dispatch(
         request,
         pod_config(
@@ -1288,10 +1300,12 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
         assert "command" not in runtime and "args" not in runtime
 
 
-def test_service_exit_terminates_the_group_even_when_task_is_still_running():
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_service_exit_terminates_the_group_even_when_task_is_still_running(sandbox):
     entry = RunningTaskEntry(task_id=JobName.from_wire("/alice/group/0"), attempt_id=0)
     pod = make_pod("ignored", "Running")
-    pod["metadata"]["labels"] = {EGRESS_LABEL: "loopback"}
+    if sandbox:
+        pod["metadata"]["labels"] = {EGRESS_LABEL: "loopback"}
     pod["status"]["containerStatuses"] = [
         {"name": "task", "state": {"running": {}}},
         {"name": "service-runtime", "state": {"terminated": {"exitCode": 1, "reason": "Error"}}},
@@ -1299,6 +1313,57 @@ def test_service_exit_terminates_the_group_even_when_task_is_still_running():
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
     assert "service-runtime" in update.error
+
+
+def test_default_profile_supports_named_image_services_on_the_cluster_network():
+    request = make_run_req("/alice/default-group/0")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+    request.environment.primary_service = "agent"
+    agent = request.environment.services.add(
+        name="agent",
+        image="example.test/agent:latest",
+        workdir="/agent",
+        env_vars={"AGENT_INPUT": "agent-value"},
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=2 * 1024**3),
+    )
+    agent.image_command.SetInParent()
+    runtime = request.environment.services.add(
+        name="runtime",
+        image="example.test/runtime:latest",
+        workdir="/runtime",
+        env_vars={"RUNTIME_INPUT": "runtime-value"},
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    runtime.image_command.entrypoint.argv.extend(["python3"])
+    runtime.image_command.arguments.argv.extend(["server.py"])
+    request.ClearField("entrypoint")
+    request.ClearField("resources")
+    request.environment.ClearField("env_vars")
+
+    updates, resources = _dispatch(request, pod_config(controller_address="http://ctrl:8080"))
+
+    assert updates == []
+    [pod] = resources[K8sResource.PODS]
+    task, peer = pod["spec"]["containers"]
+    assert [member["name"] for member in pod["spec"]["containers"]] == ["task", "service-runtime"]
+    assert "runtimeClassName" not in pod["spec"]
+    assert resources[K8sResource.NETWORK_POLICIES] == []
+    assert task["image"] == "example.test/agent:latest"
+    assert "command" not in task and "args" not in task
+    assert peer["command"] == ["python3"]
+    assert peer["args"] == ["server.py"]
+    assert task["workingDir"] == "/agent"
+    assert peer["workingDir"] == "/runtime"
+    assert task["resources"]["requests"]["cpu"] == "2000m"
+    assert peer["resources"]["requests"]["cpu"] == "1000m"
+    task_env = {item["name"]: item.get("value") for item in task["env"]}
+    assert task_env["AGENT_INPUT"] == "agent-value"
+    assert task_env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+    primary_budget = json.loads(task_env["IRIS_TASK_RESOURCES"])
+    assert primary_budget["cpu_millicores"] == 2000
+    assert int(primary_budget["memory_bytes"]) == 2 * 1024**3
+    assert {item["name"]: item.get("value") for item in peer["env"]}["RUNTIME_INPUT"] == "runtime-value"
 
 
 def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():

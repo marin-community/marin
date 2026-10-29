@@ -9,13 +9,10 @@ every one and all other profiles receive all of them. The egress policy decides
 the network, for every profile.
 """
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import PurePosixPath
 
 from iris.cluster.runtime.env import STANDARD_MOUNTS
-from iris.cluster.runtime.task_spec import validate_container_names
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
@@ -37,9 +34,6 @@ EGRESS_BLOCKED_CIDRS: tuple[str, ...] = (
     "169.254.0.0/16",
 )
 
-SANDBOX_SERVICE_PREFIX = "service-"
-SANDBOX_SERVICE_GROUP_CAPABILITY = "sandbox-service-groups"
-_PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 _CREDENTIAL_NAMES = frozenset(
     {
         "GOOGLE_APPLICATION_CREDENTIALS",
@@ -78,51 +72,6 @@ def validate_sandbox_environment(environment: dict[str, str]) -> None:
         raise ValueError(f"Sandbox environments cannot receive cloud or controller credentials: {sorted(rejected)}")
     if any("${" in value for value in environment.values()):
         raise ValueError("Sandbox service environments require literal values")
-
-
-def validate_sandbox_services(
-    profile: int,
-    egress_policy: int,
-    environment: job_pb2.EnvironmentConfig,
-    resources: job_pb2.ResourceSpecProto,
-    task_image: str,
-) -> None:
-    """Validate a private sandbox group before admission and again before launch."""
-    validate_container_names(environment)
-    services = environment.sandbox_services
-    if not services:
-        return
-    if profile != job_pb2.CONTAINER_PROFILE_SANDBOX or egress_policy != job_pb2.EGRESS_POLICY_NONE:
-        raise ValueError("Sandbox service groups require the sandbox profile and NONE egress")
-    if environment.secrets or environment.setup_scripts:
-        raise ValueError("Sandbox service groups accept no secrets or environment setup scripts")
-    if _PINNED_IMAGE.fullmatch(task_image) is None:
-        raise ValueError("Sandbox service groups require a digest-pinned task image")
-    validate_sandbox_environment(dict(environment.env_vars))
-    names = [service.name for service in services]
-    if len(names) > 8:
-        raise ValueError("Sandbox service groups require unique service names and at most eight services")
-    for service in services:
-        if _PINNED_IMAGE.fullmatch(service.image) is None:
-            raise ValueError(f"Sandbox service {service.name} requires a digest-pinned image")
-        if not PurePosixPath(service.workdir).is_absolute():
-            raise ValueError(f"Sandbox service {service.name} requires an absolute workdir")
-        validate_sandbox_environment(dict(service.env_vars))
-        if service.resources.device.WhichOneof("device") is not None:
-            raise ValueError("Sandbox services cannot request accelerator devices")
-        if service.resources.cpu_millicores <= 0 or service.resources.memory_bytes <= 0:
-            raise ValueError("Sandbox services require explicit positive CPU and memory reservations")
-        if service.resources.disk_bytes < 0:
-            raise ValueError("Sandbox service disk reservations must be nonnegative")
-        for field, override in (("entrypoint", service.entrypoint), ("arguments", service.arguments)):
-            if service.HasField(field) and not override.argv:
-                raise ValueError("Empty image command overrides are unsupported")
-    if (
-        sum(service.resources.cpu_millicores for service in services) >= resources.cpu_millicores
-        or sum(service.resources.memory_bytes for service in services) >= resources.memory_bytes
-        or sum(service.resources.disk_bytes for service in services) > resources.disk_bytes
-    ):
-        raise ValueError("Group resource totals must reserve resources for every service and the task")
 
 
 class TaskNetwork(StrEnum):

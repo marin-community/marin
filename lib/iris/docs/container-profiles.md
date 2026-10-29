@@ -133,7 +133,9 @@ itself (`IRIS_*` identity, the controller address, cache paths), and the job
 (`EnvironmentSpec.env_vars`, and in a child job the parent's
 variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
 identity variables reach the task. Its explicit `secrets` map is mounted as
-read-only files; parent secrets are not inherited.
+read-only files; parent secrets are not inherited. Explicit cloud-storage and
+controller credential names are rejected in both environment variables and
+secret bundles, including for single-service tasks.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
@@ -142,24 +144,38 @@ run verbatim and default to none.
 
 ### Task containers
 
-The Kubernetes execution path normalizes each request to a `TaskSpec` with named
-containers and a primary container. Ordinary submissions become a one-container
-task. Isolation policy is applied after this normalization, so the same container
-renderer handles ordinary jobs and sandbox groups. The existing submission API
-and wire fields remain the input format: the task's image, environment and
-entrypoint describe the primary, and `sandbox_services` describe its peers.
+`IrisClient.submit_task(TaskSpec(...))` submits a complete list of named
+`ServiceSpec` containers, including the primary. Each service declares its own
+image, working directory, environment and resources. The scheduler reserves the
+sum of those resources. A service can run an Iris `Entrypoint`, preserving setup
+and workspace handling, or use its image ENTRYPOINT and CMD with optional
+overrides. The primary owns the task's completion and output handling.
 
-`EnvironmentSpec.primary_container_name` gives the primary a logical name;
-omitting it uses `task`. Exec accepts that name, while its physical Kubernetes
-container and task lifecycle identity remain `task`. Peer resources are included
-in the job reservation; normalization assigns the remainder to the primary.
+The existing `submit(entrypoint=..., resources=..., environment=...)` API
+normalizes to a one-service task through the same path. Kubernetes renders these
+services in one Pod for both ordinary and sandbox jobs; container profile and
+egress policy determine their isolation separately. Docker workers lower
+one-service Iris-command tasks to their existing execution path and reject
+multi-service tasks and image-command startup.
+
+`TaskSpec.primary` names the primary service; omitting it uses `task`. Exec
+accepts that logical name, while the physical primary Kubernetes container
+remains `task`. Companions accept literal environment variables but cannot run
+Iris setup scripts or receive secret bundles. Ordinary primary containers retain
+their existing environment, setup and secret behavior.
+
+`EnvironmentConfig.services` stores every member and `primary_service` selects
+the primary. A controller migration upgrades stored flat jobs and the former
+peer list, retaining uploaded workdir files. Deploy matching client and
+controller versions together; the removed peer fields are not a supported
+mixed-version submission format.
 
 ### Private service groups
 
-Shellbox service groups use a typed `EnvironmentConfig.sandbox_services` list
-on one `SANDBOX` job with `EGRESS_POLICY_NONE`. The Kubernetes backend advertises
-`sandbox-service-groups`; controllers and clients without that capability reject
-group creation. Docker-worker backends do not implement groups.
+Shellbox uses the native service model on one `SANDBOX` job with
+`EGRESS_POLICY_NONE`. The Kubernetes backend advertises `task-services`;
+controllers and clients without that capability reject group creation.
+Docker-worker backends do not implement groups.
 
 Each service receives its digest-pinned image, absolute working directory,
 literal environment, CPU/memory/disk reservation and optional command overrides.

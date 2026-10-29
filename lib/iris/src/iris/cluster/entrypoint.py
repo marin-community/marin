@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble a user-facing Entrypoint + EnvironmentConfig into a RuntimeEntrypoint.
+"""Assemble a user-facing command and environment into a RuntimeEntrypoint.
 
 The RuntimeEntrypoint keeps setup separate from the user's command so each runtime
 can handle it as needed (DockerRuntime runs setup in a build container;
@@ -9,13 +9,26 @@ ProcessRuntime skips it). Setup is the user's client-resolved
 ``EnvironmentConfig.setup_scripts`` followed by iris's own runtime-deps script.
 """
 
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
 from iris.cluster.setup_scripts import iris_runtime_setup_script
-from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
 
+class CommandSource(Protocol):
+    @property
+    def command(self) -> Sequence[str]: ...
+
+    @property
+    def workdir_files(self) -> Mapping[str, bytes]: ...
+
+    @property
+    def workdir_file_refs(self) -> Mapping[str, str]: ...
+
+
 def build_runtime_entrypoint(
-    entrypoint: Entrypoint,
+    entrypoint: CommandSource,
     env_config: job_pb2.EnvironmentConfig,
 ) -> job_pb2.RuntimeEntrypoint:
     """Build a RuntimeEntrypoint from a user Entrypoint + env config.

@@ -41,7 +41,7 @@ def redact_request_env_vars(
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     """Redact credential-looking env values and every explicit secret value."""
-    if not request.environment.env_vars and not request.environment.secrets:
+    if not request.environment.env_vars and not request.environment.secrets and not request.environment.services:
         return request
 
     redacted = controller_pb2.Controller.LaunchJobRequest()
@@ -51,6 +51,11 @@ def redact_request_env_vars(
     env_vars.clear()
     env_vars.update(redacted_env)
     redacted.environment.secrets.update(dict.fromkeys(request.environment.secrets, REDACTED_VALUE))
+    for service in redacted.environment.services:
+        redacted_env = redact_value(dict(service.env_vars))
+        service.env_vars.clear()
+        service.env_vars.update(redacted_env)
+        service.secrets.update(dict.fromkeys(service.secrets, REDACTED_VALUE))
     return redacted
 
 

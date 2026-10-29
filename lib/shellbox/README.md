@@ -83,7 +83,12 @@ must already contain their dependencies. Startup overrides on the primary are
 currently unsupported by these Shellbox backends. All members use the same
 network policy; backend admission applies the sandbox restrictions separately.
 
-The Iris factory implements `create_task(spec)`. Multi-container tasks create one CPU-only
+The Iris factory lowers every member, including the primary, to Iris's native
+`TaskSpec.services` and submits it with `IrisClient.submit_task`. Iris's ordinary
+single-command API normalizes to the same service model; its container profile
+and egress policy determine isolation separately.
+
+Multi-container Shellbox tasks create one CPU-only
 Kubernetes pod under gVisor, with separate container filesystems and a private
 shared loopback network. Service names and `task` resolve to `127.0.0.1` within
 that pod. `group.endpoint("runtime", "http")` returns the declared private
@@ -140,6 +145,44 @@ The group needs no route to a model server or cloud storage. The listener requir
 Python 3 in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler.
 
+The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
+Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
+running the application and close the relay before closing the machine:
+
+```python
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.http_service import serve_http
+from shellbox.image import RegistryImage
+from shellbox.machine import Command, MachineSpec, NetworkPolicy
+
+machine = await DockerMachineFactory().create(
+    MachineSpec(RegistryImage("python:3.12-slim"), network=NetworkPolicy.DENY)
+)
+try:
+    async with serve_http(machine, authorized_handler, port=8787) as url:
+        result = await machine.run(
+            Command(("python3", "/app/worker.py"), env={"SERVICE_URL": url})
+        )
+finally:
+    await machine.close()
+```
+
+`authorized_handler` is a trusted application function accepting `HttpRequest`
+and returning `HttpResponse`. It must authorize each operation and select the
+upstream destination before attaching any credentials. Treat guest methods,
+paths and bodies as untrusted input. Credentials belong to that host function,
+never to the machine environment or command arguments.
+
+Docker retains `--network=none`: the listener uses guest loopback, while its
+request queue and responses cross `docker exec` stdin/stdout. No published port,
+host gateway or guest Docker socket is needed. The guest image needs Python 3
+in addition to the Docker backend's normal command and transfer utilities.
+Responses are buffered, with a 4 MiB body limit and at most 16 pending requests;
+streaming and arbitrary caller headers are unsupported. A shared-loopback group
+can share one listener; separate network namespaces need their own listeners.
+This relay does not add Docker task-group execution or change plain Docker's
+host-kernel isolation boundary.
+
 `group.wait_ready()` runs each service's own readiness command with its declared
 timeout, interval, start period and optional attempt limit. Timed readiness
 requires Python 3 in each service image: a guest supervisor kills the probe's
@@ -150,7 +193,7 @@ or the job lifetime ending also tears down the group; containers are not reused
 between trials. Download outputs through machine handles before closing them.
 
 Iris service groups require a Kubernetes controller advertising
-`sandbox-service-groups`; older controllers and Docker-worker backends reject it.
+`task-services`; older controllers and Docker-worker backends reject it.
 `LocalMachineFactory.create_task` implements the same contract with bubblewrap:
 members share a private loopback network and keep separate filesystems, PID, IPC
 and UTS namespaces. Concurrent groups may use the same ports. Group names resolve
@@ -292,7 +335,7 @@ uv run --package marin-shellbox --extra iris --frozen --group test pytest \
   -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 -v
 ```
 
-The controller must advertise `sandbox-service-groups` and have permission to
+The controller must advertise `task-services` and have permission to
 read the named `iris-egress-loopback` NetworkPolicy. The CI workflow grants only
 that policy read within `iris-ci`; the operator installs the policy. Running the
 workflow also rebuilds the controller, deletes managed CI task pods and starts
