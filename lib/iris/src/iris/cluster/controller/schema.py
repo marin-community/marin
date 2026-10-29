@@ -311,6 +311,8 @@ job_config_table = Table(
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
     Column("egress_policy", Integer, nullable=False, server_default="0"),
+    # An ALLOWLIST job's own egress rules, as rule strings (iris.cluster.egress).
+    Column("egress_allow_json", JSONList(), nullable=False, server_default="[]"),
     Index("idx_job_config_name", "name"),
 )
 

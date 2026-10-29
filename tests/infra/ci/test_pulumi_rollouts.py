@@ -37,9 +37,9 @@ def test_marina_rollout_ignores_marin_modules_outside_the_image() -> None:
     "changed_path",
     [
         "infra/marina/apps/evaldash/samples.py",
-        "infra/marina/applets/rl_data_catalog/server/app.py",
-        "infra/marina/applets/filer/dist/app.js",
-        "infra/marina/examples/problem-set-applet/applet.toml",
+        "infra/marina/apps/rl_data_catalog/server/app.py",
+        "infra/marina/apps/filer/dist/app.js",
+        "infra/marina/examples/problem-set-app/applet.toml",
         "infra/marina/web/src/components/AppShell.vue",
     ],
 )

@@ -82,8 +82,12 @@ test = ["pytest>=8.3.2", "pytest-timeout", "pytest-mock", "zstandard"]
 dev = [{ include-group = "test" }]
 
 [tool.uv]
-constraint-dependencies = ["nltk>=3.10.4"]
 exclude-dependencies = ["litellm"]
+constraint-dependencies = [
+    "nltk>=3.10.4",
+    # CVE-2026-115586: reject vulnerable transitive virtualenv releases.
+    "virtualenv>=21.14.13",
+]
 
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }
