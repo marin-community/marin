@@ -233,16 +233,17 @@ class Tracking:
 class _FilesAdapter:
     def __init__(self, export_path: str):
         self.directory = join_resource_path(export_path, "metrics")
-        self.steps: dict[int, dict[str, Any]] = {}
+        self.step: int | None = None
+        self.metrics: dict[str, Any] = {}
         io.makedirs(self.directory, exist_ok=True)
 
     def log(self, data: dict[str, Any], step: int) -> None:
         path = join_resource_path(self.directory, f"step-{step:06d}.json")
-        if step not in self.steps:
-            self.steps[step] = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
-        metrics = self.steps[step]
-        metrics.update(data)
-        io.write_bytes_atomic(path, (json.dumps(metrics, default=float, sort_keys=True) + "\n").encode())
+        if step != self.step:
+            self.metrics = json.loads(io.read_bytes(path)) if io.exists(path) else {"step": step}
+            self.step = step
+        self.metrics.update(data)
+        io.write_bytes_atomic(path, (json.dumps(self.metrics, default=float, sort_keys=True) + "\n").encode())
 
     def finish(self) -> None:
         pass

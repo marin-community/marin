@@ -250,7 +250,6 @@ class CPUInferenceEngine(InferenceEngineInterface):
         self._request_ids = itertools.count()
         self._live_requests: set[str] = set()
         self._generated_tokens = 0
-        self._finished_requests = 0
 
     async def generate(self, input_batch: InferenceEngineInput) -> InferenceEngineOutput:
         await self._resumed.wait()
@@ -266,7 +265,6 @@ class CPUInferenceEngine(InferenceEngineInterface):
         )
         response_ids, response_logprobs, stop_reasons, policy_steps = map(list, zip(*results, strict=True))
         self._generated_tokens += sum(len(ids) for ids in response_ids)
-        self._finished_requests += len(response_ids)
         return InferenceEngineOutput(
             responses=[self.tokenizer.decode(ids, skip_special_tokens=True) for ids in response_ids],
             response_ids=response_ids,
@@ -393,16 +391,13 @@ class CPUInferenceEngine(InferenceEngineInterface):
         return [(response_ids[index], response_logprobs[index], stop_reasons[index]) for index in range(batch_size)]
 
     async def get_stats(self, read_mode: IntervalReadMode = IntervalReadMode.RESET) -> VLLMEngineStatsSnapshot:
-        snapshot = VLLMEngineStatsSnapshot(
+        return VLLMEngineStatsSnapshot(
             engine_id="cpu",
             timestamp=time.time(),
             current=VLLMCurrentStats(),
             cumulative=VLLMCumulativeStats(generation_tokens=self._generated_tokens),
-            interval=VLLMIntervalStats(finished_requests=self._finished_requests),
+            interval=VLLMIntervalStats(),
         )
-        if read_mode is IntervalReadMode.RESET:
-            self._finished_requests = 0
-        return snapshot
 
     async def pause_generation(self) -> None:
         self._resumed.clear()

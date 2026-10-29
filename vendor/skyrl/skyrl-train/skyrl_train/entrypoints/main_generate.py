@@ -21,8 +21,12 @@ from skyrl_train.entrypoints.main_base import (
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import trainer_metrics
-from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.metric_names import (
+    EVAL_OUTCOME_METRIC_PREFIX,
+    GENERATE_OUTCOME_METRIC_PREFIX,
+    PROMPTS_DROPPED_TOO_LONG_METRIC,
+)
+from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -82,10 +86,6 @@ class EvalOnlyEntrypoint(BasePPOExp):
         local_vllm = self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm"
         try:
             await trajectory_runner.startup()
-            initial_tokens = 0
-            if local_vllm:
-                initial_snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.PEEK)
-                initial_tokens = sum(engine.cumulative.generation_tokens for engine in initial_snapshot.engines)
             started = time.perf_counter()
             results: dict[str, Any] = await evaluate(
                 eval_dataloader=build_eval_dataloader(self.cfg, self.eval_dataset),
@@ -101,27 +101,17 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 {
                     "generate/wall_seconds": elapsed,
                     "generate/response_tokens": tokens,
-                    "generate/prompts_dropped_too_long": self.eval_dataset.prompts_dropped_too_long,
-                }
-            )
-            results.update(
-                {
-                    key.replace(EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX, 1): value
-                    for key, value in tuple(results.items())
-                    if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
+                    **{
+                        GENERATE_OUTCOME_METRIC_PREFIX + key.removeprefix(EVAL_OUTCOME_METRIC_PREFIX): value
+                        for key, value in results.items()
+                        if key.startswith(EVAL_OUTCOME_METRIC_PREFIX)
+                    },
                 }
             )
             if local_vllm:
                 snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
-                generated_tokens = (
-                    sum(engine.cumulative.generation_tokens for engine in snapshot.engines) - initial_tokens
-                )
-                engine_gpus = (
-                    self.cfg.generator.num_inference_engines
-                    * self.cfg.generator.inference_engine_tensor_parallel_size
-                    * self.cfg.generator.inference_engine_pipeline_parallel_size
-                    * self.cfg.generator.inference_engine_data_parallel_size
-                )
+                generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
                 results.update(
                     {
                         f"generate/{key}": value
@@ -130,7 +120,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     }
                 )
                 results["generate/vllm/generation_tokens"] = generated_tokens
-                results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / engine_gpus
+                results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / num_rollout_gpus(self.cfg)
         finally:
             try:
                 await trajectory_runner.shutdown()
