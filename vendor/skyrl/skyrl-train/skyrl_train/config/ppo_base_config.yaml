@@ -468,6 +468,7 @@ generator:
     stop: null
 
   eval_sampling_params:
+    seed: null
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0
     temperature: 0.0
