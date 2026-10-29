@@ -213,10 +213,10 @@ class FileDownloadTask:
 
 
 def stream_file_to_fsspec(task: FileDownloadTask) -> dict:
-    """Stream one file from the source filesystem to its destination using an atomic write.
+    """Reuse a complete destination or stream one file using an atomic write.
 
-    Uses atomic_rename to write to a temp file first, then rename on success.
-    This enables recovery across individual files if the job is interrupted.
+    Existing files are reused when their size matches the pinned source listing.
+    New transfers write to a temp file before renaming on success.
     """
     file_path = task.source_url
     fsspec_file_path = task.destination_path
@@ -233,6 +233,20 @@ def stream_file_to_fsspec(task: FileDownloadTask) -> dict:
     last_exception = None
     for attempt in range(max_retries):
         try:
+            if task.expected_size is not None:
+                destination_fs, destination = url_to_fs(fsspec_file_path)
+                try:
+                    destination_info = destination_fs.info(destination)
+                except FileNotFoundError:
+                    pass
+                else:
+                    if (
+                        destination_info.get("type") != "directory"
+                        and destination_info.get("size") == task.expected_size
+                    ):
+                        logger.info("Reusing %s (%s bytes)", fsspec_file_path, task.expected_size)
+                        return {"file_path": file_path, "status": "skipped", "size": task.expected_size}
+
             StoragePath(os.path.dirname(fsspec_file_path)).mkdirs()
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
@@ -423,19 +437,20 @@ def plan_download(cfg: DownloadConfig) -> DownloadPlan:
 def finish_download(plan: DownloadPlan) -> None:
     """Persist source provenance after all file transfers have completed."""
     write_provenance_json(plan.output_path, metadata=plan.provenance)
-    logger.info("Streamed all files and wrote provenance JSON; check %s.", plan.output_path)
+    logger.info("Completed download and wrote provenance JSON; check %s.", plan.output_path)
 
 
 def download_hf(cfg: DownloadConfig) -> None:
     """Download selected files with a Zephyr worker pool.
 
+    Reruns reuse destination files whose sizes match the source listing. Use a
+    pinned source revision when reusing an output path across runs.
+
     Distributed Fray actors inherit HF_TOKEN from the parent job's secrets map.
     Hugging Face clients discover the token through HF_TOKEN_PATH or HF_TOKEN.
     """
     plan = plan_download(cfg)
-    pipeline = (
-        Dataset.from_list(list(plan.tasks)).map(stream_file_to_fsspec).write_jsonl(plan.metrics_path, skip_existing=True)
-    )
+    pipeline = Dataset.from_list(list(plan.tasks)).map(stream_file_to_fsspec).write_jsonl(plan.metrics_path)
     ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}
     if cfg.worker_resources is not None:
         ctx_kwargs["resources"] = cfg.worker_resources
