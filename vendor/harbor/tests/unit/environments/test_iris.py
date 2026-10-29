@@ -153,7 +153,7 @@ class ControllerJob:
         self.endpoint_closed = False
         self.submission: dict = {}
 
-    def submit(self, **kwargs):
+    def submit_task(self, **kwargs):
         self.submission = kwargs
         return self
 
@@ -180,7 +180,7 @@ def test_offline_lifecycle_commands_and_host_artifacts(
 ) -> None:
     job = ControllerJob()
     client = SimpleNamespace(
-        submit=job.submit, shutdown=lambda: setattr(job, "shutdown", True)
+        submit_task=job.submit_task, shutdown=lambda: setattr(job, "shutdown", True)
     )
     endpoint = SimpleNamespace(
         url="http://test",
@@ -256,11 +256,12 @@ def test_offline_lifecycle_commands_and_host_artifacts(
     asyncio.run(run())
     assert job.submission["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert job.submission["egress_policy"] == job_pb2.EGRESS_POLICY_NONE
-    assert job.submission["environment"].env_vars == {"PUBLIC": "task-visible"}
-    assert job.submission["environment"].setup_scripts == []
-    assert job.submission["task_image"] == IMAGE
-    assert job.submission["resources"].cpu == expected_cpu
-    assert job.submission["resources"].memory == expected_memory_mb * 1024 * 1024
+    primary = job.submission["task"].primary_service.to_proto(job_pb2.EnvironmentConfig())
+    assert dict(primary.env_vars) == {"PUBLIC": "task-visible"}
+    assert not primary.setup_scripts and not primary.secrets
+    assert primary.image == IMAGE
+    assert primary.resources.cpu_millicores == expected_cpu * 1000
+    assert primary.resources.memory_bytes == expected_memory_mb * 1024 * 1024
     assert job.cancelled and job.shutdown and job.endpoint_closed
 
 
@@ -268,7 +269,7 @@ def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(
     tmp_path: Path, monkeypatch
 ) -> None:
     controller_job = ControllerJob()
-    client = SimpleNamespace(submit=controller_job.submit, shutdown=lambda: None)
+    client = SimpleNamespace(submit_task=controller_job.submit_task, shutdown=lambda: None)
     endpoint = SimpleNamespace(url="http://test", credentials=None, close=lambda: None)
     guest = tmp_path / "guest"
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
