@@ -14,14 +14,13 @@ export PYTHONUNBUFFERED=1
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= $XLA_FLAGS"
 
 # Across nodes, data parallelism all-reduces each layer's expert gradients over the NICs inside the backward
-# layer scan. These flags let XLA run several collectives at once, move them into the next scan iteration and
-# start them early, so most of that traffic overlaps compute. They are neutral on one node, so only multi-node
-# allocations get them; the caller's XLA_FLAGS still override any of them. README.md has the measurements.
+# layer scan. These flags let XLA run up to 4 collectives at once, move each all-reduce into the next scan
+# iteration and start collectives early, so most of that traffic overlaps compute. They are neutral on one node,
+# so only multi-node allocations get them; the caller's XLA_FLAGS still override any of them. README.md has the
+# measurements, the per-flag ablation and the caveat about more than one collective in flight.
 if [ "${SLURM_JOB_NUM_NODES:-1}" -gt 1 ]; then
     MULTINODE_XLA_FLAGS="--xla_gpu_enable_latency_hiding_scheduler=true \
---xla_gpu_all_gather_combine_threshold_bytes=8589934592 --xla_gpu_reduce_scatter_combine_threshold_bytes=8589934592 \
 --xla_gpu_experimental_parallel_collective_overlap_limit=4 --xla_gpu_enable_pipelined_all_reduce=true \
---xla_gpu_enable_pipelined_reduce_scatter=true --xla_gpu_enable_pipelined_all_gather=true \
 --xla_gpu_enable_while_loop_double_buffering=true --xla_gpu_experimental_collective_start_as_early_as_possible=true"
     export XLA_FLAGS="$MULTINODE_XLA_FLAGS $XLA_FLAGS"
 fi

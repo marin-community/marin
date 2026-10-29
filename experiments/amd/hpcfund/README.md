@@ -37,17 +37,36 @@ configuration.
 
 ## Multi-node runs
 
-In an allocation of more than one node, the wrapper adds XLA flags that overlap collectives with compute: the latency-hiding scheduler, 8 GiB all-gather and reduce-scatter combine thresholds, up to 4 collectives in flight, pipelined all-reduce, reduce-scatter and all-gather across loop iterations, while-loop double buffering, and starting each collective as early as possible. With data parallelism across nodes, each layer's expert-weight gradients are all-reduced over the network inside the backward layer scan, and without these flags that all-reduce runs with nothing to overlap it. Set any of the flags in `XLA_FLAGS` to override it.
+In an allocation of more than one node, the wrapper adds five XLA flags that overlap collectives with compute: the latency-hiding scheduler, up to 4 collectives in flight (XLA's default is 1), pipelined all-reduce (each loop iteration's all-reduce moves into the next iteration), while-loop double buffering, and starting each collective as early as possible. With data parallelism across nodes, each layer's expert-weight gradients are all-reduced over the network inside the backward layer scan, and without these flags that all-reduce runs with nothing to overlap it. Set any of the flags in `XLA_FLAGS` to override it.
 
-June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes, 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
+June Snowball (`synthetic_benchmark.py --size full`), EP8 inside each node and data parallelism across nodes (`--expert-axis 8 --replica-axis 2`), 8 sequences of 4,096 tokens per GPU, `--moe-impl ring_filtered --pooled-transport-capacity-factor 1.1 --attention gpu_pallas_triton_flash --remat-mode save_moe`, step time as the median of steps 2-19:
 
 | Hardware | Nodes | Without the flags | With the flags | Change |
 |---|---|---|---|---|
-| MI350X (`mi3508x`, this wrapper and venv) | 2 | 1.975 s | 1.719-1.720 s | -13% |
-| MI350X | 1 | 1.529-1.534 s | 1.526-1.529 s | none |
-| MI355X (TheRock 7.14 container, JAX 0.11.0) | 2 | 1.902-1.955 s | 1.649-1.656 s | -14% |
+| MI350X (`mi3508x`, this wrapper and venv) | 2 | 1.975-1.982 s | 1.715-1.717 s | -13% |
+| MI350X, all nine flags of the ablation below | 1 | 1.529-1.534 s | 1.526-1.529 s | none |
+| MI355X (TheRock 7.14 container, JAX 0.11.0) | 2 | 1.955-1.971 s | 1.709-1.736 s | -12% |
 
-A second two-node MI350X run without the flags took 3.026 s, about 1 s slower on every step; its cause is unknown. The flags were tested only with two nodes.
+In both two-node MI350X jobs, the second run without the flags was slower on every step (2.134 s and 3.026 s); the cause is unknown, and the table uses the first run of each job. Peak memory rises by at most 1 GiB.
+
+Each flag's share, from two MI355X nodes: removing one flag from the full set of nine changes the 1.720 s step as follows.
+
+| Flag removed | Step | Change |
+|---|---|---|
+| `--xla_gpu_enable_latency_hiding_scheduler` | 2.065 s | +20% |
+| `--xla_gpu_experimental_parallel_collective_overlap_limit=4` | 1.964 s | +14% |
+| `--xla_gpu_experimental_collective_start_as_early_as_possible` | 1.793 s | +4.2% |
+| `--xla_gpu_enable_pipelined_all_reduce` | 1.768 s | +2.8% |
+| `--xla_gpu_enable_while_loop_double_buffering` | 1.752 s | +1.9% |
+| `--xla_gpu_enable_pipelined_all_gather` | 1.729 s | none |
+| `--xla_gpu_enable_pipelined_reduce_scatter` | 1.719 s | none |
+| 8 GiB all-gather and reduce-scatter combine thresholds | 1.715 s | none |
+
+The wrapper keeps the first five. With the overlap limit at 1, the other flags give no gain (1.964 s against 1.955-1.971 s without flags).
+
+On GB200, more than one collective in flight silently corrupted training with Grug's ragged all-to-all transport and the layer-carry offload, so the NVIDIA EP hero forces the limit to 1 (`experiments/grug/moe_hero_ep/train.py`). Here, per-step losses and capacity-drop rates with the flags stay within the spread of repeated runs without them (losses within 3e-4). These runs use synthetic tokens and an untrained router, which detect such races poorly; check loss and drop-rate parity from a trained checkpoint before a long run, or set `--xla_gpu_experimental_parallel_collective_overlap_limit=1` in `XLA_FLAGS` to rule it out at the cost of the gain.
+
+The flags were measured only with this layout on two nodes. Cross-node FSDP and EP16 runs also get them through the wrapper, but were not measured with them.
 
 ## Build the venv
 
