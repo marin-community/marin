@@ -287,8 +287,12 @@ EVALUATIONS = MappingProxyType(
         for evaluation in (
             # Harbor follows the native panel's evaluation schedule.
             Evaluation(
-                name="harbor-smartie", file="snowball_rl_harbor.yaml", harness=EvalHarness.HARBOR,
-                source="harbor", every=10, at_start=True,
+                name="harbor-smartie",
+                file="snowball_rl_harbor.yaml",
+                harness=EvalHarness.HARBOR,
+                source="harbor",
+                every=10,
+                at_start=True,
             ),
             Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
             Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
