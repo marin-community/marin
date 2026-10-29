@@ -149,7 +149,7 @@ def test_checkpoint_export_allocation_excludes_unequal_reference_pool(policy_los
     export_plan = derive_policy_export_role_plan(OmegaConf.to_container(export.skyrl, resolve=True))
     assert [claim.role_id for claim in export_plan.claims] == ["policy"]
     assert derive_num_nodes(export_plan) == 15
-    training_plan = derive_role_plan(OmegaConf.to_container(training.skyrl, resolve=True), generate_only=False)
+    training_plan = derive_role_plan(OmegaConf.to_container(training.skyrl, resolve=True))
     assert training_plan.claim("reference").num_nodes == 8
     assert derive_num_nodes(training_plan) == 24
 

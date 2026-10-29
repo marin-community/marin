@@ -6,7 +6,7 @@ role claims, physical bundles, and placement arithmetic used before Iris submiss
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -131,6 +131,10 @@ class SkyRLRolePlan:
         if len(gpu_widths) > 1:
             raise ValueError(f"Iris role bundles require one GPUs-per-node value; got {sorted(gpu_widths)}")
 
+    @property
+    def gpus_per_node(self) -> int:
+        return self.bundles[0].gpus_per_node
+
     def claim(self, role_id: str) -> ModelRoleClaim:
         matches = [claim for claim in self.claims if claim.role_id == role_id]
         if len(matches) != 1:
@@ -195,14 +199,9 @@ def _optional_at(config: dict[str, Any], path: str, default: Any = None) -> Any:
     return node
 
 
-def _local_generation(config: dict[str, Any], *, generate_only: bool) -> bool:
-    return generate_only and bool(_at(config, "generator.run_engines_locally"))
-
-
-def _role_plan_values(config: dict[str, Any], *, generate_only: bool) -> _RolePlanValues:
+def _role_plan_values(config: dict[str, Any]) -> _RolePlanValues:
     return _RolePlanValues(
-        colocate_all=bool(_at(config, "trainer.placement.colocate_all"))
-        and not _local_generation(config, generate_only=generate_only),
+        colocate_all=bool(_at(config, "trainer.placement.colocate_all")),
         colocate_policy_ref=bool(_optional_at(config, "trainer.placement.colocate_policy_ref", True)),
         policy_num_nodes=int(_at(config, "trainer.placement.policy_num_nodes")),
         policy_num_gpus_per_node=int(_at(config, "trainer.placement.policy_num_gpus_per_node")),
@@ -243,9 +242,7 @@ def _policy_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRoleC
     )
 
 
-def _core_model_claims(config: dict[str, Any], values: _RolePlanValues, *, generate_only: bool) -> list[ModelRoleClaim]:
-    if _local_generation(config, generate_only=generate_only):
-        return []
+def _core_model_claims(config: dict[str, Any], values: _RolePlanValues) -> list[ModelRoleClaim]:
     placement = _at(config, "trainer.placement")
     use_reference = reference_model_required(_at(config, "trainer.algorithm"))
     use_critic = bool(_optional_at(config, "trainer.critic.model.path"))
@@ -390,7 +387,7 @@ def _rollout_claim(config: dict[str, Any], values: _RolePlanValues) -> ModelRole
     return claim
 
 
-def derive_role_plan(config: dict[str, Any], *, generate_only: bool) -> SkyRLRolePlan:
+def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     """Derive every role-plan field from the RL config.
 
     Required geometry raises before submission, while omitted reference dimensions
@@ -399,19 +396,27 @@ def derive_role_plan(config: dict[str, Any], *, generate_only: bool) -> SkyRLRol
     remote roles receive no Iris bundle, and each local colocation group becomes one
     physical whole-node footprint.
     """
-    values = _role_plan_values(config, generate_only=generate_only)
-    claims = _core_model_claims(config, values, generate_only=generate_only)
+    values = _role_plan_values(config)
+    claims = _core_model_claims(config, values)
     if inference_engines_required(config):
         claims.append(_rollout_claim(config, values))
-    if not _local_generation(config, generate_only=generate_only):
-        claims.extend(_teacher_claims(config))
-        claims.extend(_draft_trainer_claims(config, values))
+    claims.extend(_teacher_claims(config))
+    claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
+
+
+def derive_generation_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
+    """Derive the local inference footprint for evaluation-only launches."""
+    values = _role_plan_values(config)
+    if not values.run_engines_locally:
+        return derive_role_plan(config)
+    values = replace(values, colocate_all=False)
+    return _role_plan((_rollout_claim(config, values),), values)
 
 
 def derive_policy_export_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     """Derive only the saved policy's footprint for checkpoint conversion."""
-    values = _role_plan_values(config, generate_only=False)
+    values = _role_plan_values(config)
     return _role_plan((_policy_claim(config, values),), values)
 
 

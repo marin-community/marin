@@ -16,7 +16,12 @@ from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.objective_spec import validate_objective
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
-from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.role_plan import (
+    derive_generation_role_plan,
+    derive_num_nodes,
+    derive_policy_export_role_plan,
+    derive_role_plan,
+)
 from cloud.iris.rl_config_translation import (
     RL_ENTRYPOINTS,
     RLEntrypoint,
@@ -272,13 +277,12 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
     checkpoint_export = config["run"]["mode"] == RunMode.CHECKPOINT_EXPORT
-    plan = (
-        derive_policy_export_role_plan(skyrl)
-        if checkpoint_export
-        else derive_role_plan(
-            skyrl, generate_only=config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
-        )
-    )
+    if checkpoint_export:
+        plan = derive_policy_export_role_plan(skyrl)
+    elif config["runtime"]["entrypoint"] == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
+        plan = derive_generation_role_plan(skyrl)
+    else:
+        plan = derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
     expected_nodes = derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
@@ -286,11 +290,11 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
             f"{expected_nodes} physical nodes"
         )
-    role_gpus_per_node = plan.bundles[0].gpus_per_node
+    role_gpus_per_node = plan.gpus_per_node
     gpu_mismatch = (
         allocation["gpus_per_node"] < role_gpus_per_node
         if checkpoint_export
-        else (allocation["gpus_per_node"] != role_gpus_per_node)
+        else allocation["gpus_per_node"] != role_gpus_per_node
     )
     if gpu_mismatch:
         raise ValueError(

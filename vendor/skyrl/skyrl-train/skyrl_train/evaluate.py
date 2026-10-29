@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
-from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX
+from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
 
@@ -219,7 +219,7 @@ def _calculate_eval_metrics(
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
     metrics.update(
         {
-            f"eval/all/{key.removeprefix('generate/')}": value
+            EVAL_OUTCOME_METRIC_PREFIX + key.removeprefix(GENERATE_OUTCOME_METRIC_PREFIX): value
             for key, value in (batch.get("rollout_metrics") or {}).items()
             if key.startswith(GENERATE_OUTCOME_METRIC_PREFIX)
         }

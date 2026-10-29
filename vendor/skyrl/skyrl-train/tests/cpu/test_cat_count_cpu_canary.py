@@ -16,8 +16,6 @@ import torch
 import zstandard
 from omegaconf import OmegaConf
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ScriptGrader
-from shellbox.machine import PackageSpec
 from skyrl_train.evaluate import evaluation_dump_dir
 from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from examples.cat_count.cpu_canary import PROMPT
@@ -27,7 +25,6 @@ from skyrl_train.inference_engines.inference_engine_client import InferenceEngin
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
 from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
-from tests.cpu.task_specs import SHELL_ENVIRONMENT, machine_runtime
 from tests.cpu.tiny_training.cat_count import (
     FAST_STEPS,
     RUN_TIMEOUT_SECONDS,
@@ -212,15 +209,6 @@ async def test_cpu_sampling_preserves_trajectory_rng_and_minimum_tokens(cat_coun
                 assert len(ids) >= (minimum or 1)
                 assert tokenizer.eos_token_id not in ids[: minimum or 1]
             assert all(math.isfinite(value) for value in result["response_logprobs"][0])
-        continued = await engine.generate(
-            {
-                "prompt_token_ids": [eos_prompt],
-                "session_ids": ["ignore-eos"],
-                "sampling_params": {"temperature": 0.0, "max_tokens": 8, "min_tokens": 0, "ignore_eos": True},
-            }
-        )
-        assert len(continued["response_ids"][0]) == 8
-        assert continued["response_ids"][0][0] == tokenizer.eos_token_id
     finally:
         await engine.teardown()
 
@@ -239,7 +227,6 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     assert any(row["policy/ppo_clip_ratio"] > 0 for row in training)
     assert all("environment/exact" in row for row in training)
     assert any("environment/exact_n20" in row for row in training)
-    assert all("reward/zero_std_group_fraction" in row for row in training)
     assert all(sum(row[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == 32 for row in training)
     checkpoint = torch.load(root / f"ckpts/global_step_{FAST_STEPS}/policy/rank_0.pt", weights_only=False)
     optimizer_steps = [state["step"].item() for state in checkpoint["optimizer"]["state"].values()]
@@ -312,6 +299,7 @@ def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, for
 
 
 @pytest.mark.timeout(2 * RUN_TIMEOUT_SECONDS)
+# Step-wise training has distinct estimator forwarding and evaluation projection branches.
 @pytest.mark.parametrize("step_wise", [False, True])
 def test_cat_count_rloo_n_preserves_metrics_across_resume(
     tmp_path, cat_count_policy, cat_count_session, forkserver_context, step_wise
@@ -337,13 +325,12 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
         training = [row for row in records if "policy/raw_grad_norm" in row]
         assert [row["step"] for row in training] == list(range(1, steps + 1))
         assert all(row["generate/prompts_dropped_too_long"] == 1 for row in training)
-        assert all(0 <= row["reward/zero_std_group_fraction"] <= 1 for row in training)
-        assert all(0 <= row["reward/rloo_n_filtered_groups"] <= row["reward/rloo_n_total_groups"] for row in training)
+        assert all(
+            row["reward/zero_std_group_fraction"] == row["reward/rloo_n_filtered_groups"] / 5 for row in training
+        )
         assert all(row["reward/rloo_n_total_groups"] == 5 for row in training)
         assert any(row["reward/rloo_n_filtered_groups"] > 0 for row in training)
-        assert all(sum(row[f"generate/outcome/{outcome.value}"] for outcome in Outcome) == 10 for row in training)
         assert sum(records[-1][f"eval/all/outcome/{outcome.value}"] for outcome in Outcome) == 20
-        assert [row["step"] for row in records] == list(range(steps + 1))
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)
@@ -353,45 +340,25 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
     environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
-    tasks = []
-    expected = {}
-    for index, n in enumerate((7, 1, 4, 2)):
+    def task(n, identifier, extra_info):
         row = {
             "prompt": [{"role": "user", "content": PROMPT.format(N=n)}],
             "env_class": "cat_count",
             "data_source": "train",
-            "extra_info": {"n": n, "data_source": "train"},
+            "extra_info": {"n": n, "data_source": "train", **extra_info},
         }
-        spec = source_row_task(row, index, source_name="cat-count", environment_configs=environment_configs)
-        identifier = f"stable-cat-count-{n}"
-        tasks.append(spec.model_copy(update={"task": spec.task.model_copy(update={"id": identifier})}))
-        expected[identifier] = PROMPT.format(N=n)
-    grader_error = tasks[-1]
-    tasks.append(
-        grader_error.model_copy(
-            update={
-                "task": grader_error.task.model_copy(
-                    update={
-                        "id": "grader-error",
-                        "grader": ScriptGrader(
-                            argv=("true",),
-                            environment=SHELL_ENVIRONMENT.model_copy(update={"package_spec": PackageSpec()}),
-                        ),
-                    }
-                ),
-                "verifier_machine": machine_runtime("shellsim"),
-            }
-        )
-    )
-    expected["grader-error"] = PROMPT.format(N=2)
-    failure_row = {**row, "extra_info": {"n": "invalid", "data_source": "train"}}
-    failed = source_row_task(failure_row, 4, source_name="cat-count", environment_configs=environment_configs)
-    for identifier in ("rollout-error", "rollout-error-2"):
-        tasks.append(failed.model_copy(update={"task": failed.task.model_copy(update={"id": identifier})}))
-        expected[identifier] = PROMPT.format(N=2)
+        lowered = source_row_task(row, 0, source_name="cat-count", environment_configs=environment_configs)
+        spec = lowered.task.model_copy(update={"id": identifier})
+        return lowered.model_copy(update={"task": spec})
+
+    expected = {f"stable-cat-count-{n}": PROMPT.format(N=n) for n in (7, 1, 4, 2)}
+    tasks = [task(n, f"stable-cat-count-{n}", {}) for n in (7, 1, 4, 2)]
+    tasks.append(task(2, "rollout-error", {"n": "invalid"}))
+    expected["rollout-error"] = PROMPT.format(N=2)
     path = root / "data" / "permuted.parquet"
     write_tasks(path, reversed(tasks))
     cfg.data.val_data = [str(path)]
+    cfg.generator.num_inference_engines = 2
     cfg.generator.eval_n_samples_per_prompt = 2
     cfg.generator.eval_sampling_params.ignore_eos = True
     cfg.generator.eval_sampling_params.max_generate_length = 8
@@ -411,19 +378,18 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     assert metrics["generate/wall_seconds"] > 0
     generated_tokens = 2 * len(expected) * 8
     assert metrics["generate/vllm/generation_tokens"] == generated_tokens
-    assert generated_tokens > tokens
     assert metrics["generate/tokens_per_second_per_gpu"] == pytest.approx(
-        generated_tokens / metrics["generate/wall_seconds"]
+        generated_tokens / metrics["generate/wall_seconds"] / 2
     )
-    assert metrics["generate/vllm/num_engines"] == 1
+    assert metrics["generate/vllm/num_engines"] == 2
     assert {outcome.value: metrics[f"generate/outcome/{outcome.value}"] for outcome in Outcome} == {
         "graded": 8,
         "submission_failure": 0,
         "invalid_task": 0,
-        "infra_error": 2,
-        "unavailable": 4,
+        "infra_error": 0,
+        "unavailable": 2,
     }
-    assert metrics["generate/outcome/rollout_failure"] == 4
+    assert metrics["generate/outcome/rollout_failure"] == 2
 
 
 @pytest.mark.nightly

@@ -509,14 +509,8 @@ def _task_error_policies(
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
-    metrics.update(
-        {
-            f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(
-                sum(rollout.grade.status == outcome for rollout in rollouts)
-            )
-            for outcome in Outcome
-        }
-    )
+    outcomes = Counter(rollout.grade.status for rollout in rollouts)
+    metrics.update({f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome})
     metrics[f"{GENERATE_OUTCOME_METRIC_PREFIX}rollout_failure"] = float(
         sum(rollout.failure is not None for rollout in rollouts)
     )
