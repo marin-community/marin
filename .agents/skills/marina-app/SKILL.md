@@ -10,9 +10,17 @@ sections of [the Marina reference](../../../infra/marina/README.md). Treat sourc
 CLI help and those docs as authoritative. Use the existing examples as package
 references.
 
-Every application uses `marina release`. Check maintained source into
-`infra/marina/apps/`; release ad hoc apps from any local directory. Both store
-released packages in Postgres. Agent-created apps follow the same lifecycle.
+Every application uses `marina release`. Choose where to keep source based on
+expected future changes:
+
+- If the app will need changes again, check its source into
+  `infra/marina/apps/<name>/` for review and maintenance.
+- Ad hoc means no future changes are expected. Release it from any local
+  directory without checking in its source, as with a finished report.
+
+Both store released packages in Postgres; ad hoc apps remain available after
+release. Agent-created apps follow the same rules. Named-app capabilities are
+a separate decision from where source lives.
 Use `marina apps` for management. The existing package format still uses
 `applet.toml` and `applet_id`; these do not define a separate app type.
 Marina image deployment and startup never publish packages, select application
@@ -123,8 +131,10 @@ uv run marina release my-report --base-version 0 --json
 uv run marina release my-report --id RETURNED_UUID --base-version CURRENT_VERSION
 ```
 
-Record the first result's UUID and immutable revision URL. Maintained sources should
-declare `applet_id` in `applet.toml`. A merge or runtime restart does not release source or load
+Record the first result's UUID and immutable revision URL. If future changes
+become necessary, check the source into `infra/marina/apps/<name>/` and declare
+that existing UUID as `applet_id` in `applet.toml`; release to the same app.
+A merge or runtime restart does not release source or load
 application datasets. `release-status` compares recorded app/shared-input trees;
 runtime dependencies also matter.
 

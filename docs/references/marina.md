@@ -7,15 +7,21 @@ preserves each app's selected revision. Merging source does not release it or lo
 
 ## Choose the application shape
 
-Use a static package for a report and add a Python backend when it needs APIs.
+Use a static package for a report and add a Python backend to serve API endpoints.
 Either can be a named app when it needs stable named routes, scheduled jobs or
 the Loom panel for asking an agent to work on the application. Naming adds
 capabilities to the same release mechanism.
 
-Maintained app source is checked in under `infra/marina/apps/`. Ad hoc apps can
-be released from any local directory without checking in their source. Both
-store their released code in Postgres and use the same commands. Whether an
-agent or a person created an app does not change its lifecycle.
+Choose where to keep source based on whether you expect to change the app again:
+
+- Expect future changes: check the source into `infra/marina/apps/<name>/` so
+  people and agents can review and maintain it.
+- No future changes expected: release an ad hoc app from any local directory
+  without checking in its source. A finished report is one example.
+
+Both store their released code in Postgres and use the same commands. Ad hoc
+apps remain available after release. Whether an agent or a person created an
+app does not change this choice. Naming is a separate capability decision.
 
 The package format retains the filename `applet.toml` and UUID field `applet_id`
 so existing released revisions remain valid. These spellings do not describe
@@ -70,7 +76,9 @@ The stable UUID and existing access mode are preserved.
 
 Ad hoc directories without a Git repository use the same command. Their first
 `release --base-version 0` returns a UUID; later releases supply `--id UUID` and
-`--base-version CURRENT_VERSION`. Declare `applet_id` in `applet.toml` when maintaining the source.
+`--base-version CURRENT_VERSION`. If you later decide to maintain an ad hoc app,
+check its source into `infra/marina/apps/<name>/` and declare its existing UUID
+as `applet_id` in `applet.toml`. Release further revisions to that same app.
 
 `release-status` compares recorded source trees, distinguishes local edits, and
 reports `unrecorded` for packages without provenance. Declared shared build inputs

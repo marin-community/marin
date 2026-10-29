@@ -18,10 +18,11 @@ storage limits, examples, the agent pane and project uploads.
 
 ## Source and package layout
 
-Maintained app source is checked in under `apps/<name>/`. Ad hoc apps can be
-released from any local directory without checking in their source. Every app's
-released frontend, Python code and selected revision live in Postgres and use
-the same `marina release` lifecycle.
+If you expect to change an app again, check its source into `apps/<name>/` for
+review and maintenance. Ad hoc means no future changes are expected; release
+that app from any local directory without checking in its source. Ad hoc apps
+remain available after release. Every app's released frontend, Python code and
+selected revision live in Postgres and use the same `marina release` lifecycle.
 
 Named apps add stable routes and infrastructure-approved capabilities to this
 same package model. Source location does not grant those capabilities.
@@ -134,8 +135,9 @@ uv run marina release my-report --base-version 0 --json
 uv run marina release my-report --id RETURNED_UUID --base-version CURRENT_VERSION
 ```
 
-The first command allocates a UUID. Record it before updating. Maintained source
-should declare `applet_id` in `applet.toml` so ordinary releases cannot
+The first command allocates a UUID. Record it before updating. If you later
+decide to maintain the app, check its source into `apps/<name>/` and declare that
+existing UUID as `applet_id` in `applet.toml` so ordinary releases cannot
 accidentally select another application. A declared UUID must match the upload
 target, including direct API uploads. Source checks are client safeguards; server
 authentication and version checks still apply to direct uploads and older clients.
