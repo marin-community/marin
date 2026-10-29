@@ -1393,17 +1393,16 @@ class HfVisionCheckpointConverter(HfCheckpointIO[VisionConfig]):
     def __init__(
         self,
         LevConfigClass: Type[VisionConfig],
-        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+        reference_checkpoint: Optional[RepoRef] = None,
         HfConfigClass: Optional[Type] = None,
         config_overrides: Optional[dict] = None,
         trust_remote_code: bool = False,
         ignore_prefix: Optional[str] = None,
     ):
-        ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
-        hf_class = self._infer_config_class(HfConfigClass, ref, trust_remote_code)
+        hf_class = self._infer_config_class(HfConfigClass, reference_checkpoint, trust_remote_code)
         self.__default_init__(  # type: ignore
             LevConfigClass=LevConfigClass,
-            reference_checkpoint=ref,
+            reference_checkpoint=reference_checkpoint,
             HfConfigClass=hf_class,
             config_overrides=config_overrides,
             trust_remote_code=trust_remote_code,
@@ -1413,7 +1412,7 @@ class HfVisionCheckpointConverter(HfCheckpointIO[VisionConfig]):
     def load_pretrained(
         self,
         model_cls: Type[VisionModelWithHfSerializationMixin[VisionConfig]],
-        ref: Optional[Union[str, RepoRef]] = None,
+        ref: Optional[RepoRef] = None,
         config: Optional[VisionConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
         dtype: Optional[jnp.dtype] = None,

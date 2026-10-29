@@ -623,7 +623,7 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
     weights = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
     safetensors.numpy.save_file({with_prefix(prefix, "weight"): weights}, str(tmp_path / SAFE_TENSORS_MODEL))
     converter = HfVisionCheckpointConverter(
-        TinyVisionConfig, reference_checkpoint=str(tmp_path), HfConfigClass=HfViTConfig, ignore_prefix=prefix
+        TinyVisionConfig, reference_checkpoint=RepoRef(str(tmp_path)), HfConfigClass=HfViTConfig, ignore_prefix=prefix
     )
     pixels = jnp.array([2, 3, 4], dtype=jnp.float32)
     expected = np.array([20, 48], dtype=np.float32)
@@ -632,7 +632,7 @@ def test_vision_converter_restores_weights_and_missing_buffers(tmp_path, prefix)
         np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(loaded), expected)
         exported = tmp_path / "exported"
         converter.save_pretrained(loaded, str(exported), save_reference_code=False)
-        restored = converter.load_pretrained(TinyVisionModel, ref=str(exported))
+        restored = converter.load_pretrained(TinyVisionModel, ref=RepoRef(str(exported)))
         np.testing.assert_allclose(eqx.filter_jit(lambda model: model(pixels))(restored), expected)
     np.testing.assert_array_equal(safetensors.numpy.load_file(exported / SAFE_TENSORS_MODEL)["weight"], weights)
 
