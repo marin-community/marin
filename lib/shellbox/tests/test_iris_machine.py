@@ -31,7 +31,7 @@ from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
-from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
+from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -184,7 +184,10 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("private_credentials", [False, True])
-def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
+@pytest.mark.parametrize("task_interface", [False, True], ids=["machine", "task"])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(
+    tmp_path, monkeypatch, caplog, private_credentials, task_interface
+):
     task_id = JobName.from_wire("/fixture/sandbox/0")
     status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
@@ -212,7 +215,11 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
 
     async def scenario():
-        machine = await factory.create(spec)
+        machine = (
+            (await factory.create_task(TaskSpec((ContainerSpec("agent", spec),), primary="agent"))).primary
+            if task_interface
+            else await factory.create(spec)
+        )
         try:
             assert secret not in json.dumps(asdict(machine.spec), default=str)
             result = await machine.run(Command(("sh", "-c", "printf ready")))
@@ -447,7 +454,14 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
 
         task.status = status
         creation = asyncio.create_task(
-            factory.create_group(ServiceGroupSpec(spec, (ServiceSpec("runtime", spec),)))
+            factory.create_task(
+                TaskSpec(
+                    containers=(
+                        ContainerSpec("task", spec),
+                        ContainerSpec("runtime", spec),
+                    )
+                )
+            )
             if grouped
             else factory.create(spec)
         )
@@ -487,7 +501,14 @@ def test_cancelled_factory_wait_reclaims_the_submitted_job(monkeypatch, tmp_path
 
         task.status = status
         creation = asyncio.create_task(
-            factory.create_group(ServiceGroupSpec(spec, (ServiceSpec("runtime", spec),)))
+            factory.create_task(
+                TaskSpec(
+                    containers=(
+                        ContainerSpec("task", spec),
+                        ContainerSpec("runtime", spec),
+                    )
+                )
+            )
             if grouped
             else factory.create(spec)
         )
@@ -551,28 +572,28 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
     probe = Command(
         ("sh", "-c", "n=$(cat attempts 2>/dev/null || echo 0); n=$((n+1)); echo $n > attempts; test $n -ge 2")
     )
-    spec = ServiceGroupSpec(
-        task=MachineSpec(image, workdir=str(tmp_path / "task"), cpus=2, memory_mb=256),
-        services=(
-            ServiceSpec(
+    spec = TaskSpec(
+        containers=(
+            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"), cpus=2, memory_mb=256)),
+            ContainerSpec(
                 name="runtime",
                 machine=MachineSpec(image, workdir=str(runtime), cpus=1, memory_mb=128),
                 endpoints=(ServiceEndpoint("http", 8000),),
                 readiness=ReadinessProbe(probe, timeout=5, interval=0.001, attempts=3),
             ),
-        ),
+        )
     )
 
     async def run():
-        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        group = await IrisMachineFactory(controller_url="http://controller").create_task(spec)
         assert group.endpoint("runtime", "http") == "runtime:8000"
         await group.wait_ready()
         assert (runtime / "attempts").read_text().strip() == "2"
-        assert (await group.services["runtime"].run(Command(("printf", "runtime")))).stdout == b"runtime"
-        await group.services["runtime"].close()
+        assert (await group.containers["runtime"].run(Command(("printf", "runtime")))).stdout == b"runtime"
+        await group.containers["runtime"].close()
         assert job.cancelled
         with pytest.raises(RuntimeError, match="closed"):
-            await group.task.run(Command(("true",)))
+            await group.primary.run(Command(("true",)))
         await group.close()
 
     asyncio.run(run())
@@ -627,24 +648,24 @@ else:
         output_limit_bytes=8,
         user=str(os.getuid()),
     )
-    spec = ServiceGroupSpec(
-        task=MachineSpec(image, workdir=str(tmp_path / "task")),
-        services=(
-            ServiceSpec(
+    spec = TaskSpec(
+        containers=(
+            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"))),
+            ContainerSpec(
                 name="runtime",
                 machine=MachineSpec(image, workdir=str(tmp_path)),
                 readiness=ReadinessProbe(probe, timeout=8, interval=0.001, attempts=2),
             ),
-        ),
+        )
     )
 
     async def run():
-        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        group = await IrisMachineFactory(controller_url="http://controller").create_task(spec)
         try:
             await group.wait_ready()
             assert (runtime / "healthy").read_text() == "2"
             assert not job.cancelled
-            assert (await group.services["runtime"].run(Command(("printf", "running")))).stdout == b"running"
+            assert (await group.containers["runtime"].run(Command(("printf", "running")))).stdout == b"running"
         finally:
             await group.close()
         assert job.cancelled
@@ -678,32 +699,32 @@ def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path, adver
     image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    spec = ServiceGroupSpec(
-        task=MachineSpec(image, workdir=str(tmp_path / "task")),
-        services=(
-            ServiceSpec(
+    spec = TaskSpec(
+        containers=(
+            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"))),
+            ContainerSpec(
                 name="runtime",
                 machine=MachineSpec(image, workdir=str(runtime)),
                 readiness=ReadinessProbe(
                     Command(("sh", "-c", "echo unhealthy >&2; exit 1")), timeout=5, interval=0.001, attempts=2
                 ),
             ),
-        ),
+        )
     )
 
     async def run():
         factory = IrisMachineFactory(controller_url="http://controller")
         if not advertise_support:
             with pytest.raises(UnsupportedMachineSpec):
-                await factory.create_group(spec)
+                await factory.create_task(spec)
             assert not client.submitted
             return
-        group = await factory.create_group(spec)
+        group = await factory.create_task(spec)
         with pytest.raises(RuntimeError):
             await group.wait_ready()
         assert job.cancelled
         with pytest.raises(RuntimeError):
-            await group.services["runtime"].run(Command(("true",)))
+            await group.containers["runtime"].run(Command(("true",)))
         await asyncio.gather(group.close(), group.close())
 
     asyncio.run(run())

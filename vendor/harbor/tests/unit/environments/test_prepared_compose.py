@@ -87,12 +87,13 @@ def test_tau3_import_preserves_prepared_services_and_private_model_capability(ta
     )
     with task_environment(MODEL_ENVIRONMENT):
         plan = import_prepared_task(task, tau3_environment)
-    (runtime,) = plan.group.services
+    main, runtime = plan.task.containers
 
-    assert plan.group.task.source.reference == MAIN_IMAGE
+    assert plan.task.primary == main.name == "main"
+    assert main.machine.source.reference == MAIN_IMAGE
     assert runtime.machine.source.reference == RUNTIME_IMAGE
-    assert plan.group.task.network is runtime.machine.network is NetworkPolicy.DENY
-    assert plan.group.task.env["OPENAI_API_KEY"] == runtime.machine.env["OPENAI_API_KEY"] == "EMPTY"
+    assert main.machine.network is runtime.machine.network is NetworkPolicy.DENY
+    assert main.machine.env["OPENAI_API_KEY"] == runtime.machine.env["OPENAI_API_KEY"] == "EMPTY"
     assert runtime.machine.env["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert runtime.machine.env["TAU2_USER_MODEL"] == "gpt-5.2"
     assert runtime.arguments is None and runtime.entrypoint is None

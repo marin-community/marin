@@ -488,6 +488,9 @@ message EnvironmentConfig {
   // Credential-free containers sharing only the sandbox task's private network.
   // Their resource reservations are included in the job's total resources.
   repeated SandboxServiceSpec sandbox_services = 8;
+  // Logical name for the primary container; empty means "task". The runtime
+  // retains the physical container identity used by logs and task status.
+  string primary_container_name = 9;
 
   // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
   // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.

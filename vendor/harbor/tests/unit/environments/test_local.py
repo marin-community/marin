@@ -129,7 +129,7 @@ def test_local_prepared_services_keep_state_private_and_collect_verifier_logs(
     async def run():
         await adapter.start(force_build=False)
         machine = adapter.machine
-        roots = [machine.root, *(service.root for service in adapter.group.services.values())]
+        roots = [container.root for container in adapter.execution.containers.values()]
         try:
             # These minimal images have no Python healthcheck runner. Bound the
             # actor's first request while the real HTTP service processes start.

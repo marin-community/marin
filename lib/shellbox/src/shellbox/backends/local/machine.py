@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from shellbox.backends.local import launch
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
@@ -51,7 +52,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.service import ServiceGroup, ServiceGroupSpec
+from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
 
@@ -427,7 +428,7 @@ class LocalMachine:
         self._environment = environment
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
-        self._group_close: Callable[[], Awaitable[None]] | None = None
+        self._task_close: Callable[[], Awaitable[None]] | None = None
         self._keeper: asyncio.subprocess.Process | None = None
         self._keeper_pidfd: int | None = None
         self._init_pidfd: int | None = None
@@ -437,7 +438,6 @@ class LocalMachine:
         self._root_fd: int | None = None
         self._commands: set[asyncio.subprocess.Process] = set()
         self._watcher: asyncio.Task[None] | None = None
-        self._expiry: asyncio.Task[None] | None = None
 
     def _check_open(self) -> None:
         if self._closed:
@@ -780,8 +780,8 @@ class LocalMachine:
         await asyncio.to_thread(unpack_local_archive, result.stdout, target)
 
     async def close(self) -> None:
-        if self._group_close is not None:
-            await self._group_close()
+        if self._task_close is not None:
+            await self._task_close()
             return
         await self._close_local()
 
@@ -792,8 +792,6 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
-        if self._expiry is not None:
-            self._expiry.cancel()
         # Kill the verified, pinned guest init before its host launcher. An
         # immediate close can otherwise race bwrap's parent-death setup and
         # leave the init holding the launcher's stderr pipe open.
@@ -892,7 +890,7 @@ class LocalMachineFactory:
 
     Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
     must be digest pinned. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
-    a machine or group; a command timeout or cancellation also closes its entire machine or group.
+    a task; a command timeout or cancellation also closes every container in that task.
     """
 
     backend: Backend = Backend.LOCAL
@@ -934,17 +932,20 @@ class LocalMachineFactory:
         check_local_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
-        machine = await self._create(spec)
-        if self.ttl is not None:
-            machine._expiry = asyncio.create_task(_expire(machine.close, self.ttl))
-        return machine
+        task = await self.create_task(single_container_task(spec))
+        return cast(LocalMachine, task.primary)
 
-    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
-        """Start separate members sharing only a private loopback network."""
-        for member in (spec.task, *(service.machine for service in spec.services)):
-            _check_spec(member)
-        if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", service.name) is None for service in spec.services):
-            raise UnsupportedMachineSpec("Local service names must be lowercase DNS labels")
+    async def create_task(self, spec: TaskSpec) -> Task:
+        """Start named containers with private filesystems and one network."""
+        for container in spec.containers:
+            _check_spec(container.machine)
+        if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
+            raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
+        if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container.name) is None for container in spec.containers):
+            raise UnsupportedMachineSpec("Local container names must be lowercase DNS labels")
+        primary = spec.primary_container
+        if primary.entrypoint is not None or primary.arguments is not None:
+            raise UnsupportedMachineSpec("The local task's primary container does not support startup overrides")
         members: list[LocalMachine] = []
         monitors: list[asyncio.Task[Result]] = []
         expiry: asyncio.Task[None] | None = None
@@ -960,34 +961,40 @@ class LocalMachineFactory:
             await asyncio.gather(*monitors, return_exceptions=True)
 
         try:
-            aliases = "127.0.0.1 localhost " + " ".join(service.name for service in spec.services) + "\n"
-            task = await self._create(spec.task, aliases=aliases)
-            members.append(task)
-            services = {}
-            for service in spec.services:
-                member = await self._create(service.machine, peer=task, aliases=aliases)
+            aliases = "127.0.0.1 localhost " + " ".join(container.name for container in spec.containers) + "\n"
+            primary_machine = await self._create(primary.machine, aliases=aliases)
+            members.append(primary_machine)
+            containers = {primary.name: primary_machine}
+            for container in spec.containers:
+                if container.name == primary.name:
+                    continue
+                member = await self._create(container.machine, peer=primary_machine, aliases=aliases)
                 members.append(member)
-                services[service.name] = member
-            group = ServiceGroup(task, services, spec, close)
+                containers[container.name] = member
+            task = Task(containers, spec, close)
             for member in members:
-                member._group_close = group.close
-            for service in spec.services:
-                member = services[service.name]
+                member._task_close = task.close
+            for container in spec.containers:
+                if container.name == primary.name:
+                    continue
+                member = containers[container.name]
                 image = member.image
                 entrypoint = (
-                    service.entrypoint if service.entrypoint is not None else (() if image is None else image.entrypoint)
+                    container.entrypoint
+                    if container.entrypoint is not None
+                    else (() if image is None else image.entrypoint)
                 )
-                arguments = service.arguments
+                arguments = container.arguments
                 if arguments is None:
-                    arguments = image.arguments if service.entrypoint is None and image is not None else ()
+                    arguments = image.arguments if container.entrypoint is None and image is not None else ()
                 if not entrypoint and not arguments:
-                    raise UnsupportedMachineSpec(f"Service {service.name} has no startup command")
+                    raise UnsupportedMachineSpec(f"Container {container.name} has no startup command")
                 monitor = asyncio.create_task(member.run(Command((*entrypoint, *arguments))))
-                monitor.add_done_callback(lambda finished: _service_finished(group, finished, closing_tasks))
+                monitor.add_done_callback(lambda finished: _companion_finished(task, finished, closing_tasks))
                 monitors.append(monitor)
             if self.ttl is not None:
-                expiry = asyncio.create_task(_expire(group.close, self.ttl))
-            return group
+                expiry = asyncio.create_task(_expire(task.close, self.ttl))
+            return task
         except BaseException:
             await asyncio.shield(asyncio.gather(*(member._close_local() for member in members)))
             raise
@@ -1085,9 +1092,11 @@ class LocalMachineFactory:
             )
             await machine._start_keeper(peer)
             if aliases is not None:
-                hosts = await machine._control("cat > /etc/hosts", PurePosixPath("/"), stdin=aliases.encode())
+                hosts = await machine._control(
+                    "mkdir -p /etc && cat > /etc/hosts", PurePosixPath("/"), stdin=aliases.encode()
+                )
                 if hosts.exit_code != 0:
-                    raise RuntimeError(f"Cannot prepare group aliases: {hosts.stderr.decode(errors='replace')}")
+                    raise RuntimeError(f"Cannot prepare task aliases: {hosts.stderr.decode(errors='replace')}")
             result = await machine._control('mkdir -p -- "$1"', _absolute_path(effective.workdir))
             if result.exit_code != 0:
                 raise RuntimeError(f"Cannot create image workdir: {result.stderr.decode(errors='replace')}")
@@ -1113,13 +1122,13 @@ async def _expire(close: Callable[[], Awaitable[None]], ttl: float) -> None:
 def _log_task_failure(task: asyncio.Task) -> None:
     if not task.cancelled() and (error := task.exception()) is not None:
         if isinstance(error, MachineTerminated):
-            return  # Closing a group interrupts its still-running service monitors.
+            return  # Closing a task interrupts its still-running companion monitors.
         logger.error("Local sandbox lifecycle failed", exc_info=(type(error), error, error.__traceback__))
 
 
-def _service_finished(group: ServiceGroup, task: asyncio.Task[Result], closing_tasks: set[asyncio.Task[None]]) -> None:
-    _log_task_failure(task)
-    reclaim = asyncio.create_task(group.close())
+def _companion_finished(task: Task, monitor: asyncio.Task[Result], closing_tasks: set[asyncio.Task[None]]) -> None:
+    _log_task_failure(monitor)
+    reclaim = asyncio.create_task(task.close())
     closing_tasks.add(reclaim)
     reclaim.add_done_callback(closing_tasks.discard)
     reclaim.add_done_callback(_log_task_failure)

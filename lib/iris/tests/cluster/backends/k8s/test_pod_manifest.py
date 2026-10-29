@@ -1234,6 +1234,7 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.task_image = "example.test/task@sha256:" + "a" * 64
     request.resources.disk_bytes = 2 * 1024**3
+    request.environment.primary_container_name = "agent"
     service = request.environment.sandbox_services.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
@@ -1264,7 +1265,7 @@ def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(
     task, runtime = spec["containers"]
     assert [container["name"] for container in spec["containers"]] == ["task", "service-runtime"]
     assert spec["runtimeClassName"] == "cpu-sandbox"
-    assert spec["hostAliases"] == [{"ip": "127.0.0.1", "hostnames": ["task", "runtime"]}]
+    assert spec["hostAliases"] == [{"ip": "127.0.0.1", "hostnames": ["task", "agent", "runtime"]}]
     assert spec["dnsPolicy"] == "None"
     assert "hostNetwork" not in spec and "serviceAccountName" not in spec
     assert spec["automountServiceAccountToken"] is False

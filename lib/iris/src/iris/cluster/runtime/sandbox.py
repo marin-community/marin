@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 
 from iris.cluster.runtime.env import STANDARD_MOUNTS
+from iris.cluster.runtime.task_spec import validate_container_names
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.rpc import job_pb2
 
@@ -38,7 +39,6 @@ EGRESS_BLOCKED_CIDRS: tuple[str, ...] = (
 
 SANDBOX_SERVICE_PREFIX = "service-"
 SANDBOX_SERVICE_GROUP_CAPABILITY = "sandbox-service-groups"
-_SERVICE_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 _CREDENTIAL_NAMES = frozenset(
     {
@@ -88,6 +88,7 @@ def validate_sandbox_services(
     task_image: str,
 ) -> None:
     """Validate a private sandbox group before admission and again before launch."""
+    validate_container_names(environment)
     services = environment.sandbox_services
     if not services:
         return
@@ -99,11 +100,9 @@ def validate_sandbox_services(
         raise ValueError("Sandbox service groups require a digest-pinned task image")
     validate_sandbox_environment(dict(environment.env_vars))
     names = [service.name for service in services]
-    if len(names) > 8 or len(set(names)) != len(names):
+    if len(names) > 8:
         raise ValueError("Sandbox service groups require unique service names and at most eight services")
     for service in services:
-        if len(service.name) > 55 or _SERVICE_NAME.fullmatch(service.name) is None or service.name == "task":
-            raise ValueError(f"Invalid sandbox service name: {service.name!r}")
         if _PINNED_IMAGE.fullmatch(service.image) is None:
             raise ValueError(f"Sandbox service {service.name} requires a digest-pinned image")
         if not PurePosixPath(service.workdir).is_absolute():

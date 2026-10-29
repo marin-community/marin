@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -51,7 +52,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.service import ServiceGroup, ServiceGroupSpec
+from shellbox.task import Task as ContainerTask
+from shellbox.task import TaskSpec, single_container_task
 
 # The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
@@ -367,12 +369,20 @@ class IrisMachineFactory:
         )
 
     async def create(self, spec: MachineSpec) -> IrisMachine:
-        return await self._create(spec, self._check_spec(spec))
+        task = await self.create_task(single_container_task(spec))
+        return cast(IrisMachine, task.primary)
 
     async def _create(
-        self, spec: MachineSpec, source: RegistryImage, services: tuple[SandboxServiceSpec, ...] = ()
+        self,
+        spec: MachineSpec,
+        source: RegistryImage,
+        services: tuple[SandboxServiceSpec, ...],
+        *,
+        primary_name: str,
     ) -> IrisMachine:
-        submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, source, services))
+        submission = asyncio.create_task(
+            asyncio.to_thread(self._submit_sync, spec, source, services, primary_name=primary_name)
+        )
         try:
             machine = await asyncio.shield(submission)
         except asyncio.CancelledError:
@@ -401,11 +411,17 @@ class IrisMachineFactory:
             await machine.close()
             raise
 
-    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
-        """Start a credential-free task and services in one private gVisor pod."""
-        if self.secret_env:
+    async def create_task(self, spec: TaskSpec) -> ContainerTask:
+        """Start a singleton or private peer group through the same Iris path."""
+        primary = spec.primary_container
+        companions = tuple(container for container in spec.containers if container.name != spec.primary)
+        if primary.entrypoint is not None or primary.arguments is not None:
+            raise UnsupportedMachineSpec("The Iris primary container is kept alive for machine commands")
+        if companions and self.secret_env:
             raise UnsupportedMachineSpec("Private service groups accept no secret-enabled machine factory")
-        source = self._check_spec(spec.task)
+        if companions and spec.network is not NetworkPolicy.DENY:
+            raise UnsupportedMachineSpec("Iris multi-container tasks require denied external networking")
+        source = self._check_spec(primary.machine)
         services = tuple(
             SandboxServiceSpec(
                 name=service.name,
@@ -420,11 +436,9 @@ class IrisMachineFactory:
                     disk=(service.machine.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
             )
-            for service in spec.services
+            for service in companions
         )
-        if not services:
-            raise UnsupportedMachineSpec("A service group requires at least one service")
-        task = await self._create(spec.task, source, services)
+        task = await self._create(primary.machine, source, services, primary_name=primary.name)
         members = {
             service.name: IrisMachine(
                 task.endpoint,
@@ -436,12 +450,18 @@ class IrisMachineFactory:
                 container_name=service.name,
                 execution=task.execution,
             )
-            for service in spec.services
+            for service in companions
         }
-        return ServiceGroup(task, members, spec, task.close)
+        members[primary.name] = task
+        return ContainerTask(members, spec, task.close)
 
     def _submit_sync(
-        self, spec: MachineSpec, source: RegistryImage, services: tuple[SandboxServiceSpec, ...] = ()
+        self,
+        spec: MachineSpec,
+        source: RegistryImage,
+        services: tuple[SandboxServiceSpec, ...],
+        *,
+        primary_name: str,
     ) -> IrisMachine:
         info = get_job_info()
         if info is not None:
@@ -474,12 +494,12 @@ class IrisMachineFactory:
             )
             environment = EnvironmentSpec(
                 setup_scripts=[],
-                env_vars=(
-                    dict(spec.env)
-                    if services
-                    else {name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()}
-                ),
+                env_vars={
+                    **spec.env,
+                    **{name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
+                },
                 sandbox_services=services,
+                primary_container_name=primary_name,
             )
             resources = ResourceSpec(
                 cpu=(spec.cpus or 1) + sum(service.resources.cpu for service in services),

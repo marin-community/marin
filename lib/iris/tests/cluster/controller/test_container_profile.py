@@ -177,7 +177,9 @@ def _service_group_request():
 
 def test_sandbox_service_group_persists_on_admission(service):
     service._controller.backend.descriptor = k8s_backend_descriptor()
-    response = _as("user", "alice", service.launch_job, _service_group_request(), None)
+    request = _service_group_request()
+    request.environment.primary_container_name = "agent"
+    response = _as("user", "alice", service.launch_job, request, None)
     stored = _as(
         "user",
         "alice",
@@ -187,11 +189,14 @@ def test_sandbox_service_group_persists_on_admission(service):
     ).request
     assert stored.resources.cpu_millicores == 2000
     assert stored.environment.sandbox_services[0].name == "runtime"
+    assert stored.environment.primary_container_name == "agent"
 
 
 def test_service_exec_cannot_select_infrastructure_containers(service):
     service._controller.backend.descriptor = k8s_backend_descriptor()
-    _as("user", "alice", service.launch_job, _service_group_request(), None)
+    task = _service_group_request()
+    task.environment.primary_container_name = "agent"
+    _as("user", "alice", service.launch_job, task, None)
     backend = service._controller.backend
     backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(stdout="runtime")
     request = controller_pb2.Controller.ExecInContainerRequest(
@@ -202,6 +207,10 @@ def test_service_exec_cannot_select_infrastructure_containers(service):
     result = _as("user", "alice", service.exec_in_container, request, None)
     assert result.stdout == "runtime"
     assert backend.exec_in_container.call_args.args[1].container_name == "runtime"
+    for primary in ("agent", "task"):
+        request.container_name = primary
+        assert _as("user", "alice", service.exec_in_container, request, None).stdout == "runtime"
+        assert backend.exec_in_container.call_args.args[1].container_name == ""
     backend.exec_in_container.reset_mock()
     request.container_name = "output-uploader"
     with pytest.raises(ConnectError) as error:
@@ -210,8 +219,8 @@ def test_service_exec_cannot_select_infrastructure_containers(service):
     backend.exec_in_container.assert_not_called()
 
 
-@pytest.mark.parametrize("location", ["task", "service", "secret", "egress"])
-def test_service_groups_reject_credential_and_network_escalation_at_admission(service, location):
+@pytest.mark.parametrize("location", ["task", "service", "secret", "egress", "alias"])
+def test_service_groups_reject_invalid_inputs_at_admission(service, location):
     service._controller.backend.descriptor = k8s_backend_descriptor()
     request = _service_group_request()
     if location == "task":
@@ -220,6 +229,8 @@ def test_service_groups_reject_credential_and_network_escalation_at_admission(se
         request.environment.sandbox_services[0].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
     elif location == "secret":
         request.environment.secrets["CW_KEY_SECRET"] = "private"
+    elif location == "alias":
+        request.environment.primary_container_name = "runtime"
     else:
         request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
     with pytest.raises(ConnectError) as error:

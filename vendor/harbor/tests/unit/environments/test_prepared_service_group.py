@@ -23,7 +23,7 @@ from harbor.models.task.config import EnvironmentConfig, MCPServerConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.utils.env import task_environment
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.service import ServiceGroup, ServiceGroupSpec
+from shellbox.task import Task, TaskSpec
 
 _RUNTIME = """
 import json, os, sys, urllib.request
@@ -50,14 +50,14 @@ ThreadingHTTPServer(('127.0.0.1',int(sys.argv[1])),Handler).serve_forever()
 """
 
 
-class ProcessGroupFactory:
+class ProcessTaskFactory:
     def __init__(self, root: Path, port: int):
         self.root, self.port = root, port
         self.closed = False
 
-    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
-        actor = ProcessMachine(self.root / "actor", spec.task)
-        (runtime_spec,) = spec.services
+    async def create_task(self, spec: TaskSpec) -> Task:
+        actor = ProcessMachine(self.root / "actor", spec.primary_container.machine)
+        (runtime_spec,) = (container for container in spec.containers if container.name != spec.primary)
         runtime = ProcessMachine(self.root / "runtime", runtime_spec.machine)
         script = self.root / "runtime.py"
         script.write_text(_RUNTIME)
@@ -81,7 +81,7 @@ class ProcessGroupFactory:
             await runtime.close()
             self.closed = True
 
-        return ServiceGroup(actor, {"tau3-runtime": runtime}, spec, close)
+        return Task({spec.primary: actor, runtime_spec.name: runtime}, spec, close)
 
 
 @pytest.mark.parametrize("backend", ["iris", "local"])
@@ -146,7 +146,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
         "AsyncClient",
         lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
     )
-    factory = ProcessGroupFactory(tmp_path, runtime_port)
+    factory = ProcessTaskFactory(tmp_path, runtime_port)
     if backend == "iris":
         environment_class, factory_kwargs = IrisEnvironment, {"cluster": "test"}
         monkeypatch.setattr(iris, "IrisMachineFactory", lambda **kwargs: factory)

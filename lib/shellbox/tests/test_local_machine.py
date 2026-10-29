@@ -54,7 +54,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
+from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec, single_container_task
 from shellbox.transfer import download_files
 
 # Prints "ok" or the errno name for each (operation, target) pair in argv, so one command reports several checks.
@@ -758,11 +758,25 @@ def test_commands_see_only_their_private_root_and_processes(python_factory, outs
 
 
 @pytest.mark.parametrize(("network", "connects"), [(NetworkPolicy.DENY, False), (NetworkPolicy.ALLOW, True)])
-def test_deny_network_policy_refuses_tcp_connections(python_factory, network, connects):
+@pytest.mark.parametrize("explicit_task", [False, True], ids=["machine-api", "task-api"])
+def test_singleton_network_policy_controls_host_connections(python_factory, network, connects, explicit_task):
     spec = MachineSpec(HostImage(), workdir="/app", network=network)
+
+    async def scenario(port):
+        if explicit_task:
+            task = await python_factory.create_task(TaskSpec((ContainerSpec("actor", spec),), primary="actor"))
+            machine = task.primary
+        else:
+            machine = await python_factory.create(spec)
+        try:
+            return await machine.run(Command(("python3", "-c", ACCESS_PROBE, "connect", str(port))))
+        finally:
+            await machine.close()
+
     with socket.create_server(("127.0.0.1", 0)) as server:
-        outcomes = access_outcomes(python_factory, ("connect", server.getsockname()[1]), spec=spec)
-    assert (outcomes == ["ok"]) == connects
+        result = asyncio.run(scenario(server.getsockname()[1]))
+    assert result.exit_code == 0
+    assert (result.stdout.split() == [b"ok"]) == connects
 
 
 def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, factory, outside_dir):
@@ -893,11 +907,10 @@ else:
 """
 
 
-def private_group_spec(marker="service", readiness=None):
-    return ServiceGroupSpec(
-        task=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
-        services=(
-            ServiceSpec(
+def private_task_spec(marker="service", readiness=None):
+    return TaskSpec(
+        containers=(
+            ContainerSpec(
                 name="runtime",
                 machine=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
                 endpoints=(ServiceEndpoint("http", 8123),),
@@ -912,7 +925,9 @@ def private_group_spec(marker="service", readiness=None):
                     interval=0.05,
                 ),
             ),
+            ContainerSpec("actor", MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY)),
         ),
+        primary="actor",
     )
 
 
@@ -974,25 +989,25 @@ def test_real_local_http_relay_serves_concurrent_requests(factory):
 
 
 @pytest.mark.parametrize("family,host", [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")], ids=["ipv4", "ipv6"])
-def test_local_group_peers_have_private_filesystems_and_no_host_network(factory, family, host):
+def test_local_task_peers_have_private_filesystems_and_no_host_network(factory, family, host):
     async def scenario(host_port):
         groups = await asyncio.gather(
-            factory.create_group(private_group_spec("first")),
-            factory.create_group(private_group_spec("second")),
+            factory.create_task(private_task_spec("first")),
+            factory.create_task(private_task_spec("second")),
         )
-        roots = [machine.root for group in groups for machine in (group.task, *group.services.values())]
+        roots = [cast(LocalMachine, machine).root for group in groups for machine in group.containers.values()]
         try:
             await asyncio.gather(*(group.wait_ready() for group in groups))
             for group, expected in zip(groups, (b"first", b"second"), strict=True):
-                written = await group.task.run(Command(("sh", "-c", "echo actor >/app/member-secret")))
+                written = await group.primary.run(Command(("sh", "-c", "echo actor >/app/member-secret")))
                 assert written.exit_code == 0
-                own = await group.task.run(Command(("cat", "/app/member-secret")))
+                own = await group.primary.run(Command(("cat", "/app/member-secret")))
                 assert own.stdout == b"actor\n"
-                answer = await group.task.run(
+                answer = await group.primary.run(
                     Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint("runtime", "http")))
                 )
                 assert (answer.exit_code, answer.stdout) == (0, expected)
-                connection = await group.task.run(Command(("python3", "-c", CONNECT_PROBE, str(host_port), host)))
+                connection = await group.primary.run(Command(("python3", "-c", CONNECT_PROBE, str(host_port), host)))
                 assert connection.stdout == b"blocked\n"
         finally:
             await asyncio.gather(*(group.close() for group in groups))
@@ -1014,7 +1029,7 @@ def test_local_group_peers_have_private_filesystems_and_no_host_network(factory,
         asyncio.run(scenario(listener.getsockname()[1]))
 
 
-def test_local_group_retries_a_timed_readiness_probe_without_destroying_the_service(factory):
+def test_local_task_retries_a_timed_readiness_probe_without_destroying_the_companion(factory):
     probe = """import pathlib, signal, socket
 marker = pathlib.Path('/app/probe-attempted')
 if not marker.exists():
@@ -1024,7 +1039,7 @@ socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
 """
 
     async def scenario():
-        spec = private_group_spec(
+        spec = private_task_spec(
             readiness=ReadinessProbe(
                 command=Command(("python3", "-c", probe), timeout=0.15),
                 timeout=10,
@@ -1032,12 +1047,12 @@ socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
                 attempts=5,
             )
         )
-        group = await factory.create_group(spec)
+        group = await factory.create_task(spec)
         try:
             await group.wait_ready()
-            result = await group.services["runtime"].run(Command(("test", "-f", "/app/probe-attempted")))
+            result = await group.containers["runtime"].run(Command(("test", "-f", "/app/probe-attempted")))
             assert result.exit_code == 0
-            response = await group.task.run(Command(("python3", "-c", HTTP_CLIENT, "http://runtime:8123")))
+            response = await group.primary.run(Command(("python3", "-c", HTTP_CLIENT, "http://runtime:8123")))
             assert response.stdout == b"service"
         finally:
             await group.close()
@@ -1046,18 +1061,18 @@ socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
 
 
 @pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
-def test_local_group_command_deadline_closes_every_member(factory, cancel):
+def test_local_task_command_deadline_closes_every_member(factory, cancel):
     async def scenario():
-        group = await factory.create_group(private_group_spec())
-        roots = [group.task.root, group.services["runtime"].root]
+        group = await factory.create_task(private_task_spec())
+        roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
             command = Command(
                 ("sh", "-c", "touch /app/command-started; exec sleep 3600"), timeout=None if cancel else 0.2
             )
-            pending = asyncio.create_task(group.task.run(command))
+            pending = asyncio.create_task(group.primary.run(command))
             if cancel:
-                started = await group.task.run(
+                started = await group.primary.run(
                     Command(("sh", "-c", "until test -f /app/command-started; do sleep 0.01; done"), timeout=5)
                 )
                 assert started.exit_code == 0
@@ -1067,7 +1082,7 @@ def test_local_group_command_deadline_closes_every_member(factory, cancel):
             else:
                 result = await pending
                 assert result.reason is ExitReason.TIMED_OUT
-            for machine in (group.task, *group.services.values()):
+            for machine in group.containers.values():
                 with pytest.raises(MachineTerminated):
                     await machine.run(Command(("true",)))
         finally:
@@ -1104,22 +1119,27 @@ def test_cancelled_command_start_closes_the_machine(factory, monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("service_exit", [False, True], ids=["ttl", "service-exit"])
-def test_local_group_failure_and_ttl_reclaim_all_members(service_exit):
+@pytest.mark.parametrize(
+    "companions,service_exit",
+    [(False, False), (True, False), (True, True)],
+    ids=["singleton-ttl", "multi-container-ttl", "companion-exit"],
+)
+def test_local_task_failure_and_ttl_reclaim_all_members(companions, service_exit):
     factory = make_factory(ttl=None if service_exit else 3)
 
     async def scenario():
-        group = await factory.create_group(private_group_spec())
-        roots = [group.task.root, group.services["runtime"].root]
+        spec = private_task_spec() if companions else single_container_task(SPEC)
+        group = await factory.create_task(spec)
+        roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
-            waiting = asyncio.create_task(group.task.run(Command(("sleep", "3600"))))
+            waiting = asyncio.create_task(group.primary.run(Command(("sleep", "3600"))))
             if service_exit:
                 with contextlib.suppress(MachineTerminated):
-                    await group.services["runtime"].run(Command(("sh", "-c", "kill -TERM $(cat /app/service-pid)")))
+                    await group.containers["runtime"].run(Command(("sh", "-c", "kill -TERM $(cat /app/service-pid)")))
             with pytest.raises(MachineTerminated):
                 await asyncio.wait_for(waiting, 8)
-            for machine in (group.task, *group.services.values()):
+            for machine in group.containers.values():
                 with pytest.raises(MachineTerminated):
                     await machine.run(Command(("true",)))
         finally:
@@ -1312,7 +1332,7 @@ def executable_oci_image(oci_image):
     ],
     ids=["image-defaults", "entrypoint-only", "arguments-only", "both-overridden"],
 )
-def test_prepared_local_group_applies_startup_overrides_with_private_writable_roots(
+def test_prepared_local_task_applies_startup_overrides_with_private_writable_roots(
     executable_oci_image, tmp_path, entrypoint, arguments, expected
 ):
     umoci = shutil.which("umoci")
@@ -1322,7 +1342,7 @@ def test_prepared_local_group_applies_startup_overrides_with_private_writable_ro
     image = executable_oci_image
     original = {path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()}
     task = MachineSpec(image, workdir="", network=NetworkPolicy.DENY)
-    service = ServiceSpec(
+    service = ContainerSpec(
         "runtime",
         task,
         endpoints=(ServiceEndpoint("http", 8123),),
@@ -1332,18 +1352,18 @@ def test_prepared_local_group_applies_startup_overrides_with_private_writable_ro
     )
 
     async def scenario():
-        group = await factory.create_group(ServiceGroupSpec(task, (service,)))
-        roots = [group.task.root, group.services["runtime"].root]
+        group = await factory.create_task(TaskSpec((ContainerSpec("actor", task), service), primary="actor"))
+        roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
-            identity = await group.task.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
+            identity = await group.primary.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
             assert (identity.exit_code, identity.stdout) == (0, b"/app\nfrom-image\n0\n")
-            written = await group.task.run(Command(("sh", "-c", "printf actor >index.html")))
+            written = await group.primary.run(Command(("sh", "-c", "printf actor >index.html")))
             assert written.exit_code == 0
-            response = await group.task.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))
+            response = await group.primary.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))
             assert (response.exit_code, response.stdout) == (0, expected)
-            await group.task.download("/app/index.html", tmp_path / "actor")
-            await group.services["runtime"].download("/app/index.html", tmp_path / "runtime")
+            await group.primary.download("/app/index.html", tmp_path / "actor")
+            await group.containers["runtime"].download("/app/index.html", tmp_path / "runtime")
             assert (tmp_path / "actor").read_bytes() == b"actor"
             assert (tmp_path / "runtime").read_bytes() == expected
         finally:

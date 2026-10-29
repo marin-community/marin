@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private service groups with separate filesystems and one shared loopback network."""
+"""Named containers sharing a task's network and lifetime."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -63,7 +63,7 @@ class ReadinessProbe:
 
 
 @dataclass(frozen=True)
-class ServiceSpec:
+class ContainerSpec:
     name: str
     machine: MachineSpec
     endpoints: tuple[ServiceEndpoint, ...] = ()
@@ -73,51 +73,73 @@ class ServiceSpec:
 
 
 @dataclass(frozen=True)
-class ServiceGroupSpec:
-    task: MachineSpec
-    services: tuple[ServiceSpec, ...]
+class TaskSpec:
+    """One or more containers, with a primary container for default execution.
+
+    All members share a network policy. Backend admission decides which policies
+    and container counts it can enforce; sandbox restrictions are not part of
+    this generic description.
+    """
+
+    containers: tuple[ContainerSpec, ...]
+    primary: str = "task"
 
     def __post_init__(self) -> None:
-        if self.task.network is not NetworkPolicy.DENY or any(
-            service.machine.network is not NetworkPolicy.DENY for service in self.services
-        ):
-            raise UnsupportedMachineSpec("Private service groups require denied external networking for every member")
-        names = [service.name for service in self.services]
+        names = [container.name for container in self.containers]
         if len(set(names)) != len(names):
-            raise ValueError("Service names must be unique within a group")
-        ports = [endpoint.port for service in self.services for endpoint in service.endpoints]
+            raise ValueError("Container names must be unique within a task")
+        if self.primary not in names:
+            raise ValueError("A task must name one of its containers as primary")
+        if any(container.machine.network is not self.network for container in self.containers):
+            raise UnsupportedMachineSpec("Containers sharing a task must use the same network policy")
+        ports = [endpoint.port for container in self.containers for endpoint in container.endpoints]
         if len(set(ports)) != len(ports):
-            raise ValueError("Services sharing loopback must use distinct endpoint ports")
+            raise ValueError("Containers sharing loopback must use distinct endpoint ports")
+
+    @property
+    def primary_container(self) -> ContainerSpec:
+        return next(container for container in self.containers if container.name == self.primary)
+
+    @property
+    def network(self) -> NetworkPolicy:
+        return self.primary_container.machine.network
 
 
-class ServiceGroup:
-    """One private network and its task and service machines, closed together."""
+def single_container_task(spec: MachineSpec) -> TaskSpec:
+    """Normalize the machine convenience API to the task execution model."""
+    return TaskSpec((ContainerSpec("task", spec),))
+
+
+class Task:
+    """Named container handles owned and closed as one task."""
 
     def __init__(
         self,
-        task: Machine,
-        services: Mapping[str, Machine],
-        spec: ServiceGroupSpec,
+        containers: Mapping[str, Machine],
+        spec: TaskSpec,
         close: Callable[[], Awaitable[None]],
     ):
-        self.task = task
-        self.services = MappingProxyType(dict(services))
+        self.containers = MappingProxyType(dict(containers))
         self.spec = spec
         self._close = close
         self._closing: asyncio.Future[None] | None = None
 
-    def endpoint(self, service: str, endpoint: str) -> str:
-        """Return the group-private host and port, usable only from group machines."""
-        selected = next(member for member in self.spec.services if member.name == service)
+    @property
+    def primary(self) -> Machine:
+        return self.containers[self.spec.primary]
+
+    def endpoint(self, container: str, endpoint: str) -> str:
+        """Return a task-private address usable from its containers."""
+        selected = next(member for member in self.spec.containers if member.name == container)
         port = next(item.port for item in selected.endpoints if item.name == endpoint)
-        return f"{service}:{port}"
+        return f"{container}:{port}"
 
     async def wait_ready(self) -> None:
         """Wait for each declared probe, reclaiming the whole group on failure."""
         try:
-            for service in self.spec.services:
-                if service.readiness is not None:
-                    await wait_service_ready(self.services[service.name], service.readiness)
+            for container in self.spec.containers:
+                if container.readiness is not None:
+                    await wait_service_ready(self.containers[container.name], container.readiness)
         except BaseException:
             await asyncio.shield(self.close())
             raise
@@ -128,10 +150,10 @@ class ServiceGroup:
         await asyncio.shield(self._closing)
 
 
-class ServiceGroupFactory(MachineFactory, Protocol):
-    """A machine factory that also creates private groups of task services."""
+class TaskFactory(MachineFactory, Protocol):
+    """A factory accepting singleton and multi-container task descriptions."""
 
-    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup: ...
+    async def create_task(self, spec: TaskSpec) -> Task: ...
 
 
 async def wait_service_ready(machine: Machine, probe: ReadinessProbe) -> None:

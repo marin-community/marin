@@ -123,7 +123,6 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     cache_host_dirname,
     normalize_workdir_relative_path,
-    render_setup_steps,
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
@@ -138,6 +137,7 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.sandbox import SANDBOX_SERVICE_PREFIX, TaskNetwork, task_isolation, validate_sandbox_services
+from iris.cluster.runtime.task_spec import ContainerSpec, task_spec_from_request
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
@@ -574,18 +574,6 @@ class PodConfig:
     egress_allowlist: EgressAllowlistConfig | None = None
 
 
-def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Build a shell script that runs the setup steps then the run_command."""
-    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
-    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
-    # Activate the venv the setup script populated. Conditional on it existing so
-    # a custom or no-setup script that brings its own environment runs as-is.
-    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.entrypoint.run_command.argv:
-        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
-    return "\n".join(lines)
-
-
 def _build_init_container_spec(
     run_req: job_pb2.RunTaskRequest,
     pod_name: str,
@@ -896,27 +884,27 @@ def _service_group_security_context() -> dict:
     }
 
 
-def _sandbox_service_container(service: job_pb2.SandboxServiceSpec) -> dict:
-    resources = service.resources
+def _container_manifest(container: ContainerSpec, physical_name: str) -> dict:
+    resources = container.resources
     requests = {"cpu": f"{resources.cpu_millicores}m", "memory": str(resources.memory_bytes)}
     limits = {"memory": str(resources.memory_bytes)}
     if resources.disk_bytes:
         requests["ephemeral-storage"] = str(resources.disk_bytes)
         limits["ephemeral-storage"] = str(resources.disk_bytes)
-    container: dict = {
-        "name": f"{SANDBOX_SERVICE_PREFIX}{service.name}",
-        "image": service.image,
-        "workingDir": service.workdir,
-        "env": [{"name": name, "value": value} for name, value in service.env_vars.items()],
+    manifest: dict = {
+        "name": physical_name,
+        "image": container.image,
+        "imagePullPolicy": "IfNotPresent",
+        "workingDir": container.workdir,
+        "env": [{"name": name, "value": value} for name, value in container.env_vars.items()],
         "resources": {"requests": requests, "limits": limits},
-        "securityContext": _service_group_security_context(),
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    if service.HasField("entrypoint"):
-        container["command"] = list(service.entrypoint.argv)
-    if service.HasField("arguments"):
-        container["args"] = list(service.arguments.argv)
-    return container
+    if container.entrypoint is not None:
+        manifest["command"] = list(container.entrypoint)
+    if container.arguments is not None:
+        manifest["args"] = list(container.arguments)
+    return manifest
 
 
 def _build_pod_manifest(
@@ -938,6 +926,7 @@ def _build_pod_manifest(
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     services = run_req.environment.sandbox_services
     try:
+        task_spec = task_spec_from_request(run_req, config.default_image)
         validate_sandbox_services(
             run_req.container_profile, run_req.egress_policy, run_req.environment, run_req.resources, task_image
         )
@@ -998,11 +987,7 @@ def _build_pod_manifest(
     memory_limit_bytes = 0
     if run_req.HasField("resources"):
         res = job_pb2.ResourceSpecProto()
-        res.CopyFrom(run_req.resources)
-        for service in services:
-            res.cpu_millicores -= service.resources.cpu_millicores
-            res.memory_bytes -= service.resources.memory_bytes
-            res.disk_bytes -= service.resources.disk_bytes
+        res.CopyFrom(task_spec.primary_container.resources)
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
@@ -1044,21 +1029,15 @@ def _build_pod_manifest(
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
     volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
-    container: dict = {
-        "name": "task",
-        "image": task_image,
-        "imagePullPolicy": "IfNotPresent",
-        "env": env_list,
-        "workingDir": WORKDIR_MOUNT.container_path,
-        "volumeMounts": vol_mounts,
-        "command": ["bash", "-lc", _build_task_script(run_req)],
-        # Without this, a non-zero exit leaves containerStatuses[].state.terminated
-        # with an empty message and a bare "Error" reason, burying the actual
-        # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the
-        # operator has to pull separately. This has the kubelet populate the
-        # message with the container's own tail log output instead.
-        "terminationMessagePolicy": "FallbackToLogsOnError",
-    }
+    containers = [
+        _container_manifest(
+            member, "task" if member.name == task_spec.primary else f"{SANDBOX_SERVICE_PREFIX}{member.name}"
+        )
+        for member in task_spec.containers
+    ]
+    container = containers[0]
+    container["env"] = env_list
+    container["volumeMounts"] = vol_mounts
     if job_secrets or _needs_task_policy(run_req, network):
         # The required volume also holds task startup until the pod's egress
         # policy exists: the provider writes the Secret after the policy.
@@ -1077,10 +1056,13 @@ def _build_pod_manifest(
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
     if services:
-        container["securityContext"] = _service_group_security_context()
+        for member in containers:
+            member["securityContext"] = _service_group_security_context()
 
     if resources:
         container["resources"] = resources
+    else:
+        container.pop("resources")
 
     job_id = _job_id_from_task(task_id)
     labels = {
@@ -1180,7 +1162,6 @@ def _build_pod_manifest(
             }
         )
 
-    containers = [container, *(_sandbox_service_container(service) for service in services)]
     if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         storage_file = None
@@ -1224,8 +1205,10 @@ def _build_pod_manifest(
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
+    if services or run_req.environment.primary_container_name:
+        aliases = list(dict.fromkeys(("task", *(member.name for member in task_spec.containers))))
+        spec["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": aliases}]
     if services:
-        spec["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": ["task", *(service.name for service in services)]}]
         spec["shareProcessNamespace"] = False
         spec["dnsPolicy"] = "None"
         spec["dnsConfig"] = {"nameservers": ["127.0.0.1"]}

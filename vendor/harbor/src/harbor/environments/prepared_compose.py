@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translate prepared Harbor Compose tasks into private Shellbox service groups."""
+"""Translate prepared Harbor Compose tasks into named Shellbox containers."""
 
 import json
 import re
@@ -19,11 +19,11 @@ from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.utils.env import resolve_env_vars, validate_task_environment
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
-from shellbox.service import (
+from shellbox.task import (
+    ContainerSpec,
     ReadinessProbe,
     ServiceEndpoint,
-    ServiceGroupSpec,
-    ServiceSpec,
+    TaskSpec,
 )
 
 COMPOSE_FILENAMES = (
@@ -83,7 +83,7 @@ class ComposeDocument(BaseModel):
 
 @dataclass(frozen=True)
 class ImportedTask:
-    group: ServiceGroupSpec
+    task: TaskSpec
     service_log_paths: tuple[tuple[str, str], ...]
 
 
@@ -256,7 +256,7 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
                 raise ValueError("Compose expose must declare a TCP port number")
             ports.append(ServiceEndpoint(f"tcp-{text}", int(text)))
         services.append(
-            ServiceSpec(
+            ContainerSpec(
                 name=name,
                 machine=_machine(name, service, prepared, task),
                 endpoints=tuple(ports),
@@ -273,7 +273,10 @@ def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> Impo
         if endpoint.username or endpoint.password or (endpoint.hostname, endpoint.port or 80) not in names_and_ports:
             raise ValueError("Prepared task MCP endpoint must name a declared service and exposed port")
     return ImportedTask(
-        group=ServiceGroupSpec(task=_machine("main", main, prepared, task), services=tuple(services)),
+        task=TaskSpec(
+            containers=(ContainerSpec("main", _machine("main", main, prepared, task)), *services),
+            primary="main",
+        ),
         service_log_paths=tuple(log_paths),
     )
 

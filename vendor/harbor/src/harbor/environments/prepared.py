@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared Harbor execution over prepared Shellbox machines and service groups."""
+"""Shared Harbor execution over prepared Shellbox tasks."""
 
 import asyncio
 import tempfile
@@ -27,14 +27,14 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import resolve_env_vars
 
 from shellbox.machine import Command, Machine, MachineSpec
-from shellbox.service import ServiceGroup, ServiceGroupFactory
+from shellbox.task import Task, TaskFactory
 from shellbox.http_service import serve_http
 
 
 class PreparedEnvironment(BaseEnvironment):
     """Execute prepared tasks through a credential-free Shellbox factory."""
 
-    factory: ServiceGroupFactory
+    factory: TaskFactory
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class PreparedEnvironment(BaseEnvironment):
         if kwargs.get("persistent_env"):
             raise ValueError("Prepared sandbox does not accept driver environment variables")
         self.machine: Machine | None = None
-        self.group: ServiceGroup | None = None
+        self.execution: Task | None = None
         self._relay = AsyncExitStack()
         self._service_log_paths: tuple[tuple[str, str], ...] = ()
         self.model_endpoint = model_endpoint
@@ -64,7 +64,7 @@ class PreparedEnvironment(BaseEnvironment):
 
     @abstractmethod
     def _resource_spec(self, spec: MachineSpec) -> MachineSpec:
-        """Apply this backend's declared resource policy to a group member."""
+        """Apply this backend's declared resource policy to a task container."""
         ...
 
     def _command_user(self, user: str | int | None) -> str | None:
@@ -96,16 +96,14 @@ class PreparedEnvironment(BaseEnvironment):
         if force_build:
             raise ValueError("Prepared sandbox uses prebuilt images; force_build is unsupported")
         plan = import_prepared_task(self.task_env_config, self.environment_dir)
-        task_spec = self._resource_spec(plan.group.task)
-        group_spec = replace(
-            plan.group,
-            task=task_spec,
-            services=tuple(
-                replace(service, machine=self._resource_spec(service.machine)) for service in plan.group.services
+        task_spec = replace(
+            plan.task,
+            containers=tuple(
+                replace(container, machine=self._resource_spec(container.machine)) for container in plan.task.containers
             ),
         )
         needs_model = any(
-            "OPENAI_BASE_URL" in machine.env for machine in (task_spec, *(item.machine for item in group_spec.services))
+            "OPENAI_BASE_URL" in container.machine.env for container in task_spec.containers
         )
         if (needs_model or self.verifier_model_endpoint is not None) and (
             self.model_endpoint is None or self.model_name is None
@@ -113,22 +111,17 @@ class PreparedEnvironment(BaseEnvironment):
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
             )
-        creation = asyncio.create_task(
-            self.factory.create_group(group_spec) if group_spec.services else self.factory.create(task_spec)
-        )
+        creation = asyncio.create_task(self.factory.create_task(task_spec))
         try:
-            created = await asyncio.shield(creation)
+            execution = await asyncio.shield(creation)
         except asyncio.CancelledError:
             # A backend may still acquire resources after cancellation. Own and
-            # reclaim the late machine or group before leaving this operation.
-            machine = await creation
-            await asyncio.shield(machine.close())
+            # reclaim the late task before leaving this operation.
+            execution = await creation
+            await asyncio.shield(execution.close())
             raise
-        if isinstance(created, ServiceGroup):
-            self.group = created
-            self.machine = created.task
-        else:
-            self.machine = created
+        self.execution = execution
+        self.machine = execution.primary
         try:
             if needs_model or self.verifier_model_endpoint is not None:
                 await self._relay.enter_async_context(
@@ -138,14 +131,13 @@ class PreparedEnvironment(BaseEnvironment):
                         port=MODEL_RELAY_PORT,
                     )
                 )
-            if self.group is not None:
-                await self.group.wait_ready()
-                for name, path in plan.service_log_paths:
-                    result = await self.group.services[name].run(
-                        Command(("mkdir", "-p", path), cwd="/", user=self._command_user("root"))
-                    )
-                    if result.exit_code:
-                        raise RuntimeError("Failed to prepare service artifact directory")
+            await execution.wait_ready()
+            for name, path in plan.service_log_paths:
+                result = await execution.containers[name].run(
+                    Command(("mkdir", "-p", path), cwd="/", user=self._command_user("root"))
+                )
+                if result.exit_code:
+                    raise RuntimeError("Failed to prepare service artifact directory")
             self._service_log_paths = plan.service_log_paths
             targets = self._mount_targets(writable_only=True)
             if targets:
@@ -161,21 +153,19 @@ class PreparedEnvironment(BaseEnvironment):
         try:
             await self._relay.aclose()
         finally:
-            group, machine = self.group, self.machine
-            self.group = self.machine = None
+            execution = self.execution
+            self.execution = self.machine = None
             self._service_log_paths = ()
-            if group is not None:
-                await group.close()
-            elif machine is not None:
-                await machine.close()
+            if execution is not None:
+                await execution.close()
 
     async def _sync_service_logs(self) -> None:
-        if self.group is None or self.machine is None:
+        if self.execution is None or self.machine is None:
             return
         for name, target in self._service_log_paths:
             with tempfile.TemporaryDirectory() as staging:
                 local = Path(staging) / "logs"
-                await self.group.services[name].download(target, local)
+                await self.execution.containers[name].download(target, local)
                 await self.machine.upload(local, target)
 
     async def exec(

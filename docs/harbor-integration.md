@@ -204,6 +204,13 @@ Build and push these images during trusted task preparation, preserving each tas
 runtime image includes its task-specific `task_config.json`; one image cannot silently substitute
 another task's configuration. Dockerfiles and Compose build declarations may remain in the source
 artifact. Evaluation reads the prepared references and never executes their build recipes.
+
+The importer produces one Shellbox `TaskSpec` containing named containers and an
+explicit primary named `main`. A task without peers has that same representation
+with one container. Both use `factory.create_task`; startup, readiness, artifact
+transfer and cleanup share the same path. Iris lowers this to its existing wire
+format and normalizes it before container construction.
+
 Build images separately with the task's dependencies, verifier dependencies and terminal utilities
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
 Tasks using the model relay also need Python 3 in the main image.

@@ -100,7 +100,7 @@ def test_cancelled_start_reclaims_job_that_finishes_submitting(
             await finish_submission.wait()
             return SimpleNamespace(close=close)
 
-        monkeypatch.setattr(adapter.factory, "create", create)
+        monkeypatch.setattr(adapter.factory, "create_task", create)
         start = asyncio.create_task(adapter.start(force_build=False))
         await submitting.wait()
         start.cancel()
@@ -256,7 +256,7 @@ def test_offline_lifecycle_commands_and_host_artifacts(
     asyncio.run(run())
     assert job.submission["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert job.submission["egress_policy"] == job_pb2.EGRESS_POLICY_NONE
-    assert job.submission["environment"].env_vars == {}
+    assert job.submission["environment"].env_vars == {"PUBLIC": "task-visible"}
     assert job.submission["environment"].setup_scripts == []
     assert job.submission["task_image"] == IMAGE
     assert job.submission["resources"].cpu == expected_cpu
