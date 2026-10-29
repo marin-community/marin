@@ -123,10 +123,15 @@ CONTAINER_PROFILE_NAMES: list[str] = [
     job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES if p != job_pb2.CONTAINER_PROFILE_GVISOR
 ]
 
-# User-selectable egress policies (UNSPECIFIED picks the profile's default).
+# User-selectable egress policies (UNSPECIFIED picks the parent's or the cluster's default).
 EGRESS_POLICY_NAMES: list[str] = [
     job_pb2.EgressPolicy.Name(p)
-    for p in (job_pb2.EGRESS_POLICY_CLUSTER, job_pb2.EGRESS_POLICY_INTERNET, job_pb2.EGRESS_POLICY_NONE)
+    for p in (
+        job_pb2.EGRESS_POLICY_CLUSTER,
+        job_pb2.EGRESS_POLICY_ALLOWLIST,
+        job_pb2.EGRESS_POLICY_INTERNET,
+        job_pb2.EGRESS_POLICY_NONE,
+    )
 ]
 
 
