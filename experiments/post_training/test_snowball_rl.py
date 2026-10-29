@@ -194,7 +194,11 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
 import json, sys
 from pathlib import Path
 from omegaconf import OmegaConf
+from omegaconf.resolvers.oc import env
 from cloud.iris.launch_config import load_launch_config
+OmegaConf.register_new_resolver(
+    "oc.env", lambda key, *default: "/home/ahmad" if key == "HOME" else env(key, *default), replace=True
+)
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
     {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
