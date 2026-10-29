@@ -5,13 +5,17 @@ import hashlib
 import inspect
 import json
 import math
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
+import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
 from click.testing import CliRunner
+from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
@@ -79,6 +83,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         fingerprint="",
         answers=None,
         missing_receipt=False,
+        unresolved_receipt=False,
     ):
         preset = presets.PRESETS[preset] if isinstance(preset, str) else preset
         root = tmp_path / name / version
@@ -104,7 +109,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         commit = gate.CONTROLS.get(preset.name, gate.CONTROLS["learning-medium"])[0].main_commit
         source = {"tree_hash": "native-tree", "base_commit": commit, "dirty": False, "command_line": list(argv)}
         result = {"state": "succeeded", "iris_job_id": "/tests/native-run", "provenance": source | (provenance or {})}
-        if not missing_receipt:
+        if not (missing_receipt or unresolved_receipt):
             _json(root / "terminal.json", {"config": {}, "result": result})
         (root / ".executor_status").write_text("SUCCESS")
         for step in (0,) if preset.recipe.layout.role_plan.generate_only else range(1, preset.updates + 1):
@@ -127,8 +132,26 @@ def recorded_runs(selection, tmp_path, monkeypatch):
             }
             if step != omit_step:
                 _json(root / f"exports/metrics/step-{step:06d}.json", row | (metrics or {}))
+        launch = {"inputs": {"validation_data": [{"uri": str(panel)}]}}
+        if unresolved_receipt:
+            launch |= {
+                "artifacts": {"attempts_root": str(root / "attempts")},
+                "run": {"attempt_id": "missing"},
+                "iris": {"job_name": "lookup-missing-job"},
+            }
+
+            @contextmanager
+            def endpoint(**kwargs):
+                yield SimpleNamespace(url="http://iris.test", credentials=None)
+
+            @contextmanager
+            def rpc(*args):
+                yield SimpleNamespace(list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse())
+
+            monkeypatch.setattr(adapter, "connect_controller", endpoint)
+            monkeypatch.setattr(adapter, "rpc_client", rpc)
         if not missing_receipt:
-            _json(root / "resolved-launch.yaml", {"config": {"inputs": {"validation_data": [{"uri": str(panel)}]}}})
+            _json(root / "resolved-launch.yaml", {"config": launch})
         sessions = {-1 if preset.updates == 0 else preset.updates: score}
         sessions |= {0: initial_score} if initial_score is not None else {}
         for evaluation in preset.evaluations:
@@ -302,6 +325,7 @@ BROKEN_FAILS = {"planned_updates", "finite_losses_and_gradients", "grader_error_
         ),
         ("speed-short", {}, {}, "pass", "no change", set(), None),
         ("speed-medium", {"missing_receipt": True}, {}, "invalid", None, set(), None),
+        ("speed-medium", {"unresolved_receipt": True}, {}, "invalid", None, set(), None),
     ],
 )
 def test_rescore_reports_candidate_and_control_contracts(
@@ -318,6 +342,9 @@ def test_rescore_reports_candidate_and_control_contracts(
     assert bounds is None or (error["lower_bound"], error["upper_bound"]) == bounds
     assert Path(report["report"]).with_suffix(".md").exists()
     assert not fault.get("missing_receipt") or report["reason"] == f"no launch receipt at {source}"
+    assert not fault.get("unresolved_receipt") or report["reason"].startswith(
+        "cannot identify the Iris job lookup-missing-job"
+    )
 
 
 def test_detail_rows_use_their_count_and_leave_the_label_to_declared_metrics(recorded_runs):
