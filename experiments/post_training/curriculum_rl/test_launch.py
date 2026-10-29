@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 from marin.execution.lazy import StepContext
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
+from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.curriculum_rl import launch
 
@@ -42,10 +42,8 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
-    command = launcher_command_for_test(paths[0])
-    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        [*bootstrap, "python", "-c", COMPOSE_LAUNCHES, *paths], capture_output=True, text=True, check=False
+        skyrl_cpu_command("python", "-c", COMPOSE_LAUNCHES, *paths), capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [{"profile": "megatron", "strategy": "megatron"}] * len(arms)

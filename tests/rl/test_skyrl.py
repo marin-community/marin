@@ -17,15 +17,17 @@ from typing import IO
 
 import pytest
 import yaml
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     MegatronGeometry,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -395,8 +397,14 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
 
 @pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
-    # Evaluation previously passed preflight, then failed in the GPU engine factory.
     spec = _spec()
+    if entrypoint == "generate":
+        spec = dataclasses.replace(
+            spec,
+            topology=dataclasses.replace(
+                spec.topology, role_plan=dataclasses.replace(spec.topology.role_plan, generate_only=True)
+            ),
+        )
     recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
     with pytest.raises(ValueError, match="expert_block requires non-colocated"):
         dataclasses.replace(spec, config_yaml=recipe)
@@ -749,3 +757,27 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
     # Unsupported curriculum strategies must fail before the launcher allocates workers.
     with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
+
+
+def test_finished_policy_resolves_terminal_export_for_post_evaluation(tmp_path):
+    root = tmp_path / "finished"
+    root.mkdir()
+    result = SkyRLRun(
+        path=str(root),
+        hf_model_uri=str(root / "policy"),
+        global_step=100,
+        tokenizer_uri="tests/tokenizer",
+        tokenizer_revision="tokenizer-commit",
+        checkpoint_root=str(root / "checkpoints"),
+        draft_checkpoint_root=None,
+        terminal_manifest_uri=str(root / "terminal.json"),
+        iris_job_id="/test/run",
+    )
+    record = ArtifactRecord(result_type=result_type_name(SkyRLRun), result=result.result_payload())
+    (root / RECORD_FILENAME).write_text(record.model_dump_json())
+    source = ArtifactStep.adopt("tests/finished", "2026.10.26", str(root), kind=SkyRLRun)
+    model = SkyRLPolicyModel(source)
+    context = StepContext.for_run(str(tmp_path / "evaluation"), str(tmp_path), deps=model.deps())
+    resolved = model.resolve(context)
+    assert resolved.uri == str(root / "policy")
+    assert (resolved.tokenizer_uri, resolved.tokenizer_revision) == ("tests/tokenizer", "tokenizer-commit")
