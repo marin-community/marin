@@ -17,7 +17,7 @@ import levanter.tracker
 import levanter.eval
 from levanter import callbacks
 from levanter.callbacks._iris_status import iris_status_reporter
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.data.text.datasets import LmDataConfig
 from levanter.adaptor.lora import (
     LoraConfig,
@@ -55,7 +55,7 @@ class LoraLmConfig:
     train_seq_len: int = 4096
 
 
-def load_base_model(converter: HFCheckpointConverter, model_config, parameter_axis_mapping, mp: jmp.Policy):
+def load_base_model(converter: HfLmCheckpointConverter, model_config, parameter_axis_mapping, mp: jmp.Policy):
     """Load the HF base model; fields in the policy's dtype overrides keep their stored dtype."""
     return converter.load_pretrained(
         model_config.model_type, axis_mapping=parameter_axis_mapping, dtype=hf_load_dtype(mp)
@@ -66,7 +66,7 @@ def main(config: LoraLmConfig):
     levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
-    converter = HFCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
+    converter = HfLmCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
     converter.warn_if_tokenizer_mismatch(tokenizer)
 
     converter = converter.replaced(tokenizer=tokenizer)

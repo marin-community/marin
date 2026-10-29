@@ -9,7 +9,7 @@ from safetensors.numpy import load_file, save_file
 from levanter.compat.fsspec_safetensor import (
     read_safetensors_fsspec,
 )
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 
 
 class _InMemoryAsyncFS(AsyncFileSystem):
@@ -68,7 +68,7 @@ def test_load_from_remote_file_url(tmp_path, monkeypatch):
     monkeypatch.setattr("levanter.compat.hf_checkpoints.jax.jit", _jit_stub)
     monkeypatch.setattr("levanter.compat.hf_checkpoints.jax.lax.with_sharding_constraint", lambda x, _: x)
 
-    converter = HFCheckpointConverter.__new__(HFCheckpointConverter)
+    converter = HfLmCheckpointConverter.__new__(HfLmCheckpointConverter)
     converter.__dict__.update(
         {
             "LevConfigClass": None,

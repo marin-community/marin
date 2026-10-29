@@ -13,7 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 import jax
 import jax.numpy as jnp
 import jmp
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmHeadModel
@@ -92,7 +92,7 @@ class LoadedLevanterModel:
 class LevanterBackend:
     """Serve the model with Levanter's inference engine, in-process on the slice's chips.
 
-    Weights load through :class:`~levanter.compat.hf_checkpoints.HFCheckpointConverter`, which
+    Weights load through :class:`~levanter.compat.hf_checkpoints.HfLmCheckpointConverter`, which
     infers the Levanter model class from the checkpoint's HF architecture and reads config and
     weights over fsspec, so an HF repo id and an object-store HF-format snapshot both work. A
     native Levanter checkpoint tree (not an HF export) is not servable this way.
@@ -137,7 +137,7 @@ class LevanterBackend:
         dtype = validate_levanter_dtype(spec.dtype)
         checkpoint_ref = RepoRef(spec.weights, spec.revision)
         # Resolve the model class first: whether the mesh needs explicit axes is a model property.
-        converter = HFCheckpointConverter.from_hf(checkpoint_ref)
+        converter = HfLmCheckpointConverter.from_hf(checkpoint_ref)
         model_config = converter.default_config
         if config_overrides:
             model_config = dataclasses.replace(model_config, **dict(config_overrides))
@@ -185,7 +185,7 @@ class LevanterBackend:
         # load_model has no such requirement.)
         checkpoint_ref = RepoRef(spec.weights, spec.revision)
         tokenizer_ref = str(RepoRef(spec.tokenizer_source, spec.tokenizer_revision))
-        model_type = HFCheckpointConverter.from_hf(checkpoint_ref).default_config.model_type
+        model_type = HfLmCheckpointConverter.from_hf(checkpoint_ref).default_config.model_type
         if not issubclass(model_type, SupportsPagedGeneration):
             raise NotImplementedError(
                 f"{model_type.__name__} implements only the full-forward LmHeadModel interface (no "

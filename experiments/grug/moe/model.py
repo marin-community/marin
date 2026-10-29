@@ -21,7 +21,7 @@ from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -184,8 +184,8 @@ class GrugModelConfig:
     def hf_checkpoint_converter(
         self,
         ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint,
             HfConfigClass=GrugMoeHfConfig,
