@@ -17,6 +17,7 @@ from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_typ
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
+from scipy.stats import t
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import snowball_pass_rates
@@ -84,6 +85,7 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         mixed=128,
         detail=False,
         fingerprint="",
+        answers=None,
     ):
         preset = presets.PRESETS[preset_name] if isinstance(preset_name, str) else preset_name
         root = tmp_path / name / version
@@ -179,6 +181,9 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 path = root / "exports/dumped_evals" / session / "panel.jsonl"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("w") as stream:
+                    if answers is not None:
+                        stream.writelines(json.dumps(row) + "\n" for row in answers)
+                        continue
                     for i in range(count):
                         identifier = f"train-task-{i}" if evaluation.file == "train" else f"task-{i}"
                         if panel_shift and i == 0:
@@ -252,8 +257,9 @@ def test_calibrate_pools_deviations_within_pins():
 
 
 @pytest.mark.parametrize("outlier", [False, True])
-def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, outlier):
+def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs, outlier, tmp_path):
     roots = controls(recorded_runs, "speed-medium")
+    next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet")).unlink()
     if outlier:
         path = roots[0] / "exports/metrics/step-000002.json"
         row = json.loads(path.read_text())
@@ -286,6 +292,10 @@ def test_rescore_leave_one_out_uses_median_and_two_guard_tolerance(recorded_runs
     artifact = Path(report["report"])
     assert json.loads(artifact.read_text()) == {k: v for k, v in report.items() if k != "report"}
     assert artifact.with_suffix(".md").exists()
+    pin = gate.CONTROLS["speed-medium"][0]
+    ordinary = rescore("speed-medium", presets.control_name(pin.preset, pin.main_commit, 0))
+    assert ordinary["report"] != report["report"]
+    assert [row["n_control"] for row in ordinary["guards"]] == [4, 4]
     assert before == {path: hashlib.sha256(path.read_bytes()).digest() for path in before}
     assert set(report) == {
         "report",
@@ -337,7 +347,15 @@ BROKEN = {"policy/raw_grad_norm": float("nan"), "generate/outcome/graded": 502, 
         ),
         (
             "learning-medium",
-            {"metrics": BROKEN, "unscored": 20, "duplicate_task": True, "omit_step": 25},
+            {
+                "metrics": BROKEN,
+                "unscored": 20,
+                "duplicate_task": True,
+                "omit_step": 25,
+                "argv": ("snowball", "--init", "users/test/missing@2026.10.27"),
+                "initial_score": 0.2,
+                "initial_missing": True,
+            },
             {},
             "fail",
             "regression",
@@ -347,6 +365,8 @@ BROKEN = {"policy/raw_grad_norm": float("nan"), "generate/outcome/graded": 502, 
                 "grader_error_fraction",
                 "panel-910/batch_finished",
                 "panel-910/panel_scored_fraction",
+                "panel-910/initial/batch_finished",
+                "panel-910/initial/panel_scored_fraction",
             },
         ),
         ("speed-medium", {"fixed": False}, {}, "fail", "regression", {"fixed_reply_tokens"}),
@@ -373,7 +393,12 @@ def test_rescore_reports_candidate_and_control_contracts(
     report = rescore(preset, name + ("@" + fault["version"] if "version" in fault else ""))
     assert (report["verdict"], report["label"]) == (verdict, label), report
     assert {row["name"] for row in report["invariants"] if not row["holds"]} == failed, report
+    if fault.get("metrics") in (BOUNDARY, AMBIGUOUS):
+        error = next(row for row in report["invariants"] if row["name"] == "grader_error_fraction")
+        assert (error["lower_bound"], error["upper_bound"]) == (0.01, 0.01 if fault["metrics"] == BOUNDARY else 0.02)
     if fault.get("detail"):
+        detail = next(row for row in report["reported"] if row["metric"] == "panel-910/family/small/mean")
+        assert detail["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 12, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
         assert any("/difficulty/" in row["metric"] for row in report["reported"])
         assert any(
             row.get("change") == "better" and row["metric"] not in {m.key for m in presets.PRESETS[preset].reported}
@@ -394,31 +419,21 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, selection
             evaluations=(scoring.PASS_RATE_EVALUATION,),
             guards=(),
         )
-        source = recorded_runs(producer_preset, producer.name, fingerprint=producer.fingerprint())
-        _json(
-            source / "resolved-launch.yaml",
-            {"config": {"inputs": {"validation_data": [{"uri": presets.default_selection().path()}]}}},
-        )
-        path = source / "exports/dumped_evals/eval_only/panel.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "\n".join(
-                json.dumps(
-                    {
-                        "task_id": f"task-{i}",
-                        "exception_type": "GraderUnavailable" if i == 1 and attempt == 7 else None,
-                        "verification": {
-                            "status": "verified",
-                            "score": float(attempt < (0, 4, 8)[i % 3]),
-                            "score_min": 0,
-                            "score_max": 1,
-                        },
-                    }
-                )
-                for i in range(910)
-                for attempt in range(8)
-            )
-        )
+        answers = [
+            {
+                "task_id": f"task-{i}",
+                "exception_type": "GraderUnavailable" if i == 1 and attempt == 7 else None,
+                "verification": {
+                    "status": "verified",
+                    "score": float(attempt < (0, 4, 8)[i % 3]),
+                    "score_min": 0,
+                    "score_max": 1,
+                },
+            }
+            for i in range(910)
+            for attempt in range(8)
+        ]
+        recorded_runs(producer_preset, producer.name, fingerprint=producer.fingerprint(), answers=answers)
         run(summary)
         rates = pq.read_table(Path(summary.path()) / "pass_rates.parquet").to_pylist()
         assert {row["task_id"]: (row["passed"], row["samples"]) for row in rates} == {
@@ -470,6 +485,24 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, selection
     report = saved.model_dump(mode="json", exclude={"path"})
     rescored = rescore(preset, built.runs[0].name)
     assert rescored["run"] == report["run"]
+    metadata = report["run"]
+    expected_settings = (
+        {
+            "trainer.algorithm.advantage_estimator": "grpo",
+            "trainer.algorithm.group_advantage_min_size": None,
+            "trainer.policy.optimizer_config.lr": "1e-6",
+        }
+        if preset == "learning-medium"
+        else {}
+    )
+    assert {
+        key: json.loads(value) for item in metadata["settings"] for key, _, value in (item.partition("="),)
+    } == expected_settings
+    assert (metadata["tasks"], metadata["init"]) == (
+        (None, "users/test/initializer@2026.10.27")
+        if preset == "learning-medium"
+        else ("snowball-100k@2026.10.26", None)
+    )
     if preset == "learning-medium":
         gain = next(row for row in report["reported"] if row["metric"] == "panel-910/mean/gain")
         assert gain["run"] == pytest.approx(0.295)
@@ -482,10 +515,19 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, selection
     Path(status["report"]).unlink()
     terminal = json.loads((source / "terminal.json").read_text())
     terminal["result"]["state"] = "failed"
-    _json(source / "terminal.json", terminal)
+    (source / "terminal.json").unlink()
+    (source / RECORD_FILENAME).unlink()
+    (source / ".executor_status").write_text("FAILED")
+    _json(source / "attempts/failed-fixture.json", terminal)
+    launch = json.loads((source / "resolved-launch.yaml").read_text())
+    launch["config"].update(
+        {"artifacts": {"attempts_root": str(source / "attempts")}, "run": {"attempt_id": "failed-fixture"}}
+    )
+    _json(source / "resolved-launch.yaml", launch)
     result = CliRunner().invoke(snowball.main, ["--preset", preset, "--version", presets.PRESET_REVISION, *argv[1:]])
     assert result.exit_code == 0, (result.output, result.exception)
-    assert yaml.safe_load(result.output.split("StepSpec(", 1)[0])["verdict"] == "fail"
+    status = yaml.safe_load(result.output.split("StepSpec(", 1)[0])
+    assert (status["verdict"], status["reason"], status["iris_job_id"]) == ("fail", "run crashed", "/tests/native-run")
 
 
 def test_panel_scores_join_permuted_answers_and_aggregate_tasks(tmp_path):
