@@ -4,6 +4,7 @@ import math
 
 import ray
 import torch
+from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -51,7 +52,10 @@ def grug_engine_client(
 ) -> InferenceEngineClient:
     """Start vLLM engines for a tiny Grug checkpoint."""
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    engine_init_kwargs = {"max_model_len": MAX_MODEL_LEN}
+    engine_init_kwargs = {
+        "max_model_len": MAX_MODEL_LEN,
+        **OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True),
+    }
     if moe_backend is not None:
         engine_init_kwargs["kernel_config"] = {"moe_backend": moe_backend}
     engines = create_ray_wrapped_inference_engines(
@@ -85,7 +89,10 @@ def rollout_training_batch(prompts: list[list[int]], rollout) -> TrainingInputBa
         [prompt + response for prompt, response in zip(prompts, rollout["response_ids"])], dtype=torch.long
     )
     action_log_probs = torch.tensor(rollout["response_logprobs"], dtype=torch.float32)
-    advantages = ADVANTAGE_PATTERN.repeat(math.ceil(sequences.shape[0] / 2), 1)[: sequences.shape[0]]
+    response_length = action_log_probs.shape[1]
+    advantages = ADVANTAGE_PATTERN.repeat(
+        math.ceil(sequences.shape[0] / 2), math.ceil(response_length / ADVANTAGE_PATTERN.shape[1])
+    )[: sequences.shape[0], :response_length]
     ones = torch.ones_like(action_log_probs)
     batch = TrainingInputBatch(
         {

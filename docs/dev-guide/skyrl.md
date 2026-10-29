@@ -49,6 +49,22 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Grug checkpoint numerics
+
+A Grug checkpoint's `config.json` must state `qk_mult`, `sliding_window`, the
+maximum sequence length (`max_position_embeddings` or `max_seq_len`) and the
+experts per token (`num_experts_per_tok` or `num_experts_per_token`). Marin's
+vLLM build fills these keys with its own defaults when they are absent, so
+SkyRL's `GrugMoeConfig` raises an error naming any missing key. Both read RoPE
+theta from `rope_theta`, then `rope_parameters`, then `rope`, and use 10000
+when none is present.
+
+The Grug nightly lane runs `skyrl-train/tests/gpu/test_grug_sampler_trainer.py`.
+It checks that SkyRL's and vLLM's config classes resolve the same values, that
+Megatron's log-probabilities match vLLM's sampled log-probabilities when
+Megatron replays vLLM's routed experts, and that correction weights scale the
+policy loss and gradient norm.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
