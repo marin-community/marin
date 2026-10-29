@@ -237,7 +237,9 @@ def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, Envir
     for source in sources:
         if source.source_id not in components:
             continue
-        record = next(_admitted_records(source))
+        record = next(_admitted_records(source), None)
+        if record is None:
+            raise ValueError(f"No admitted grader environment for {source.source_id}")
         task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
         if not isinstance(task.grader, ScriptGrader) or task.grader.environment.docker_image is not None:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
