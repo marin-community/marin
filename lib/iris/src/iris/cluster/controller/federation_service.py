@@ -98,6 +98,13 @@ def _job_delta(
         job_id=job_id.to_wire(),
         summary=_job_summary(q, job),
         changed_tasks=changed_tasks,
+        limits=controller_pb2.Controller.FederationJobLimits(
+            timeout=duration_to_proto(Duration.from_ms(job.timeout_ms or 0)),
+            scheduling_timeout=duration_to_proto(Duration.from_ms(job.scheduling_timeout_ms or 0)),
+            max_retries_failure=job.max_retries_failure,
+            max_retries_preemption=job.max_retries_preemption,
+            max_task_failures=job.max_task_failures,
+        ),
     )
 
 

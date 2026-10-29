@@ -820,6 +820,15 @@ message Controller {
     FederationBudgetPolicy budget_policy = 3;
   }
 
+  // Requested limits shown by the hub for jobs created on an execution peer.
+  message FederationJobLimits {
+    iris.time.Duration timeout = 1;
+    iris.time.Duration scheduling_timeout = 2;
+    int32 max_retries_failure = 3;
+    int32 max_retries_preemption = 4;
+    int32 max_task_failures = 5;
+  }
+
   // One handed-off job's state as the peer currently holds it. The parent mirrors
   // this into its own jobs/tasks rows (stamped with the peer's cluster) for that handle.
   message FederationJobDelta {
@@ -829,6 +838,7 @@ message Controller {
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
+    FederationJobLimits limits = 5;               // requested limits for the parent's job display
   }
 
   // One service endpoint exported by a handed-off (RECEIVED) job on the peer.

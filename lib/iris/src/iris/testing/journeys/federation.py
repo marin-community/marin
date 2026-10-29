@@ -52,7 +52,8 @@ class InProcessPeerConnection:
     ) -> controller_pb2.Controller.FederationSyncResponse:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            return self._controller.federation_sync(request)
+            response = self._controller.federation_sync(request)
+        return controller_pb2.Controller.FederationSyncResponse.FromString(response.SerializeToString())
 
     def terminate_job(self, job_id: JobName) -> None:
         self._require_reachable()
