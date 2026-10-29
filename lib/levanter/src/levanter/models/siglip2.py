@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from haliax import Axis, NamedArray
 from haliax._src.state_dict import default_eqx_module_from_state_dict
-from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
+from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, from_state_dict, with_prefix
 from jaxtyping import PRNGKeyArray
@@ -27,6 +27,7 @@ from levanter.models.siglip import (
     SiglipMultiheadAttentionPoolingHead,
     siglip_activation,
     siglip_hidden_states,
+    siglip_encoder_layers,
 )
 from levanter.models.vision_model import VisionEncoderConfig
 from levanter.utils.activation import ActivationFunctionEnum
@@ -365,7 +366,7 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         """Map Levanter field names to HuggingFace state dict keys."""
-        return {"layers": "encoder.layers"}  # HF uses encoder.layers instead of layers
+        return {"layers": "encoder.layers"}
 
     @staticmethod
     def init(config: Siglip2VisionConfig, *, key: PRNGKeyArray) -> "Siglip2VisionTransformer":
@@ -383,11 +384,7 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
 
         embeddings = Siglip2VisionEmbeddings.init(config, key=k_embed)
 
-        layers = Stacked.init(
-            config.Layers,
-            SiglipEncoderLayer,
-            gradient_checkpointing=config.gradient_checkpointing,
-        )(config, key=shaped_rng_split(k_layers, config.num_hidden_layers))
+        layers = siglip_encoder_layers(config, key=k_layers)
 
         post_layernorm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 

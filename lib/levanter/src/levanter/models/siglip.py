@@ -278,6 +278,9 @@ class SiglipBlockConfig(Protocol):
     def Layers(self) -> Axis: ...
 
     @property
+    def gradient_checkpointing(self) -> bool: ...
+
+    @property
     def hidden_act(self) -> ActivationFunctionEnum: ...
 
     @property
@@ -423,6 +426,14 @@ class SiglipEncoderLayer(eqx.Module):
         key_attention, _ = maybe_rng_split(key, 2)
         x = x + self.self_attn(self.layer_norm1(x), mask=mask, key=key_attention)
         return x + self.mlp(self.layer_norm2(x))
+
+
+def siglip_encoder_layers(config: SiglipBlockConfig, *, key: PRNGKeyArray) -> Stacked[SiglipEncoderLayer]:
+    return Stacked.init(
+        config.Layers,
+        SiglipEncoderLayer,
+        gradient_checkpointing=config.gradient_checkpointing,
+    )(config, key=shaped_rng_split(key, config.Layers.size))
 
 
 def siglip_hidden_states(
@@ -696,7 +707,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         """Map Levanter field names to HuggingFace state dict keys."""
-        return {"layers": "encoder.layers"}  # HF uses encoder.layers instead of layers
+        return {"layers": "encoder.layers"}
 
     @staticmethod
     def init(config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionTransformer":
@@ -714,11 +725,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
 
         embeddings = SiglipVisionEmbeddings.init(config, key=k_embed)
 
-        layers = Stacked.init(
-            config.Layers,
-            SiglipEncoderLayer,
-            gradient_checkpointing=config.gradient_checkpointing,
-        )(config, key=shaped_rng_split(k_layers, config.num_hidden_layers))
+        layers = siglip_encoder_layers(config, key=k_layers)
 
         post_layernorm = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 
