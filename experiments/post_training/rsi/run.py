@@ -130,6 +130,13 @@ def feedback_options(function):
             ),
             click.option("--synthesized-share", type=float, default=0.5, show_default=True),
             click.option(
+                "--synthesis-replaces",
+                help=(
+                    "A seed stratum whose tasks the synthesized tasks replace, so that the other strata keep their "
+                    "share; the synthesized share stays a share of all training tasks and must be below the stratum's."
+                ),
+            ),
+            click.option(
                 "--synthesis-max-wait",
                 type=float,
                 default=0.0,
@@ -210,6 +217,7 @@ class FeedbackOptions:
     max_new_ideas: int
     analysis_rules: str
     synthesized_share: float
+    synthesis_replaces: str | None
     synthesis_max_wait: float
     synthesis: Synthesis
     generator_instances: int
@@ -513,8 +521,32 @@ async def _skyrl_run(
                 synthesis_max_wait=feedback.synthesis_max_wait,
                 seed=options.seed,
             )
-            stream = rsi_loop(seed_tasks, boxes, config)
+            if feedback.synthesis_replaces is None:
+                stream = rsi_loop(seed_tasks, boxes, config)
+            else:
+                replaced, kept = _split_stratum(pool, feedback, options.seed, strata, written)
+                weight = pool.weights[feedback.synthesis_replaces]
+                config = replace(config, synthesized_share=feedback.synthesized_share / weight)
+                stream = rsi_loop(replaced, boxes, config, untouched=Source(kept, share=1 - weight))
         await _record_groups(stream, strata, output)
+
+
+def _split_stratum(
+    pool: TaskPool, feedback: FeedbackOptions, seed: int, strata: dict[str, str], written: Collection[str]
+) -> tuple[AsyncIterator[TaskSpec], AsyncIterator[TaskSpec]]:
+    """The seed tasks of the stratum that synthesized tasks replace, and those of the other strata, each in the seed's
+    order."""
+    name = feedback.synthesis_replaces
+    if name not in pool.weights:
+        raise ValueError(f"no seed stratum {name!r}; the strata are {sorted(pool.weights)}")
+    if feedback.synthesized_share >= pool.weights[name]:
+        raise ValueError(f"the synthesized share must be below the {name} share of the seed, {pool.weights[name]:.3f}")
+    replaced = (task for task in pool.stream(seed) if task.stratum == name)
+    kept = (task for task in pool.stream(seed) if task.stratum != name)
+    return (
+        from_iterable(_remember_stratum(replaced, strata, written=written)),
+        from_iterable(_remember_stratum(kept, strata, written=written)),
+    )
 
 
 async def _with_oracle_tasks(

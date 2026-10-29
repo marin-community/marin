@@ -31,6 +31,7 @@ from experiments.post_training.rsi.feedback import FailedRun, synthesized
 from experiments.post_training.rsi.live_eval import eval_policy
 from experiments.post_training.rsi.loop import Boxes, LoopConfig, rsi_loop
 from experiments.post_training.rsi.rollouts import TaskRollouts
+from experiments.post_training.rsi.streams import Source as StreamSource
 from experiments.post_training.rsi.streams import batched, from_iterable
 
 TASKS_PER_STEP = 2
@@ -137,3 +138,48 @@ def test_the_loop_trains_on_tasks_made_from_its_evaluation_failures():
     assert first_synthesized >= TASKS_PER_STEP
     assert all(task_id.startswith("seed-") for task_id in ids[:first_synthesized])
     assert {task_id for task_id in ids if task_id.startswith("idea-1.")} == {"idea-1.task-0", "idea-1.task-1"}
+
+
+def test_synthesized_tasks_replace_only_the_seed_tasks_of_their_family():
+    total = 400
+
+    async def train_all(tasks: AsyncIterable[TaskSpec]) -> AsyncIterator[TaskRollouts]:
+        taken = 0
+        async for batch in batched(tasks, TASKS_PER_STEP):
+            for item in batch:
+                taken += 1
+                yield TaskRollouts(item, (graded(f"{item.id}-a", 0.0),), f"step-{taken // TASKS_PER_STEP + 1}")
+            await asyncio.sleep(0)
+            if taken >= total:
+                return
+
+    async def generate_many(ideas: AsyncIterable[CapabilityIdea]) -> AsyncIterator[TaskSpec]:
+        async for each in ideas:
+            for k in range(1000):
+                yield synthesized(task(f"task-{k}"), each)
+
+    async def run_split() -> list[str]:
+        family = from_iterable(task(f"family-{k}") for k in range(1000))
+        others = from_iterable(task(f"other-{k}") for k in range(1000))
+        boxes = Boxes(
+            train=train_all,
+            eval_policy=lambda groups: eval_policy(groups, evaluate, EVAL_EVERY, step_of),
+            analyze_failed_runs=analyze_failed_runs,
+            generate_tasks=generate_many,
+        )
+        # Synthesis takes three quarters of the family's 0.4 share: 0.3 of all tasks.
+        config = LoopConfig(
+            max_pass_rate=0.25, failures_per_analysis=4, synthesized_share=0.75, synthesis_max_wait=0.0, seed=0
+        )
+        loop = rsi_loop(family, boxes, config, untouched=StreamSource(others, share=0.6))
+        return [group.task.id async for group in loop]
+
+    ids = asyncio.run(run_split())
+    assert len(ids) == total
+    others = sum(task_id.startswith("other-") for task_id in ids)
+    made = sum(task_id.startswith("idea-") for task_id in ids)
+    family = sum(task_id.startswith("family-") for task_id in ids)
+    # The other families keep their 0.6 share; synthesis takes its share out of the family's 0.4 alone.
+    assert abs(others / total - 0.6) < 0.06
+    assert made > 0
+    assert abs((made + family) / total - 0.4) < 0.06

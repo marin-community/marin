@@ -53,8 +53,18 @@ class LoopConfig:
     seed: int
 
 
-def rsi_loop(seed_tasks: AsyncIterable[TaskSpec], boxes: Boxes, config: LoopConfig) -> AsyncIterator[TaskRollouts]:
-    """Train on the seed tasks and on the tasks that the loop makes from the policy's own failures."""
+def rsi_loop(
+    seed_tasks: AsyncIterable[TaskSpec],
+    boxes: Boxes,
+    config: LoopConfig,
+    *,
+    untouched: Source[TaskSpec] | None = None,
+) -> AsyncIterator[TaskRollouts]:
+    """Train on the seed tasks and on the tasks that the loop makes from the policy's own failures.
+
+    With ``untouched``, those seed tasks keep their share and the synthesized share is of ``seed_tasks`` alone: the
+    synthesized tasks replace only seed tasks of the family that the loop synthesizes for.
+    """
     rollouts = Broadcast[TaskRollouts]()
     failures = failed_runs(boxes.eval_policy(rollouts.listen()), config.max_pass_rate)
     ideas = boxes.analyze_failed_runs(batched(failures, config.failures_per_analysis))
@@ -64,4 +74,6 @@ def rsi_loop(seed_tasks: AsyncIterable[TaskSpec], boxes: Boxes, config: LoopConf
         Source(new_tasks, share=config.synthesized_share, max_wait=config.synthesis_max_wait),
         seed=config.seed,
     )
+    if untouched is not None:
+        tasks = mix(untouched, Source(tasks, share=1 - untouched.share), seed=config.seed)
     return rollouts.publish(boxes.train(tasks))
