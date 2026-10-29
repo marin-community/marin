@@ -62,8 +62,6 @@ logger = logging.getLogger("iris.multigpu")
 _SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 # How often to re-poll child liveness while waiting for the group (seconds).
 _REAP_POLL_INTERVAL = 1.0
-# Grace period after a SIGTERM before escalating to SIGKILL, so a child that
-# traps or ignores SIGTERM cannot wedge the supervisor (and hence the task).
 
 
 def _child_rank_env(
