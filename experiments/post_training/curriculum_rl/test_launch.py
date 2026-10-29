@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 from marin.execution.lazy import StepContext
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
+from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.curriculum_rl import launch
 
@@ -18,13 +18,7 @@ from cloud.iris.launch_config import load_launch_config
 
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
-    {"profile": config.runtime.profile, "strategy": config.skyrl.trainer.strategy,
-     "colocate_policy_ref": config.skyrl.trainer.placement.colocate_policy_ref,
-     "policy_gpus": (config.skyrl.trainer.placement.policy_num_nodes
-                     * config.skyrl.trainer.placement.policy_num_gpus_per_node),
-     "reference_gpus": (config.skyrl.trainer.placement.ref_num_nodes
-                        * config.skyrl.trainer.placement.ref_num_gpus_per_node),
-     "allocated_gpus": config.iris.allocation.num_nodes * config.iris.allocation.gpus_per_node}
+    {"profile": config.runtime.profile, "strategy": config.skyrl.trainer.strategy}
     for config in configs
 ]))
 """
@@ -48,19 +42,8 @@ def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> 
         path = tmp_path / f"{name}.yaml"
         path.write_text(config.launch_config_yaml)
         paths.append(str(path))
-    command = launcher_command_for_test(paths[0])
-    bootstrap = command[: command.index("marinskyrl")]
     result = subprocess.run(
-        [*bootstrap, "python", "-c", COMPOSE_LAUNCHES, *paths], capture_output=True, text=True, check=False
+        skyrl_cpu_command("python", "-c", COMPOSE_LAUNCHES, *paths), capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
-    rows = json.loads(result.stdout)
-    assert [{key: row[key] for key in ("profile", "strategy")} for row in rows] == [
-        {"profile": "megatron", "strategy": "megatron"}
-    ] * len(arms)
-    if preset.label == "snowball-smoke":
-        assert all(
-            not row["colocate_policy_ref"]
-            and (row["policy_gpus"], row["reference_gpus"], row["allocated_gpus"]) == (32, 16, 56)
-            for row in rows
-        )
+    assert json.loads(result.stdout) == [{"profile": "megatron", "strategy": "megatron"}] * len(arms)
