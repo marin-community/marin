@@ -344,9 +344,9 @@ def test_math_judge_task_roundtrip_routes_extracted_answer_and_keeps_provider_fa
     judge_server.status_code = status
     package = verifyit_package(
         MathJudgeSpec(
-            math=MathSpec(expected="2", alternatives=("3",), profile=MathProfile.EVALCHEMY_OLYMPIAD),
+            math=MathSpec(expected="2", profile=MathProfile.BOXED),
             judge=JudgeSpec(
-                references=('["2", "3"]',),
+                references=("2",),
                 rubric=RUBRIC_LABELS,
                 exact_gate=False,
                 prompt_template="Reference: {reference}\nCandidate: {candidate}",
@@ -361,14 +361,14 @@ def test_math_judge_task_roundtrip_routes_extracted_answer_and_keeps_provider_fa
     task = TaskSpec.model_validate_json(_task(package.grader).model_dump_json())
     result = grade_task(
         task,
-        _attempt(task, r"\boxed{4} then \boxed{2}"),
+        _attempt(task, r"\boxed{2} then \boxed{4}"),
         judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
     )
     assert (result.status, result.reward) == (expected_status, expected_reward)
     assert judge_server.requests[0]["messages"] == [
         {
             "role": "user",
-            "content": 'Reference: ["2", "3"]\nCandidate: 4',
+            "content": "Reference: 2\nCandidate: 4",
         }
     ]
 

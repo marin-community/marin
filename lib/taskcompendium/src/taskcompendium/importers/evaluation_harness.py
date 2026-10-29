@@ -17,11 +17,11 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.modes.grade_harness_generation import drop_references
-from verifyit.spec import ExactSpec, HarnessGenerationProfile, HarnessGenerationSpec
+from verifyit.spec import ExactSpec
 
 from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import (
     ChoiceLikelihood,
     ContinuationLikelihood,
@@ -29,9 +29,11 @@ from taskcompendium.evaluation import (
     LikelihoodRequest,
     TextGeneration,
 )
-from taskcompendium.models import TaskSpec
+from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.scorers.harness_generation import drop_references
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import source_order
-from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
 HARNESS_REVISION = "6d642546f4688648fced259eb3302efd36ece5af"
@@ -347,14 +349,18 @@ def read_generation_file(
     yield from compile_generation_documents(parquet_documents(path), fewshot, template)
 
 
-def convert_generation_document(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec:
+def convert_generation_document(row: RawRow, context: ConversionContext, *, benchmark: str) -> TaskSpec:
     operation = TextGeneration.model_validate(row.data["operation"])
-    task = answer_task(
+    task = conversation_task(
         row,
-        prompt=operation.context,
-        spec=HarnessGenerationSpec(
-            profile=HarnessGenerationProfile(row.data["profile"]),
-            references=tuple(tuple(spans) for spans in row.data["references"]),
+        events=(TextMessage(role="user", content=operation.context),),
+        package=source_package(
+            "harness_generation",
+            {
+                "profile": row.data["profile"],
+                "references": tuple(tuple(spans) for spans in row.data["references"]),
+            },
+            environment=required_grader_environment(context),
         ),
         evidence=row.data,
     )

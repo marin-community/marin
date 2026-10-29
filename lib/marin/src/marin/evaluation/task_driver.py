@@ -41,7 +41,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
     TraceMode,
 )
-from shellbox.machine import MachineFactory, MachineTerminated
+from shellbox.machine import MachineFactory, MachineTerminated, NetworkPolicy
 from taskcompendium.evaluation import (
     ChatGeneration,
     ChoiceLikelihood,
@@ -53,11 +53,10 @@ from taskcompendium.evaluation import (
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, verifyit_spec
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, grades_with_judge, judge_spec
 from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_protocol
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec, MathJudgeSpec
 
 from marin.evaluation.completion import completion_text
 from marin.evaluation.likelihood import InvalidLikelihoodRequest, LikelihoodScorer, LikelihoodTransportError
@@ -66,7 +65,7 @@ from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Se
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.10.29.5"
+DRIVER_REVISION = "2026.10.29.6"
 
 
 class EvaluationInfrastructureError(RuntimeError):
@@ -383,15 +382,23 @@ async def _score_generation(
     options = generation_options(protocol, config, attempt.trial)
     options["max_tokens"] = max_tokens
     engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
+    verifier = config.verifier_machine
+    if (
+        verifier is not None
+        and isinstance(task.grader, ScriptGrader)
+        and task.grader.judge is not None
+        and "network" in task.grader.environment.capabilities
+    ):
+        verifier = verifier.model_copy(update={"network": NetworkPolicy.ALLOW})
     spec = TaskRolloutSpec(
         task=task,
         harness=EXACT_CHAT_HARNESS,
         task_machine=config.task_machine,
         verifier_machine=(
-            config.verifier_machine
+            verifier
             if isinstance(task.grader, ScriptGrader | VerifyitGrader)
             and task.grader.environment is not None
-            and not grades_with_judge(task.grader)
+            and not (isinstance(task.grader, VerifyitGrader) and grades_with_judge(task.grader))
             else None
         ),
         judge_connection=judge_connection,
@@ -478,10 +485,8 @@ def _validate_judge(task: TaskSpec, identity: JudgeIdentity | None) -> None:
         return
     if identity is None:
         raise ValueError(f"Judged task requires an explicit judge identity and connection: {task.id}")
-    assert isinstance(task.grader, VerifyitGrader)
-    verifier = verifyit_spec(task.grader)
-    judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
-    assert isinstance(judge, JudgeSpec)
+    judge = judge_spec(task.grader)
+    assert judge is not None
     alias = judge.model.strip() or (identity.default_model or "").strip()
     if not alias or not identity.models.get(alias, "").strip():
         raise ValueError(f"Judge model has no recorded immutable revision: {alias!r} ({task.id})")

@@ -8,8 +8,15 @@ GPL-licensed Number Cookbook evaluator.
 """
 
 import re
+from enum import StrEnum
 
-from verifyit.spec import NupaAnswerFormat
+
+class NupaAnswerFormat(StrEnum):
+    INTEGER = "Integer"
+    FLOAT = "Float"
+    FRACTION = "Fraction"
+    SCIENTIFIC = "ScientificNotation"
+
 
 _ANSWER_MARKER = re.compile(r"(?i)^(?:the\s+answer\s+is|so\s+the\s+answer\s+is)\s+")
 _BOXED = re.compile(r"\\boxed\{([^{}]+)\}")

@@ -38,6 +38,7 @@ from taskcompendium.models import (
     GradingAttempt,
     JsonSubmission,
     PlainText,
+    ScriptGrader,
     StateSubmission,
     Submission,
     SubmissionFailure,
@@ -58,7 +59,7 @@ from taskcompendium.submission import (
 )
 
 
-def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
+def grade_result(verifier: Spec | None, verdict: Reward) -> GradeResult:
     """Normalize verifyit outcomes independently of where the verifier ran."""
     if (
         not isinstance(verdict.status, Status)
@@ -80,8 +81,8 @@ def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
     return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
 
 
-def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
-    """Decode a verdict file written by the verifyit command."""
+def parse_grade_result(verifier: Spec | None, data: bytes) -> GradeResult:
+    """Decode a Verifyit verdict from a mode or a task-owned script."""
     try:
         verdict = json.loads(data)
         if not isinstance(verdict, dict):
@@ -136,13 +137,17 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
     raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
 
 
-def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
+def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec | None) -> bool:
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
     if any(has_ejection(event) for event in attempt.conversation.events[len(task.context.events) :]):
         return False
-    policy = empty_output_policy(verifier)
+    if isinstance(task.grader, ScriptGrader):
+        policy = task.grader.empty_output
+    else:
+        assert verifier is not None
+        policy = empty_output_policy(verifier)
     if policy is not EmptyOutputPolicy.GRADE:
         return False
     final = attempt.conversation.events[-1]

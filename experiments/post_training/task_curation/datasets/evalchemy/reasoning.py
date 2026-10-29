@@ -8,8 +8,8 @@ import random
 from functools import lru_cache, partial
 
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import (
     ChatGeneration,
     ChatPromptVariant,
@@ -18,14 +18,15 @@ from taskcompendium.evaluation import (
     Sampling,
     TrialPolicy,
 )
+from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import Converter, IntendedUse, RawRow
-from verifyit.spec import EmptyOutputPolicy, McqProfile, McqSpec
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.datasets.evalchemy.datasets import ACCURACY
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -55,17 +56,12 @@ def gpqa_choices(data: dict) -> tuple[str, str]:
     return options, expected
 
 
-def convert_gpqa(row: RawRow, _context: ConversionContext) -> TaskSpec:
+def convert_gpqa(row: RawRow, context: ConversionContext) -> TaskSpec:
     options, expected = gpqa_choices(row.data)
-    task = answer_task(
+    task = conversation_task(
         row,
-        prompt=GPQA_PROMPT.format(problem=row.data["Question"], options=options),
-        spec=McqSpec(
-            expected=expected,
-            options=4,
-            profile=McqProfile.EVALCHEMY_GPQA,
-            empty_output=EmptyOutputPolicy.GRADE,
-        ),
+        events=(TextMessage(role="user", content=GPQA_PROMPT.format(problem=row.data["Question"], options=options)),),
+        package=source_package("gpqa", {"expected": expected}, environment=required_grader_environment(context)),
         evidence=dict(row.data),
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:GPQADiamond")})
@@ -104,14 +100,11 @@ def mmlu_support(root: str) -> tuple[dict, ...]:
 def convert_mmlu(row: RawRow, context: ConversionContext) -> TaskSpec:
     support = mmlu_support(str(context.inputs["fewshot"]))
     variants = tuple(mmlu_prompt(support, row.data, num_fewshot=shots) for shots in range(MMLU_FEWSHOT_COUNT + 1))
-    task = answer_task(
+    task = conversation_task(
         row,
-        prompt=variants[-1],
-        spec=McqSpec(
-            expected=row.data["answer"],
-            options=10,
-            profile=McqProfile.EVALCHEMY_MMLU_PRO,
-            empty_output=EmptyOutputPolicy.GRADE,
+        events=(TextMessage(role="user", content=variants[-1]),),
+        package=source_package(
+            "mmlu_pro", {"expected": row.data["answer"]}, environment=required_grader_environment(context)
         ),
         evidence={**row.data, "prompt_variants": variants},
     )
@@ -167,8 +160,9 @@ def choice_dataset(
                 name="evalchemy-" + name,
                 source=source,
                 convert=converter,
-                version="1",
+                version=scorer_revision("mmlu_pro" if benchmark == "MMLUPro" else "gpqa"),
                 intended_use=IntendedUse.EVAL,
+                grader=BASIC_GRADER,
                 inputs=inputs,
             ),
             EvaluationProtocol(

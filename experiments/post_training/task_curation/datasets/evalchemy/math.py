@@ -7,16 +7,16 @@ import json
 from dataclasses import replace
 from functools import partial
 
-from taskcompendium.convert.answers import answer_task
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import EvaluationProtocol, Sampling, TrialPolicy
-from taskcompendium.models import TaskSpec
+from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
+from taskcompendium.importers.evalchemy.scorers.math import CHAT_REQUEST_STOPS
+from taskcompendium.importers.evalchemy.scorers.olympiad import reference_answers
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
-from verifyit.adapters.evalchemy_judges import EQUIVALENCE_JUDGE_TEMPLATE
-from verifyit.adapters.evalchemy_math import CHAT_REQUEST_STOPS
-from verifyit.adapters.evalchemy_olympiad import reference_answers
-from verifyit.spec import JudgeSpec, MathJudgeSpec, MathProfile, MathSpec
+from verifyit.spec import JudgeSpec
 
 from experiments.post_training.task_curation.datasets.evalchemy.datasets import (
     ACCURACY,
@@ -24,6 +24,8 @@ from experiments.post_training.task_curation.datasets.evalchemy.datasets import 
     MATH_PROMPT,
     math_dataset,
 )
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import MATH_GRADER, MATH_JUDGE_GRADER
+from experiments.post_training.task_curation.datasets.evalchemy.judge_prompts import EQUIVALENCE_JUDGE_TEMPLATE
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -43,52 +45,59 @@ def bundled_source(directory: str, filename: str, sha256: str) -> UrlSource:
     )
 
 
-def convert_amc(row: RawRow, _context: ConversionContext) -> TaskSpec:
-    task = answer_task(
+def convert_amc(row: RawRow, context: ConversionContext) -> TaskSpec:
+    task = conversation_task(
         row,
-        prompt=MATH_PROMPT.format(problem=row.data["question"]),
-        spec=MathSpec(expected=str(row.data["answer"]), profile=MathProfile.EVALCHEMY_AMC),
+        events=(TextMessage(role="user", content=MATH_PROMPT.format(problem=row.data["question"])),),
+        package=source_package(
+            "amc", {"expected": str(row.data["answer"])}, environment=required_grader_environment(context)
+        ),
         evidence=dict(row.data),
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:AMC23")})
 
 
-def convert_olympiad(row: RawRow, _context: ConversionContext, *, judged: bool) -> TaskSpec:
+def convert_olympiad(row: RawRow, context: ConversionContext, *, judged: bool) -> TaskSpec:
     answers = reference_answers(row.data["answer"])
-    math = MathSpec(expected=answers[0], alternatives=answers[1:], profile=MathProfile.EVALCHEMY_OLYMPIAD)
-    spec = (
-        MathJudgeSpec(
-            math=math,
-            judge=JudgeSpec(
-                references=(json.dumps(list(answers), ensure_ascii=False),),
-                question=row.data["problem"],
-                rubric="labels",
-                exact_gate=False,
-                prompt_template=EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
-                    "{candidate_answer}", "{candidate}"
-                ),
-                label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
-                label_metrics={
-                    label: {
-                        "accuracy": float(label == "correct"),
-                        "incorrect": float(label == "incorrect"),
-                        "not_attempted": float(label == "not_attempted"),
-                        "judge_failed": 0.0,
-                    }
-                    for label in ("correct", "incorrect", "not_attempted")
-                },
-                label_scan="whole",
-                label_case="upper",
-                max_completion_tokens=2048,
+    judge = (
+        JudgeSpec(
+            references=(json.dumps(list(answers), ensure_ascii=False),),
+            question=row.data["problem"],
+            rubric="labels",
+            exact_gate=False,
+            prompt_template=EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
+                "{candidate_answer}", "{candidate}"
             ),
+            label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
+            label_metrics={
+                label: {
+                    "accuracy": float(label == "correct"),
+                    "incorrect": float(label == "incorrect"),
+                    "not_attempted": float(label == "not_attempted"),
+                    "judge_failed": 0.0,
+                }
+                for label in ("correct", "incorrect", "not_attempted")
+            },
+            label_scan="whole",
+            label_case="upper",
+            max_completion_tokens=2048,
         )
         if judged
-        else math
+        else None
     )
-    task = answer_task(
+    environment = required_grader_environment(context)
+    if judged:
+        environment = environment.model_copy(update={"capabilities": (*environment.capabilities, "network")})
+    task = conversation_task(
         row,
-        prompt=MATH_PROMPT.format(problem=row.data["problem"]),
-        spec=spec,
+        events=(TextMessage(role="user", content=MATH_PROMPT.format(problem=row.data["problem"])),),
+        package=source_package(
+            "olympiad",
+            {"expected": answers, "judged": judged},
+            environment=environment,
+            judge=judge,
+            timeout=60 + judge.transport_budget if judge is not None else 60,
+        ),
         evidence=dict(row.data),
     )
     benchmark = "OlympiadBench" if judged else "OlympiadBenchDeterministic"
@@ -112,8 +121,9 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvalDataSet]:
                 name="evalchemy-" + benchmark.lower(),
                 source=bundled_source("OlympiadBench", "olympiadbench.jsonl", OLYMPIAD_SHA256),
                 convert=partial(convert_olympiad, judged=judged),
-                version="1",
+                version=scorer_revision("olympiad"),
                 intended_use=IntendedUse.EVAL,
+                grader=MATH_JUDGE_GRADER if judged else MATH_GRADER,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
@@ -177,7 +187,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
         config=replace(
             amc.config,
             item_builder=chat_item,
-            recipe=replace(amc.config.recipe, convert=convert_amc),
+            recipe=replace(amc.config.recipe, convert=convert_amc, version=scorer_revision("amc")),
             protocol=amc.config.protocol.model_copy(
                 update={
                     "sampling": amc.config.protocol.sampling.model_copy(update={"max_tokens": 32768, "stop": ()}),

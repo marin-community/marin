@@ -19,8 +19,7 @@ math = ["math-verify>=0.9", "sympy>=1.12"]
 schema = ["jsonschema>=4.20", "pyyaml>=6.0"]
 judge = ["openai>=1.59.9"]
 reasoning-gym = ["reasoning-gym>=0.1.25"]
-instructions = ["nltk>=3.9.1", "langdetect", "immutabledict", "emoji", "syllapy"]
-all = ["marin-verifyit[math,schema,judge,reasoning-gym,instructions]"]
+all = ["marin-verifyit[math,schema,judge,reasoning-gym]"]
 
 [dependency-groups]
 test = [

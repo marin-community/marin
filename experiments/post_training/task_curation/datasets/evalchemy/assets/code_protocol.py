@@ -4,7 +4,7 @@
 """Pure Evalchemy Python source preparation; this module never executes a candidate.
 
 Adapted from the MIT Evalchemy integrations and lm-evaluation-harness v0.4.12.
-See licenses/lm-evaluation-harness-MIT.txt for the harness license.
+See lm-evaluation-harness-MIT.txt for the harness license.
 """
 
 import re
@@ -12,20 +12,8 @@ import textwrap
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-END_OF_TURN = (
-    "<|im_end|>",
-    "<|eot_id|>",
-    "<|end_of_text|>",
-    "<|endoftext|>",
-    "</s>",
-    "\nYou are an AI assistant",
-    "\nQuestion:",
-    "\nQ:",
-    "\n[Question]",
-    "\nUser:",
-    "\nuser\n",
-    "\nAssistant:",
-)
+from verifyit.adapters.completion import END_OF_TURN
+
 HUMANEVAL_STOPS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint", "\n```", *END_OF_TURN)
 HUMANEVAL_REQUEST_STOPS = HUMANEVAL_STOPS[:4]
 PYTHON_IMPORTS = (

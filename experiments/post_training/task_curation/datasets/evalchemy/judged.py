@@ -21,8 +21,8 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, IntendedUse, RawRow
-from verifyit.adapters.evalchemy_judges import financebench_spec, simpleqa_spec
 
+from experiments.post_training.task_curation.datasets.evalchemy.judge_prompts import financebench_spec, simpleqa_spec
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo

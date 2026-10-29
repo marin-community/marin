@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source scoring and selection policies for OpenAI MRCR and GraphWalks.
+"""Pinned scoring and selection policies for OpenAI MRCR and GraphWalks.
 
 Adopted from Marin Evalchemy's pinned OpenAI dataset integrations. Preparation
 and grading are pure; model-tokenizer eligibility belongs to the evaluation run.
@@ -11,7 +11,7 @@ import re
 from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
 
-from verifyit.grade import Reward, scored
+from verifyit.grade import InvalidTask, Reward, scored
 
 MRCR_BIN_UPPER_BOUNDS = (8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576)
 MRCR_NEEDLE_COUNTS = (2, 4, 8)
@@ -62,6 +62,8 @@ def graphwalks_output_budget(answer_tokens: int) -> int:
 
 
 def grade_nonce_similarity(expected: str, nonce: str, response: str) -> Reward:
+    if not isinstance(expected, str) or not isinstance(nonce, str) or not nonce:
+        raise InvalidTask("MRCR requires text and a nonempty nonce")
     hit = response.startswith(nonce)
     score = SequenceMatcher(None, response.removeprefix(nonce), expected.removeprefix(nonce)).ratio() if hit else 0.0
     return scored(score, metrics={"accuracy": score, "prefix_hit_rate": float(hit)})
@@ -79,6 +81,8 @@ def graphwalks_answer(response: str) -> tuple[list[str], bool]:
 
 
 def grade_graphwalks(expected: tuple[str, ...], response: str) -> Reward:
+    if not isinstance(expected, tuple) or any(not isinstance(node, str) for node in expected):
+        raise InvalidTask("GraphWalks requires reference node strings")
     extracted, extraction_failed = graphwalks_answer(response)
     predicted, truth = set(extracted), set(expected)
     if extraction_failed:

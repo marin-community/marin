@@ -35,6 +35,18 @@ MAX_COLLECTION_ITEMS = 10_000
 MAX_COLLECTION_CHARS = 1_000_000
 
 
+def grade_literal_candidate(expected: str, candidate: str) -> Reward:
+    """Compare literal strings through the existing exact mode's strict options."""
+    spec = ExactSpec(
+        expected=(expected,),
+        ignore_case=False,
+        ignore_whitespace=False,
+        strip_outer_whitespace=False,
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    return grade_exact_candidate(spec, candidate)
+
+
 def _normalize(text: str, spec: ExactSpec) -> str:
     value = text.strip() if spec.strip_outer_whitespace else text
     if spec.ignore_whitespace:

@@ -77,8 +77,8 @@ revisions, context window and serving configuration. For example:
   "limits": {
     "max_turns": 1, "max_total_tokens": null,
     "model_turn_timeout": 600, "tool_turn_timeout": 60,
-    "total_turn_timeout": 600, "attempt_timeout": 660,
-    "verifier_timeout": 180, "cleanup_timeout": 15
+    "total_turn_timeout": 600, "attempt_timeout": 900,
+    "verifier_timeout": 240, "cleanup_timeout": 15
   }
 }
 ```
@@ -256,9 +256,23 @@ dataset reducer to raw observations.
 
 `EvalDataSet` binds a `CurationRecipe`, `EvaluationProtocol` and item builder.
 Simple math datasets reuse `math_dataset`; harness tasks use native prompt
-templates and explicit scoring policies. New source algorithms belong in
-TaskCompendium importers or VerifyIT adapters; artifact graphs stay in
-`experiments/`.
+templates and explicit scoring policies. Source algorithms belong with the
+dataset importers; artifact graphs stay in `experiments/`. Verifyit provides
+shared comparisons, mathematical equivalence, judge transport and verdicts.
+
+Evalchemy's source scorers live in
+`taskcompendium.importers.evalchemy.scorers`. `source_package` ships the selected
+scorer and private row configuration as a `ScriptGrader`. The declared pinned
+environment runs it in a fresh Shellbox machine. `scorer_revision` includes the
+scorer, dependencies and entry point in the corpus identity. Benchmark prompts,
+rubrics and extraction rules remain source-owned.
+
+Scripted judges declare their `JudgeSpec` on the grader. The runtime installs
+`/tests/judge.toml` and supplies credentials only to the verifier machine. The
+evaluation driver enables network access for scripted judges whose environment
+explicitly requires it; other graders retain the configured network policy.
+The verifier limit must cover the script's deterministic work and judge
+transport budget. Judged Olympiad reserves 240 seconds for both stages.
 
 Pin source revisions and assets, retain the original population and source order,
 and version changes to prompts or grading. Compare the actual old and new

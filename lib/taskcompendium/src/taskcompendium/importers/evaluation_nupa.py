@@ -11,14 +11,15 @@ from random import Random
 from typing import Any
 
 from rigging.filesystem.storage_path import StoragePath
-from verifyit.spec import NupaAnswerFormat, NupaSpec
 
-from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import ChatGeneration, EvaluationItem
-from taskcompendium.models import TaskSpec
+from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.scorers.nupa_preparation import NupaAnswerFormat
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import source_order
-from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
 NUPA_SAMPLE_SEED = 20_222_943
@@ -128,13 +129,14 @@ def read_nupa_panel(path: StoragePath, context: ConversionContext) -> Iterator[d
     yield from (records[identity] for identity in identities)
 
 
-def convert_nupa(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec:
-    task = answer_task(
+def convert_nupa(row: RawRow, context: ConversionContext, *, benchmark: str) -> TaskSpec:
+    task = conversation_task(
         row,
-        prompt=row.data["prompt"],
-        spec=NupaSpec(
-            expected=row.data["answer"],
-            answer_format=NupaAnswerFormat(row.data["answer_format"]),
+        events=(TextMessage(role="user", content=row.data["prompt"]),),
+        package=source_package(
+            "nupa",
+            {"expected": row.data["answer"], "answer_format": NupaAnswerFormat(row.data["answer_format"])},
+            environment=required_grader_environment(context),
         ),
         evidence=row.data,
     )

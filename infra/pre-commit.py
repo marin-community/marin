@@ -53,8 +53,8 @@ EXCLUDE_PATTERNS = [
     "vendor/evalchemy/**",
     "vendor/harbor/**",
     # Canonical instruction checkers retain upstream style and license notices.
-    "lib/verifyit/src/verifyit/adapters/ifeval/**",
-    "lib/verifyit/src/verifyit/adapters/ifbench/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     # Benchmark prompts retain source whitespace byte for byte.
     "experiments/post_training/task_curation/datasets/evalchemy/assets/crux_*.txt",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.

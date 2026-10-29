@@ -579,6 +579,11 @@ A malformed first file is a grading failure. Grading does not try a lower-priori
 The optional `pass_above` threshold supplies a separate pass/fail result.
 Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
+`RewardFileFormat.VERDICT_JSON` requires a zero exit code and reads Verifyit's
+structured verdict, retaining scored, invalid-task and infrastructure-error
+outcomes with their details. A scripted judge declares `ScriptGrader.judge`;
+the runtime stages `/tests/judge.toml` and supplies its connection credentials
+only in the verifier machine's environment.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A grading failure has no reward.

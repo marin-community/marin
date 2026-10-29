@@ -8,8 +8,8 @@ from functools import cache
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import (
     ChatGeneration,
     ContextPolicy,
@@ -22,13 +22,14 @@ from taskcompendium.evaluation import (
     Sampling,
     TrialPolicy,
 )
+from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
+from taskcompendium.importers.evalchemy.scorers.long_context import FINAL_ANSWER_PREFIX, mrcr_bin
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
-from verifyit.adapters.evalchemy_long_context import FINAL_ANSWER_PREFIX, mrcr_bin
-from verifyit.spec import GraphWalksSpec, MRCRSpec
 
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -69,13 +70,17 @@ def read_mrcr(path: StoragePath, _context: ConversionContext):
                 yield {**row, "official_tokens": tokens, "mrcr_bin_upper": mrcr_bin(tokens)}
 
 
-def convert_mrcr(row: RawRow, _context: ConversionContext) -> TaskSpec:
+def convert_mrcr(row: RawRow, context: ConversionContext) -> TaskSpec:
     data = row.data
     messages = json.loads(data["prompt"])
-    task = answer_task(
+    task = conversation_task(
         row,
-        prompt=messages[-1]["content"],
-        spec=MRCRSpec(expected=data["answer"], nonce=data["random_string_to_prepend"]),
+        events=(TextMessage(role="user", content=messages[-1]["content"]),),
+        package=source_package(
+            "mrcr",
+            {"expected": data["answer"], "nonce": data["random_string_to_prepend"]},
+            environment=required_grader_environment(context),
+        ),
         evidence=dict(data),
     )
     return task.model_copy(
@@ -103,11 +108,15 @@ def mrcr_item(task: TaskSpec) -> EvaluationItem:
     )
 
 
-def convert_graphwalks(row: RawRow, _context: ConversionContext) -> TaskSpec:
-    task = answer_task(
+def convert_graphwalks(row: RawRow, context: ConversionContext) -> TaskSpec:
+    task = conversation_task(
         row,
-        prompt=row.data["prompt"],
-        spec=GraphWalksSpec(expected=tuple(row.data["answer_nodes"])),
+        events=(TextMessage(role="user", content=row.data["prompt"]),),
+        package=source_package(
+            "graphwalks",
+            {"expected": row.data["answer_nodes"]},
+            environment=required_grader_environment(context),
+        ),
         evidence=dict(row.data),
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:GraphWalks", "long-context")})
@@ -141,9 +150,10 @@ def mrcr_source(name: str, max_context: int) -> RlDataSource[EvalDataSet]:
                 name="evalchemy-" + name.lower(),
                 source=HfSource("openai/mrcr", MRCR_REVISION, MRCR_FILES, SourceFormat.PARQUET, read=read_mrcr),
                 convert=convert_mrcr,
-                version="1",
+                version=scorer_revision("mrcr"),
                 intended_use=IntendedUse.EVAL,
                 resource_budget_bytes=LONG_CONTEXT_RESOURCE_BYTES,
+                grader=BASIC_GRADER,
             ),
             EvaluationProtocol(
                 benchmark=name,
@@ -192,9 +202,10 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                     name="evalchemy-graphwalks",
                     source=HfSource("openai/graphwalks", GRAPHWALKS_REVISION, GRAPHWALKS_FILES, SourceFormat.PARQUET),
                     convert=convert_graphwalks,
-                    version="1",
+                    version=scorer_revision("graphwalks"),
                     intended_use=IntendedUse.EVAL,
                     resource_budget_bytes=LONG_CONTEXT_RESOURCE_BYTES,
+                    grader=BASIC_GRADER,
                 ),
                 EvaluationProtocol(
                     benchmark="GraphWalks",

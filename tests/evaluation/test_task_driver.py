@@ -53,6 +53,9 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     ExitCodeReward,
+    FileReward,
+    RewardFile,
+    RewardFileFormat,
     ScriptGrader,
     TextMessage,
 )
@@ -63,8 +66,6 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
-    HarnessGenerationProfile,
-    HarnessGenerationSpec,
     JudgeSpec,
     MathJudgeSpec,
     MathProfile,
@@ -180,12 +181,39 @@ async def test_driver_resume_rejects_a_different_model_or_selection(tmp_path, pu
 
 
 def convert_mixed_row(row: RawRow, _context: ConversionContext):
-    spec = (
-        HarnessGenerationSpec(HarnessGenerationProfile.TRIVIAQA, (("Paris",),))
-        if row.data["kind"] == "raw"
-        else ExactSpec((row.data["expected"],), ignore_case=False, empty_output=EmptyOutputPolicy.GRADE)
-    )
+    spec = ExactSpec((row.data.get("expected", "Paris"),), ignore_case=False, empty_output=EmptyOutputPolicy.GRADE)
     task = answer_task(row, prompt=row.data["prompt"], spec=spec, evidence=row.data)
+    if row.data["kind"] == "raw":
+        verdicts = tuple(
+            json.dumps(
+                {
+                    "reward": 1,
+                    "detail": {
+                        "metrics": {"exact_match,strict_answer": strict, "exact_match,extract_answer": 1},
+                        "extracted": {"strict_answer": "Paris" if strict else "[invalid]", "extract_answer": "Paris"},
+                    },
+                }
+            )
+            for strict in (0, 1)
+        )
+        task = task.model_copy(
+            update={
+                "grader": ScriptGrader(
+                    argv=(
+                        "sh",
+                        "-c",
+                        'if test "$(cat /app/answer.txt)" = "Answer: Paris."; then printf %s "$2"; '
+                        'else printf %s "$1"; fi > /app/verdict.json',
+                        "fixture-grader",
+                        *verdicts,
+                    ),
+                    reward=FileReward(files=(RewardFile(path="/app/verdict.json", format=RewardFileFormat.JSON),)),
+                    environment=EnvironmentRequirements(
+                        command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec()
+                    ),
+                )
+            }
+        )
     if row.data["kind"] == "sandbox":
         task = task.model_copy(
             update={
@@ -431,10 +459,18 @@ async def test_driver_zero_shot_fallback_reduces_output_cap_and_records_oversize
             "model": run_config.model.model_copy(update={"context_window": 1000}),
             "max_tokens": 800,
             "source_limit": None,
+            "verifier_machine": machine_runtime(backend="shellsim"),
         }
     )
     output = str(tmp_path / "results")
-    await run_evaluation((corpus,), output, config, model, machine_factories={}, tokenizer=CharacterTokenizer())
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        tokenizer=CharacterTokenizer(),
+    )
     # Source MMLU-Pro stops at zero shots, then endpoint preflight reserves 64 tokens.
     assert {(request.messages[0]["content"], request.options["max_tokens"]) for request in requests} == {
         ("a" * 300, 636),
@@ -469,7 +505,9 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
         return ModelTurn(raw_message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
 
     output = str(tmp_path / "results")
-    await run_evaluation((corpus,), output, run_config, model, machine_factories={})
+    config = run_config.model_copy(update={"verifier_machine": machine_runtime(backend="shellsim")})
+    machines = {"shellsim": ShellSimMachineFactory()}
+    await run_evaluation((corpus,), output, config, model, machine_factories=machines)
     reader = ReadView(output)
     terminal = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert len(terminal) == 1
@@ -482,7 +520,7 @@ async def test_driver_multimetric_submission_failure_saves_raw_response_without_
     assert samples[0].metrics == {}
     assert samples[0].grading.score == 0
     assert samples[0].output == "Paris"
-    await run_evaluation((corpus,), output, run_config, model, machine_factories={})
+    await run_evaluation((corpus,), output, config, model, machine_factories=machines)
     assert len(requests) == 1
 
 
@@ -502,11 +540,23 @@ def convert_judged_row(row, _context):
         label_case="upper",
     )
     verifier = (
-        MathJudgeSpec(math=MathSpec(expected="2", profile=MathProfile.EVALCHEMY_OLYMPIAD), judge=judge)
+        MathJudgeSpec(math=MathSpec(expected="2", profile=MathProfile.BOXED), judge=judge)
         if row.data.get("math")
         else judge
     )
     task = answer_task(row, prompt=row.data["prompt"], spec=verifier, evidence=row.data)
+    if row.data.get("scripted"):
+        task = task.model_copy(
+            update={
+                "grader": ScriptGrader(
+                    argv=("true",),
+                    environment=EnvironmentRequirements(
+                        package_spec=PackageSpec(), command_semantics=CommandSemantics.SHELL_SIMULATOR
+                    ),
+                    judge=judge,
+                ),
+            }
+        )
     return task.model_copy(update={"tags": ("eval",)})
 
 
@@ -636,12 +686,15 @@ async def test_driver_judge_identity_pins_explicit_and_default_models_across_fai
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_model", ["source-judge", ""])
+@pytest.mark.parametrize("scripted", [False, True])
 async def test_driver_unmapped_judge_model_is_rejected_before_generation(
-    tmp_path, run_config, judge_endpoint, monkeypatch, source_model
+    tmp_path, run_config, judge_endpoint, monkeypatch, source_model, scripted
 ):
     monkeypatch.setenv("VERIFYIT_JUDGE_MODEL", "different")
     corpus = publish_policy_corpus(
-        tmp_path, [{"prompt": "unmapped judge", "model": source_model}], converter=convert_judged_row
+        tmp_path,
+        [{"prompt": "unmapped judge", "model": source_model, "scripted": scripted}],
+        converter=convert_judged_row,
     )
     judge_requests, connection = judge_endpoint
     config = run_config.model_copy(

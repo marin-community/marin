@@ -4,8 +4,9 @@
 import re
 
 import pytest
-from verifyit.adapters.evalchemy_nupa import grade_nupa_answer
 from verifyit.grade import Status
+
+from taskcompendium.importers.evalchemy.scorers.nupa import grade_nupa_answer
 
 
 def full_answer(value, answer_format):

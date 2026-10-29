@@ -28,9 +28,6 @@ process exit after a verdict has been written.
 | `math` | expression equality through math-verify |
 | `numeric` | numeric equality with explicit tolerances |
 | `exact` | normalized string equality |
-| `harness_generation` | pinned GSM8K, TriviaQA, NQ-Open, and DROP extraction and named metrics |
-| `nupa` | representation-sensitive numeric components and aligned-digit metrics |
-| `jee` | source JEEBench option membership, partial credit, and numeric tolerance |
 | `structure_closure` | continuation of a pinned prefix matching the first completed outer reference region |
 | `json-schema` | JSON, YAML, or TOML checked against JSON Schema |
 | `xml-elements` | required XML elements and attributes |
@@ -46,23 +43,6 @@ process exit after a verdict has been written.
 
 `structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
 Callers with generation stop metadata remove configured terminal markers before candidate grading.
-
-`HarnessGenerationSpec` selects one fixed source profile and stores reference alternatives as
-groups of answer spans. Non-DROP alternatives each contain one span. The grader consumes the raw
-completion and returns every source filter's metric in `detail.metrics`, plus its extracted answers.
-GSM8K retains strict and flexible extraction; TriviaQA and NQ-Open retain strict and permissive
-short answers; DROP retains grouped spans, number matching, and rounded token F1. These profiles
-run without an lm-eval installation. Their transport stops are separate from scorer postprocessing.
-
-`NupaSpec` declares an integer, float, fraction, or scientific-notation representation. The grader
-preserves component digits, including leading and trailing zeros, and reports exact match, aligned
-digit match, digit-length error, format validity, and missing answers in `detail.metrics`.
-Mathematically equivalent representations can have different scores. The curated `NUPA-Loose`
-sample and the fixed `NUPA5K-Loose` panel use this same grader and remain distinct populations.
-
-`JeeSpec` retains the last boxed answer and the declared source question type. Single-choice
-answers use case-sensitive A–D membership. Multiple-choice answers retain source partial credit;
-numeric answers use Python floats with an absolute tolerance of 0.01.
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
@@ -144,7 +124,7 @@ attempt can be scored.
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
-accepts: `unsolvable`, `exact`, `harness_generation`, `nupa`, `jee`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
 `structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
 decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the

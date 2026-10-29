@@ -11,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from verifyit.adapters.evalchemy_instructions import grade_source_instructions, validate_source_instructions
 from verifyit.grade import (
     Aggregation,
     InvalidTask,
@@ -22,7 +21,7 @@ from verifyit.grade import (
     scored,
 )
 from verifyit.modes.ifeval import CONSTRAINTS, Check
-from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalProfile, IfevalSpec
+from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
 
 def resolve_checks(
@@ -42,10 +41,6 @@ def resolve_checks(
 
 
 def grade(spec: IfevalSpec, tests_dir: Path, workspace: Path) -> Reward:
-    if spec.profile is not IfevalProfile.STANDARD:
-        validate_ifeval(spec)
-        text = read_output(spec, workspace)
-        return grade_source_instructions(spec, text or "")
     checks = resolve_checks(spec.constraints)
     text = read_output(spec, workspace)
     if text is None:
@@ -56,21 +51,11 @@ def grade(spec: IfevalSpec, tests_dir: Path, workspace: Path) -> Reward:
 
 def validate_ifeval(spec: IfevalSpec) -> None:
     empty_output_policy(spec)
-    if not isinstance(spec.profile, IfevalProfile):
-        raise InvalidTask("Unknown instruction checker profile")
-    if spec.profile is not IfevalProfile.STANDARD:
-        validate_source_instructions(spec)
-        return
     resolve_checks(spec.constraints)
 
 
 def grade_ifeval_candidate(spec: IfevalSpec, candidate: str, *, registry: Mapping[str, Check] | None = None) -> Reward:
     """Grade prepared text with optional additional trusted, process-local checks."""
-    if spec.profile is not IfevalProfile.STANDARD:
-        validate_ifeval(spec)
-        if registry is not None:
-            raise InvalidTask("Source checker profiles cannot override their registry")
-        return grade_source_instructions(spec, candidate)
     checks = resolve_checks(spec.constraints, registry)
     policy = empty_output_policy(spec)
     if not isinstance(candidate, str):

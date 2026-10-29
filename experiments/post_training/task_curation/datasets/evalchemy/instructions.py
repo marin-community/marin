@@ -15,12 +15,12 @@ from taskcompendium.evaluation import (
     TextGeneration,
     TrialPolicy,
 )
-from taskcompendium.grader import verifyit_package
+from taskcompendium.importers.evalchemy.grader import scorer_revision, source_package
+from taskcompendium.importers.evalchemy.scorers.instruction_spec import InstructionProfile
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
-from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalProfile, IfevalSpec
 
 from experiments.post_training.task_curation.datasets.evalchemy.instruction_environments import (
     IFBENCH_GRADER,
@@ -46,33 +46,29 @@ IFBENCH_METRICS = (
 )
 
 
-def convert_instructions(row: RawRow, context: ConversionContext, *, profile: IfevalProfile) -> TaskSpec:
+def convert_instructions(row: RawRow, context: ConversionContext, *, profile: InstructionProfile) -> TaskSpec:
     # Parquet pads kwargs with nulls for other checkers; both source protocols discard them.
-    constraints = tuple(
-        Constraint(name=name, params={key: value for key, value in params.items() if value is not None})
+    constraints = [
+        {"name": name, "params": {key: value for key, value in params.items() if value is not None}}
         for name, params in zip(row.data["instruction_id_list"], row.data["kwargs"], strict=True)
-    )
+    ]
     task = conversation_task(
         row,
         events=(TextMessage(role="user", content=row.data["prompt"]),),
-        package=verifyit_package(
-            IfevalSpec(
-                constraints=constraints,
-                profile=profile,
-                prompt=row.data["prompt"],
-                empty_output=EmptyOutputPolicy.GRADE,
-            ),
+        package=source_package(
+            "ifeval" if profile is InstructionProfile.HARNESS else "ifbench",
+            {"constraints": constraints, "profile": profile, "prompt": row.data["prompt"]},
             environment=required_grader_environment(context),
         ),
         evidence=dict(row.data),
     )
-    benchmark = "ifeval" if profile is IfevalProfile.HARNESS else "IFBench"
+    benchmark = "ifeval" if profile is InstructionProfile.HARNESS else "IFBench"
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:" + benchmark)})
 
 
-def instruction_item(task: TaskSpec, *, profile: IfevalProfile) -> EvaluationItem:
+def instruction_item(task: TaskSpec, *, profile: InstructionProfile) -> EvaluationItem:
     item = chat_item(task)
-    if profile is IfevalProfile.HARNESS:
+    if profile is InstructionProfile.HARNESS:
         (message,) = task.context.events
         return item.model_copy(update={"operation": TextGeneration(context=message.content)})
     return item
@@ -83,10 +79,10 @@ def instruction_source(
     benchmark: str,
     source: HfSource,
     population: int,
-    profile: IfevalProfile,
+    profile: InstructionProfile,
     max_tokens: int,
 ) -> RlDataSource[EvalDataSet]:
-    names = IFEVAL_METRICS if profile is IfevalProfile.HARNESS else IFBENCH_METRICS
+    names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name,
@@ -101,21 +97,21 @@ def instruction_source(
                 name="evalchemy-" + name,
                 source=source,
                 convert=partial(convert_instructions, profile=profile),
-                version="2",
+                version=scorer_revision("ifeval" if profile is InstructionProfile.HARNESS else "ifbench"),
                 intended_use=IntendedUse.EVAL,
-                grader=IFEVAL_GRADER if profile is IfevalProfile.HARNESS else IFBENCH_GRADER,
+                grader=IFEVAL_GRADER if profile is InstructionProfile.HARNESS else IFBENCH_GRADER,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
                 version="maintained-instructions-v4",
-                operation="text_generation" if profile is IfevalProfile.HARNESS else "chat_generation",
+                operation="text_generation" if profile is InstructionProfile.HARNESS else "chat_generation",
                 sampling=Sampling(
                     temperature=0,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=(),
-                    chat_template_kwargs={} if profile is IfevalProfile.HARNESS else {"enable_thinking": False},
+                    chat_template_kwargs={} if profile is InstructionProfile.HARNESS else {"enable_thinking": False},
                 ),
                 trials=TrialPolicy(count=1, seed=None),
                 metrics=tuple(
@@ -143,7 +139,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
             "ifeval",
             HfSource("google/IFEval", IFEVAL_REVISION, ("ifeval_input_data.jsonl",), SourceFormat.JSONL),
             541,
-            IfevalProfile.HARNESS,
+            InstructionProfile.HARNESS,
             1280,
         ),
         instruction_source(
@@ -153,7 +149,7 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                 "allenai/IFBench_test", IFBENCH_REVISION, ("data/train-00000-of-00001.parquet",), SourceFormat.PARQUET
             ),
             300,
-            IfevalProfile.IFBENCH,
+            InstructionProfile.IFBENCH,
             1024,
         ),
     ]

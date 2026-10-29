@@ -33,6 +33,7 @@ from verifyit.modes.grade_math_judge import validate_math_judge
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
+    EmptyOutputPolicy,
     GotestSpec,
     JudgeSpec,
     JunitSpec,
@@ -44,7 +45,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.28"
+SCHEMA_VERSION = "0.29"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -486,6 +487,7 @@ class ExitCodeReward(BaseModel):
 class RewardFileFormat(StrEnum):
     NUMBER = "number"
     JSON = "json"
+    VERDICT_JSON = "verdict_json"
 
 
 class RewardFile(BaseModel):
@@ -501,7 +503,8 @@ class RewardFile(BaseModel):
 class FileReward(BaseModel):
     """The first existing file supplies the score; a missing, empty, or invalid file is a grading failure.
 
-    A JSON file's ``detail`` object, when present, becomes the grade detail.
+    A JSON file's ``detail`` object, when present, becomes the grade detail. ``verdict_json``
+    reads a Verifyit verdict, preserving unscored task and infrastructure failures.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -600,6 +603,10 @@ class ScriptGrader(BaseModel):
     are copied from it, verifier resources are installed under ``/tests``, the extracted answer is
     written to ``answer_path`` (``None`` when the agent's files are the result), and the
     conversation is written to ``conversation_path`` as JSON chat messages.
+
+    ``judge`` declares a required service contract, staged as ``/tests/judge.toml``. The runtime
+    supplies endpoint credentials only to the grading machine. ``empty_output`` permits scripts
+    to grade blank plain-text submissions when the source requires per-item metrics for them.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
@@ -615,10 +622,14 @@ class ScriptGrader(BaseModel):
     conversation_path: str = "/tests/conversation.json"
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
     timeout: float = Field(default=600.0, gt=0)
+    empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
+    judge: JudgeSpec | None = None
 
     @model_validator(mode="after")
     def validate_grader(self) -> "ScriptGrader":
         _require_grader_environment(self.environment)
+        if self.judge is not None:
+            validate_judge_spec(self.judge)
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
         if self.answer_path is not None:
@@ -654,8 +665,21 @@ def grades_in_process(grader: Grader) -> bool:
 
 
 def grades_with_judge(grader: Grader) -> bool:
-    """Whether the grader is a verifyit judge, which grades the answer through a judge service."""
-    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec | MathJudgeSpec)
+    """Whether grading requires a judge service."""
+    return judge_spec(grader) is not None
+
+
+def judge_spec(grader: Grader) -> JudgeSpec | None:
+    """The declared judge service contract, independent of the grader's execution location."""
+    if isinstance(grader, ScriptGrader):
+        return grader.judge
+    if isinstance(grader, VerifyitGrader):
+        verifier = verifyit_spec(grader)
+        if isinstance(verifier, MathJudgeSpec):
+            return verifier.judge
+        if isinstance(verifier, JudgeSpec):
+            return verifier
+    return None
 
 
 def grader_workspace(grader: Grader) -> str:

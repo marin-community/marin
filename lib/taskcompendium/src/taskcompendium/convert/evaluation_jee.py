@@ -3,14 +3,14 @@
 
 """Preserve JEEBench's source type-specific prompts and private scoring references."""
 
-from verifyit.spec import JeeQuestionType, JeeSpec
-
-from taskcompendium.convert.answers import answer_task
 from taskcompendium.convert.evaluation import source_evidence
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import ChatGeneration, EvaluationItem
-from taskcompendium.models import TaskSpec
+from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.scorers.jee import JeeQuestionType
+from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import source_order
-from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow
 
 PROMPTS = {
@@ -36,13 +36,17 @@ PROMPTS = {
 }
 
 
-def convert_jee(row: RawRow, _context: ConversionContext) -> TaskSpec:
+def convert_jee(row: RawRow, context: ConversionContext) -> TaskSpec:
     question_type = JeeQuestionType(row.data["type"])
     question = row.data["question"].replace("\n\n", "\n").strip()
-    task = answer_task(
+    task = conversation_task(
         row,
-        prompt=PROMPTS[question_type] + "\n\nProblem: " + question,
-        spec=JeeSpec(expected=str(row.data["gold"]), question_type=question_type),
+        events=(TextMessage(role="user", content=PROMPTS[question_type] + "\n\nProblem: " + question),),
+        package=source_package(
+            "jee",
+            {"expected": str(row.data["gold"]), "question_type": question_type},
+            environment=required_grader_environment(context),
+        ),
         evidence=row.data,
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:JEEBench")})

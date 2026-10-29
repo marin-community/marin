@@ -2,7 +2,7 @@
 
 Source: Marin 623134de90723e7f189036da005067f36817b6e7, vendor/evalchemy/eval/chat_benchmarks/IFBench (Allen Institute for AI, 2025). Original Apache-2.0 notices are retained.
 
-Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. Checker logic is unchanged. Install the instructions extra and provision NLTK data before grading. Missing data raises an error; grading never downloads it.
+Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. Checker logic is unchanged. The dataset declares pinned checker packages and NLTK data in its grading environment. Missing data raises an error; grading never downloads it.
 
 Original source SHA-256:
 

@@ -14,8 +14,8 @@ from collections.abc import Sequence
 from math_verify import parse, verify
 from sympy.core.relational import Relational
 
-from verifyit.adapters.evalchemy_code import END_OF_TURN
-from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
+from verifyit.adapters.completion import END_OF_TURN
+from .minerva import is_equiv, normalize_final_answer
 from verifyit.grade import Reward, invalid_task, scored
 
 

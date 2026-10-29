@@ -2,7 +2,7 @@
 
 Source: EleutherAI/lm-evaluation-harness v0.4.12, lm_eval/tasks/ifeval. Original Apache-2.0 notices are retained.
 
-Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. Checker logic is unchanged. Install the instructions extra and provision NLTK data before grading. Missing data raises an error; grading never downloads it.
+Changes: package imports are relative; import-time NLTK downloads and package-directory writes are removed. Checker logic is unchanged. The dataset declares pinned checker packages and NLTK data in its grading environment. Missing data raises an error; grading never downloads it.
 
 Original source SHA-256:
 

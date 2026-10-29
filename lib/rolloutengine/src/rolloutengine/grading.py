@@ -7,6 +7,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
@@ -19,11 +20,10 @@ from taskcompendium.models import (
     ScriptGrader,
     VerifyitGrader,
     grades_with_judge,
-    verifyit_spec,
+    judge_spec,
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import JudgeSpec, MathJudgeSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -38,10 +38,8 @@ def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
     connection's default model, or ``VERIFYIT_JUDGE_MODEL`` for environment-configured callers.
     """
     grader = spec.task.grader
-    assert isinstance(grader, VerifyitGrader)
-    verifier = verifyit_spec(grader)
-    judge = verifier.judge if isinstance(verifier, MathJudgeSpec) else verifier
-    assert isinstance(judge, JudgeSpec)
+    judge = judge_spec(grader)
+    assert judge is not None
     connection = spec.judge_connection
     fallback = (
         connection.default_model
@@ -51,12 +49,12 @@ def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
     if not (judge.model.strip() or fallback.strip()):
         raise ValueError(f"A judge grader needs JudgeSpec.model or {MODEL_ENV}")
     if connection is not None:
-        return connection
+        return replace(connection, default_model=fallback)
     base_url = os.environ.get(BASE_URL_ENV, "").strip()
     if not base_url:
         raise ValueError(f"A judge grader needs TaskRolloutSpec.judge_connection or {BASE_URL_ENV}")
     # Local OpenAI-compatible servers ignore the key, but the client needs one.
-    return JudgeConnection(base_url, os.environ.get(API_KEY_ENV) or "unused")
+    return JudgeConnection(base_url, os.environ.get(API_KEY_ENV) or "unused", default_model=fallback)
 
 
 async def _grade_rollout(
@@ -79,7 +77,7 @@ async def _grade_rollout(
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
-    if grades_with_judge(grader):
+    if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
@@ -95,4 +93,5 @@ async def _grade_rollout(
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=spec.limits.verifier_timeout,
+        judge_connection=judge_connection(spec) if grades_with_judge(grader) else None,
     )

@@ -37,9 +37,9 @@ ENV_VARS = ("VERIFYIT_JUDGE_BASE_URL", "VERIFYIT_JUDGE_API_KEY", "VERIFYIT_JUDGE
 
 def _math_judge_spec() -> MathJudgeSpec:
     return MathJudgeSpec(
-        math=MathSpec(expected="2", alternatives=("3",), profile=MathProfile.EVALCHEMY_OLYMPIAD),
+        math=MathSpec(expected="2", profile=MathProfile.BOXED),
         judge=JudgeSpec(
-            references=('["2", "3"]',),
+            references=("2",),
             rubric="labels",
             exact_gate=False,
             prompt_template="Reference: {reference}\nCandidate: {candidate}",
@@ -51,7 +51,7 @@ def _math_judge_spec() -> MathJudgeSpec:
     )
 
 
-@pytest.mark.parametrize("response, expected", [(r"\boxed{3}", 1), ("no box", 0), ("", 0)])
+@pytest.mark.parametrize("response, expected", [(r"\boxed{2}", 1), ("", 0)])
 def test_math_judge_roundtrip_preserves_local_decisions_without_an_endpoint(unconfigured_judge, response, expected):
     spec = parse_spec(render_spec(_math_judge_spec()))
     assert isinstance(spec, MathJudgeSpec)
@@ -60,17 +60,17 @@ def test_math_judge_roundtrip_preserves_local_decisions_without_an_endpoint(unco
 
 
 @pytest.mark.parametrize("reply,expected", [("correct", 1), (" INCORRECT\n", 0), ("Not_Attempted", 0)])
-def test_math_judge_sends_extracted_first_box_and_parses_whole_label(fake_judge, reply, expected):
+def test_math_judge_sends_extracted_answer_and_parses_whole_label(fake_judge, reply, expected):
     fake_judge.replies = [reply]
     spec = parse_spec(render_spec(_math_judge_spec()))
     assert isinstance(spec, MathJudgeSpec)
-    verdict = grade_math_judge_candidate(spec, r"\boxed{4} then \boxed{2}")
+    verdict = grade_math_judge_candidate(spec, r"\boxed{2} then \boxed{4}")
     assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
     assert verdict.detail["extracted"] == "4"
     assert fake_judge.requests[0]["messages"] == [
         {
             "role": "user",
-            "content": 'Reference: ["2", "3"]\nCandidate: 4',
+            "content": "Reference: 2\nCandidate: 4",
         }
     ]
     assert fake_judge.requests[0]["temperature"] == 0

@@ -6,15 +6,12 @@
 import re
 import string
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
-from verifyit.adapters.evalchemy_code import END_OF_TURN
-from verifyit.adapters.evalchemy_minerva import is_equiv, normalize_final_answer
+from verifyit.adapters.completion import END_OF_TURN
 from verifyit.adapters.harness_native import exact_match
-from verifyit.grade import InvalidTask, Reward, read_output, scored
+from verifyit.grade import InvalidTask, Reward, scored
 from verifyit.modes.grade_exact import grade_collection_f1
-from verifyit.spec import HarnessGenerationProfile, HarnessGenerationSpec
 
 INVALID_ANSWER = "[invalid]"
 GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN)
@@ -172,25 +169,27 @@ def _drop_metrics(candidate: str, references: tuple[tuple[str, ...], ...]) -> di
     return {"em,extract_answer": best_em, "f1,extract_answer": best_f1}
 
 
-def validate_harness_generation(spec: HarnessGenerationSpec) -> None:
+def validate_harness_generation(profile: str, references: tuple[tuple[str, ...], ...]) -> None:
     if (
-        not isinstance(spec.profile, HarnessGenerationProfile)
-        or not spec.references
-        or any(not spans or any(not isinstance(span, str) for span in spans) for spans in spec.references)
+        profile not in {"gsm8k", "triviaqa", "nq_open", "drop"}
+        or not references
+        or any(not spans or any(not isinstance(span, str) for span in spans) for spans in references)
     ):
         raise InvalidTask("Harness generation requires a known profile and answer alternatives")
-    if spec.profile != HarnessGenerationProfile.DROP and any(len(spans) != 1 for spans in spec.references):
+    if profile != "drop" and any(len(spans) != 1 for spans in references):
         raise InvalidTask("Only DROP accepts multi-span references")
 
 
-def grade_harness_generation_candidate(spec: HarnessGenerationSpec, response: str) -> Reward:
+def grade_harness_generation_candidate(profile: str, references: tuple[tuple[str, ...], ...], response: str) -> Reward:
     """Grade all source extraction variants and retain each named metric and extracted answer."""
-    validate_harness_generation(spec)
-    if spec.profile == HarnessGenerationProfile.DROP:
+    validate_harness_generation(profile, references)
+    if profile == "drop":
         extracted = {"extract_answer": extract_drop_answer(response)}
-        metrics = _drop_metrics(extracted["extract_answer"], spec.references)
+        metrics = _drop_metrics(extracted["extract_answer"], references)
         primary = "f1,extract_answer"
-    elif spec.profile == HarnessGenerationProfile.GSM8K:
+    elif profile == "gsm8k":
+        from .minerva import is_equiv, normalize_final_answer  # noqa: PLC0415
+
         strict = re.findall(r"#### (\-?[0-9\.\,]+)", response)
         flexible = truncate_response(response, GSM8K_STOPS)
         answer = INVALID_ANSWER
@@ -199,7 +198,7 @@ def grade_harness_generation_candidate(spec: HarnessGenerationSpec, response: st
                 answer = matches[-1].strip()
                 break
         extracted = {"strict-match": strict[0] if strict else INVALID_ANSWER, "flexible-extract": answer}
-        reference = normalize_final_answer(spec.references[0][0])
+        reference = normalize_final_answer(references[0][0])
         metrics = {
             f"exact_match,{name}": float(
                 candidate != INVALID_ANSWER and is_equiv(normalize_final_answer(candidate), reference)
@@ -212,23 +211,15 @@ def grade_harness_generation_candidate(spec: HarnessGenerationSpec, response: st
             "strict_answer": extract_short_answer(response, marked=True),
             "extract_answer": extract_short_answer(response, marked=False),
         }
-        references = [spans[0] for spans in spec.references]
-        regexes = (r"\b(?:The |the |An |A |The |a |an )",) if spec.profile == HarnessGenerationProfile.NQ_OPEN else ()
+        answers = [spans[0] for spans in references]
+        regexes = (r"\b(?:The |the |An |A |The |a |an )",) if profile == "nq_open" else ()
         metrics = {
             f"exact_match,{name}": (
                 exact_match(
-                    candidate, references, ignore_case=True, ignore_punctuation=True, regexes_to_ignore=regexes
+                    candidate, answers, ignore_case=True, ignore_punctuation=True, regexes_to_ignore=regexes
                 ).reward
             )
             for name, candidate in extracted.items()
         }
         primary = "exact_match,strict_answer"
     return scored(metrics[primary], metrics=metrics, extracted=extracted)
-
-
-def grade(spec: HarnessGenerationSpec, _tests_dir: Path, workspace: Path) -> Reward:
-    validate_harness_generation(spec)
-    response = read_output(spec, workspace)
-    if response is None:
-        return scored(0.0, reason="no_output")
-    return grade_harness_generation_candidate(spec, response)

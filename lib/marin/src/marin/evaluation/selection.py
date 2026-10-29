@@ -17,16 +17,16 @@ from taskcompendium.evaluation import (
     MRCRContextSelection,
     TextGeneration,
 )
-from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_cases, evaluation_items
-from taskcompendium.submission import conversation_messages
-from verifyit.adapters.evalchemy_long_context import (
+from taskcompendium.importers.evalchemy.scorers.long_context import (
     GRAPHWALKS_CONTEXT_MARGIN,
     GRAPHWALKS_PREFIX_CHARS_PER_TOKEN,
     GRAPHWALKS_PREFIX_TOKEN_MARGIN,
     graphwalks_output_budget,
     interleave_mrcr_indices,
 )
+from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.evaluation import EvaluationCase, evaluation_cases, evaluation_items
+from taskcompendium.submission import conversation_messages
 
 SELECTIONS_TABLE = "evaluation_selection"
 CONTEXT_MARGIN = 64

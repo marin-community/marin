@@ -14,6 +14,8 @@ from taskcompendium.evaluation import (
     Sampling,
     TrialPolicy,
 )
+from taskcompendium.importers.evalchemy.grader import scorer_revision
+from taskcompendium.importers.evalchemy.scorers.harness_generation import COMPLETION_REQUEST_STOPS, GSM8K_REQUEST_STOPS
 from taskcompendium.importers.evaluation_harness import (
     HarnessTemplate,
     choice_item,
@@ -29,8 +31,8 @@ from taskcompendium.importers.evaluation_harness import (
 )
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
-from verifyit.modes.grade_harness_generation import COMPLETION_REQUEST_STOPS, GSM8K_REQUEST_STOPS
 
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER, MATH_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -429,7 +431,8 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                         ),
                         inputs={"fewshot": HfSource(repo, revision, (pool,), SourceFormat.PARQUET)} if shots else {},
                         convert=partial(convert_generation_document, benchmark=name),
-                        version="1",
+                        grader=MATH_GRADER if profile == "gsm8k" else BASIC_GRADER,
+                        version=scorer_revision("harness_generation"),
                         intended_use=IntendedUse.EVAL,
                     ),
                     protocol=EvaluationProtocol(

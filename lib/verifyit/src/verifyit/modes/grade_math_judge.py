@@ -5,10 +5,10 @@
 
 from pathlib import Path
 
-from verifyit.grade import InvalidTask, Reward, Status, empty_output_policy, read_output, scored
+from verifyit.grade import Reward, Status, empty_output_policy, read_output, scored
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate, validate_judge_spec
-from verifyit.modes.grade_math import grade_math_text_candidate, validate_math
-from verifyit.spec import JudgeRuntimeSource, MathJudgeSpec, MathProfile
+from verifyit.modes.grade_math import grade_math_text_candidate, math_answer, validate_math
+from verifyit.spec import JudgeRuntimeSource, MathJudgeSpec
 
 
 def validate_math_judge(spec: MathJudgeSpec) -> None:
@@ -16,8 +16,6 @@ def validate_math_judge(spec: MathJudgeSpec) -> None:
     empty_output_policy(spec)
     validate_math(spec.math)
     validate_judge_spec(spec.judge)
-    if spec.math.profile is not MathProfile.EVALCHEMY_OLYMPIAD:
-        raise InvalidTask("math-judge requires the Olympiad extraction profile")
 
 
 def grade_math_judge_candidate(
@@ -33,7 +31,7 @@ def grade_math_judge_candidate(
     verdict = grade_math_text_candidate(spec.math, candidate)
     if verdict.status is not Status.SCORED or verdict.reward == 1:
         return verdict
-    answer = verdict.detail["extracted"]
+    answer = verdict.detail.get("extracted", math_answer(spec.math, candidate))
     if not answer.strip():
         return verdict
     result = grade_judge_candidate(spec.judge, answer, connection=connection, runtime=runtime, context=context)

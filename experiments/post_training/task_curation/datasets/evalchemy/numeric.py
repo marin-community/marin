@@ -6,10 +6,12 @@
 from functools import partial
 
 from taskcompendium.evaluation import EvaluationProtocol, Metric, MetricKind, Sampling, TrialPolicy
+from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.evaluation_nupa import convert_nupa, nupa_item, read_nupa_panel, read_nupa_sample
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -53,8 +55,9 @@ def sources() -> list[RlDataSource[EvalDataSet]]:
                         ),
                         inputs=inputs,
                         convert=partial(convert_nupa, benchmark=name),
-                        version="1",
+                        version=scorer_revision("nupa"),
                         intended_use=IntendedUse.EVAL,
+                        grader=BASIC_GRADER,
                     ),
                     protocol=EvaluationProtocol(
                         benchmark=name,

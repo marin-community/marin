@@ -6,6 +6,8 @@
 import copy
 import json
 import re
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +20,15 @@ from fray.local_backend import LocalClient
 from marin.evaluation.selection import SELECTIONS_TABLE, select_cases
 from marin.evaluation.task_driver import EvaluationRunConfig, ModelIdentity, run_evaluation
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
+from shellbox.machine import PackageSpec
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
 from transformers import PreTrainedTokenizerFast
+from verifyit.spec import ExactSpec
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.evalchemy.long_context import sources
@@ -83,6 +89,15 @@ def graph_row(prompt: str, nodes: tuple[str, ...], kind: str = "bfs") -> dict:
     return {"prompt": prompt, "prompt_chars": len(prompt), "answer_nodes": list(nodes), "problem_type": kind}
 
 
+def selection_task(row, context, *, convert):
+    task = convert(row, context)
+    expected = row.data.get("answer")
+    if expected is None:
+        expected = "Final Answer: [" + ", ".join(row.data["answer_nodes"]) + "]"
+    # Selection and ledger tests use a shared comparison without a grading machine.
+    return task.model_copy(update={"grader": verifyit_package(ExactSpec(expected=(expected,))).grader})
+
+
 def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context_window: int | None = None):
     source = next(source for source in sources() if source.config.protocol.benchmark == benchmark)
     dataset = source.config
@@ -95,12 +110,26 @@ def publish_fixture(tmp_path: Path, benchmark: str, rows: list[dict], *, context
         file.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(table if index == 0 else table.slice(0, 0), file)
     output = str(tmp_path / "published")
-    protocol = dataset.protocol.model_copy(update={"expected_population": len(rows), "context_window": context_window})
+    protocol = dataset.protocol.model_copy(
+        update={
+            "expected_population": len(rows),
+            "context_window": context_window,
+            "metrics": tuple(
+                metric for metric in dataset.protocol.metrics if metric.name == dataset.protocol.primary_metric
+            ),
+        }
+    )
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        package_spec=PackageSpec(pypi_packages=("tomli-w==1.2.0",)),
+    )
+    recipe = source_recipe(dataset.recipe, {}, environment)
+    recipe = replace(recipe, convert=partial(selection_task, convert=recipe.convert))
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
             publish_evaluation_corpus(
-                source_recipe(dataset.recipe, {}, None),
+                recipe,
                 protocol,
                 dataset.item_builder,
                 context,

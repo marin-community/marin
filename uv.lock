@@ -2446,15 +2446,6 @@ wheels = [
 ]
 
 [[package]]
-name = "emoji"
-version = "2.16.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/01/a25a9c13e2f8945d06b219e08e88a5dd8a504ad1a79f872f25d6814f498c/emoji-2.16.0.tar.gz", hash = "sha256:ff9e9b1c48389ef78ed1787e7693c555e84e6bb9bac16be1fd65e1616dbf80c8", size = 617905, upload-time = "2026-09-16T19:47:57.051Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/8a/75e3177f374877b19dd3112820b071836ad1100f9f58424630b4783519bc/emoji-2.16.0-py3-none-any.whl", hash = "sha256:c4230d80640def9071599ff56b1b5950fe13a2a94c0da98c5deab12431b24330", size = 610912, upload-time = "2026-09-16T19:47:55.507Z" },
-]
-
-[[package]]
 name = "equinox"
 version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6071,15 +6062,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langdetect"
-version = "1.0.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
-
-[[package]]
 name = "latex2sympy2-extended"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6420,7 +6402,7 @@ dev = [
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
-    { name = "marin-verifyit", extra = ["instructions", "math", "reasoning-gym", "schema"] },
+    { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "mkdocs" },
     { name = "mkdocs-git-authors-plugin" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
@@ -6467,7 +6449,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
-    { name = "marin-verifyit", extra = ["instructions", "math", "reasoning-gym", "schema"] },
+    { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -6562,7 +6544,7 @@ dev = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
-    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema", "instructions"], editable = "lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "mkdocs", specifier = ">=1.5.0" },
     { name = "mkdocs-git-authors-plugin", specifier = ">=0.9.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.2.0" },
@@ -6609,7 +6591,7 @@ lint = [
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
-    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema", "instructions"], editable = "lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -7910,24 +7892,12 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
-    { name = "emoji" },
-    { name = "immutabledict" },
     { name = "jsonschema" },
-    { name = "langdetect" },
     { name = "math-verify" },
-    { name = "nltk" },
     { name = "openai" },
     { name = "pyyaml" },
     { name = "reasoning-gym" },
-    { name = "syllapy" },
     { name = "sympy" },
-]
-instructions = [
-    { name = "emoji" },
-    { name = "immutabledict" },
-    { name = "langdetect" },
-    { name = "nltk" },
-    { name = "syllapy" },
 ]
 judge = [
     { name = "openai" },
@@ -7954,21 +7924,16 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "emoji", marker = "extra == 'instructions'" },
-    { name = "immutabledict", marker = "extra == 'instructions'" },
     { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
-    { name = "langdetect", marker = "extra == 'instructions'" },
-    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym", "instructions"], marker = "extra == 'all'", editable = "lib/verifyit" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "lib/verifyit" },
     { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
-    { name = "nltk", marker = "extra == 'instructions'", specifier = ">=3.9.1" },
     { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
     { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
     { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
-    { name = "syllapy", marker = "extra == 'instructions'" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
     { name = "tomli-w", specifier = ">=1.2" },
 ]
-provides-extras = ["math", "schema", "judge", "reasoning-gym", "instructions", "all"]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
 
 [package.metadata.requires-dev]
 test = [
@@ -12108,15 +12073,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e0/de/a0c3d1244912c260638f0f925e190e493ccea37ecaea9bbad7c14413b803/super_collections-0.6.2.tar.gz", hash = "sha256:0c8d8abacd9fad2c7c1c715f036c29f5db213f8cac65f24d45ecba12b4da187a", size = 31315, upload-time = "2025-09-30T00:37:08.067Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/43/47c7cf84b3bd74a8631b02d47db356656bb8dff6f2e61a4c749963814d0d/super_collections-0.6.2-py3-none-any.whl", hash = "sha256:291b74d26299e9051d69ad9d89e61b07b6646f86a57a2f5ab3063d206eee9c56", size = 16173, upload-time = "2025-09-30T00:37:07.104Z" },
-]
-
-[[package]]
-name = "syllapy"
-version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c8/0c/32605cf1126804f5422c7b3266b8e4f77fdfc561fd1cb4cbbeb69eabe281/syllapy-0.8.0.tar.gz", hash = "sha256:8dbf266909fa8b62d3c16425200326809244253532631d774d2465663c4e7436", size = 28073, upload-time = "2026-08-01T17:48:16.31Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/04/31e44d11ce517ac39b87d0746bdd492f4c80770795b9a9e10c8eea722ffb/syllapy-0.8.0-py3-none-any.whl", hash = "sha256:eea0a65665ad6c980686785af3e588cfcc8d359d5975ba67b18dea9cef6b0425", size = 24882, upload-time = "2026-08-01T17:48:14.955Z" },
 ]
 
 [[package]]

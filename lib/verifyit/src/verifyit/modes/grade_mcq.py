@@ -15,9 +15,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from verifyit.adapters.evalchemy_choices import grade_gpqa_answer, grade_mmlu_answer
 from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
-from verifyit.spec import McqProfile, McqSpec
+from verifyit.spec import McqSpec
 
 ANSWER = re.compile(r"Answer\s*:\s*(?!Answer)\s*([A-Za-z0-9])(?![A-Za-z0-9])\s*")
 BOXED_LETTER = re.compile(r"\\boxed\{\s*([A-Za-z0-9])\s*\}")
@@ -140,8 +139,6 @@ def answer_letters(text: str) -> list[str]:
 
 def validate_mcq(spec: McqSpec) -> None:
     empty_output_policy(spec)
-    if not isinstance(spec.profile, McqProfile):
-        raise InvalidTask("unknown MCQ extraction profile")
     if type(spec.options) is not int or not 1 <= spec.options <= MAX_OPTIONS:
         raise InvalidTask(f"mcq options must be 1..{MAX_OPTIONS}, got {spec.options}")
     letters = tuple(string.ascii_uppercase[: spec.options])
@@ -153,16 +150,8 @@ def validate_mcq(spec: McqSpec) -> None:
 
 
 def grade_mcq_candidate(spec: McqSpec, candidate: str) -> Reward:
-    """Score an extracted MCQ option letter against a validated task spec.
-
-    Standard callers extract the option themselves. Evalchemy profiles receive
-    the complete response so their source-specific extraction remains intact.
-    """
+    """Score an extracted MCQ option letter against a validated task spec."""
     validate_mcq(spec)
-    if spec.profile is McqProfile.EVALCHEMY_GPQA:
-        return grade_gpqa_answer(spec.expected, candidate)
-    if spec.profile is McqProfile.EVALCHEMY_MMLU_PRO:
-        return grade_mmlu_answer(spec.expected, candidate)
     letters = tuple(string.ascii_uppercase[: spec.options])
     expected = spec.expected.strip().upper()
     extracted = candidate.strip().upper()
@@ -178,8 +167,6 @@ def grade(spec: McqSpec, tests_dir: Path, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    if spec.profile is not McqProfile.STANDARD:
-        return grade_mcq_candidate(spec, text)
     matches = answer_letters(text)
     if matches:
         return grade_mcq_candidate(spec, matches[-1])

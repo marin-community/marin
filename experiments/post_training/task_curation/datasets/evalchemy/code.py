@@ -26,9 +26,13 @@ from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
 from taskcompendium.runtime.resources import inline_resource
-from verifyit.adapters import evalchemy_code
-from verifyit.adapters.evalchemy_code import HUMANEVAL_REQUEST_STOPS, function_prompt, mbpp_prompt
+from verifyit.adapters import completion
 
+from experiments.post_training.task_curation.datasets.evalchemy.assets.code_protocol import (
+    HUMANEVAL_REQUEST_STOPS,
+    function_prompt,
+    mbpp_prompt,
+)
 from experiments.post_training.task_curation.datasets.evalchemy.datasets import ACCURACY
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.environment import Environment
@@ -39,11 +43,11 @@ ASSETS = Path(__file__).parent / "assets"
 PYTHON_GRADER = Environment(requirements=("numpy==2.3.5",))
 CODE_ASSETS = (
     inline_resource("prepare.py", (ASSETS / "python_prepare.py").read_bytes()),
-    inline_resource("code_protocol.py", Path(evalchemy_code.__file__).read_bytes()),
+    inline_resource("code_protocol.py", (ASSETS / "code_protocol.py").read_bytes()),
     inline_resource("NOTICE.txt", (ASSETS / "NOTICE.txt").read_bytes()),
     inline_resource(
         "lm-evaluation-harness-MIT.txt",
-        (Path(evalchemy_code.__file__).parent / "licenses/lm-evaluation-harness-MIT.txt").read_bytes(),
+        (ASSETS / "lm-evaluation-harness-MIT.txt").read_bytes(),
     ),
 )
 CODE_REVISION = (
@@ -52,7 +56,8 @@ CODE_REVISION = (
         {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (
-                Path(evalchemy_code.__file__),
+                ASSETS / "code_protocol.py",
+                Path(completion.__file__),
                 ASSETS / "python_prepare.py",
                 ASSETS / "crux_input.txt",
                 ASSETS / "crux_output.txt",
