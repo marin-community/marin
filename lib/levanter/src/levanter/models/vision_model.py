@@ -12,7 +12,7 @@ import draccus
 import equinox as eqx
 from haliax import Axis
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfVisionCheckpointConverter
 
 VisionEncoderT = TypeVar("VisionEncoderT", bound=eqx.Module)
 
@@ -53,6 +53,6 @@ class VisionEncoderConfig(
         pass
 
     @abc.abstractmethod
-    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter:
+    def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HfVisionCheckpointConverter:
         """Create a HuggingFace checkpoint converter for this config."""
         pass

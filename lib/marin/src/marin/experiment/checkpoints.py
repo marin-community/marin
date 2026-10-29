@@ -72,7 +72,7 @@ class HfToLevanterConfig:
 def resolve_lm_config(model_type: str, hf_id: str, hf_revision: str) -> LmConfig:
     """Resolve the concrete ``LmConfig`` for ``hf_id@hf_revision`` — the arch native init needs.
 
-    Reads the pinned HF ``config.json`` through the model class's ``HFCheckpointConverter`` (the same
+    Reads the pinned HF ``config.json`` through the model class's ``HfLmCheckpointConverter`` (the same
     derivation ``use_hf_model_config`` performs at train start). Called at graph-construction time so the
     architecture is an identity-bearing input, not something reconstructed only on the worker.
     """

@@ -35,7 +35,10 @@ from haliax.state_dict import (  # noqa: E402
     with_prefix,
 )
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin  # noqa: E402
+from levanter.compat.hf_checkpoints import (  # noqa: E402
+    HfVisionCheckpointConverter,
+    VisionModelWithHfSerializationMixin,
+)
 from levanter.layers.attention import (  # noqa: E402
     Attention,
     AttentionBackend,
@@ -120,9 +123,9 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
-    ) -> HFCheckpointConverter["SiglipVisionConfig"]:  # type: ignore
+    ) -> HfVisionCheckpointConverter["SiglipVisionConfig"]:
         """Create HuggingFace checkpoint converter for this config."""
-        return HFCheckpointConverter(
+        return HfVisionCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=False,
@@ -160,11 +163,10 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             vision_use_head=getattr(hf_config, "vision_use_head", True),
         )
 
-    def to_hf_config(self, vocab_size: int = 1, config_overrides: Optional[Dict] = None) -> HfSiglipVisionConfig:
+    def to_hf_config(self, config_overrides: Optional[Dict] = None) -> HfSiglipVisionConfig:
         """Convert from Levanter config to HuggingFace config.
 
         Args:
-            vocab_size: Vocabulary size (unused for vision-only models, but required by interface)
             config_overrides: Optional config overrides
         """
         if config_overrides is None:
@@ -759,12 +761,12 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         return SiglipVisionModelOutput(last_hidden_state=last_hidden_state, hidden_states=result_hidden_states)
 
 
-class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializationMixin[SiglipVisionConfig]):
+class SiglipVisionModel(ModuleWithStateDictSerialization, VisionModelWithHfSerializationMixin[SiglipVisionConfig]):
     """
     SigLIP Vision Model with HuggingFace compatibility.
 
     This is a wrapper around SiglipVisionTransformer that implements
-    the ModelWithHfSerializationMixin interface for checkpoint conversion.
+    vision checkpoint conversion.
     """
 
     vision_model: SiglipVisionTransformer
@@ -774,23 +776,16 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
     def config(self) -> SiglipVisionConfig:
         return self.vision_model.config
 
-    @property
-    def Vocab(self) -> Axis:
-        # Vision models don't have a vocab, but ModelWithHfSerializationMixin requires it
-        # We use a dummy axis for compatibility
-        return Axis(name="vocab", size=1)
-
     def get_hf_config(self) -> HfConfig:
         """Return the Hugging Face vision configuration."""
         return self.config.to_hf_config()
 
     @classmethod
-    def init(cls, Vocab: Axis, config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionModel":
+    def init(cls, config: SiglipVisionConfig, *, key: PRNGKeyArray) -> "SiglipVisionModel":
         """
         Initialize SiglipVisionModel.
 
         Args:
-            Vocab: Dummy vocab axis (not used for vision models, but required by interface)
             config: SiglipVisionConfig
             key: PRNGKey for initialization
 

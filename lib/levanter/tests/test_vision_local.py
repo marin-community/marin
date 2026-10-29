@@ -29,8 +29,8 @@ def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder: str) 
         model_class = Siglip2VisionModel
         axes = (batch, hax.Axis("num_patches", 4), hax.Axis("patch_input", 768))
 
-    model = model_class.init(hax.Axis("vocab", 1), config, key=jax.random.PRNGKey(0))
-    other = model_class.init(hax.Axis("vocab", 1), config, key=jax.random.PRNGKey(1))
+    model = model_class.init(config, key=jax.random.PRNGKey(0))
+    other = model_class.init(config, key=jax.random.PRNGKey(1))
     pixels = hax.random.normal(jax.random.PRNGKey(2), axes)
 
     def forward(network: SiglipVisionModel | Siglip2VisionModel) -> jax.Array:
@@ -91,11 +91,16 @@ def test_public_vision_checkpoint_loader(tmp_path, encoder):
     converter = config.hf_checkpoint_converter(str(tmp_path))
     with use_test_mesh():
         loaded = converter.load_pretrained(config.model_type)
-        template = config.model_type.init(hax.Axis("vocab", 0), config, key=jax.random.PRNGKey(1))
+        template = config.model_type.init(config, key=jax.random.PRNGKey(1))
         expected = from_torch_compatible_state_dict(template, converter.load_state_dict(str(tmp_path)))
     pixels = hax.random.normal(jax.random.PRNGKey(2), axes)
     forward = eqx.filter_jit(lambda model: model(pixels).last_hidden_state.array)
     np.testing.assert_allclose(forward(loaded), forward(expected), rtol=1e-5, atol=1e-5)
+    exported = tmp_path / "exported"
+    with use_test_mesh():
+        converter.save_pretrained(loaded, str(exported), save_reference_code=False)
+        restored = config.hf_checkpoint_converter(str(exported)).load_pretrained(config.model_type)
+    np.testing.assert_allclose(forward(restored), forward(loaded), rtol=1e-5, atol=1e-5)
 
 
 @skip_if_no_torch

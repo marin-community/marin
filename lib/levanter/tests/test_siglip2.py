@@ -255,7 +255,7 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = f"{tmpdir}/converted_model"
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
-        converter.save_pretrained(model, save_path, save_tokenizer=False)
+        converter.save_pretrained(model, save_path)
 
         converted_hf_model = HfSiglip2VisionModel.from_pretrained(save_path)
         converted_hf_model.eval()

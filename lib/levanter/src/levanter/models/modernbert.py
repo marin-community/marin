@@ -29,7 +29,7 @@ from haliax._src.state_dict import default_eqx_module_from_state_dict, default_e
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.layers.normalization import LayerNormConfig
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddings
@@ -163,8 +163,8 @@ class ModernBertConfig(HFCompatConfig):
 
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
-    ) -> HFCheckpointConverter["ModernBertConfig"]:
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["ModernBertConfig"]:
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=False,

@@ -148,8 +148,7 @@ def test_siglip_vision_model_vs_hf() -> None:
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         hf_model.save_pretrained(f"{tmpdir}/hf_model")
 
-        Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=jax.random.PRNGKey(0))
+        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, lev_config, key=jax.random.PRNGKey(0))
 
         converter = lev_config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/hf_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/hf_model")
@@ -210,8 +209,7 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         torch_model.save_pretrained(f"{tmpdir}/hf_model")
 
-        Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=jax.random.PRNGKey(0))
+        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, lev_config, key=jax.random.PRNGKey(0))
 
         converter = lev_config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/hf_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/hf_model")

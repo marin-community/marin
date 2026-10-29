@@ -132,7 +132,7 @@ def test_snowball_hf_config_does_not_initialize_jax_backend():
 
 
 def test_snowball_hf_converter_matches_config_class():
-    # This is exactly the match HFCheckpointConverter.from_hf performs (by HfConfigClass name).
+    # This is exactly the match HfLmCheckpointConverter.from_hf performs (by HfConfigClass name).
     converter = SnowballConfig().hf_checkpoint_converter()
     assert converter.HfConfigClass is GrugMoeHfConfig
 
@@ -271,7 +271,7 @@ def test_snowball_requires_explicit_mesh_axes():
 def test_snowball_load_pretrained_machinery_is_exact():
     """Snowball survives load_pretrained's eval_shape-template + named_jit(from_state_dict) core.
 
-    HFCheckpointConverter.load_pretrained builds an abstract template with eqx.filter_eval_shape and
+    HfLmCheckpointConverter.load_pretrained builds an abstract template with eqx.filter_eval_shape and
     fills it inside haliax.named_jit; Snowball's explicit-mesh reshards must lower under both. This
     guards the marin-serve load path (LevanterBackend.load_model) without an on-disk checkpoint.
     """
