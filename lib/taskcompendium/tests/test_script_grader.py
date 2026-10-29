@@ -493,6 +493,30 @@ async def test_test_command_timeout_is_candidate_failure_but_preparation_failure
     assert result.diagnostics["stderr"] == "command failure"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("candidate_duration,expected_reward", [(2, 1.0), (4, 0.0)])
+async def test_slow_input_staging_preserves_the_candidate_time_limit(monkeypatch, candidate_duration, expected_reward):
+    original_run = VerifyitImageMachine.run
+    candidate = ("sh", "-c", "exit 0")
+
+    async def run(machine, command):
+        # Model a loaded worker: staging takes four seconds, independent of the candidate.
+        duration = 4 if command.argv[0] == "tar" else candidate_duration if command.argv == candidate else 0
+        if command.timeout is not None and duration > command.timeout:
+            return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(VerifyitImageMachine, "run", run)
+    task = arithmetic_task(
+        ScriptGrader(argv=candidate, reward=ExitCodeReward(), environment=GRADER_ENVIRONMENT, timeout=3)
+    )
+    result = await grade_in_sandbox(
+        task, answered(task, "12"), FixtureImageFactory(), replace(GRADER_MACHINE, startup_timeout=10)
+    )
+    assert result.status == Outcome.GRADED, result.error
+    assert result.reward == expected_reward
+
+
 @pytest.mark.parametrize(
     "reward,script,expected",
     [

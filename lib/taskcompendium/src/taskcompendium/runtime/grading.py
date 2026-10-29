@@ -314,12 +314,14 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
-async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float) -> GradeResult:
+async def _script_reward(
+    machine: Machine, grader: ScriptGrader, timeout: float, preparation_timeout: float | None
+) -> GradeResult:
     if isinstance(grader.reward, FileReward):
         paths = tuple(file.path for file in grader.reward.files)
         directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
         for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=timeout), "Cannot prepare reward files")
+            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
@@ -447,6 +449,8 @@ async def grade_in_sandbox(
     The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
     working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
+    Input unpacking and environment setup use ``machine_spec.startup_timeout``. The grader's
+    execution limit applies only to the grading command, so slow staging cannot consume its budget.
     """
     grading = _sandbox_grading(task, task_machine, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
@@ -560,6 +564,7 @@ async def _grade_staged(
                     grading.spec,
                     grading.grader,
                     grading.limit,
+                    preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
                 )
             finally:
@@ -579,32 +584,33 @@ async def _grade_on(
     grader: VerifyitGrader | ScriptGrader,
     timeout: float,
     *,
+    preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
     await machine.upload(archive_path, STAGING_ARCHIVE)
     await _run_checked(
         machine,
-        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=timeout, user=user),
+        Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=preparation_timeout, user=user),
         "Could not unpack grading inputs",
     )
     # The archive holds references and tests; protecting /tests does not protect a copy in /tmp.
     await _run_checked(
         machine,
-        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=timeout, user=user),
+        Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=preparation_timeout, user=user),
         "Could not remove the grading archive",
     )
     await _run_checked(
         machine,
-        Command(("mkdir", "-p", workspace), cwd="/", timeout=timeout),
+        Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
         "Could not initialize the grading workspace",
     )
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
-            Command(("sh", "-c", setup), timeout=timeout, user=user),
+            Command(("sh", "-c", setup), timeout=preparation_timeout, user=user),
             "Grading environment setup failed",
         )
     if spec is not None:
         return await _verifyit_reward(machine, spec, workspace, timeout)
     assert isinstance(grader, ScriptGrader)
-    return await _script_reward(machine, grader, timeout)
+    return await _script_reward(machine, grader, timeout, preparation_timeout)
