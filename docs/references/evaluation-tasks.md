@@ -101,11 +101,31 @@ the dataset protocol; compare old runs with explicit matching controls.
 ```bash
 OPENAI_API_KEY=unused uv run --package marin-core --group test python \
   -m experiments.evaluation.task_driver \
+  --local \
   --dataset scratch/eval-curation/evalchemy-math500 \
   --dataset scratch/eval-curation/evalchemy-piqa \
   --config run-config.json --endpoint-file endpoint.txt \
   --output scratch/eval-run
 ```
+
+Without `--local`, the driver submits a disposable Iris CPU worker to
+`cw-us-east-02a` and waits for completion. Use shared object-storage roots for
+both corpora and results:
+
+```bash
+OPENAI_API_KEY=unused uv run --package marin-core python \
+  -m experiments.evaluation.task_driver \
+  --cluster cw-us-east-02a \
+  --dataset s3://marin-us-east-02a/YOUR_CORPUS_ROOT \
+  --config run-config.json --endpoint-file endpoint.txt \
+  --output s3://marin-us-east-02a/YOUR_RUN_ROOT
+```
+
+The worker requests 4 CPUs, 32 GiB of memory, 64 GiB of disk and a 36-hour
+lifetime. `--cpu`, `--memory`, `--disk` and `--timeout` override these resources;
+`--job-name` names the job and `--no-wait` returns after submission. Choose a
+cluster in the same region as the corpora, output and inference endpoint. The
+endpoint must already serve the model recorded in the run configuration.
 
 `endpoint.txt` contains the OpenAI-compatible base URL. Use the credential
 environment variable appropriate to that endpoint; `--api-key-env` changes its
@@ -132,13 +152,24 @@ it cannot verify a provider's deployment independently. Judge responses retain
 their reported model identity. Keep endpoint URLs and credentials in the
 connection arguments, outside this secret-free run descriptor.
 
-Code and canonical instruction graders need a verifier machine. Add a
-`verifier_machine` object with `backend: "local"`, `network: "deny"`,
-`cpus`/`memory_mb`/`storage_mb`/`user: null`, `gpus: 0`,
-`startup_timeout: 300` and `cleanup_timeout: 30`. The CLI uses Shellbox's local
-sandbox, which is intended for trusted development inputs. Other backends can
-supply factories through the library `run_evaluation` API. Package locks, private
-tests and pinned NLP assets come from the published task's grader environment.
+Code and canonical instruction graders use Shellbox's `LocalMachineFactory`
+(bubblewrap) by default, with network access denied. The driver selects the Iris
+`CONTAINER_PROFILE_PRIVILEGED` CPU worker required to create bubblewrap's
+namespaces. Each Shellbox guest gets a private filesystem, read-only runtime
+mounts and explicit environment variables. Solver and judge connections stay in
+the coordinator's mounted secret files and do not enter grader machines or the
+run descriptor. Iris supplies the coordinator's storage credentials separately.
+
+An explicit `verifier_machine` or `task_machine` in the run configuration can
+override local machine resources and deadlines. The default verifier startup
+deadline is 600 seconds; cleanup uses `limits.cleanup_timeout`. The CLI supports
+the local Shellbox backend; other backends supply factories through the library
+`run_evaluation` API. `--local` requires a host that supports bubblewrap
+namespaces. There is no unsandboxed execution fallback.
+
+Package locks, private tests and pinned NLP assets come from the published
+task's grader environment. The environment builder includes Verifyit's base
+dependencies in each lock and its artifact identity.
 Local shared runtime caches use
 `~/.cache/marin/task-runtime`; mounted workers use `/cache/task-curation`.
 
