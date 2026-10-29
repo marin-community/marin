@@ -103,6 +103,19 @@ a single input and output axis. For instance, attention modules in Levanter typi
 When serializing these linear modules to state dicts (see the next section), Haliax will automatically flatten them. You should
 ensure that `out_first=True` is set on Linear modules if they're going to be loaded as PyTorch Linear modules.
 
+### Hugging Face checkpoint converters
+
+Language models use `HfLmCheckpointConverter` from `levanter.compat.hf_checkpoints`.
+It owns tokenizer metadata, vocabulary resizing, and initialization through
+`Model.init(Vocab, config, key=key)`. Update imports of the former
+`HFCheckpointConverter` name; there is no compatibility alias.
+
+Vision encoders use `HfVisionCheckpointConverter` and
+`VisionModelWithHfSerializationMixin`. Vision model classes initialize through
+`Model.init(config, key=key)`, and their config implements
+`to_hf_config(config_overrides=None)` and `from_hf_config(hf_config)`.
+Both converters share checkpoint I/O and shard export through `HfCheckpointIO`.
+
 ### Serialization to/from State Dicts
 
 PyTorch and Hugging Face Transformers use "state dicts" as their preferred serialization format, either as pickles or as the new [safetensors](https://github.com/huggingface/safetensors) format.

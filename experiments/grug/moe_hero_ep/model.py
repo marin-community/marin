@@ -29,7 +29,7 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.grug._moe.common import (
     _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _zero_dropped_assignments,
@@ -408,8 +408,8 @@ class GrugModelConfig:
     def hf_checkpoint_converter(
         self,
         ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+        return HfLmCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint,
             HfConfigClass=GrugMoeHfConfig,

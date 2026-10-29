@@ -308,7 +308,7 @@ def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path, monkeypa
 
     legacy_config = draccus.parse(LoraDpoConfig, str(config_path), args=[])
     monkeypatch.setattr(
-        "levanter.main.lora_dpo.HFCheckpointConverter.from_hf",
+        "levanter.main.lora_dpo.HfLmCheckpointConverter.from_hf",
         lambda *args, **kwargs: SimpleNamespace(default_config=Gpt2Config()),
     )
 

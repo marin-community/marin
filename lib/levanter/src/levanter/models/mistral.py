@@ -13,7 +13,7 @@ from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
@@ -84,8 +84,8 @@ class MistralConfig(LlamaConfig):
     # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
-    ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore
-        return HFCheckpointConverter(
+    ) -> HfLmCheckpointConverter["MistralConfig"]:  # type: ignore
+        return HfLmCheckpointConverter(
             self,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
