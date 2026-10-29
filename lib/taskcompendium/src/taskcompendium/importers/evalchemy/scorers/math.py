@@ -11,11 +11,11 @@ import threading
 
 from math_verify import parse, verify
 from sympy.core.relational import Relational
-
 from verifyit.adapters.completion import END_OF_TURN, final_text
+from verifyit.grade import Reward, invalid_task, scored
+
 from .amc import last_boxed_answer
 from .minerva import is_equiv, normalize_final_answer
-from verifyit.grade import Reward, invalid_task, scored
 
 CHAT_REQUEST_STOPS = END_OF_TURN[:4]
 

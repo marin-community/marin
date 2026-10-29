@@ -24,7 +24,6 @@ from fractions import Fraction
 import sympy
 from sympy.parsing.latex import parse_latex
 from sympy.parsing.latex.errors import LaTeXParsingError
-
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import GradingInfraError
 

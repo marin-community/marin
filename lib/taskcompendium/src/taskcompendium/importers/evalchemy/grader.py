@@ -72,7 +72,7 @@ def source_package(
     judge: JudgeSpec | None = None,
     timeout: float = 60,
 ) -> GraderPackage:
-    """Run the pinned source scorer in a fresh Shellbox verifier machine."""
+    """Package the pinned source scorer for a fresh Shellbox verifier machine."""
     grader = ScriptGrader(
         argv=("python3", "-m", "source_grader.main", scorer),
         cwd="/tests",

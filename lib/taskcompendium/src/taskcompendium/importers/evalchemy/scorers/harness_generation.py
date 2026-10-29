@@ -9,9 +9,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from verifyit.adapters.completion import END_OF_TURN
-from verifyit.adapters.harness_native import exact_match
 from verifyit.grade import InvalidTask, Reward, scored
-from verifyit.modes.grade_exact import grade_collection_f1
+from verifyit.modes.grade_exact import grade_collection_f1, grade_normalized_aliases
 
 INVALID_ANSWER = "[invalid]"
 GSM8K_STOPS = tuple("Question:" if stop == "\nQuestion:" else stop for stop in END_OF_TURN)
@@ -215,7 +214,7 @@ def grade_harness_generation_candidate(profile: str, references: tuple[tuple[str
         regexes = (r"\b(?:The |the |An |A |The |a |an )",) if profile == "nq_open" else ()
         metrics = {
             f"exact_match,{name}": (
-                exact_match(
+                grade_normalized_aliases(
                     candidate, answers, ignore_case=True, ignore_punctuation=True, regexes_to_ignore=regexes
                 ).reward
             )

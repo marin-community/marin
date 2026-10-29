@@ -32,7 +32,11 @@ from taskcompendium.importers.evaluation_harness import (
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import BASIC_GRADER, MATH_GRADER
+from experiments.post_training.task_curation.datasets.evalchemy.grader_environments import (
+    ALIAS_GRADER,
+    BASIC_GRADER,
+    MATH_GRADER,
+)
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import EvalDataSet, curate
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -431,7 +435,12 @@ def generation_sources() -> list[RlDataSource[EvalDataSet]]:
                         ),
                         inputs={"fewshot": HfSource(repo, revision, (pool,), SourceFormat.PARQUET)} if shots else {},
                         convert=partial(convert_generation_document, benchmark=name),
-                        grader=MATH_GRADER if profile == "gsm8k" else BASIC_GRADER,
+                        grader={
+                            "gsm8k": MATH_GRADER,
+                            "triviaqa": ALIAS_GRADER,
+                            "nq_open": ALIAS_GRADER,
+                            "drop": BASIC_GRADER,
+                        }[profile],
                         version=scorer_revision("harness_generation"),
                         intended_use=IntendedUse.EVAL,
                     ),
