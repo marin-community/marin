@@ -7,8 +7,10 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from haliax import Axis
+from jax.sharding import AxisType, Mesh, PartitionSpec as P
 
 import levanter.inference.engine as engine_module
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
@@ -125,3 +127,42 @@ def test_generate_completes_requests_across_prefill_and_slot_limits(max_rounds, 
     assert [len(values) for values in result.logprobs] == list(map(len, expected))
     # A second batch must reuse the released slots and pages without retaining earlier output.
     assert service.generate(requests[:1]).tokens == expected[: generation_counts[0]]
+
+
+class ShardedLogitModel(DummyModel):
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids):
+        logits, cache = super().decode(input_ids, kv_cache, batch_info, pos_ids)
+        return hax.NamedArray(jax.sharding.reshard(logits.array, P("data", "model")), logits.axes), cache
+
+
+def test_generate_samples_explicit_token_and_vocabulary_shards():
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, -1),
+        ("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    with jax.set_mesh(mesh):
+        service = InferenceEngine.from_model_with_config(
+            ShardedLogitModel(vocab_size=8 * jax.device_count()),
+            None,
+            InferenceEngineConfig(
+                max_seq_len=8,
+                max_rounds=2,
+                max_pages=8,
+                max_seqs=2,
+                page_size=4,
+                max_queued_tokens=2,
+                max_seqs_in_prefill=1,
+                max_prefill_size=4,
+                compute_dtype=jnp.float32,
+            ),
+        )
+        request = Request(
+            prompt_tokens=[1, 2, 3, 4],
+            request_id=10,
+            decode_params=dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.array(7)),
+            n_generations=2,
+        )
+        result = service.generate([request])
+    assert result.tokens == [[3, 3, 3], [3, 3, 3]]
+    assert all(np.isfinite(values).all() for values in result.logprobs)
