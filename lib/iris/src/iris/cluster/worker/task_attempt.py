@@ -66,7 +66,12 @@ from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
-from iris.preemption import PREEMPTION_GRACE_ENV, SHUTDOWN_MARGIN_SECONDS, preemption_grace_seconds
+from iris.preemption import (
+    DEFAULT_WORKER_STOP_TIMEOUT_SECONDS,
+    PREEMPTION_GRACE_ENV,
+    SHUTDOWN_MARGIN_SECONDS,
+    preemption_grace_seconds,
+)
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
@@ -323,6 +328,12 @@ class TaskAttempt:
         # it across worker restarts.
         self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
+        env = self.request.environment.env_vars
+        self.termination_timeout_ms = (
+            (preemption_grace_seconds(env) + SHUTDOWN_MARGIN_SECONDS) * 1000
+            if PREEMPTION_GRACE_ENV in env
+            else DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000
+        )
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self.output_dir: Path | None = None
@@ -494,10 +505,7 @@ class TaskAttempt:
         if self.status not in _KILLABLE_STATES:
             return False
         if term_timeout_ms is None:
-            env = self.request.environment.env_vars
-            term_timeout_ms = (
-                (preemption_grace_seconds(env) + SHUTDOWN_MARGIN_SECONDS) * 1000 if PREEMPTION_GRACE_ENV in env else 5000
-            )
+            term_timeout_ms = self.termination_timeout_ms
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
         if not self.has_container:

@@ -497,6 +497,40 @@ def test_kill_running_task_allows_graceful_exit_without_force(mock_worker, mock_
     assert not forced_while_running.is_set()
 
 
+def test_worker_shutdown_waits_for_graceful_task_exit(mock_worker, mock_runtime):
+    stopped = threading.Event()
+    handle = create_mock_container_handle()
+    handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+    handle.stop_hook = lambda force: stopped.set() if not force else None
+    mock_runtime.create_container = Mock(return_value=handle)
+
+    request = create_run_task_request()
+    request.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = "1"
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    mock_worker.stop()
+
+    assert task.status == job_pb2.TASK_STATE_KILLED
+    assert handle.stop_calls[0] == {"force": False}
+    assert not any(call["force"] for call in handle.stop_calls)
+
+
+def test_invalid_preemption_grace_rejected_before_task_starts(mock_worker):
+    request = create_run_task_request()
+    request.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = "invalid"
+
+    with pytest.raises(ValueError, match="invalid literal"):
+        mock_worker.submit_task(request)
+
+    assert mock_worker.list_tasks() == []
+
+
 def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
     # Create a handle that stays running until killed

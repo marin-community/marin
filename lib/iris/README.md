@@ -73,10 +73,11 @@ python -m iris.jax.multigpu_main --nproc 8 -- python train.py
 The supervisor assigns each child a process index and local device IDs. Iris
 runs the submitted command as given, so callers must add the wrapper themselves.
 Set `IRIS_PREEMPTION_GRACE_SECONDS` in the task environment to give a
-SIGTERM-aware command time to finish. The multi-GPU supervisor waits that many
+SIGTERM-aware command 1 to 110 seconds to finish. The multi-GPU supervisor waits that many
 seconds before sending SIGKILL; the Kubernetes task Pod and worker stop path
 allow five more seconds. Without the setting, the supervisor retains its
-10 second grace. A stalled command is still force-terminated at the deadline.
+10 second grace. The GCP worker container permits 120 seconds for its own
+shutdown. A stalled command is still force-terminated at the deadline.
 
 ## Architecture
 

@@ -62,6 +62,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
+from iris.preemption import DEFAULT_WORKER_STOP_TIMEOUT_SECONDS, SHUTDOWN_MARGIN_SECONDS
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -416,10 +417,7 @@ class Worker:
                 a.resume_monitoring()
 
             def _stop_adopted(a: TaskAttempt = attempt) -> None:
-                try:
-                    a.stop(force=True)
-                except RuntimeError:
-                    pass
+                a.kill()
 
             self._task_threads.spawn(
                 target=_run_adopted,
@@ -458,9 +456,8 @@ class Worker:
         """
         if not preserve_containers:
             # Stop task threads first so running tasks exit before infrastructure
-            # tears down. ThreadContainer.stop() signals each thread's stop_event,
-            # which the _run_task watcher bridges to attempt.should_stop + container kill.
-            self._task_threads.stop()
+            # tears down. Each watcher sends SIGTERM and waits before escalating.
+            self._task_threads.stop(timeout=self._task_stop_timeout())
         else:
             logger.info("Preserving %d running containers for adoption by new worker", len(self._tasks))
             # Detach task threads from the parent so _threads.stop() won't
@@ -638,7 +635,7 @@ class Worker:
         # Stop all running task threads so they exit cleanly before we
         # kill containers.  Without this, orphaned threads discover their
         # containers are gone and log confusing "Container not found" errors.
-        self._task_threads.stop()
+        self._task_threads.stop(timeout=self._task_stop_timeout())
 
         # Clear task tracking
         with self._lock:
@@ -651,6 +648,13 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         logger.info("Worker state reset complete")
+
+    def _task_stop_timeout(self) -> Duration:
+        with self._lock:
+            timeout_ms = max(
+                (task.termination_timeout_ms for task in self._tasks), default=DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000
+            )
+        return Duration.from_ms(timeout_ms + SHUTDOWN_MARGIN_SECONDS * 1000)
 
     # Task management methods
 
@@ -797,16 +801,13 @@ class Worker:
         with self._lock:
             self._tasks.append(attempt)
 
-        # Start execution in a monitored non-daemon thread. When stop() is called,
-        # the on_stop callback kills the container so attempt.run() exits promptly.
+        # Start execution in a monitored non-daemon thread. The on_stop callback
+        # gives the container its configured grace before forcing termination.
         def _run_task(stop_event: threading.Event) -> None:
             attempt.run()
 
         def _stop_task() -> None:
-            try:
-                attempt.stop(force=True)
-            except RuntimeError:
-                pass
+            attempt.kill()
 
         mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
         attempt.thread = mt._thread
