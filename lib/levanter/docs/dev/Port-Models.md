@@ -114,6 +114,7 @@ Vision encoders use `HfVisionCheckpointConverter` and
 `VisionModelWithHfSerializationMixin`. Vision model classes initialize through
 `Model.init(config, key=key)`, and their config implements
 `to_hf_config(config_overrides=None)` and `from_hf_config(hf_config)`.
+Pass vision checkpoint references as `RepoRef(model_name_or_path, revision=None)`.
 Both converters share checkpoint I/O and shard export through `HfCheckpointIO`.
 
 ### Serialization to/from State Dicts
