@@ -21,10 +21,10 @@ launcher interface; Snowball steps use the fixed `PRESET_REVISION` instead.
 | speed-medium | 40 H100, east | ten synchronous updates, exactly 4,096 tokens per answer | median update time over updates 2–10 and staleness-0 k3 mismatch |
 | learning-medium | 40 H100, east | 25 synchronous RLOO-N updates | final panel equal-family mean; training metrics over updates 21–25 |
 | data-medium | 40 H100, east | learning-medium on candidate tasks | same fixed panel and recipe as learning-medium |
-| train-long | 112 H100, Reno; optional40 H100, east | asynchronous training, default 100 updates | checkpoints, in-run panel and final 910-task evaluation; no verdict |
+| train-long | 112 H100, Reno; optional 40 H100, east | asynchronous training, default 100 updates | checkpoints, in-run panel and final 910-task evaluation; no verdict |
 
 East means `cw-us-east-02a`; Reno means `cw-rno2a`. The 40-H100 layout has 32
-policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and 8192
+policy GPUs and 8 engine GPUs, 128 prompts×4 answers, a 24,576-token window and 8,192
 reply tokens. The 112-H100 layout has 64 policy GPUs and 48 engine GPUs, 512×16,
 a 65,536-token window and 32,768 reply tokens. Both use staleness 2 for train-long;
 medium runs use staleness 0. East uses sockets; Reno uses InfiniBand.
@@ -114,7 +114,6 @@ the submitting environment; every run forwards its required keys through Iris.
 | no-grading-timer | generation includes grader tails; add separate grader timings |
 | eval-uses-training-sampling | Panel answers use the training temperature because the engine applies `generator.sampling_params` to native requests. Separate evaluation sampling belongs with the Phase 1.5 panel and new controls. |
 | mismatch-is-agreement | agreement can miss shared errors; learning remains a separate check |
-| harbor-on-daytona | the Harbor fallback and its evidence run are a follow-up PR |
 
 Speed-short measures engines only. A speed claim also needs speed-medium, whose
 mismatch guard compares engine and trainer log-probabilities on trained tokens.
