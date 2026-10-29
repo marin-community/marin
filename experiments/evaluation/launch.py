@@ -221,6 +221,7 @@ class _ResolvedDefinition:
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
+    egress_allow: tuple[str, ...]
 
 
 def _resolve_definitions(
@@ -267,6 +268,7 @@ def _resolve_definitions(
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
+                        egress_allow=definition.egress_allow_for(config),
                     ),
                 )
             )
@@ -291,6 +293,7 @@ def _resolve_definitions(
                     ),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
+                    egress_allow=definition.egress_allow_for(config),
                 ),
             )
         )
@@ -451,6 +454,7 @@ def build_evaluation_batch(
         instances=spec.instances,
         judge=judge,
         secret_env=secret_env,
+        egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,
     )
 
@@ -551,6 +555,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
+        egress_allow=batch.egress_allow,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )
