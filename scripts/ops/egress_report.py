@@ -53,8 +53,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # us-central2; the job runs there and stages its outputs there so every large
 # read is same-region.
 LOG_REGION = "us-central2"
-DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
-JOB_TIMEOUT = Duration.from_seconds(30 * 60)
+# The job hands its report files back through this lifecycle-managed prefix, since
+# Iris discards a callable's return value.
+STAGING_DIR = "gs://marin-us-central2/tmp/egress-report"
+# Leaves the runner's 30-minute workflow timeout room to submit, fetch and publish.
+JOB_TIMEOUT = Duration.from_seconds(20 * 60)
 REPORT_FILES = (SUMMARY_JSON, REPORT_MD, APPENDIX_CSV)
 # The scan's DuckDB threads and memory limit follow this request (cross_region.SCAN_MEMORY_FRACTION).
 JOB_RESOURCES = ResourceSpec(cpu=16, memory="16GB", disk="5GB")
@@ -164,24 +167,18 @@ def _compose_message(
 @click.option("--hours", type=float, default=24.0, help="Analysis window in hours. Defaults to 24.")
 @click.option("--channel", default="internal-discuss", help="Discord channel name.")
 @click.option(
-    "--staging-dir",
-    default=DEFAULT_STAGING_DIR,
-    show_default=True,
-    help=f"{LOG_REGION} GCS prefix the Iris job writes its report files under.",
-)
-@click.option(
     "--dry-run/--no-dry-run",
     default=False,
     help="Skip gist creation and Discord post; print the message that would have been sent.",
 )
-def main(hours: float, channel: str, staging_dir: str, dry_run: bool) -> None:
+def main(hours: float, channel: str, dry_run: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     outdir = Path(tempfile.mkdtemp(prefix="egress-report-"))
     logging.info("Workdir: %s", outdir)
 
     now = dt.datetime.now(dt.UTC)
     run_id = now.strftime("%Y%m%d-%H%M%S")
-    output_dir = str(StoragePath(staging_dir) / run_id)
+    output_dir = str(StoragePath(STAGING_DIR) / run_id)
     _run_cross_region_on_iris(hours, now.isoformat(), output_dir, run_id)
     summary = _fetch_outputs(output_dir, outdir)
 

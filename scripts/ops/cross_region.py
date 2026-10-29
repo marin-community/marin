@@ -49,6 +49,8 @@ GS_RE = re.compile(r"gs://[^\s'\"`]+")
 
 # Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
 LOG_NAMESPACE = "log"
+# Where finelog keeps object-backed tables under its remote_log_dir.
+LOG_TABLE_PREFIX = ("_finelog", "tables")
 # Repository-relative Iris config for the cluster whose task logs are analyzed.
 DEFAULT_IRIS_CONFIG = "lib/iris/config/marin.yaml"
 
@@ -907,11 +909,10 @@ def run_analysis(
     with gcs_scan_connection(TaskResources.from_environment()) as con:
         summary = analyze(iter_log_rows(con, sources, window), db_path, window)
     logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
+    # Segments are read in place, so no log files are cached locally.
+    summary["local_log_files"] = []
     summary["local_db_path"] = str(db_path)
-    summary["remote_log_dir"] = remote_log_dir
-    summary["log_catalog_generation"] = pin.catalog_generation
-    summary["log_segments_scanned"] = len(log_segments)
-    summary["log_bytes_scanned"] = sum(segment.byte_size for segment in log_segments)
+    summary["remote_logs_dir"] = f"{remote_log_dir}/{'/'.join(LOG_TABLE_PREFIX)}/{LOG_NAMESPACE}"
     return summary
 
 
@@ -953,7 +954,7 @@ def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Pat
     help="Optional remote checkpoint directory to use instead of the latest checkpoint.",
 )
 @click.option(
-    "--lookback-hours",
+    "--download-lookback-hours",
     type=float,
     default=DEFAULT_LOOKBACK_HOURS,
     show_default=True,
@@ -980,7 +981,7 @@ def main(
     hours: float,
     end_time: str | None,
     checkpoint_dir: str | None,
-    lookback_hours: float,
+    download_lookback_hours: float,
     summary_json: str | None,
     appendix_csv: str | None,
     report_md: str | None,
@@ -990,7 +991,7 @@ def main(
     out_path.mkdir(parents=True, exist_ok=True)
     logging.info(f"Output directory: {out_path}")
 
-    summary = run_analysis(config, window, lookback_hours, checkpoint_dir, out_path)
+    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path)
 
     summary_json_path = Path(summary_json) if summary_json else out_path / SUMMARY_JSON
     appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / APPENDIX_CSV
@@ -1010,7 +1011,7 @@ def main(
                 "report_md": str(report_md_path),
                 "gist_command": f"gh gist create --desc {gist_desc!r} {report_md_path} {appendix_csv_path}",
                 "local_db_path": summary["local_db_path"],
-                "log_segments_scanned": summary["log_segments_scanned"],
+                "local_log_files": summary["local_log_files"],
                 "cross_region_log_lines": summary["cross_region_log_lines"],
                 "cross_region_path_mentions": summary["cross_region_path_mentions"],
                 "top_pairs": list(summary["cross_region_region_pairs"].items())[:10],

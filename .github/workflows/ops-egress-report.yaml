@@ -20,8 +20,7 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
-    # The Iris job's own timeout is 30 min (egress_report.py JOB_TIMEOUT).
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
