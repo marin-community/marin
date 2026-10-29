@@ -21,11 +21,19 @@ Chunked prefill stays enabled with an 8,192-token scheduling budget, and CUDA
 graphs remain enabled. The sequence cap also applies to training generation
 and reduces concurrency.
 
-On the fixed 100-task panel, two direct-SFT engines produced identical response
-tokens, text, and grades across two passes each. Each pass generated 469,450
-response tokens with mean rollout reward 0.2002. This finite comparison does
-not establish universal bitwise determinism. Reproduction through normal
-Megatron initialization and weight broadcast remains unverified.
+On the fixed 100-task panel, six evaluations across four fresh engine startups
+produced identical prompt and response tokens, text, grades, and recorded
+operational outcomes. Four evaluations used direct SFT loading. Two used normal
+Megatron initialization and NCCL `expert_block` weight transfer, then exited
+before any optimizer step. Each evaluation generated 469,450 response tokens
+with mean rollout reward 0.2002 on H100s with Grug-67B and vLLM revision
+`39e62869693c`.
+
+Batch-invariant arithmetic with concurrent scheduling still produced different
+answers between passes, including with prefix caching disabled and eager
+execution. The one-sequence profile reproduced this fixed panel; the comparison
+does not establish universal bitwise determinism or identify the GPU operation
+responsible for the batched variation. Training throughput has not been measured.
 
 ## Make or update tasks
 
