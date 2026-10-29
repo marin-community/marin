@@ -407,15 +407,15 @@ def _load_run(path: str, preset: presets.Preset, inputs: GateInputs = GateInputs
         for metric in preset.guards
     )
     return RunData(
-        path,
-        presets.artifact_record(path),
-        terminal,
-        _window_values(preset, metrics),
-        table,
-        panel_ids,
-        tuple(invariants),
-        missing,
-        pa.concat_tables(initial_scores) if initial_scores else table.slice(0, 0),
+        path=path,
+        record=presets.artifact_record(path),
+        terminal=terminal,
+        values=_window_values(preset, metrics),
+        scores=table,
+        panel_ids=panel_ids,
+        invariants=tuple(invariants),
+        missing_tokens=missing,
+        initial_scores=pa.concat_tables(initial_scores) if initial_scores else table.slice(0, 0),
     )
 
 
