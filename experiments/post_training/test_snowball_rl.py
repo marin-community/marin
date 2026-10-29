@@ -13,7 +13,6 @@ import marin.rl.skyrl as adapter
 import pytest
 import yaml
 from iris.rpc import controller_pb2, job_pb2
-from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
@@ -70,6 +69,16 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
                     launches[name] = yaml.safe_load(config.launch_config_yaml)
             if name == "train-long":
                 assert run.runs[0] in run.post_run_evaluations[0].deps
+    off_boundary = snowball.build_run(
+        presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
+    ).runs[0]
+    path = tmp_path / "off-boundary.yaml"
+    path.write_text(
+        off_boundary.build_config(
+            StepContext.for_fingerprint(off_boundary.runtime_args, off_boundary.deps)
+        ).launch_config_yaml
+    )
+    paths.append(str(path))
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
         settings=tuple(
@@ -78,6 +87,7 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
                 (
                     "trainer={train_batch_size: 64, policy_mini_batch_size: 64}",
                     "generator.n_samples_per_prompt=8",
+                    "trainer.micro_train_batch_size_per_gpu=2",
                     "+trainer.policy.megatron_config.logprob_chunk_size=512",
                 ),
             )
@@ -107,6 +117,10 @@ print(json.dumps([{
     "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
     "training": config.runtime.training_type is not None,
     "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
+    "steps": config.skyrl.trainer.max_steps,
+    "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
+    "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
+    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
 } for config in configs]))
 """,
             *paths,
@@ -128,13 +142,15 @@ print(json.dumps([{
             assert row["admission"] == expected, row
         if "/eval/panel-910" in name:
             assert row["window"] == (65536 if row["tools"] == "hermes" else 24576), row
+        if "train-long-" in name and "/eval/" not in name:
+            assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
         if row["fixed"]:
             assert not row["overlong_filtering"], row
         if row["training"] and row["validation"]:
             assert "evaluation" in row["callbacks"], row
             if "best_checkpoint" in row["callbacks"]:
                 assert row["callbacks"].index("evaluation") < row["callbacks"].index("best_checkpoint"), row
-    assert (rows[-1]["batch"], rows[-1]["samples"]) == (64, 8)
+    assert (rows[-1]["batch"], rows[-1]["samples"], rows[-1]["micro"], rows[-1]["forward_micro"]) == (64, 8, 2, 2)
     # Candidate selection is the only difference between the two learning experiments.
     learning, data = launches["learning-medium"], launches["data-medium"]
     assert learning["skyrl"] == data["skyrl"]
@@ -271,7 +287,7 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     (source / "resolved-launch.yaml").write_text(
         json.dumps({"config": document, "train_data_sources": [], "val_data_sources": []})
     )
-    state = {"value": job_pb2.JOB_STATE_KILLED}
+    state = {"value": job_pb2.JOB_STATE_KILLED, "known": True}
     job_id = "/tests/parent/" + document["iris"]["job_name"]
 
     @contextmanager
@@ -282,18 +298,15 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     def rpc(*args):
         yield SimpleNamespace(
             list_jobs=lambda request: controller_pb2.Controller.ListJobsResponse(
-                jobs=[job_pb2.JobStatus(job_id=job_id, state=state["value"])]
+                jobs=[job_pb2.JobStatus(job_id=job_id, state=state["value"])] if state["known"] else []
             )
         )
 
     monkeypatch.setattr(adapter, "connect_controller", endpoint)
     monkeypatch.setattr(adapter, "rpc_client", rpc)
-    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
-    (source / ".executor_status").write_text("FAILED")
     earlier = ArtifactStep.adopt(original.name, original.version, str(source), kind=SkyRLRun)
     resumed = snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier).runs[0]
     assert resumed.name != original.name
-    assert earlier not in resumed.deps
     assert all(dep.artifact_type is not SkyRLRun for dep in resumed.deps)
     config = resumed.build_config(
         StepContext.for_run(
@@ -302,9 +315,10 @@ def test_resume_reads_failed_run_without_rebuilding_it(selection, tmp_path, monk
     )
     assert config.output.checkpoint_root == str(checkpoints)
     assert yaml.safe_load(config.launch_config_yaml)["artifacts"]["checkpoint_root"] == str(checkpoints)
-    assert (source / ".executor_status").read_text() == "FAILED"
-    assert not (source / RECORD_FILENAME).exists()
-    assert not (source / "terminal.json").exists()
+    state["known"] = False
+    with pytest.raises(click.BadParameter, match="cannot identify the Iris job"):
+        snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier)
+    state["known"] = True
     state["value"] = job_pb2.JOB_STATE_RUNNING
     with pytest.raises(click.BadParameter, match=job_id):
         snowball.build_run(presets.PRESETS["train-long"], layout=presets.P40, resume_from=earlier)

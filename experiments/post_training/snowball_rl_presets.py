@@ -193,11 +193,19 @@ def task_manifest(root: StoragePath) -> dict[str, dict]:
 
 
 def read_text(path: str | StoragePath) -> str:
-    return StoragePath(path).read_text()
+    fs, key = filesystem_for(str(path))
+    with fs.open(key, "rt") as stream:
+        return stream.read()
 
 
 def paths(pattern: StoragePath) -> list[StoragePath]:
-    return sorted(pattern.glob(), key=str)
+    fs, key = filesystem_for(str(pattern))
+    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
+
+
+def exists(path: str | StoragePath) -> bool:
+    fs, key = filesystem_for(str(path))
+    return fs.exists(key)
 
 
 class PanelEvaluator:
@@ -654,6 +662,7 @@ BATCH_SETTINGS = {
     "trainer.train_batch_size": "train_batch_size",
     "trainer.policy_mini_batch_size": "policy_mini_batch_size",
     "generator.n_samples_per_prompt": "n_samples_per_prompt",
+    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
 _COMPARISON_KEYS = {
     "trainer.max_steps",
@@ -746,8 +755,8 @@ def artifact_prefix(cluster: str) -> str:
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
-def artifact_record(step: ArtifactStep) -> ArtifactRecord:
-    return ArtifactRecord.model_validate_json(read_text(StoragePath(step.path()) / RECORD_FILENAME))
+def artifact_record(path: str) -> ArtifactRecord:
+    return ArtifactRecord.model_validate_json(read_text(StoragePath(path) / RECORD_FILENAME))
 
 
 def selection_artifact(value: str) -> ArtifactStep:
@@ -765,11 +774,11 @@ def published_artifact(value: str) -> ArtifactStep:
         raise click.BadParameter("use an immutable artifact version instead of dev")
     for layout in (P40, L112):
         root = str(StoragePath(artifact_prefix(layout.cluster)) / name / version)
-        if (StoragePath(root) / "resolved-launch.yaml").isfile():
+        if exists(StoragePath(root) / "resolved-launch.yaml"):
             return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
         path = StoragePath(root) / RECORD_FILENAME
-        if path.isfile():
-            record = ArtifactRecord.model_validate_json(path.read_text())
+        if exists(path):
+            record = ArtifactRecord.model_validate_json(read_text(path))
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")

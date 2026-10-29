@@ -701,7 +701,13 @@ class SkyRLLaunchResponse(BaseModel):
     iris_job_id: str | None = None
     failure: str | None = None
     iris_job_state: str | None = None
+    provenance: dict | None = None
+    run_id: str | None = None
     model: _SkyRLTerminalModel | None = None
+
+
+class SkyRLReceiptLookupError(ValueError):
+    """The recorded Iris job cannot be identified uniquely."""
 
 
 class SkyRLLaunchReceipt(BaseModel):
@@ -712,16 +718,15 @@ class SkyRLLaunchReceipt(BaseModel):
 
 def read_skyrl_launch_config(run_output: str) -> dict:
     """Read the native resolved-launch envelope's compiled configuration."""
-    return yaml.safe_load(StoragePath(prefix_join(run_output, "resolved-launch.yaml")).read_text())["config"]
+    fs, key = filesystem_for(prefix_join(run_output, "resolved-launch.yaml"))
+    return yaml.safe_load(fs.cat(key))["config"]
 
 
 def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     terminal = prefix_join(run_output, "terminal.json")
     fs, key = filesystem_for(terminal)
     if fs.exists(key):
-        return SkyRLLaunchReceipt.model_validate(
-            {**json.loads(StoragePath(terminal).read_text()), "receipt_uri": terminal}
-        )
+        return SkyRLLaunchReceipt.model_validate({**json.loads(fs.cat(key)), "receipt_uri": terminal})
     resolved = prefix_join(run_output, "resolved-launch.yaml")
     fs, key = filesystem_for(resolved)
     if not fs.exists(key):
@@ -730,9 +735,7 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
     attempt = prefix_join(config["artifacts"]["attempts_root"], f"{config['run']['attempt_id']}.json")
     fs, key = filesystem_for(attempt)
     if fs.exists(key):
-        return SkyRLLaunchReceipt.model_validate(
-            {**json.loads(StoragePath(attempt).read_text()), "receipt_uri": attempt}
-        )
+        return SkyRLLaunchReceipt.model_validate({**json.loads(fs.cat(key)), "receipt_uri": attempt})
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:
@@ -753,7 +756,7 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
         jobs = response.jobs
     matches = [job for job in jobs if str(JobName.from_wire(job.job_id)).rsplit("/", 1)[-1] == name]
     if len(matches) != 1:
-        raise ValueError(f"cannot identify the Iris job {name}; its state must be known before resume")
+        raise SkyRLReceiptLookupError(f"cannot identify the Iris job {name}; its state must be known before resume")
     job = matches[0]
     state = "running"
     if is_job_finished(job.state):

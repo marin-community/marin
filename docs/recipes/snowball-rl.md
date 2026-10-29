@@ -71,10 +71,7 @@ Create candidates through [task curation](../references/task-curation.md), using
 the admitted FULL corpus and immutable recipe versions. The manifest provides
 task IDs, family, AAII category, agentic flag and grader kind.
 
-`PanelEvaluator` reads the run's own evaluation dumps, joins metadata by TaskSpec
-ID and keeps attempts and weight steps separate. The equal-family mean first
-averages each task's scored answers, then tasks within a family, then families.
-It reports scored coverage separately.
+`PanelEvaluator` supplies native evaluation callbacks, sampling settings and versioned validation data sources.
 
 Learning/data medium evaluates all 910 tasks at the end; `--init` adds
 update 0. Train-long evaluates the fixed 100-task panel before training and every 10 updates,
@@ -83,8 +80,7 @@ Metrics are in `exports/metrics/step-*.json`; per-answer JSONL is under
 `exports/dumped_evals/`. The canonical `terminal.json` records the result and Iris
 job ID. Inspect both the artifacts and job before treating a run as successful.
 
-The `Evaluator` interface separates configuration, callbacks and score rows from
-presets. Harbor-on-Daytona support is a follow-up; internal panels are the current
+The `Evaluator` interface supplies configuration, callbacks and required environment names for presets. Harbor-on-Daytona support is a follow-up; internal panels are the current
 implementation. Training tasks with remote judges require `TOGETHER_API_KEY` in
 the submitting environment; every run forwards its required keys through Iris.
 
