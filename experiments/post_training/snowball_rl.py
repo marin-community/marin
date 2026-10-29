@@ -435,11 +435,11 @@ def build_run(
             checkpoint_root=checkpoint_root,
         )
         runs.append(run)
-    gate = None
-    if preset.name in snowball_rl_gate.CONTROLS and not control:
-        gate = snowball_rl_gate.gate_step(
-            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init)
-        )
+    gate = (
+        snowball_rl_gate.gate_step(preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init))
+        if preset.name in snowball_rl_gate.CONTROLS and not control
+        else None
+    )
     return SnowballRun(tuple(runs), gate)
 
 
@@ -494,16 +494,12 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         )
     verdict = {}
     if run.gate is not None:
-        execution = next(value for value in run.runs[0].runtime_args.values() if isinstance(value, IrisSkyRLExecution))
-        path = StoragePath(run.gate.path(prefix=presets.artifact_prefix(execution.cluster))) / "gate_report.json"
+        path = (
+            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))) / "gate_report.json"
+        )
         if presets.exists(path):
             report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
-            verdict = {
-                "verdict": report.verdict.value,
-                "label": report.label.value if report.label else None,
-                "reason": report.reason,
-                "report": str(path),
-            }
+            verdict = {"report": str(path), **report.model_dump(mode="json", include={"verdict", "label", "reason"})}
             changes, reason = _changed_paths(
                 report.control.main_commit,
                 ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
