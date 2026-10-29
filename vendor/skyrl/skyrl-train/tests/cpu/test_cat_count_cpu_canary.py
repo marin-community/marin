@@ -341,6 +341,7 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
     root = tmp_path / "generate"
     cfg = cat_count_config(root, cat_count_policy)
     environment_configs = OmegaConf.to_container(cfg.environment.task_sessions, resolve=True)
+
     def task(n, identifier, extra_info):
         row = {
             "prompt": [{"role": "user", "content": PROMPT.format(N=n)}],

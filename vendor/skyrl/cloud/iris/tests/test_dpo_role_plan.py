@@ -1,7 +1,11 @@
 import pytest
 
 from cloud.iris.role_plan import (
-    ModelRoleKind, RoleExecution, derive_num_nodes, derive_role_plan, derive_generation_role_plan,
+    ModelRoleKind,
+    RoleExecution,
+    derive_num_nodes,
+    derive_role_plan,
+    derive_generation_role_plan,
 )
 
 

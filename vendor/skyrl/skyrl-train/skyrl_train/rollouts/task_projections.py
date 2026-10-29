@@ -1,5 +1,6 @@
 """Convert common rollout records into whole-trajectory or per-step training data."""
 
+from collections import Counter
 from collections.abc import Sequence
 import copy
 from dataclasses import dataclass, replace
@@ -510,7 +511,9 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
     outcomes = Counter(rollout.grade.status for rollout in rollouts)
-    metrics.update({f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome})
+    metrics.update(
+        {f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome}
+    )
     metrics[f"{GENERATE_OUTCOME_METRIC_PREFIX}rollout_failure"] = float(
         sum(rollout.failure is not None for rollout in rollouts)
     )
