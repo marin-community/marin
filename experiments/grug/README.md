@@ -73,13 +73,21 @@ discovery ignores directories without a completed `metadata.json` marker.
 After committing a preemption checkpoint, the trainer exits with SIGTERM status
 so Iris retries the task instead of reporting partial training as complete.
 
-Grug dispatch gives Iris tasks a 60 second shutdown budget. Override it on the
-launching job with `-e IRIS_PREEMPTION_GRACE_SECONDS <seconds>`; the dispatcher
-forwards that setting to training tasks. Values from 1 to 110 seconds are
-supported. Iris gives the task Pod and worker
-five additional seconds before force termination. The 60 second value has not
-been validated. Measure the slowest training step, pending save, commit, and
-process teardown before choosing a production value.
+Grug dispatch sets `JobRequest.termination_grace` to 60 seconds. Override it
+with the `termination_grace=Duration.from_seconds(...)` argument to
+`dispatch_grug_training_run`. Iris validates values from 1 to 110 seconds when
+accepting the job and preserves the resolved value across retries and federation.
+The supervisor receives that budget; the task Pod and worker receive five
+additional seconds for teardown.
+
+A controlled two-H100 base-model probe with remote CoreWeave checkpoints passed
+preemption during a step and an async save, exact restore, and continuation with
+the same batches. Shutdown took 8.75 and 10.22 seconds for that small synthetic
+model. This does not establish a 60-second budget for production-size checkpoints.
+Measure the slowest training step, pending save, commit, and process teardown
+before choosing a production value. See the
+[validation record](https://github.com/marin-community/marin/pull/10774#issuecomment-6501275454)
+for the tested revision and remaining limits.
 
 ## Visual diff for template variants
 

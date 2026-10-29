@@ -177,6 +177,7 @@ def insert_job_and_config(
     stored verbatim. A child ignores it and inherits its root's stored value, so a
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
+    assert request.HasField("termination_grace"), "termination_grace must be resolved before persistence"
     assert (
         priority_band != job_pb2.PRIORITY_BAND_INHERIT
     ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
@@ -288,6 +289,7 @@ def insert_job_and_config(
         max_retries_failure=int(request.max_retries_failure),
         max_retries_preemption=int(request.max_retries_preemption),
         timeout_ms=timeout_ms,
+        termination_grace_ms=int(request.termination_grace.milliseconds),
         preemption_policy=int(request.preemption_policy),
         existing_job_policy=int(request.existing_job_policy),
         priority_band=priority_band,

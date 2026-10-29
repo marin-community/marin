@@ -20,7 +20,9 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     with_slice_topology_env,
 )
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 def _make_req(
@@ -38,6 +40,7 @@ def _make_req(
     ports: list[str] | None = None,
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
+    req.termination_grace.milliseconds = DEFAULT_TERMINATION_GRACE.to_ms()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.attempt_uid = attempt_uid
@@ -73,6 +76,7 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=Duration.from_ms(req.termination_grace.milliseconds),
     )
 
 

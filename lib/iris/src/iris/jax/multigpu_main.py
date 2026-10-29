@@ -46,7 +46,7 @@ import threading
 from types import FrameType
 from typing import IO
 
-from rigging.timing import Deadline, Duration
+from rigging.timing import Deadline
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.log_highlights import rank_log_tag
@@ -55,7 +55,7 @@ from iris.jax.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
-from iris.preemption import preemption_grace_seconds
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 
 logger = logging.getLogger("iris.multigpu")
 
@@ -182,7 +182,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     )
 
     children, pumps = _spawn_children(nproc, devices_per_proc, task_index, num_tasks, child_argv)
-    terminate_grace = Duration.from_seconds(preemption_grace_seconds(os.environ))
+    terminate_grace = job_info.termination_grace if job_info is not None else DEFAULT_TERMINATION_GRACE
 
     terminating = threading.Event()
     shutdown_signum: int | None = None

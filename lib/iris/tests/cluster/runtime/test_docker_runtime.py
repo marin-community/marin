@@ -3,6 +3,7 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -12,6 +13,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerRuntime, _security_flags
 from iris.cluster.runtime.types import NETWORK_MODE_HOST, NETWORK_MODE_NONE, ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -246,3 +248,53 @@ def test_security_flags_gvisor_profiles_use_runsc_runtime_and_default_caps(profi
     assert "--cap-drop" not in flags
     assert "--privileged" not in flags
     assert "no-new-privileges" not in flags
+
+
+def test_docker_discovery_restores_submitted_termination_grace(monkeypatch, runtime, tmp_path):
+    labels = {}
+
+    def docker(cmd, **kwargs):
+        if cmd[:2] == ["docker", "create"]:
+            for index, argument in enumerate(cmd[:-1]):
+                if argument == "--label":
+                    key, value = cmd[index + 1].split("=", 1)
+                    labels[key] = value
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "ps"]:
+            stdout = "container-id\n"
+        elif cmd[:2] == ["docker", "inspect"]:
+            stdout = json.dumps(
+                [
+                    {
+                        "Id": "container-id",
+                        "Config": {"Labels": labels},
+                        "State": {"Running": True},
+                        "Mounts": [{"Destination": "/app", "Source": str(tmp_path)}],
+                    }
+                ]
+            )
+        else:
+            stdout = ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", docker)
+    runtime.create_container(
+        ContainerConfig(
+            image="iris-task:latest",
+            entrypoint=job_pb2.RuntimeEntrypoint(run_command=job_pb2.CommandEntrypoint(argv=["train"])),
+            env={},
+            task_id="/user/checkpoint/0",
+            attempt_id=2,
+            attempt_uid="attempt-2",
+            termination_grace=Duration.from_ms(60123),
+            mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+            workdir_host_path=tmp_path,
+        )
+    ).run()
+
+    discovered = runtime.discover_containers()
+
+    assert len(discovered) == 1
+    assert discovered[0].task_id == "/user/checkpoint/0"
+    assert discovered[0].attempt_id == 2
+    assert discovered[0].termination_grace == Duration.from_ms(60123)

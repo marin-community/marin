@@ -422,11 +422,15 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_ADVERTISE_HOST" in env_names
 
 
-def test_pod_preemption_grace_exceeds_task_shutdown_budget():
+def test_pod_termination_grace_uses_typed_budget_and_overrides_user_env():
     req = make_run_req("/test-job/0")
-    req.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = "60"
+    req.termination_grace.milliseconds = 60001
+    req.environment.env_vars["IRIS_TERMINATION_GRACE_MS"] = "999999"
     manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["terminationGracePeriodSeconds"] == 65
+    assert manifest["spec"]["terminationGracePeriodSeconds"] == 66
+    env = {entry["name"]: entry.get("value") for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env["IRIS_TERMINATION_GRACE_MS"] == "60001"
+    assert "IRIS_TERMINATION_GRACE_MS" not in json.loads(env["IRIS_JOB_ENV"])
 
 
 def test_build_pod_manifest_secret_is_required_and_read_only():

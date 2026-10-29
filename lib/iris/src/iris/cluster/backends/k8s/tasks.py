@@ -148,7 +148,7 @@ from iris.cluster.stats.tables import (
     stats_timestamp,
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
-from iris.preemption import PREEMPTION_GRACE_ENV, SHUTDOWN_MARGIN_SECONDS, preemption_grace_seconds
+from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -909,6 +909,8 @@ def _build_pod_manifest(
         network = TaskNetwork.CLUSTER
     host_network = _uses_host_network(config, run_req, network)
 
+    termination_grace = resolve_termination_grace(Duration.from_ms(run_req.termination_grace.milliseconds))
+
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
         task_id=run_req.task_id,
@@ -922,6 +924,7 @@ def _build_pod_manifest(
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
+        termination_grace=termination_grace,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     job_secrets = task_secret_values(run_req.environment)
@@ -1208,8 +1211,8 @@ def _build_pod_manifest(
         )
         spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
 
-    if PREEMPTION_GRACE_ENV in job_env:
-        spec["terminationGracePeriodSeconds"] = preemption_grace_seconds(job_env) + SHUTDOWN_MARGIN_SECONDS
+    termination_timeout_ms = (termination_grace + SHUTDOWN_MARGIN).to_ms()
+    spec["terminationGracePeriodSeconds"] = (termination_timeout_ms + 999) // 1000
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the

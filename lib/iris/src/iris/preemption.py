@@ -1,24 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shutdown budget shared by task launchers and runtimes."""
+"""Shutdown budgets shared by the controller, task launchers, and runtimes."""
 
-from collections.abc import Mapping
+from rigging.timing import Duration
 
-PREEMPTION_GRACE_ENV = "IRIS_PREEMPTION_GRACE_SECONDS"
-DEFAULT_PREEMPTION_GRACE_SECONDS = 10
+TERMINATION_GRACE_ENV = "IRIS_TERMINATION_GRACE_MS"
+DEFAULT_TERMINATION_GRACE = Duration.from_seconds(10)
+MAX_TERMINATION_GRACE = Duration.from_seconds(110)
+SHUTDOWN_MARGIN = Duration.from_seconds(5)
 DEFAULT_WORKER_STOP_TIMEOUT_SECONDS = 5
-SHUTDOWN_MARGIN_SECONDS = 5
-MAX_PREEMPTION_GRACE_SECONDS = 110
-WORKER_CONTAINER_STOP_TIMEOUT_SECONDS = MAX_PREEMPTION_GRACE_SECONDS + 2 * SHUTDOWN_MARGIN_SECONDS
+WORKER_CONTAINER_STOP_TIMEOUT_SECONDS = int((MAX_TERMINATION_GRACE + SHUTDOWN_MARGIN * 2).to_seconds())
 
 
-def preemption_grace_seconds(env: Mapping[str, str]) -> int:
-    """Return the task's configured SIGTERM grace in seconds."""
-    try:
-        value = int(env.get(PREEMPTION_GRACE_ENV, DEFAULT_PREEMPTION_GRACE_SECONDS))
-    except ValueError as exc:
-        raise ValueError(f"{PREEMPTION_GRACE_ENV} must be an integer") from exc
-    if not 1 <= value <= MAX_PREEMPTION_GRACE_SECONDS:
-        raise ValueError(f"{PREEMPTION_GRACE_ENV} must be between 1 and {MAX_PREEMPTION_GRACE_SECONDS}")
-    return value
+def resolve_termination_grace(grace: Duration | None) -> Duration:
+    """Resolve and validate the job's SIGTERM grace before submission."""
+    grace = DEFAULT_TERMINATION_GRACE if grace is None else grace
+    if not 1000 <= grace.to_ms() <= MAX_TERMINATION_GRACE.to_ms():
+        raise ValueError("termination_grace must be between 1 and 110 seconds")
+    return grace

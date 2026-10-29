@@ -67,10 +67,9 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.preemption import (
-    DEFAULT_WORKER_STOP_TIMEOUT_SECONDS,
-    PREEMPTION_GRACE_ENV,
-    SHUTDOWN_MARGIN_SECONDS,
-    preemption_grace_seconds,
+    SHUTDOWN_MARGIN,
+    TERMINATION_GRACE_ENV,
+    resolve_termination_grace,
 )
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
@@ -211,6 +210,7 @@ def build_iris_env(
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=task.termination_grace,
     )
 
     if worker_id:
@@ -328,12 +328,8 @@ class TaskAttempt:
         # it across worker restarts.
         self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
-        env = self.request.environment.env_vars
-        self.termination_timeout_ms = (
-            (preemption_grace_seconds(env) + SHUTDOWN_MARGIN_SECONDS) * 1000
-            if PREEMPTION_GRACE_ENV in env
-            else DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000
-        )
+        self.termination_grace = resolve_termination_grace(Duration.from_ms(self.request.termination_grace.milliseconds))
+        self.termination_timeout_ms = (self.termination_grace + SHUTDOWN_MARGIN).to_ms()
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self.output_dir: Path | None = None
@@ -395,6 +391,7 @@ class TaskAttempt:
         request = job_pb2.RunTaskRequest(
             task_id=discovered.task_id,
             attempt_id=attempt_id,
+            termination_grace={"milliseconds": discovered.termination_grace.to_ms()},
         )
         config = TaskAttemptConfig(
             task_attempt=identity,
@@ -832,8 +829,8 @@ class TaskAttempt:
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
         # The controller owns the process-incarnation identity and the task's
-        # credential. User and cluster env cannot replace either.
-        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV):
+        # credential and shutdown budget. User and cluster env cannot replace them.
+        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, TERMINATION_GRACE_ENV):
             env.pop(controller_owned, None)
             if value := iris_env.get(controller_owned):
                 env[controller_owned] = value
@@ -861,6 +858,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
+            termination_grace=self.termination_grace,
             mounts=mounts,
             network_mode=docker_network_mode(isolation.network),
             resolv_conf=self._prepare_resolv_conf(isolation.network),

@@ -712,6 +712,7 @@ class FrayIrisClient:
                 container_profile=convert_container_profile(request.resources),
                 priority_band=request.priority,
                 timeout=request.timeout,
+                termination_grace=request.termination_grace,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

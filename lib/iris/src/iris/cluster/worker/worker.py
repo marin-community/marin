@@ -62,7 +62,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.preemption import DEFAULT_WORKER_STOP_TIMEOUT_SECONDS, SHUTDOWN_MARGIN_SECONDS
+from iris.preemption import DEFAULT_WORKER_STOP_TIMEOUT_SECONDS, SHUTDOWN_MARGIN
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
@@ -654,7 +654,7 @@ class Worker:
             timeout_ms = max(
                 (task.termination_timeout_ms for task in self._tasks), default=DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000
             )
-        return Duration.from_ms(timeout_ms + SHUTDOWN_MARGIN_SECONDS * 1000)
+        return Duration.from_ms(timeout_ms) + SHUTDOWN_MARGIN
 
     # Task management methods
 

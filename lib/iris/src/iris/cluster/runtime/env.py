@@ -14,11 +14,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from google.protobuf import json_format
+from rigging.timing import Duration
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.preemption import TERMINATION_GRACE_ENV
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -238,6 +240,7 @@ def build_common_iris_env(
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
     resources: job_pb2.ResourceSpecProto | None,
+    termination_grace: Duration,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
@@ -260,6 +263,7 @@ def build_common_iris_env(
         env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
+    env[TERMINATION_GRACE_ENV] = str(termination_grace.to_ms())
 
     # Controller connectivity
     if controller_address:
@@ -299,7 +303,9 @@ def build_common_iris_env(
     env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
     if environment.env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(dict(environment.env_vars))
+        env["IRIS_JOB_ENV"] = json.dumps(
+            {key: value for key, value in environment.env_vars.items() if key != TERMINATION_GRACE_ENV}
+        )
 
     # Only propagate region/zone constraints to children; device constraints
     # are re-derived from each child's own resource spec.

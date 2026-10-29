@@ -57,6 +57,7 @@ from iris.cluster.types import (
     is_federated,
     is_job_finished,
 )
+from iris.preemption import TERMINATION_GRACE_ENV, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
@@ -482,6 +483,16 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
+    if TERMINATION_GRACE_ENV in request.environment.env_vars:
+        raise ConnectError(Code.INVALID_ARGUMENT, f"{TERMINATION_GRACE_ENV} is reserved for Iris runtime metadata")
+    try:
+        requested_grace = (
+            Duration.from_ms(request.termination_grace.milliseconds) if request.HasField("termination_grace") else None
+        )
+        grace = resolve_termination_grace(requested_grace)
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
+    request.termination_grace.milliseconds = grace.to_ms()
     for name in request.environment.secrets:
         try:
             validate_secret_name(name)
