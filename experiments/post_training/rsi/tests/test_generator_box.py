@@ -7,6 +7,7 @@ import pytest
 
 pytest.importorskip("taskforge")
 
+import asyncio
 import base64
 import json
 
@@ -22,7 +23,7 @@ from taskcompendium.models import (
 )
 from taskforge.capability import CapabilityIdea
 
-from experiments.post_training.rsi.generator_box import cited_types, examples_by_type, typed_idea
+from experiments.post_training.rsi.generator_box import cited_types, examples_by_type, round_robin, typed_idea
 
 GENERATED_ENTRY = {"question": "Sort: b, A", "answer": "A, b", "metadata": {"source_dataset": "word_sorting"}}
 NEMOTRON_TERMS = {
@@ -91,3 +92,18 @@ def test_an_idea_gets_the_types_it_cites_most_cited_first_with_all_their_example
     typed = typed_idea(idea(["generated-0"]), examples["word_sorting"])
     assert typed.capability["example_entries"] == [GENERATED_ENTRY, GENERATED_ENTRY]
     assert typed.capability["example_tasks"] == ["Sort: b, A", "Sort: b, A"]
+
+
+def test_a_later_batch_gets_its_turn_before_the_first_one_is_used_up():
+    async def run() -> list[str]:
+        batches: asyncio.Queue[list[str] | None] = asyncio.Queue()
+        batches.put_nowait(["a0", "a1", "a2", "a3"])
+        stream = round_robin(batches)
+        taken = [await anext(stream)]
+        # The gap idea's batch arrives while the first idea's batch could still fill the whole share.
+        batches.put_nowait(["b0", "b1"])
+        batches.put_nowait([])
+        batches.put_nowait(None)
+        return taken + [item async for item in stream]
+
+    assert asyncio.run(run()) == ["a0", "a1", "b0", "a2", "b1", "a3"]

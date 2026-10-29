@@ -14,7 +14,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -88,10 +88,38 @@ def typed_idea(idea: CapabilityIdea, entries: Mapping[str, dict]) -> CapabilityI
     return idea.model_copy(update={"capability": capability})
 
 
+async def round_robin[T](batches: asyncio.Queue[list[T] | None]) -> AsyncIterator[T]:
+    """One item of each batch in turn, over the batches that have arrived by then, until ``None`` arrives and every
+    batch is used up. Training takes the synthesized share a task at a time, and the first ideas' instances alone can
+    fill it; taking them in turn gives the ideas that come later their share."""
+    rotation: deque[deque[T]] = deque()
+    finished = False
+
+    def take(batch: list[T] | None) -> None:
+        nonlocal finished
+        if batch is None:
+            finished = True
+        elif batch:
+            rotation.append(deque(batch))
+
+    while True:
+        while not batches.empty():
+            take(batches.get_nowait())
+        if not rotation:
+            if finished:
+                return
+            take(await batches.get())
+            continue
+        batch = rotation.popleft()
+        yield batch.popleft()
+        if batch:
+            rotation.append(batch)
+
+
 async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: GeneratorConfig) -> AsyncIterator[TaskSpec]:
     """The valid instances that one generator program per cited type makes for each idea, as each idea finishes."""
     examples = examples_by_type(config.evaluation)
-    made: asyncio.Queue[TaskSpec | None] = asyncio.Queue()
+    made: asyncio.Queue[list[TaskSpec] | None] = asyncio.Queue()
     slots = asyncio.Semaphore(config.concurrency)
 
     async def one(idea: CapabilityIdea) -> None:
@@ -111,11 +139,15 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
                 continue
             kept = [(question, entry) for question, entry in pairs if valid(name, question, entry)]
             logger.info("%s, %s: %d of %d instances are valid", idea.capability_id, name, len(kept), len(pairs))
-            for k, (question, entry) in enumerate(kept):
-                task_id = f"{name}.generator-{k}"
-                made.put_nowait(
-                    synthesized(entry_task(config.templates[name], name, task_id, question, entry, capability), idea)
-                )
+            made.put_nowait(
+                [
+                    synthesized(
+                        entry_task(config.templates[name], name, f"{name}.generator-{k}", question, entry, capability),
+                        idea,
+                    )
+                    for k, (question, entry) in enumerate(kept)
+                ]
+            )
 
     async def run_all() -> None:
         running: set[asyncio.Task[None]] = set()
@@ -131,7 +163,7 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
 
     runner = asyncio.create_task(run_all())
     try:
-        while (task := await made.get()) is not None:
+        async for task in round_robin(made):
             yield task
         await runner
     finally:
