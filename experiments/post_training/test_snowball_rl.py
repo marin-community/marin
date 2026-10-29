@@ -144,7 +144,7 @@ def selection_results(config):
         results.append((directory / "best_checkpoint.json").exists())
     return results
 print(json.dumps([{
-    "name": config.run.id, "entrypoint": config.runtime.entrypoint,
+    "input": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
     "nodes": config.iris.allocation.num_nodes, "eval_interval": config.skyrl.trainer.eval_interval,
     "validation": bool(config.inputs.validation_data),
     "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
@@ -160,7 +160,7 @@ print(json.dumps([{
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
-} for config in configs]))
+} for config, path in zip(configs, sys.argv[1:], strict=True)]))
 """,
         paths,
     )
@@ -177,7 +177,8 @@ print(json.dumps([{
             assert row["window"] == (65536 if row["tools"] == "hermes" else 24576), row
         if "train-long-" in name and "/eval/" not in name:
             assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
-        if "harbor_evaluation" in row["callbacks"]:
+        if Path(row["input"]).name == "harbor.yaml":
+            assert "harbor_evaluation" in row["callbacks"], row
             assert row["endpoint"], row
             assert row["selection"] == [True, False, False], row
         if row["fixed"]:
