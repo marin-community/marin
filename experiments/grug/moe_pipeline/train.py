@@ -42,6 +42,7 @@ from experiments.grug.moe_pipeline.pipeline import (
     make_pipeline_mesh,
     prepare_automatic_mpmd_step,
 )
+from experiments.grug.preemption import GracefulPreemption
 
 
 class PipelineSchedule(StrEnum):
@@ -339,38 +340,53 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
 
     step_times = []
     loss = None
-    for step_index in range(start_step, config.steps):
-        started = time.monotonic()
-        state, metrics = step(state, batches, loss_denominator)
-        jax.block_until_ready((state, metrics))
-        elapsed = time.monotonic() - started
-        step_times.append(elapsed)
-        metric_loss = metrics[TRAIN_LOSS_KEY]
-        if profiler_callback is not None:
-            profiler_callback(SimpleNamespace(step=step_index))
-        completed_steps = step_index + 1
-        if config.checkpoint_root and config.checkpoint_every_steps:
-            if completed_steps % config.checkpoint_every_steps == 0 or completed_steps == config.steps:
-                checkpoint_path = save_checkpoint(
-                    config.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
-                )
-                _log("PIPELINE_CHECKPOINT", step=completed_steps, path=checkpoint_path)
-        if isinstance(metric_loss, MpmdArray):
-            if not metric_loss.is_partially_addressable:
-                continue
-            local_loss = metric_loss.to_mpmd_local_array
-            if not isinstance(local_loss, jax.Array):
-                raise TypeError(f"expected one local loss array, got {type(local_loss).__name__}")
-        else:
-            local_loss = metric_loss
-        loss = float(local_loss)
-        _log(
-            "PIPELINE_STEP",
-            step=step_index,
-            elapsed_seconds=elapsed,
-            tokens_per_second=config.batch_size * config.seq_len / elapsed,
-            loss=loss,
-        )
+    last_checkpoint_step = start_step
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        for step_index in range(start_step, config.steps):
+            started = time.monotonic()
+            state, metrics = step(state, batches, loss_denominator)
+            jax.block_until_ready((state, metrics))
+            elapsed = time.monotonic() - started
+            step_times.append(elapsed)
+            metric_loss = metrics[TRAIN_LOSS_KEY]
+            if profiler_callback is not None:
+                profiler_callback(SimpleNamespace(step=step_index))
+            completed_steps = step_index + 1
+            if config.checkpoint_root and config.checkpoint_every_steps:
+                if completed_steps % config.checkpoint_every_steps == 0 or completed_steps == config.steps:
+                    checkpoint_path = save_checkpoint(
+                        config.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                    )
+                    _log("PIPELINE_CHECKPOINT", step=completed_steps, path=checkpoint_path)
+                    last_checkpoint_step = completed_steps
+            if preemption.should_stop(completed_steps):
+                if config.checkpoint_root and completed_steps != last_checkpoint_step:
+                    checkpoint_path = save_checkpoint(
+                        config.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                    )
+                    _log("PIPELINE_CHECKPOINT", step=completed_steps, path=checkpoint_path)
+                break
+            if isinstance(metric_loss, MpmdArray):
+                if not metric_loss.is_partially_addressable:
+                    continue
+                local_loss = metric_loss.to_mpmd_local_array
+                if not isinstance(local_loss, jax.Array):
+                    raise TypeError(f"expected one local loss array, got {type(local_loss).__name__}")
+            else:
+                local_loss = metric_loss
+            loss = float(local_loss)
+            _log(
+                "PIPELINE_STEP",
+                step=step_index,
+                elapsed_seconds=elapsed,
+                tokens_per_second=config.batch_size * config.seq_len / elapsed,
+                loss=loss,
+            )
+
+    finally:
+        preemption.restore()
 
     if not step_times:
         _log("PIPELINE_COMPLETE", step=start_step)

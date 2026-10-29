@@ -466,6 +466,37 @@ def test_kill_running_task(mock_worker, mock_runtime):
     assert any(c["force"] for c in mock_handle.stop_calls)
 
 
+def test_kill_running_task_allows_graceful_exit_without_force(mock_worker, mock_runtime):
+    stopped = threading.Event()
+    forced_while_running = threading.Event()
+    mock_handle = create_mock_container_handle()
+    mock_handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+
+    def on_stop(force: bool) -> None:
+        if force and not stopped.is_set():
+            forced_while_running.set()
+        if not force:
+            stopped.set()
+
+    mock_handle.stop_hook = on_stop
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    request.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = "1"
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING and task.container_id)
+
+    assert mock_worker.kill_task(task_id)
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
+    assert mock_handle.stop_calls[0] == {"force": False}
+    assert not forced_while_running.is_set()
+
+
 def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
     """New attempt for same task_id kills the old attempt and starts a new one."""
     # Create a handle that stays running until killed

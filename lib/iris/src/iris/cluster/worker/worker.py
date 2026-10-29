@@ -1053,7 +1053,7 @@ class Worker:
             obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
         return obs
 
-    def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int = 5000) -> None:
+    def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int | None = None) -> None:
         """Kill ``attempt`` in a daemon thread so an RPC handler does not block on it.
 
         ``TaskAttempt.kill`` runs a stop/wait/force-kill sequence that can take
@@ -1067,7 +1067,7 @@ class Worker:
             daemon=True,
         ).start()
 
-    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
+    def kill_task(self, task_id: str, term_timeout_ms: int | None = None) -> bool:
         """Kill the current (most recent) attempt of a task."""
         current = self.current_attempt(task_id)
         if not current:

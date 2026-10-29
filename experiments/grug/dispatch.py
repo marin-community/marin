@@ -10,6 +10,7 @@ from typing import TypeVar
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.preemption import PREEMPTION_GRACE_ENV, preemption_grace_seconds
 from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
@@ -27,7 +28,8 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
-_FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
+_FORWARDED_ENV_NAMES = ("LD_PRELOAD", PREEMPTION_GRACE_ENV)
+_GRUG_PREEMPTION_GRACE_SECONDS = 60
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
@@ -69,6 +71,8 @@ def dispatch_grug_training_run(
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    env_vars.setdefault(PREEMPTION_GRACE_ENV, str(_GRUG_PREEMPTION_GRACE_SECONDS))
+    preemption_grace_seconds(env_vars)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),

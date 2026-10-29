@@ -55,6 +55,7 @@ from iris.jax.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
+from iris.preemption import preemption_grace_seconds
 
 logger = logging.getLogger("iris.multigpu")
 
@@ -63,7 +64,6 @@ _SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 _REAP_POLL_INTERVAL = 1.0
 # Grace period after a SIGTERM before escalating to SIGKILL, so a child that
 # traps or ignores SIGTERM cannot wedge the supervisor (and hence the task).
-_TERMINATE_GRACE = Duration.from_seconds(10.0)
 
 
 def _child_rank_env(
@@ -184,6 +184,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     )
 
     children, pumps = _spawn_children(nproc, devices_per_proc, task_index, num_tasks, child_argv)
+    terminate_grace = Duration.from_seconds(preemption_grace_seconds(os.environ))
 
     terminating = threading.Event()
     shutdown_signum: int | None = None
@@ -200,7 +201,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
         logger.warning("received signal %d; forwarding to children", signum)
         _signal_children(children, range(nproc), signum)
         if kill_deadline is None:
-            kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
+            kill_deadline = Deadline.from_now(terminate_grace)
 
     for sig in _SHUTDOWN_SIGNALS:
         signal.signal(sig, _forward_signal)
@@ -233,7 +234,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
                 terminating.set()
                 logger.error("local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending))
                 _signal_children(children, pending, signal.SIGTERM)
-                kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
+                kill_deadline = Deadline.from_now(terminate_grace)
 
     for pump in pumps:
         pump.join(timeout=5.0)

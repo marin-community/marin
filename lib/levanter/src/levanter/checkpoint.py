@@ -525,6 +525,7 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self._last_save_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
@@ -744,6 +745,13 @@ class Checkpointer:
             while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
                 time.sleep(0.2)
 
+    def save_final_checkpoint(self, *, tree: PyTree, step: int) -> None:
+        """Commit the final completed step without waiting for background pruning."""
+        self._manager.wait_until_finished()
+        if self._last_save_step != step or not self._last_save_permanent:
+            self.on_step(tree=tree, step=step, force=True)
+            self._manager.wait_until_finished()
+
     def _rm_checkpoint(self, checkpoint):
         if jax.process_index() == 0:
             logger.info(f"Removing checkpoint {checkpoint}")
@@ -787,6 +795,7 @@ class Checkpointer:
             write_config=self.write_config,
         )
         self._last_save_step = step
+        self._last_save_permanent = not is_temporary
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):

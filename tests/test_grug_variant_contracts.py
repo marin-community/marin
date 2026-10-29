@@ -12,6 +12,8 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import signal
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -37,6 +39,8 @@ from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 
+from experiments.grug.preemption import GracefulPreemption
+
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
     grug_dir = Path(__file__).resolve().parents[1] / "experiments" / "grug"
@@ -53,6 +57,19 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
     if not variants and not found_any:
         raise AssertionError(f"No grug variants with {filename} found under {grug_dir}")
     return variants
+
+
+def test_grug_preemption_records_sigterm_until_completed_step():
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        assert not preemption.should_stop(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert preemption.should_stop(2)
+    finally:
+        preemption.restore()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
 
 
 def _variant_module_name(variant: str, module: str) -> str:

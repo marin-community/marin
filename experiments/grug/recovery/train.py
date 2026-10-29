@@ -48,6 +48,7 @@ from levanter.recovery.types import DEFAULT_TMPFS_DIR
 from levanter.utils.jax_utils import parameter_count
 
 from experiments.grug.base.train import GrugTrainState, _make_train_step, initial_state
+from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.recovery.config import RecoveryRunConfig
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,9 @@ def recovery_train(config: RecoveryRunConfig) -> None:
             ).create(process_index=jax.process_index(), diagnostic=None)
 
         step = int(state.step)
+        last_snapshot_step = step
+        preemption = GracefulPreemption()
+        preemption.install()
         try:
             while step < config.num_steps:
                 faults.maybe_inject(step)
@@ -154,8 +158,14 @@ def recovery_train(config: RecoveryRunConfig) -> None:
 
                 if step % config.snapshot_every_steps == 0:
                     stats = snapshot.save(state, step=step)
+                    last_snapshot_step = step
                     logger.info("snapshot step %d: %.1f GiB in %.2fs", step, stats.bytes_written / 2**30, stats.seconds)
+                if preemption.should_stop(step):
+                    if step != last_snapshot_step:
+                        snapshot.save(state, step=step)
+                    break
         finally:
+            preemption.restore()
             if watchdog is not None:
                 watchdog.on_event(ProgressEvent.TRAINING_FINISHED)
 

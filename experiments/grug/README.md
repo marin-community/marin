@@ -62,6 +62,23 @@ uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
 
 The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
 
+## Preemption checkpoints
+
+The Grug trainer variants coordinate SIGTERM at each completed step. Every rank
+finishes that step, then the run saves a permanent checkpoint and waits for its
+commit marker before exiting. The pipeline variant uses the same stop decision
+and its canonical checkpoint root. Retries must use the same run ID and
+checkpoint root to restore the saved step and data position. Checkpoint
+discovery ignores directories without a completed `metadata.json` marker.
+
+Grug dispatch gives Iris tasks a 60 second shutdown budget. Override it on the
+launching job with `-e IRIS_PREEMPTION_GRACE_SECONDS <seconds>`; the dispatcher
+forwards that setting to training tasks. Iris gives the task Pod and worker
+five additional seconds before force termination. The 60 second value is an
+initial validation setting, not a measured guarantee. Measure the slowest
+training step, pending save, commit, and process teardown before choosing a
+production value.
+
 ## Visual diff for template variants
 
 When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:

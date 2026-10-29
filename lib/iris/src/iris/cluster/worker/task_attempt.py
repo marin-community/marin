@@ -66,6 +66,7 @@ from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
+from iris.preemption import PREEMPTION_GRACE_ENV, SHUTDOWN_MARGIN_SECONDS, preemption_grace_seconds
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
@@ -354,6 +355,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
+        self._graceful_stop = False
         self._output_stop = threading.Event()
 
     @classmethod
@@ -482,7 +484,7 @@ class TaskAttempt:
         if self._container_handle:
             self._container_handle.stop(force=force)
 
-    def kill(self, term_timeout_ms: int = 5000) -> bool:
+    def kill(self, term_timeout_ms: int | None = None) -> bool:
         """Stop this attempt, escalating to a force-kill on timeout.
 
         Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
@@ -491,13 +493,20 @@ class TaskAttempt:
         """
         if self.status not in _KILLABLE_STATES:
             return False
+        if term_timeout_ms is None:
+            env = self.request.environment.env_vars
+            term_timeout_ms = (
+                (preemption_grace_seconds(env) + SHUTDOWN_MARGIN_SECONDS) * 1000 if PREEMPTION_GRACE_ENV in env else 5000
+            )
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
-        self.should_stop = True
-        self._output_stop.set()
         if not self.has_container:
+            self.should_stop = True
+            self._output_stop.set()
             return True
         try:
+            assert self._container_handle is not None
+            self._graceful_stop = True
             self.stop(force=False)
             running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -505,6 +514,7 @@ class TaskAttempt:
                 timeout=Duration.from_ms(term_timeout_ms),
             )
             if not stopped:
+                self._graceful_stop = False
                 with contextlib.suppress(RuntimeError):
                     self.stop(force=True)
         except RuntimeError:
@@ -972,7 +982,7 @@ class TaskAttempt:
                 return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
 
             # Check if we should stop
-            if self.should_stop:
+            if self.should_stop and not self._graceful_stop:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 # Wait for the runtime to confirm the container has actually
@@ -1011,6 +1021,8 @@ class TaskAttempt:
                 )
                 # Final log fetch before container stops
                 self._stream_logs(log_reader)
+                if self.should_stop and status.exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL):
+                    return _TaskOutcome(job_pb2.TASK_STATE_KILLED, exit_code=status.exit_code)
 
                 # Container has stopped
                 if status.error:

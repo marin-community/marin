@@ -148,6 +148,7 @@ from iris.cluster.stats.tables import (
     stats_timestamp,
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.preemption import PREEMPTION_GRACE_ENV, SHUTDOWN_MARGIN_SECONDS, preemption_grace_seconds
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -1206,6 +1207,9 @@ def _build_pod_manifest(
             (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
         )
         spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
+
+    if PREEMPTION_GRACE_ENV in job_env:
+        spec["terminationGracePeriodSeconds"] = preemption_grace_seconds(job_env) + SHUTDOWN_MARGIN_SECONDS
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the

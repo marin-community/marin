@@ -68,6 +68,7 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
     prepare_automatic_mpmd_step,
     restore_pipeline_state,
 )
+from experiments.grug.preemption import GracefulPreemption
 
 _MULTIHOST_TIMEOUT = 600
 _MP_POLICY = "params=bfloat16,compute=bfloat16,output=bfloat16"
@@ -513,8 +514,11 @@ def main() -> None:
     _initialize_pipeline_communicators(mpmd_mesh, placements)
     _log("pipeline_communicators_initialized", elapsed_seconds=time.monotonic() - started)
     iterator_context = closing(train_loader.iter_from_step(start_step)) if train_loader is not None else nullcontext()
-    with iterator_context as data_iterator:
-        last_step = args.stop_after_step or args.steps
+    last_step = args.stop_after_step or args.steps
+    finished_step = start_step
+    last_checkpoint_step = start_step
+    preempted = False
+    with GracefulPreemption() as preemption, iterator_context as data_iterator:
         for completed_steps in range(start_step + 1, last_step + 1):
             if data_iterator is not None:
                 batch = next(data_iterator)
@@ -525,6 +529,7 @@ def main() -> None:
             started = time.monotonic()
             state, metrics = compiled_step(state, batches, denominator)
             jax.block_until_ready((state, metrics))
+            finished_step = completed_steps
             if args.synchronize_devices_after_step:
                 _synchronize_local_cuda_devices(completed_steps)
             if args.offload_opt_state:
@@ -550,8 +555,17 @@ def main() -> None:
                         args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
                     )
                     _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
+                    last_checkpoint_step = completed_steps
+            preempted = preemption.should_stop(completed_steps)
+            if preempted:
+                if args.checkpoint_root and completed_steps != last_checkpoint_step:
+                    path = save_checkpoint(
+                        args.checkpoint_root, state, step=completed_steps, contract=checkpoint_contract
+                    )
+                    _log("pipeline_checkpoint_saved", step=completed_steps, path=path)
+                break
     barrier_sync_named("hero_pipeline_smoke_complete", timeout=_MULTIHOST_TIMEOUT)
-    _log("pipeline_complete", steps=last_step, full_hero=full_hero)
+    _log("pipeline_preempted" if preempted else "pipeline_complete", steps=finished_step, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:
         wandb.finish()
 
