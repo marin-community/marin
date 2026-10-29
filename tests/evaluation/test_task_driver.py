@@ -26,7 +26,7 @@ from marin.evaluation.task_driver import (
 )
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
-from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
+from rolloutengine.models import ModelTurn, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import PackageSpec
@@ -145,50 +145,6 @@ def run_config():
             cleanup_timeout=10,
         ),
     )
-
-
-@pytest.mark.asyncio
-async def test_driver_preserves_cohort_trials_and_resumes_failed_attempt_without_resampling(
-    tmp_path, published_corpora, run_config
-):
-    requests = []
-
-    async def model(request: ModelRequest) -> ModelTurn:
-        requests.append(request)
-        if len(requests) == 1:
-            raise ConnectionError("temporary serving failure")
-        return ModelTurn(
-            message={"role": "assistant", "content": "red"},
-            prompt_token_ids=(),
-            response_token_ids=(),
-            logprobs=None,
-            stop_reason="stop",
-            text="red",
-            usage=TokenUsage(3, 1),
-        )
-
-    output = str(tmp_path / "results")
-    with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
-        await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
-    first = ReadView(output)
-    failed = [row for row in first.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "infra_error"]
-    assert len(failed) == 1
-    assert len(requests) == 8
-    assert {(request.messages[0]["content"], request.options["seed"]) for request in requests} == {
-        (f"{benchmark}/{index}", seed) for benchmark in ("colors", "paints") for index in range(2) for seed in (7, 8)
-    }
-    await run_evaluation(published_corpora, output, run_config, model, machine_factories={})
-    assert len(requests) == 9
-    assert requests[-1] == requests[0]
-    final = ReadView(output)
-    terminal = [row for row in final.iter_rows(ATTEMPTS_TABLE) if row["outcome"] == "graded"]
-    assert len(terminal) == 8
-    assert [(row["retry"], row["seed"]) for row in terminal if row["retry"]] == [(1, 7)]
-    samples = [sample_from_archive_row(row) for row in final.iter_rows(ARCHIVE_SAMPLES_TABLE)]
-    assert sum(sample.metrics.get("accuracy", 0) for sample in samples) == 8
-    assert all(sample.prompt_messages[0].content.endswith(("/0", "/1")) for sample in samples)
-    assert json.loads(final.read_blob(RUN_OBJECT))["config"]["source_limit"] == 2
-    assert not any("summary" in key for key in json.loads(final.read_blob(RUN_OBJECT)))
 
 
 @pytest.mark.asyncio

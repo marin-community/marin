@@ -271,8 +271,11 @@ boundaries; stored expected prompts and grades are not the equivalence gate.
 
 The [96-declaration acceptance record](https://github.com/marin-community/marin/pull/10757#issuecomment-6483684301)
 records the migration's manual old/new comparisons, reproduction commands,
-source pins, row identities, coverage and limits. Its scripts and raw captures
-remain session artifacts.
+source pins, row identities, coverage and limits. The
+[Qwen3-8B smoke report](https://github.com/marin-community/marin/pull/10757#issuecomment-6498358414)
+adds live old/new coverage across all 92 runnable declarations and records the
+excluded datasets and remaining differences. Scripts and raw captures remain
+session artifacts.
 
 For each dataset and protocol variant, run a matching subset of real pinned
 source rows through the old evaluator and the new curation/driver pipeline.
@@ -284,6 +287,10 @@ Keep this one-time acceptance run's commands, source pins and hashes, row
 identities, raw responses, results and intentional protocol differences in the
 task artifact. Expected-output snapshots are not required in CI. Routine tests
 protect publication integrity, identity, joins, transport failures and resume.
+Use small inline inputs for these pipeline contracts. Keep benchmark corpora
+and NLP data archives out of routine test fixtures. Changes to conversion or
+grading behavior require a new comparison against the source implementation
+on matching inputs and recorded responses.
 
 Compare independently generated answers separately, using the same served
 model/tokenizer revision, context, generation options and output cap. Record

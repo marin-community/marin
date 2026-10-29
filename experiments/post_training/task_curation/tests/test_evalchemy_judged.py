@@ -9,7 +9,6 @@ import threading
 import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 from fray.current_client import set_current_client
@@ -31,8 +30,6 @@ from experiments.post_training.task_curation.config import InputOverrides, Pipel
 from experiments.post_training.task_curation.datasets.evalchemy.judged import read_simpleqa, sources
 from experiments.post_training.task_curation.datasets.evalchemy.pipeline import curate
 
-INPUTS = json.loads((Path(__file__).parent / "fixtures/evalchemy_inputs.json").read_text())["judged"]
-
 
 def write_simpleqa(file, rows):
     with file.open("w", newline="") as stream:
@@ -45,7 +42,10 @@ def write_simpleqa(file, rows):
 
 @pytest.fixture(params=["FinanceBench", "SimpleQA"])
 def judged_corpus(request, tmp_path, monkeypatch):
-    reference = next(case for case in INPUTS if case["name"] == request.param)
+    reference = {
+        "name": request.param,
+        "rows": [{"question": "What is the revenue?", "answer": "$7", "evidence_text": "Revenue: $7", "metadata": {}}],
+    }
     source = next(source for source in sources() if source.config.protocol.benchmark == request.param)
     dataset = source.config
     root = tmp_path / "source"
