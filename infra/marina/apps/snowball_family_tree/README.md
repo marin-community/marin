@@ -87,5 +87,4 @@ verify both stop. Each build recreates `dist/`; commit source files only.
 Open a focused Marin PR with the information listed above.
 For public updates, follow the existing UUID and current-version procedure in the
 [maintenance guide](../../../../docs/references/snowball-family-tree.md#maintain-the-app)
-and the `marina-app` skill. Updating the source in a PR does not automatically
-publish a new public revision.
+and the `marina-app` skill. Opening a PR does not publish a public revision.
