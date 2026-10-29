@@ -337,7 +337,11 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     def count(*outcomes: str) -> float:
         return math.fsum(row.get(f"generate/outcome/{outcome}", 0) for row in training for outcome in outcomes)
 
-    total, bad, failures = count(*Outcome), count("infra_error", "unavailable", "invalid_task"), count("rollout_failure")
+    total, bad, failures = (
+        count(*Outcome),
+        count(Outcome.INFRA_ERROR, Outcome.UNAVAILABLE, Outcome.INVALID_TASK),
+        count("rollout_failure"),
+    )
     lower, upper = (max(bad, failures) / total, min(total, bad + failures) / total) if total else (1.0, 1.0)
     recorded = all(f"generate/outcome/{outcome}" in row for row in training for outcome in (*Outcome, "rollout_failure"))
     holds = upper <= 0.01 and recorded
@@ -585,7 +589,10 @@ def gate_step(
 
 
 def recorded_inputs(path: str) -> GateInputs:
-    receipt = read_skyrl_launch_receipt(path)
+    try:
+        receipt = read_skyrl_launch_receipt(path)
+    except SkyRLReceiptLookupError:
+        return GateInputs()
     argv = (receipt.result.provenance or {}).get("command_line", []) if receipt else []
     context = presets.run_command()(lambda **kwargs: ()).make_context(
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
