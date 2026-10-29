@@ -14,6 +14,19 @@ The selection defines the 100k training allocation. The launcher defaults to
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
+The inventory recipe enables batch-invariant arithmetic, fixes the evaluation
+seed to `20261020`, disables prefix caching, and limits each inference worker
+to one scheduled sequence. The inference topology remains DP8/EP8/TP1/PP1.
+Chunked prefill stays enabled with an 8,192-token scheduling budget, and CUDA
+graphs remain enabled. The sequence cap also applies to training generation
+and reduces concurrency.
+
+On the fixed 100-task panel, two direct-SFT engines produced identical response
+tokens, text, and grades across two passes each. Each pass generated 469,450
+response tokens with mean rollout reward 0.2002. This finite comparison does
+not establish universal bitwise determinism. Reproduction through normal
+Megatron initialization and weight broadcast remains unverified.
+
 ## Make or update tasks
 
 Declare new tasks through the
