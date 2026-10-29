@@ -29,6 +29,7 @@ from verifyit.execution.worker import call_bounded
 from verifyit.grade import GradingInfraError
 
 _SYMPY_TIMEOUT = 5
+_WORKER_STARTUP_TIMEOUT = 30
 _PARSE_CACHE_SIZE = 8192
 
 SUBSTITUTIONS = [
@@ -185,8 +186,12 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
 
     if threading.current_thread() is not threading.main_thread():
         try:
-            return call_bounded(_sympy_is_equiv, candidate, reference, timeout=_SYMPY_TIMEOUT)
-        except (TimeoutError, RuntimeError) as error:
+            # The child arms its own comparison alarm after Python and SymPy imports.
+            # Leave those imports a separate bounded allowance under concurrent grading.
+            return call_bounded(_sympy_is_equiv, candidate, reference, timeout=_WORKER_STARTUP_TIMEOUT + _SYMPY_TIMEOUT)
+        except TimeoutError:
+            return False
+        except RuntimeError as error:
             raise GradingInfraError("Symbolic math comparison failed in its bounded worker") from error
 
     def on_timeout(signum, frame):
@@ -210,8 +215,8 @@ def _sympy_is_equiv(candidate: str, reference: str) -> bool:
         # Without antlr4-python3-runtime 4.11 every comparison would quietly
         # score 0, so surface it rather than report a non-match.
         raise
-    except TimeoutError as error:
-        raise GradingInfraError("Symbolic math comparison timed out") from error
+    except TimeoutError:
+        return False
     except Exception:
         # Invalid expressions and unsupported subtraction are non-matches.
         return False

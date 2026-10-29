@@ -247,6 +247,11 @@ boundaries; stored expected prompts and grades are not the equivalence gate.
 
 ## Validate ingestion
 
+The [96-declaration acceptance record](https://github.com/marin-community/marin/pull/10757#issuecomment-6483684301)
+records the migration's manual old/new comparisons, reproduction commands,
+source pins, row identities, coverage and limits. Its scripts and raw captures
+remain session artifacts.
+
 For each dataset and protocol variant, run a matching subset of real pinned
 source rows through the old evaluator and the new curation/driver pipeline.
 Read the new results from FineStore and compare actual requests, references,
