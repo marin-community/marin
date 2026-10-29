@@ -690,7 +690,7 @@ def gate_step(
     if not pins:
         raise click.BadParameter(
             f"no control pin for {preset.name} at {presets.PRESET_REVISION}; collect with "
-            f"python -m experiments.post_training.snowball_rl --preset {preset.name} "
+            f"python -m experiments.post_training.snowball_rl --preset {CONTROLS[preset.name][0].preset} "
             f"--version {presets.PRESET_REVISION} --control --replicates {CONTROLS[preset.name][0].runs} --run"
         )
     root = presets.artifact_prefix(preset.recipe.layout.cluster)
