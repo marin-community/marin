@@ -20,15 +20,18 @@ import iris.jax.compile_cache as jax_cache_module
 import iris.jax.init as jax_init_module
 import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
+from iris.client.client import IrisClient, IrisContext
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.env_resources import _read_iris_resource_proto
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.jax.init import initialize_jax, resolve_coordinator_port
+from iris.rpc import controller_pb2, job_pb2
 
-INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
-RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
-COORDINATOR_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-5"
+JOB_ENDPOINT_NAME = f"jax_coordinator-{JobName.from_wire('/testuser/testjob').to_safe_token()}"
+INITIAL_ATTEMPT_ENDPOINT_NAME = f"{JOB_ENDPOINT_NAME}-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = f"{JOB_ENDPOINT_NAME}-attempt-3"
+COORDINATOR_ATTEMPT_ENDPOINT_NAME = f"{JOB_ENDPOINT_NAME}-attempt-5"
 
 
 @dataclass
@@ -601,3 +604,71 @@ def test_xla_autotune_directory_does_not_change_the_compilation_cache_key() -> N
             return cache_key.get(module, devices, options, backend)
 
     assert compilation_cache_key("/cache/node-a") == compilation_cache_key("/cache/node-b")
+
+
+@pytest.mark.parametrize("supervised", [False, True], ids=["multitask", "supervised"])
+@pytest.mark.parametrize("endpoint_name", ["jax_coordinator", "custom_coordinator"])
+def test_initialize_jax_siblings_discover_their_own_current_coordinator(
+    monkeypatch: pytest.MonkeyPatch, supervised: bool, endpoint_name: str
+) -> None:
+    class EndpointStore:
+        def __init__(self):
+            self.endpoints = []
+            self.attempts = {}
+
+        def register_endpoint(self, name, address, task_attempt, metadata, access):
+            endpoint_id = str(len(self.endpoints))
+            self.endpoints.append(
+                controller_pb2.Controller.Endpoint(name=name, address=address, endpoint_id=endpoint_id)
+            )
+            self.attempts[task_attempt.task_id] = task_attempt.attempt_id
+            return endpoint_id
+
+        def unregister_endpoint(self, endpoint_id):
+            self.endpoints = [ep for ep in self.endpoints if ep.endpoint_id != endpoint_id]
+
+        def list_endpoint_instances(self, name):
+            return [ep for ep in self.endpoints if ep.name == name]
+
+        def get_task_status(self, task_name, *, deadline=None):
+            return job_pb2.TaskStatus(
+                task_id=task_name.to_wire(),
+                state=job_pb2.TASK_STATE_RUNNING,
+                current_attempt_id=self.attempts[task_name],
+            )
+
+    store = EndpointStore()
+    client = IrisClient(store)
+    if supervised:
+        monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "2")
+        monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+        monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+    else:
+        monkeypatch.delenv("IRIS_MULTIGPU_PROCESS_COUNT", raising=False)
+
+    def enter_task(child, task_index, attempt, port):
+        info = JobInfo(
+            task_id=JobName.from_wire(f"/testuser/pipeline/{child}/{task_index}"),
+            num_tasks=1 if supervised else 2,
+            attempt_id=attempt,
+            advertise_host="10.0.0.1",
+            ports={"jax": port},
+        )
+        context = IrisContext.from_job_info(info, client=client)
+        monkeypatch.setattr(jax_init_module, "get_job_info", lambda: info)
+        monkeypatch.setattr(jax_init_module, "iris_ctx", lambda: context)
+
+    with patch("jax.distributed.initialize") as initialize, patch("jax.distributed.is_initialized", return_value=False):
+        # Keep the old coordinator's registration alive too: peers must use task
+        # zero's current attempt, independently of their own retry count.
+        for child, attempt, port in [("train", 0, 12001), ("export", 0, 12002), ("train", 5, 12003)]:
+            enter_task(child, 0, attempt, port)
+            initialize_jax(endpoint_name=endpoint_name)
+
+        if supervised:
+            monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "1")
+            monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "1")
+        for child, port in [("train", 12003), ("export", 12002)]:
+            enter_task(child, 0 if supervised else 1, 3, port)
+            initialize_jax(endpoint_name=endpoint_name, poll_timeout=0)
+            assert initialize.call_args.args == (f"10.0.0.1:{port}", 2, 1)

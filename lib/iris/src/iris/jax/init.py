@@ -23,6 +23,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.platforms.types import find_free_port
+from iris.cluster.types import JobName
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.jax.compile_guard import install_gpu_compile_guard
 from iris.jax.multigpu import (
@@ -153,8 +154,8 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _attempt_endpoint_name(endpoint_name: str, attempt_id: int) -> str:
-    return f"{endpoint_name}-attempt-{attempt_id}"
+def _attempt_endpoint_name(job_id: JobName, endpoint_name: str, attempt_id: int) -> str:
+    return f"{endpoint_name}-{job_id.to_safe_token()}-attempt-{attempt_id}"
 
 
 def _coordinator_endpoint_name(job_info: JobInfo, endpoint_name: str) -> str:
@@ -163,7 +164,7 @@ def _coordinator_endpoint_name(job_info: JobInfo, endpoint_name: str) -> str:
         raise RuntimeError("Iris client is required for coordinator discovery")
     coordinator_task = job_info.job_id.task(0)
     attempt_id = ctx.client.task_status(coordinator_task).current_attempt_number
-    return _attempt_endpoint_name(endpoint_name, attempt_id)
+    return _attempt_endpoint_name(job_info.job_id, endpoint_name, attempt_id)
 
 
 def _register_coordinator(job_info: JobInfo, port: int | None, endpoint_name: str) -> str:
@@ -211,7 +212,9 @@ def _initialize_supervised_jax(
         raise RuntimeError("multi-process JAX initialization requires an Iris job context")
 
     if proc_index == 0:
-        coordinator = _register_coordinator(job_info, port, _attempt_endpoint_name(endpoint_name, job_info.attempt_id))
+        coordinator = _register_coordinator(
+            job_info, port, _attempt_endpoint_name(job_info.job_id, endpoint_name, job_info.attempt_id)
+        )
     else:
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(
@@ -263,7 +266,7 @@ def initialize_jax(
             ``IRIS_PORT_JAX`` named port and otherwise asks the kernel to select
             an available port. Pass a port only to pin it.
         endpoint_name: Base name for coordinator discovery. Iris scopes the
-            registered name to the coordinator task's current attempt.
+            registered name to the full job ID and coordinator task's current attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
             coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
             so a slow coordinator host on a large-gang cold restart does not abort
@@ -294,7 +297,7 @@ def initialize_jax(
     job_info = get_job_info()
     base_endpoint_name = endpoint_name
     if job_info is not None and job_info.task_index == 0:
-        endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
+        endpoint_name = _attempt_endpoint_name(job_info.job_id, endpoint_name, job_info.attempt_id)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
