@@ -20,14 +20,20 @@ from PIL import Image
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
-from transformers import CLIPImageProcessor, CLIPProcessor, PreTrainedTokenizerFast
+from transformers import (
+    CLIPImageProcessor,
+    CLIPProcessor,
+    LlavaNextImageProcessor,
+    LlavaNextProcessor,
+    PreTrainedTokenizerFast,
+)
 
 from levanter.data.image import (
     processor_with_tokenizer,
     ConversationDatasetSourceConfig,
     ImageMixtureDatasetConfig,
     image_caption_to_conversation,
-    BatchImageProcessor,
+    BatchMultimodalProcessor,
     ImageConversationUrlDataSource,
     ImageDatasetSourceConfig,
     ImageTextUrlDataSource,
@@ -154,7 +160,7 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     records.write_text(json.dumps({"image": str(image), "text": "red square"}) + "\n")
     source = ImageDatasetSourceConfig(train_urls=[str(records)]).get_shard_source("train")
     batch = list(source.open_shard(source.shard_names[0]))
-    processed = BatchImageProcessor(caption_processor, max_length=max_length, max_num_patches=3)(batch)[0]
+    processed = BatchMultimodalProcessor(caption_processor, max_length=max_length, max_num_patches=3)(batch)[0]
     assert processed["pixel_values"] is not None
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
@@ -171,11 +177,12 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
 
 
 def test_any_resolution_patch_cap_rejects_incompatible_grid(caption_processor) -> None:
-    processor = BatchImageProcessor(
+    processor = BatchMultimodalProcessor(
         caption_processor,
+        max_length=12,
         max_num_patches=1,
         grid_pinpoints=[[8, 8]],
-        patch_size=4,
+        tile_size=4,
         vision_feature_height=1,
     )
     record = image_caption_to_conversation({"image": Image.new("RGB", (8, 8)), "text": "red"})
@@ -183,11 +190,21 @@ def test_any_resolution_patch_cap_rejects_incompatible_grid(caption_processor) -
         processor([record])
 
 
-def test_output_exemplar_uses_processor_patch_size(caption_processor) -> None:
-    processor = BatchImageProcessor(caption_processor, max_num_patches=None, patch_size=4)
-    pixel_values = processor.output_exemplar["pixel_values"]
-    assert pixel_values is not None
-    assert pixel_values.shape == (1, 3, 4, 4)
+@pytest.mark.parametrize("tile_size", [4, 8])
+def test_processor_dimensions_match_processed_pixels_and_cache_schema(caption_processor, tile_size) -> None:
+    caption_processor.image_processor = CLIPImageProcessor(
+        size={"shortest_edge": tile_size}, crop_size={"height": tile_size, "width": tile_size}
+    )
+    processor = BatchMultimodalProcessor(caption_processor, max_length=12, max_num_patches=2)
+    record = image_caption_to_conversation({"image": Image.new("RGB", (16, 16), "red"), "text": "red"})
+    output = processor([record])[0]
+    pixels = output["pixel_values"]
+    exemplar = processor.output_exemplar["pixel_values"]
+    assert pixels is not None and exemplar is not None
+    assert pixels.shape == exemplar.shape == (3, 3, tile_size, tile_size)
+    expected = caption_processor.image_processor(images=record["images"], return_tensors="np")["pixel_values"][0]
+    np.testing.assert_allclose(pixels[0], expected)
+    np.testing.assert_array_equal(pixels[1:], 0)
 
 
 @pytest.mark.parametrize("source_kind", ["caption", "conversation"])
@@ -239,3 +256,25 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
     if use_cache:
         restored = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
         np.testing.assert_array_equal(asyncio.run(restored.get_batch([1]))[0]["input_ids"], second["input_ids"])
+
+
+def test_any_resolution_uses_processor_encoder_patch_size(caption_processor) -> None:
+    hf_processor = LlavaNextProcessor(
+        image_processor=LlavaNextImageProcessor(
+            size={"shortest_edge": 4}, crop_size={"height": 4, "width": 4}, image_grid_pinpoints=[[8, 8]]
+        ),
+        tokenizer=caption_processor.tokenizer,
+        patch_size=2,
+        vision_feature_select_strategy="full",
+        num_additional_image_tokens=0,
+        chat_template=caption_processor.chat_template,
+    )
+    processor = BatchMultimodalProcessor(hf_processor, max_length=64)
+    record = image_caption_to_conversation({"image": Image.new("RGB", (8, 8), "red"), "text": "red"})
+    output = processor([record])[0]
+    assert output["pixel_values"].shape == (5, 3, 4, 4)
+    np.testing.assert_array_equal(output["grid_mask"], [True] * 5)
+    # Four base tokens followed by the four 2x2 tile grids in spatial row order.
+    np.testing.assert_array_equal(
+        output["unpad_indices"], [0, 1, 2, 3, 4, 5, 8, 9, 6, 7, 10, 11, 12, 13, 16, 17, 14, 15, 18, 19]
+    )

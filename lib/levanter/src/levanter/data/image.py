@@ -59,8 +59,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E4
 
 logger = logging.getLogger("levanter.data.image")
 
-DEFAULT_IMAGE_TILE_SIZE = 384
-DEFAULT_IMAGE_TEXT_MAX_LENGTH = 2048
 PREFETCH_WAIT_TIMEOUT = 0.05
 
 
@@ -275,10 +273,10 @@ class ImageTextDict(TypedDict, total=False):
     unpad_indices: np.ndarray | None
 
 
-def _image_text_cache_exemplar(patch_size: int) -> ImageTextDict:
+def _image_text_cache_exemplar(tile_size: int) -> ImageTextDict:
     """Build the array schema TreeCache uses for processed image examples."""
     return {
-        "pixel_values": np.zeros((1, 3, patch_size, patch_size), dtype=np.float32),
+        "pixel_values": np.zeros((1, 3, tile_size, tile_size), dtype=np.float32),
         "input_ids": np.zeros((1,), dtype=np.int32),
         "attention_mask": np.zeros((1,), dtype=np.int32),
         "image_sizes": np.zeros((1, 2), dtype=np.int32),
@@ -339,12 +337,12 @@ def load_image(image_data: Any) -> Image.Image:
 @dataclass(frozen=True)
 class AnyResolutionParams:
     grid_pinpoints: Optional[List[List[int]]]
-    patch_size: int
+    tile_size: int
     vision_feature_height: Optional[int]
     max_num_patches: Optional[int]
 
 
-class ImageProcessorCallable(Protocol):
+class MultimodalProcessorCallable(Protocol):
     def __call__(
         self,
         *,
@@ -359,19 +357,24 @@ class ImageProcessorCallable(Protocol):
 
 def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     """Read tiling parameters from the processor's image configuration."""
-    image_processor = getattr(processor, "image_processor", None)
-    if image_processor is None:
-        return AnyResolutionParams(None, DEFAULT_IMAGE_TILE_SIZE, None, None)
-
+    image_processor = processor.image_processor
     grid_pinpoints = getattr(image_processor, "image_grid_pinpoints", None)
-    size_dict = getattr(image_processor, "crop_size", None) or getattr(image_processor, "size", {})
-    patch_size = (
-        size_dict.get("height", size_dict.get("shortest_edge", DEFAULT_IMAGE_TILE_SIZE))
-        if isinstance(size_dict, dict)
-        else DEFAULT_IMAGE_TILE_SIZE
-    )
-    assert isinstance(patch_size, int)
-    vision_feature_height = patch_size // 14
+    size = getattr(image_processor, "crop_size", None) or image_processor.size
+    if not isinstance(size, int):
+        tile_size = size.get("height", size.get("shortest_edge"))
+        width = size.get("width", tile_size)
+        if width != tile_size:
+            raise ValueError("Image tiles must be square; configure a square crop in the image processor")
+    else:
+        tile_size = size
+    if not isinstance(tile_size, int):
+        raise ValueError("The image processor must specify a tile height or shortest_edge")
+    vision_feature_height = None
+    if grid_pinpoints:
+        encoder_patch_size = processor.patch_size
+        if not isinstance(encoder_patch_size, int):
+            raise ValueError("Any-resolution processing requires the encoder patch size")
+        vision_feature_height = tile_size // encoder_patch_size
     max_num_patches = None
 
     # Try to get max_num_patches from vision_aspect_ratio (LLaVA-specific)
@@ -382,13 +385,13 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     # Fallback: compute from grid_pinpoints if available
     if max_num_patches is None and grid_pinpoints:
         max_resolution = max(max(h, w) for h, w in grid_pinpoints)
-        max_patches_per_dim = max_resolution // patch_size
+        max_patches_per_dim = max_resolution // tile_size
         max_num_patches = max_patches_per_dim * max_patches_per_dim  # +1 for base is added in _pad_pixel_values
 
-    return AnyResolutionParams(grid_pinpoints, patch_size, vision_feature_height, max_num_patches)
+    return AnyResolutionParams(grid_pinpoints, tile_size, vision_feature_height, max_num_patches)
 
 
-class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
+class BatchMultimodalProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
     """
     A batch processor that converts conversation-format data into model-ready inputs.
 
@@ -456,19 +459,19 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         image_token: str | None = None,
         video_token: str | None = None,
-        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
+        max_length: int,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
         add_generation_prompt: bool = False,
         mask_prompt: bool = True,
-        max_num_patches: Optional[int] = 9,
+        max_num_patches: Optional[int] = None,
         grid_pinpoints: Optional[List[List[int]]] = None,
-        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
+        tile_size: Optional[int] = None,
         vision_feature_height: Optional[int] = None,
     ) -> None:
         """
-        Initialize the BatchImageProcessor.
+        Initialize the BatchMultimodalProcessor.
 
         Args:
             processor: HuggingFace processor (e.g., AutoProcessor.from_pretrained(...))
@@ -482,7 +485,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             add_generation_prompt: Whether to add generation prompt at the end
             mask_prompt: Whether to mask non-assistant tokens (set loss_mask to 0.0)
             grid_pinpoints: List of grid resolutions for anyres processing, e.g., [[384,384], [768,384], ...]
-            patch_size: Size of each image patch (default 384)
+            tile_size: Image tile size; inferred from the image processor when omitted
             vision_feature_height: Vision encoder output tokens per spatial dim (e.g., 27 for 384/14)
             max_num_patches: Maximum number of patches for anyres constraint (e.g., 9 for anyres_max_9)
         """
@@ -494,10 +497,15 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self.add_generation_prompt = add_generation_prompt
         self.mask_prompt = mask_prompt
 
+        params = _extract_anyres_params(processor)
+        if grid_pinpoints is None:
+            grid_pinpoints = params.grid_pinpoints
         self.grid_pinpoints = grid_pinpoints
-        self.patch_size = patch_size
-        self.vision_feature_height = vision_feature_height
-        self.max_num_patches = max_num_patches
+        self.tile_size = params.tile_size if tile_size is None else tile_size
+        self.vision_feature_height = (
+            params.vision_feature_height if vision_feature_height is None else vision_feature_height
+        )
+        self.max_num_patches = params.max_num_patches if max_num_patches is None else max_num_patches
 
         if grid_pinpoints is not None:
             self._grid_h: np.ndarray | None = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
@@ -527,7 +535,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
     def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
         """Select the tile grid that preserves the most image area with least padding."""
-        if self._grid_h is None or self.patch_size is None:
+        if self._grid_h is None or self.tile_size is None:
             return (1, 1)  # Default for no anyres
 
         assert self._grid_w is not None and self._grid_area is not None
@@ -550,8 +558,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         assert self.grid_pinpoints is not None
         best_h, best_w = self.grid_pinpoints[best_idx]
-        gh = best_h // self.patch_size
-        gw = best_w // self.patch_size
+        gh = best_h // self.tile_size
+        gw = best_w // self.tile_size
         return (gh, gw)
 
     def _compute_unpad_indices_for_image(
@@ -722,7 +730,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         for item in batch:
             if item.get("audio") or item.get("videos"):
                 raise ValueError(
-                    "BatchImageProcessor accepts images and text; use an audio/video processor for other modalities"
+                    "BatchMultimodalProcessor accepts images and text; use an audio/video processor for other modalities"
                 )
             messages = item.get(self.messages_key, [])
             images_data = item.get(self.images_key, [])
@@ -752,7 +760,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 image_offset += num_images
 
         if all_images:
-            processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
+            processed: BatchFeature = cast(MultimodalProcessorCallable, self.processor)(
                 images=all_images,
                 text=all_texts,
                 return_tensors="np",
@@ -761,7 +769,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 truncation=True,
             )
         else:
-            processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
+            processed: BatchFeature = cast(MultimodalProcessorCallable, self.processor)(
                 text=all_texts,
                 return_tensors="np",
                 padding=self._padding_mode,
@@ -861,17 +869,17 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             "padding": self.padding,
             "mask_prompt": self.mask_prompt,
             "max_num_patches": self.max_num_patches,
-            "patch_size": self.patch_size,
+            "tile_size": self.tile_size,
             "grid_pinpoints": self.grid_pinpoints,
             "vision_feature_height": self.vision_feature_height,
         }
 
     @property
     def output_exemplar(self) -> ImageTextDict:
-        exemplar = _image_text_cache_exemplar(self.patch_size)
+        exemplar = _image_text_cache_exemplar(self.tile_size)
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
-            exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
+            exemplar["pixel_values"] = np.zeros((total_patches, 3, self.tile_size, self.tile_size), dtype=np.float32)
             exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
             if self.grid_pinpoints and self.vision_feature_height:
                 features_per_patch = self.vision_feature_height * self.vision_feature_height
@@ -1089,7 +1097,7 @@ class ImageTaskConfig(abc.ABC):
     """Base configuration for image-text tasks."""
 
     processor: str
-    max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH
+    max_length: int = 2048
     padding: bool = True
 
     @cached_property
@@ -1155,7 +1163,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         self,
         source: ShardedDataSource[Dict[str, Any]],
         processor: ProcessorMixin,
-        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
+        max_length: int,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
@@ -1171,19 +1179,12 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         self.images_key = images_key
         self.cache_size = cache_size
 
-        params = _extract_anyres_params(processor)
-        if max_num_patches is None:
-            max_num_patches = params.max_num_patches
-
-        self._batch_processor = BatchImageProcessor(
+        self._batch_processor = BatchMultimodalProcessor(
             processor,
             max_length=max_length,
             padding=padding,
             messages_key=messages_key,
             images_key=images_key,
-            grid_pinpoints=params.grid_pinpoints,
-            patch_size=params.patch_size,
-            vision_feature_height=params.vision_feature_height,
             max_num_patches=max_num_patches,
         )
 
@@ -1361,26 +1362,19 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
         cache_dir: str,
         source: ShardedDataSource[Dict[str, Any]],
         processor: ProcessorMixin,
-        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
+        max_length: int,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
         cache_options: CacheOptions = CacheOptions.default(),
         max_num_patches: Optional[int] = None,
     ) -> "ProcessedImageCache":
-        params = _extract_anyres_params(processor)
-        if max_num_patches is None:
-            max_num_patches = params.max_num_patches
-
-        batch_processor = BatchImageProcessor(
+        batch_processor = BatchMultimodalProcessor(
             processor,
             max_length=max_length,
             padding=padding,
             messages_key=messages_key,
             images_key=images_key,
-            grid_pinpoints=params.grid_pinpoints,
-            patch_size=params.patch_size,
-            vision_feature_height=params.vision_feature_height,
             max_num_patches=max_num_patches,
         )
         cache = build_or_load_cache(cache_dir, source, batch_processor, options=cache_options)
