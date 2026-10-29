@@ -62,6 +62,26 @@ logger = logging.getLogger("levanter.data.image")
 PREFETCH_WAIT_TIMEOUT = 0.05
 
 
+ConversationMessage = TypedDict(
+    "ConversationMessage",
+    {
+        "role": str,  # "user", "assistant", "system"
+        "content": List[Dict[str, Any]],  # [{"type": "image"}, {"type": "text", "text": "..."}]
+    },
+)
+
+ConversationDict = TypedDict(
+    "ConversationDict",
+    {
+        "messages": List[ConversationMessage],
+        "images": list[Any],
+        "audio": list[Any],
+        "videos": list[Any],
+    },
+    total=False,
+)
+
+
 class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
     """
     Dataset for image-text pairs from various file formats (JSON, JSONL, Parquet).
@@ -116,7 +136,7 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
                         raise ValueError(f"Unknown format {format}")
 
 
-class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
+class ImageConversationUrlDataSource(UrlBackedShardedDataSource[ConversationDict]):
     """
     Dataset for conversation-format image-text data (VLM training format).
 
@@ -138,7 +158,7 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         self.messages_key = messages_key
         self.images_key = images_key
 
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[ConversationDict]:
         url = self._shard_name_to_url_mapping[shard_name]
         i = 0
         format = _sniff_format_for_dataset(url)
@@ -152,12 +172,7 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                 ]
                 columns = [self.messages_key, *optional_columns]
                 for record in _iter_parquet_from_row(parquet_file, row, columns=columns):
-                    yield {
-                        "messages": record[self.messages_key],
-                        "images": record.get(self.images_key, []),
-                        "audio": record.get("audio", []),
-                        "videos": record.get("videos", []),
-                    }
+                    yield conversation_fields(record, self.messages_key, self.images_key)
         else:
             with StoragePath(url).open("r", compression="infer") as f:
                 match format:
@@ -165,22 +180,12 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                         for line in f:
                             if i >= row:
                                 data = json.loads(line)
-                                yield {
-                                    "messages": data[self.messages_key],
-                                    "images": data.get(self.images_key, []),
-                                    "audio": data.get("audio", []),
-                                    "videos": data.get("videos", []),
-                                }
+                                yield conversation_fields(data, self.messages_key, self.images_key)
                             i += 1
                     case ".json":
                         data = json.load(f)
                         for doc in data[row:]:
-                            yield {
-                                "messages": doc[self.messages_key],
-                                "images": doc.get(self.images_key, []),
-                                "audio": doc.get("audio", []),
-                                "videos": doc.get("videos", []),
-                            }
+                            yield conversation_fields(doc, self.messages_key, self.images_key)
                     case _:
                         raise ValueError(f"Unknown format {format}")
 
@@ -230,24 +235,14 @@ def image_source_urls(urls: Sequence[str]) -> list[str]:
     return sorted(result)
 
 
-ConversationMessage = TypedDict(
-    "ConversationMessage",
-    {
-        "role": str,  # "user", "assistant", "system"
-        "content": List[Dict[str, Any]],  # [{"type": "image"}, {"type": "text", "text": "..."}]
-    },
-)
-
-ConversationDict = TypedDict(
-    "ConversationDict",
-    {
-        "messages": List[ConversationMessage],
-        "images": list[Any],
-        "audio": list[Any],
-        "videos": list[Any],
-    },
-    total=False,
-)
+def conversation_fields(record: Mapping[str, Any], messages_key: str, images_key: str) -> ConversationDict:
+    """Normalize source field names and retain optional modality references."""
+    return {
+        "messages": record[messages_key],
+        "images": record.get(images_key, []),
+        "audio": record.get("audio", []),
+        "videos": record.get("videos", []),
+    }
 
 
 # Pixel values are optional to support text-only examples.
@@ -382,7 +377,6 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     if vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
         max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
 
-    # Fallback: compute from grid_pinpoints if available
     if max_num_patches is None and grid_pinpoints:
         max_resolution = max(max(h, w) for h, w in grid_pinpoints)
         max_patches_per_dim = max_resolution // tile_size
@@ -391,7 +385,7 @@ def _extract_anyres_params(processor: ProcessorMixin) -> AnyResolutionParams:
     return AnyResolutionParams(grid_pinpoints, tile_size, vision_feature_height, max_num_patches)
 
 
-class BatchMultimodalProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
+class BatchMultimodalProcessor(BatchProcessor[ConversationDict, ImageTextDict]):
     """
     A batch processor that converts conversation-format data into model-ready inputs.
 
@@ -712,7 +706,7 @@ class BatchMultimodalProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         return mask.astype(np.float32)
 
-    def __call__(self, batch: Sequence[Dict[str, Any]]) -> Sequence[ImageTextDict]:
+    def __call__(self, batch: Sequence[Mapping[str, Any]]) -> Sequence[ImageTextDict]:
         """
         Process a batch of conversation data.
 
@@ -896,7 +890,7 @@ class BatchMultimodalProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         return 0
 
 
-def image_caption_to_conversation(record: Dict[str, Any]) -> Dict[str, Any]:
+def image_caption_to_conversation(record: Dict[str, Any]) -> ConversationDict:
     """Represent an image-caption pair as a user image and assistant caption."""
     return {
         "messages": [
@@ -930,7 +924,7 @@ class ImageDatasetSourceConfig:
     validation_urls: List[str] = ()  # type: ignore
     cache_dir: Optional[str] = None
 
-    def get_shard_source(self, split: str) -> Optional[ShardedDataSource[Dict[str, Any]]]:
+    def get_shard_source(self, split: str) -> Optional[ShardedDataSource[ConversationDict]]:
         """Get a sharded data source for the specified split."""
         if self.id is not None:
             try:
@@ -1050,12 +1044,7 @@ class ConversationDatasetSourceConfig:
                 return None
 
             def extract_fields(x: dict[str, Any]) -> ConversationDict:
-                return {
-                    "messages": x[self.messages_key],
-                    "images": x.get(self.images_key, []),
-                    "audio": x.get("audio", []),
-                    "videos": x.get("videos", []),
-                }
+                return conversation_fields(x, self.messages_key, self.images_key)
 
             return ds.map(extract_fields)
         else:
@@ -1073,12 +1062,7 @@ class ConversationDatasetSourceConfig:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for raw_doc in data:
                 doc = cast(Dict[str, Any], raw_doc)
-                yield {
-                    "messages": doc[self.messages_key],
-                    "images": doc.get(self.images_key, []),
-                    "audio": doc.get("audio", []),
-                    "videos": doc.get("videos", []),
-                }
+                yield conversation_fields(doc, self.messages_key, self.images_key)
         else:
             urls = self.urls_for_split(split)
             for doc in ImageConversationUrlDataSource(
@@ -1161,7 +1145,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
 
     def __init__(
         self,
-        source: ShardedDataSource[Dict[str, Any]],
+        source: ShardedDataSource[ConversationDict],
         processor: ProcessorMixin,
         max_length: int,
         padding: bool = True,
@@ -1191,7 +1175,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         self._processor_lock = self._get_processor_lock(processor)
 
         # Raw records may include decoded images as well as paths or encoded bytes.
-        self._raw_data: Optional[List[Dict[str, Any]]] = None
+        self._raw_data: Optional[List[ConversationDict]] = None
         self._length: Optional[int] = None
         self._data_lock = threading.Lock()
         self._data_loaded = threading.Event()
@@ -1217,7 +1201,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
 
             logger.info("Loading raw records into memory for indexed image access...")
 
-            raw_data: list[Dict[str, Any]] = []
+            raw_data: list[ConversationDict] = []
             for shard_name in self.source.shard_names:
                 shard_data = list(self.source.open_shard(shard_name))
                 raw_data.extend(shard_data)
@@ -1360,7 +1344,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
     @staticmethod
     def build_or_load(
         cache_dir: str,
-        source: ShardedDataSource[Dict[str, Any]],
+        source: ShardedDataSource[ConversationDict],
         processor: ProcessorMixin,
         max_length: int,
         padding: bool = True,

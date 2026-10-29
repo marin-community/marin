@@ -53,14 +53,20 @@ def test_image_references_preserve_pixels(tmp_path: Path) -> None:
         np.testing.assert_array_equal(np.asarray(load_image(reference)), pixels)
 
 
-def test_conversation_source_preserves_other_modalities(tmp_path: Path) -> None:
-    path = tmp_path / "records.jsonl"
+@pytest.mark.parametrize("file_format", ["json", "jsonl", "parquet"])
+def test_conversation_source_preserves_other_modalities(tmp_path: Path, file_format: str) -> None:
+    path = tmp_path / f"records.{file_format}"
     record = {
         "messages": [{"role": "user", "content": [{"type": "audio"}]}],
         "audio": ["sound.wav"],
         "videos": ["clip.mp4"],
     }
-    path.write_text(json.dumps(record) + "\n")
+    if file_format == "parquet":
+        pq.write_table(pa.Table.from_pylist([record]), path)
+    elif file_format == "json":
+        path.write_text(json.dumps([record]))
+    else:
+        path.write_text(json.dumps(record) + "\n")
     source = ImageConversationUrlDataSource([str(path)])
     loaded = list(source.open_shard(source.shard_names[0]))
     assert loaded == [{**record, "images": []}]
