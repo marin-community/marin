@@ -23,7 +23,7 @@ from taskcompendium.models import (
 )
 from taskforge.capability import CapabilityIdea
 
-from experiments.post_training.rsi.generator_box import cited_types, examples_by_type, round_robin, typed_idea
+from experiments.post_training.rsi.generator_box import cited_types, examples_by_type, in_turns, typed_idea
 
 GENERATED_ENTRY = {"question": "Sort: b, A", "answer": "A, b", "metadata": {"source_dataset": "word_sorting"}}
 NEMOTRON_TERMS = {
@@ -86,24 +86,30 @@ def test_both_reasoning_gym_row_forms_give_their_type_and_entry():
 def test_an_idea_gets_the_types_it_cites_most_cited_first_with_all_their_examples():
     examples = examples_by_type(EVALUATION)
     cited = idea(["nemotron-0", "generated-0", "generated-1", "calendar-0"])
-    assert cited_types(cited, examples) == ["word_sorting", "spell_backward"]
-    assert cited_types(idea(["calendar-0", "coding-0"]), examples) == []
+    assert list(cited_types(cited, examples).items()) == [("word_sorting", 2), ("spell_backward", 1)]
+    assert cited_types(idea(["calendar-0", "coding-0"]), examples) == {}
     # The program sees every evaluation task of the type, also the ones that the idea does not cite.
     typed = typed_idea(idea(["generated-0"]), examples["word_sorting"])
     assert typed.capability["example_entries"] == [GENERATED_ENTRY, GENERATED_ENTRY]
     assert typed.capability["example_tasks"] == ["Sort: b, A", "Sort: b, A"]
 
 
-def test_a_later_batch_gets_its_turn_before_the_first_one_is_used_up():
+def test_a_later_batch_gets_turns_in_proportion_to_its_weight():
     async def run() -> list[str]:
-        batches: asyncio.Queue[list[str] | None] = asyncio.Queue()
-        batches.put_nowait(["a0", "a1", "a2", "a3"])
-        stream = round_robin(batches)
+        batches: asyncio.Queue[tuple[int, list[str]] | None] = asyncio.Queue()
+        batches.put_nowait((1, ["a0", "a1", "a2", "a3", "a4", "a5"]))
+        stream = in_turns(batches)
         taken = [await anext(stream)]
-        # The gap idea's batch arrives while the first idea's batch could still fill the whole share.
-        batches.put_nowait(["b0", "b1"])
-        batches.put_nowait([])
+        # The gap idea's batch, with three times the cited failures, arrives while the first batch could still fill
+        # the whole share.
+        batches.put_nowait((3, ["b0", "b1", "b2", "b3", "b4", "b5"]))
+        batches.put_nowait((5, []))
         batches.put_nowait(None)
         return taken + [item async for item in stream]
 
-    assert asyncio.run(run()) == ["a0", "a1", "b0", "a2", "b1", "a3"]
+    items = asyncio.run(run())
+    assert items[0] == "a0"
+    # Three turns of the later batch for each turn of the first, then the rest of the first batch.
+    assert [item[0] for item in items[1:9]].count("b") == 6
+    assert items[9:] == ["a3", "a4", "a5"]
+    assert sorted(items) == sorted([f"a{k}" for k in range(6)] + [f"b{k}" for k in range(6)])

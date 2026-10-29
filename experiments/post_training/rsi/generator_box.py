@@ -70,11 +70,11 @@ def examples_by_type(evaluation: Sequence[TaskSpec]) -> dict[str, dict[str, dict
     return dict(examples)
 
 
-def cited_types(idea: CapabilityIdea, examples: Mapping[str, Mapping[str, dict]]) -> list[str]:
-    """The Reasoning Gym types of the evaluation tasks that ``idea`` cites, the most cited first."""
+def cited_types(idea: CapabilityIdea, examples: Mapping[str, Mapping[str, dict]]) -> dict[str, int]:
+    """The Reasoning Gym types of the evaluation tasks that ``idea`` cites, with how many it cites, the most first."""
     cited = cited_tasks(idea)
     counts = {name: sum(task_id in entries for task_id in cited) for name, entries in examples.items()}
-    return sorted((name for name, count in counts.items() if count), key=lambda name: -counts[name])
+    return {name: counts[name] for name in sorted(counts, key=lambda name: -counts[name]) if counts[name]}
 
 
 def typed_idea(idea: CapabilityIdea, entries: Mapping[str, dict]) -> CapabilityIdea:
@@ -88,19 +88,28 @@ def typed_idea(idea: CapabilityIdea, entries: Mapping[str, dict]) -> CapabilityI
     return idea.model_copy(update={"capability": capability})
 
 
-async def round_robin[T](batches: asyncio.Queue[list[T] | None]) -> AsyncIterator[T]:
-    """One item of each batch in turn, over the batches that have arrived by then, until ``None`` arrives and every
-    batch is used up. Training takes the synthesized share a task at a time, and the first ideas' instances alone can
-    fill it; taking them in turn gives the ideas that come later their share."""
-    rotation: deque[deque[T]] = deque()
+@dataclass
+class Batch[T]:
+    weight: int
+    """Its share of the turns: the failed evaluation tasks of its type that its idea cites."""
+    items: deque[T]
+    credit: float = 0.0
+
+
+async def in_turns[T](batches: asyncio.Queue[tuple[int, list[T]] | None]) -> AsyncIterator[T]:
+    """The items of the weighted batches that have arrived, in turns in proportion to their weights (smooth weighted
+    round robin), until ``None`` arrives and every batch is used up. Training takes the synthesized share a task at a
+    time and the first ideas' instances alone can fill it, so the ideas that come later need turns; the weights give
+    the most turns to the types that most failed evaluation tasks show."""
+    rotation: list[Batch[T]] = []
     finished = False
 
-    def take(batch: list[T] | None) -> None:
+    def take(batch: tuple[int, list[T]] | None) -> None:
         nonlocal finished
         if batch is None:
             finished = True
-        elif batch:
-            rotation.append(deque(batch))
+        elif batch[1]:
+            rotation.append(Batch(batch[0], deque(batch[1])))
 
     while True:
         while not batches.empty():
@@ -110,25 +119,28 @@ async def round_robin[T](batches: asyncio.Queue[list[T] | None]) -> AsyncIterato
                 return
             take(await batches.get())
             continue
-        batch = rotation.popleft()
-        yield batch.popleft()
-        if batch:
-            rotation.append(batch)
+        for batch in rotation:
+            batch.credit += batch.weight
+        chosen = max(rotation, key=lambda batch: batch.credit)
+        chosen.credit -= sum(batch.weight for batch in rotation)
+        yield chosen.items.popleft()
+        if not chosen.items:
+            rotation.remove(chosen)
 
 
 async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: GeneratorConfig) -> AsyncIterator[TaskSpec]:
     """The valid instances that one generator program per cited type makes for each idea, as each idea finishes."""
     examples = examples_by_type(config.evaluation)
-    made: asyncio.Queue[list[TaskSpec] | None] = asyncio.Queue()
+    made: asyncio.Queue[tuple[int, list[TaskSpec]] | None] = asyncio.Queue()
     slots = asyncio.Semaphore(config.concurrency)
 
     async def one(idea: CapabilityIdea) -> None:
-        types = [name for name in cited_types(idea, examples) if name in config.templates]
+        types = {name: count for name, count in cited_types(idea, examples).items() if name in config.templates}
         if not types:
             logger.info("%s cites no Reasoning Gym task of a seed type; it makes no tasks", idea.capability_id)
             return
         capability = f"{CAPABILITY_TAG_PREFIX}{idea.capability_id}"
-        for name in types:
+        for name, count in types.items():
             try:
                 async with slots:
                     pairs = await generator(config.client, typed_idea(idea, examples[name]), config.instances_per_type)
@@ -140,13 +152,18 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
             kept = [(question, entry) for question, entry in pairs if valid(name, question, entry)]
             logger.info("%s, %s: %d of %d instances are valid", idea.capability_id, name, len(kept), len(pairs))
             made.put_nowait(
-                [
-                    synthesized(
-                        entry_task(config.templates[name], name, f"{name}.generator-{k}", question, entry, capability),
-                        idea,
-                    )
-                    for k, (question, entry) in enumerate(kept)
-                ]
+                (
+                    count,
+                    [
+                        synthesized(
+                            entry_task(
+                                config.templates[name], name, f"{name}.generator-{k}", question, entry, capability
+                            ),
+                            idea,
+                        )
+                        for k, (question, entry) in enumerate(kept)
+                    ],
+                )
             )
 
     async def run_all() -> None:
@@ -163,7 +180,7 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
 
     runner = asyncio.create_task(run_all())
     try:
-        async for task in round_robin(made):
+        async for task in in_turns(made):
             yield task
         await runner
     finally:
