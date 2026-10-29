@@ -708,7 +708,7 @@ def test_snowball_pallas_rms_norm_explicit_train_decode_layouts_and_context_reje
     train_spec = P(("replica_dcn", "data", "expert"), None, None)
     weight_spec = P(None)
     with jax.set_mesh(train_mesh):
-        x_train = jax.device_put(jnp.ones((4, 128, 256), dtype=jnp.float32), NamedSharding(train_mesh, train_spec))
+        x_train = jax.device_put(jnp.ones((4, 256, 256), dtype=jnp.float32), NamedSharding(train_mesh, train_spec))
         weight = jax.device_put(jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32), NamedSharding(train_mesh, weight_spec))
 
         def apply(value, scale):
@@ -755,6 +755,49 @@ def test_snowball_pallas_rms_norm_explicit_train_decode_layouts_and_context_reje
         context_norm = RMSNorm(weight=context_weight, eps=1e-5, implementation="pallas_tpu")
         with pytest.raises(ValueError, match="later leading axis"):
             context_norm(context_x)
+
+
+@pytest.mark.timeout(120)
+def test_snowball_rms_norm_reference_preserves_explicit_row_sharding_over_512_rows():
+    run_on_cpu_devices(
+        """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import equinox as eqx
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.models.snowball import RMSNorm
+
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
+            axes,
+            axis_types=(AxisType.Explicit,) * len(axes),
+        )
+        input_spec = P(("replica_dcn", "data", "expert"), None, None)
+        with jax.set_mesh(mesh):
+            host_x = jnp.linspace(-1.0, 1.0, 4 * 256 * 128, dtype=jnp.float32).reshape(4, 256, 128)
+            x = jax.device_put(host_x, NamedSharding(mesh, input_spec))
+            weight = jnp.linspace(0.5, 1.5, 128, dtype=jnp.float32)
+            norm = RMSNorm(weight=weight, eps=1e-5, implementation="reference")
+
+            def independent(value, scale):
+                value32 = value.astype(jnp.float32)
+                rms = jax.lax.rsqrt(jnp.mean(jnp.square(value32), axis=-1, keepdims=True) + 1e-5)
+                return (value32 * rms * scale).astype(value.dtype)
+
+            actual = eqx.filter_jit(norm)(x)
+            expected = independent(x, weight)
+            _, gradient = eqx.filter_jit(jax.value_and_grad(lambda value: jnp.sum(norm(value))))(x)
+
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        assert actual.sharding.spec == input_spec
+        assert gradient.sharding.spec == input_spec
+        assert bool(jnp.isfinite(gradient).all())
+        """,
+        device_count=4,
+    )
 
 
 def test_snowball_hf_config_does_not_initialize_jax_backend():

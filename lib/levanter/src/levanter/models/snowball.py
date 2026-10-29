@@ -72,6 +72,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.kernels.pallas.rms_norm import Implementation as BatchInvariantRmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
+from levanter.kernels.pallas.rms_norm.reference import MAX_FLATTENED_ROWS
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
@@ -382,6 +383,30 @@ def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _bounded_rms_norm(
+    x: jax.Array,
+    weight: jax.Array,
+    eps: float,
+    implementation: BatchInvariantRmsNormImplementation,
+) -> jax.Array:
+    """Apply the bounded RMS primitive to flattened row chunks without changing their layout."""
+    if x.size // x.shape[-1] <= MAX_FLATTENED_ROWS:
+        return _match_activation_layout(batch_invariant_rms_norm(x, weight, eps, implementation), x)
+
+    flat_x = x.reshape((-1, x.shape[-1]))
+    sharding = jax.typeof(flat_x).sharding if isinstance(flat_x, core.Tracer) else flat_x.sharding
+    output_sharding = sharding.spec if isinstance(sharding, NamedSharding) else None
+    chunks: list[jax.Array] = []
+    for start in range(0, flat_x.shape[0], MAX_FLATTENED_ROWS):
+        end = start + MAX_FLATTENED_ROWS
+        if output_sharding is None:
+            chunk = flat_x[start:end]
+        else:
+            chunk = flat_x.at[start:end].get(out_sharding=output_sharding)
+        chunks.append(batch_invariant_rms_norm(chunk, weight, eps, implementation))
+    return _match_activation_layout(jnp.concatenate(chunks, axis=0).reshape(x.shape), x)
+
+
 def _qk_rms_norm(
     x: jax.Array,
     implementation: SnowballQKRMSNormImplementation,
@@ -407,14 +432,9 @@ def _qk_rms_norm_local(
     implementation: SnowballQKRMSNormImplementation,
 ) -> jax.Array:
     hidden = x.shape[-1]
-    flat_x = x.reshape((-1, hidden))
     weight = jnp.ones((hidden,), dtype=jnp.float32)
-    chunks = tuple(
-        batch_invariant_rms_norm(flat_x[start : start + 512], weight, _QK_RMS_NORM_EPS, implementation)
-        for start in range(0, flat_x.shape[0], 512)
-    )
-    output = jnp.concatenate(chunks, axis=0).reshape(x.shape)
-    return _match_activation_layout(output, x)
+    output = _bounded_rms_norm(x.reshape((-1, hidden)), weight, _QK_RMS_NORM_EPS, implementation)
+    return _match_activation_layout(output.reshape(x.shape), x)
 
 
 # --- Config ------------------------------------------------------------------------------------
@@ -646,12 +666,7 @@ class RMSNorm(eqx.Module):
             implementation = cast(BatchInvariantRmsNormImplementation, self.implementation)
             if implementation == "pallas_tpu":
                 self._validate_pallas_layout(x)
-            output = batch_invariant_rms_norm(x, weight, self.eps, implementation)
-            if x.ndim == 3:
-                input_sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
-                if isinstance(input_sharding, NamedSharding) and not input_sharding.mesh.empty:
-                    return reshard(output, input_sharding)
-            return output
+            return _bounded_rms_norm(x, weight, self.eps, implementation)
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
@@ -865,6 +880,8 @@ def _match_activation_layout(value: jax.Array, reference: jax.Array) -> jax.Arra
         return value
     current = jax.typeof(value).sharding if isinstance(value, core.Tracer) else value.sharding
     if isinstance(current, NamedSharding) and current == target:
+        return value
+    if target.mesh.empty:
         return value
     return jax.sharding.reshard(value, target)
 
