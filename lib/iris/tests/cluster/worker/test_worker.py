@@ -521,11 +521,12 @@ def test_worker_shutdown_waits_for_graceful_task_exit(mock_worker, mock_runtime)
     assert not any(call["force"] for call in handle.stop_calls)
 
 
-def test_invalid_preemption_grace_rejected_before_task_starts(mock_worker):
+@pytest.mark.parametrize("grace", ["invalid", "0", "111"])
+def test_invalid_preemption_grace_rejected_before_task_starts(mock_worker, grace: str):
     request = create_run_task_request()
-    request.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = "invalid"
+    request.environment.env_vars["IRIS_PREEMPTION_GRACE_SECONDS"] = grace
 
-    with pytest.raises(ValueError, match="invalid literal"):
+    with pytest.raises(ValueError, match="IRIS_PREEMPTION_GRACE_SECONDS"):
         mock_worker.submit_task(request)
 
     assert mock_worker.list_tasks() == []

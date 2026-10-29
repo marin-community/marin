@@ -650,6 +650,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             preemption.restore()
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def run_grug(config: GrugRunConfig) -> None:

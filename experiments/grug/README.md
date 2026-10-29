@@ -70,6 +70,8 @@ commit marker before exiting. The pipeline variant uses the same stop decision
 and its canonical checkpoint root. Retries must use the same run ID and
 checkpoint root to restore the saved step and data position. Checkpoint
 discovery ignores directories without a completed `metadata.json` marker.
+After committing a preemption checkpoint, the trainer exits with SIGTERM status
+so Iris retries the task instead of reporting partial training as complete.
 
 Grug dispatch gives Iris tasks a 60 second shutdown budget. Override it on the
 launching job with `-e IRIS_PREEMPTION_GRACE_SECONDS <seconds>`; the dispatcher

@@ -19,6 +19,7 @@ class GracefulPreemption:
 
     def __init__(self) -> None:
         self._requested = False
+        self._stopping = False
         self._previous_handler: signal.Handlers | Callable[[int, FrameType | None], object] | None = None
 
     def install(self) -> None:
@@ -47,9 +48,16 @@ class GracefulPreemption:
     def should_stop(self, completed_step: int) -> bool:
         """Collect every rank's stop request and verify the completed step agrees."""
         if jax.process_count() == 1:
-            return self._requested
+            self._stopping = self._requested
+            return self._stopping
         local = np.asarray([completed_step, int(self._requested)], dtype=np.int64)
         gathered = np.asarray(multihost_utils.process_allgather(local, tiled=False)).reshape(-1, 2)
         if np.any(gathered[:, 0] != completed_step):
             raise RuntimeError(f"Grug ranks reached different completed steps: {gathered[:, 0].tolist()}")
-        return bool(np.any(gathered[:, 1]))
+        self._stopping = bool(np.any(gathered[:, 1]))
+        return self._stopping
+
+    def exit_if_preempted(self) -> None:
+        """Report preemption after the final checkpoint commits so Iris retries the task."""
+        if self._stopping or self._requested:
+            raise SystemExit(128 + signal.SIGTERM)

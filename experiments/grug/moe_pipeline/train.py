@@ -388,6 +388,7 @@ def _run_grug_local(config: GrugPipelineTrainConfig) -> None:
     finally:
         preemption.restore()
 
+    preemption.exit_if_preempted()
     if not step_times:
         _log("PIPELINE_COMPLETE", step=start_step)
         return

@@ -568,6 +568,7 @@ def main() -> None:
     _log("pipeline_preempted" if preempted else "pipeline_complete", steps=finished_step, full_hero=full_hero)
     if args.run_id and jax.process_index() == 0:
         wandb.finish()
+    preemption.exit_if_preempted()
 
 
 if __name__ == "__main__":

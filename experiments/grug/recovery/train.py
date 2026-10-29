@@ -170,3 +170,4 @@ def recovery_train(config: RecoveryRunConfig) -> None:
                 watchdog.on_event(ProgressEvent.TRAINING_FINISHED)
 
         logger.info("recovery_train finished at step %d (run=%s)", step, run_id)
+        preemption.exit_if_preempted()

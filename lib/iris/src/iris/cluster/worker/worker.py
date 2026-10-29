@@ -766,7 +766,7 @@ class Worker:
 
         if should_kill_existing:
             assert current is not None  # set only on the supersede branch above
-            current.kill()
+            current.kill(term_timeout_ms=DEFAULT_WORKER_STOP_TIMEOUT_SECONDS * 1000)
 
         task_id.require_task()
 

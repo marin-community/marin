@@ -15,7 +15,10 @@ WORKER_CONTAINER_STOP_TIMEOUT_SECONDS = MAX_PREEMPTION_GRACE_SECONDS + 2 * SHUTD
 
 def preemption_grace_seconds(env: Mapping[str, str]) -> int:
     """Return the task's configured SIGTERM grace in seconds."""
-    value = int(env.get(PREEMPTION_GRACE_ENV, DEFAULT_PREEMPTION_GRACE_SECONDS))
+    try:
+        value = int(env.get(PREEMPTION_GRACE_ENV, DEFAULT_PREEMPTION_GRACE_SECONDS))
+    except ValueError as exc:
+        raise ValueError(f"{PREEMPTION_GRACE_ENV} must be an integer") from exc
     if not 1 <= value <= MAX_PREEMPTION_GRACE_SECONDS:
         raise ValueError(f"{PREEMPTION_GRACE_ENV} must be between 1 and {MAX_PREEMPTION_GRACE_SECONDS}")
     return value
