@@ -106,7 +106,7 @@ def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
 
 
 def task_environment_to_json(environment: job_pb2.EnvironmentConfig) -> str:
-    """Keep inline primary files in job_workdir_files, including for named tasks."""
+    """Serialize the task environment without inline primary workdir files."""
     stored = job_pb2.EnvironmentConfig()
     stored.CopyFrom(environment)
     primary = primary_service(stored)
