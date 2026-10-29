@@ -1121,7 +1121,12 @@ class SnowballBlock(eqx.Module):
             ),
             attn=SnowballAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_mlp_key,
+                implementation=cfg.gated_norm_implementation,
+            ),
             mlp=SnowballMoEMLP.init(cfg, key=mlp_key),
             shared=DenseMLP.init(
                 cfg.hidden_dim,

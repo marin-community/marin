@@ -278,7 +278,7 @@ def test_snowball_gated_norm_selector_preserves_state_dict_and_propagates():
     assert fixed.transformer.embed_gated_norm.implementation == "fixed_schedule"
     assert fixed.transformer.final_gated_norm.implementation == "fixed_schedule"
     assert all(block.attn_gated_norm.implementation == "fixed_schedule" for block in fixed.transformer.blocks)
-    assert all(block.mlp_gated_norm.implementation == "native" for block in fixed.transformer.blocks)
+    assert all(block.mlp_gated_norm.implementation == "fixed_schedule" for block in fixed.transformer.blocks)
 
     assert native_state.keys() == fixed_state.keys()
     for name in native_state:
