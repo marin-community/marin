@@ -24,17 +24,19 @@ from taskcompendium.models import (
     ResourceGroups,
     ScriptGrader,
     Source,
-    TaskResource,
     TaskSpec,
     TextMessage,
 )
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.inventory import (
+    AAII_CATEGORIES,
     FULL_VALIDATION_FILENAME,
+    HELDOUT_FAMILIES,
     TASK_MANIFEST_FILENAME,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
@@ -43,7 +45,7 @@ from experiments.post_training.task_curation.inventory import (
     validation_task,
 )
 
-FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
+FAMILIES = (*HELDOUT_FAMILIES.values(), "structural")
 
 
 @pytest.fixture(autouse=True)
@@ -90,16 +92,22 @@ def heldout_rows() -> list[dict]:
                     "command_semantics": "linux_process",
                     "packages_lock": "numpy==2.3.5\n",
                 }
-                dataset = {
-                    "calendar": "ultra_sft_step3200_calendar_v2",
-                    "competitive_coding": "ultra_sft_step3200_comp_coding",
-                    "reasoning_gym": "ultra_sft_step3200_reasoning_gym",
-                    "stem": "ultra_sft_step3200_stem_mcqa",
-                }[family]
+                dataset = next(dataset for dataset, expected in HELDOUT_FAMILIES.items() if expected == family)
+                task["tags"] = ["agentic"] if index == 0 else []
                 task["resources"]["verifier"].append(
-                    inline_resource("config.json", json.dumps({"contract": {"dataset": dataset}}).encode()).model_dump(
-                        mode="json"
-                    )
+                    inline_resource(
+                        "config.json",
+                        json.dumps(
+                            {
+                                "contract": {
+                                    "dataset": dataset,
+                                    "pass_rate_passed": 5,
+                                    "pass_rate_total": 8,
+                                    "pass_rate": 0.625,
+                                }
+                            }
+                        ).encode(),
+                    ).model_dump(mode="json")
                 )
             rows.append(
                 {
@@ -206,12 +214,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
 
 def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     rows = heldout_rows()
-    components = {
-        "ultra_sft_step3200_calendar_v2": "calendar",
-        "ultra_sft_step3200_comp_coding": "competitive_coding",
-        "ultra_sft_step3200_reasoning_gym": "reasoning_gym",
-        "ultra_sft_step3200_stem_mcqa": "stem",
-    }
+    components = HELDOUT_FAMILIES
     environments = {
         family: EnvironmentRequirements(
             command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=f"numpy==2.3.{index}\n"
@@ -220,7 +223,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
     settings = recipe(tmp_path).model_copy(
         update={
-            "sources": {f"MarinSkyRL:nemotron_ultra_rlvr1/{dataset}": family for dataset, family in components.items()},
+            "sources": {BLENDS["rlvr1"][dataset].id: family for dataset, family in components.items()},
             "family_limits": {family: 1 for family in components.values()},
         }
     )
@@ -238,11 +241,6 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
             task["grader"]["argv"][0] = "python3"
             task["grader"]["env"] = {"MODE": "historical"}
             task["grader"]["timeout"] = 330
-            task["tags"] = ["agentic"] if task["id"].endswith("-0") else []
-            resource = next(resource for resource in task["resources"]["verifier"] if resource["path"] == "config.json")
-            contract = json.loads(resource_bytes(TaskResource.model_validate(resource)))
-            contract["contract"]["pass_rate_passed"] = 5
-            resource.update(inline_resource("config.json", json.dumps(contract).encode()).model_dump(mode="json"))
         originals[task["id"]] = task
         row["lowered_task_spec"] = json.dumps(document)
     pq.write_table(pa.Table.from_pylist(rows), settings.heldout.uri)
@@ -250,13 +248,6 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     full = read_tasks(output / FULL_VALIDATION_FILENAME)
     manifest = pq.read_table(output / TASK_MANIFEST_FILENAME).to_pylist()
     assert {row["task_id"] for row in manifest} == {task.id for task in full}
-    expected_categories = {
-        "calendar": "format",
-        "competitive_coding": "coding",
-        "reasoning_gym": "scientific_reasoning",
-        "stem": "scientific_reasoning",
-        "structural": "format",
-    }
     by_id = {task.id: task for task in full}
     for row in manifest:
         task = by_id[row["task_id"]]
@@ -265,7 +256,7 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
         assert row == {
             "task_id": task.id,
             "family": family,
-            "aaii_category": expected_categories[family],
+            "aaii_category": AAII_CATEGORIES[family],
             "agentic": "agentic" in original["tags"],
             "grader_kind": "in_process" if family == "structural" else "package",
             "upstream_pass_rate": None if family == "structural" else 0.625,
