@@ -37,7 +37,6 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
@@ -230,18 +229,13 @@ def _resume_checkpoint_root(source: ArtifactStep[SkyRLRun], model: SkyRLModelSou
     ):
         raise click.BadParameter("--resume-from requires a train-long run")
     initial = config["inputs"]["model"]
-    if (initial["identity"], initial["tokenizer_uri"], initial["tokenizer_revision"]) != (
-        artifact_identity(model.step),
-        tokenizer,
-        revision,
-    ):
+    expected = (artifact_identity(model.step), tokenizer, revision)
+    if tuple(initial[key] for key in ("identity", "tokenizer_uri", "tokenizer_revision")) != expected:
         raise click.BadParameter("resume source uses another model or tokenizer; use its matching --init artifact")
     root = config["artifacts"]["checkpoint_root"]
     marker = StoragePath(root) / "latest_ckpt_global_step.txt"
     missing = f"no checkpoint remains at {root}; temporary checkpoints expire after 14 days"
-    if not presets.exists(marker) or not presets.exists(
-        StoragePath(root) / f"global_step_{int(presets.read_text(marker).strip())}"
-    ):
+    if not presets.exists(marker) or not presets.exists(marker.parent / f"global_step_{int(presets.read_text(marker))}"):
         raise click.BadParameter(missing)
     return root
 
@@ -317,12 +311,8 @@ def _post_evaluation(
         callbacks=[], eval_interval=1, eval_before_train=False, resume_mode="none", ckpt_interval=0, hf_save_interval=-1
     )
     evaluator = presets.EVALUATORS[evaluation.harness]
-    validation = evaluator.configure(
-        evaluation, config, selection=selection, default_selection=selection, seed=config["trainer"]["seed"]
-    )
-    config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(
-        evaluation, selection, selection
-    )
+    validation = evaluator.configure(evaluation, config, selection)
+    config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(evaluation, selection)
     return _run_step(
         f"{run.name}/eval/{evaluation.name}",
         config,
@@ -385,8 +375,6 @@ def build_run(
         raise click.BadParameter("candidate tasks use a different heldout input; curate against the default panel")
     selected = {evaluation.name: evaluation for evaluation in preset.evaluations}
     for name in evaluations:
-        if name not in presets.EVALUATIONS:
-            raise click.BadParameter(f"unknown evaluation {name}; choose from {', '.join(presets.EVALUATIONS)}")
         selected.setdefault(name, presets.EVALUATIONS[name])
     if init is not None:
         selected = {name: replace(evaluation, at_start=True) for name, evaluation in selected.items()}
@@ -407,12 +395,11 @@ def build_run(
     checkpoint_root = _resume_checkpoint_root(resume_from, model) if resume_from is not None else None
     validation_data = ()
     for evaluation in in_run:
-        validation_data = presets.EVALUATORS[evaluation.harness].configure(
-            evaluation, config, selection=selection, default_selection=default, seed=config["trainer"]["seed"]
-        )
+        evaluation_tasks = evaluation.tasks(selection, default)
+        validation_data = presets.EVALUATORS[evaluation.harness].configure(evaluation, config, evaluation_tasks)
         if preset.recipe.layout.role_plan.generate_only:
             config["trajectory_runner"]["max_concurrent_tasks"] = presets.evaluation_answer_count(
-                evaluation, selection, default
+                evaluation, evaluation_tasks
             )
     if not preset.recipe.layout.role_plan.generate_only:
         expected_tasks = presets.selection_summary(default)["validation_rows"]
@@ -461,10 +448,15 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.result if receipt is not None else None
-        status_fs, status_key = filesystem_for(get_status_path(path))
-        state = result.state if result else None
-        if state is None:
-            state = presets.read_text(get_status_path(path)).strip() if status_fs.exists(status_key) else "not built"
+        state = (
+            result.state
+            if result
+            else (
+                presets.read_text(get_status_path(path)).strip()
+                if presets.exists(get_status_path(path))
+                else "not built"
+            )
+        )
         rows.append(
             {
                 "name": step.name,
@@ -516,7 +508,7 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
 @click.option("--init", "init_name")
 @click.option("--resume-from", "resume_name")
 @click.option("--layout", "layout_name", type=click.Choice(sorted(presets.TRAIN_LONG_RECIPES)))
-@click.option("--eval", "evaluations", multiple=True)
+@click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(presets.EVALUATIONS)))
 @click.option("--replicates", type=click.IntRange(1, 5), default=1)
 @click.option("--control", is_flag=True)
 @rl_build_options

@@ -98,15 +98,18 @@ class EvalHarness(StrEnum):
 @dataclass(frozen=True)
 class Evaluation:
     name: str
-    harness: EvalHarness
-    source: str
     file: str
+    harness: EvalHarness = EvalHarness.PANEL
+    source: str = "default"
     sample: int | None = None
     answers: int = 1
     every: int | None = None
     at_start: bool = False
     local_only: bool = False
     post_run: bool = False
+
+    def tasks(self, selection: ArtifactStep, default: ArtifactStep) -> ArtifactStep:
+        return default if self.source == "default" else selection
 
 
 @dataclass(frozen=True)
@@ -183,24 +186,10 @@ def setting_leaves(setting: Setting) -> tuple[Setting, ...]:
     return (setting,)
 
 
-def task_manifest(root: StoragePath) -> dict[str, dict]:
-    path = root / TASK_MANIFEST_FILENAME
-    fs, key = filesystem_for(str(path))
-    if not fs.exists(key):
-        return {}
-    with fs.open(key, "rb") as stream:
-        return {row["task_id"]: row for row in pq.read_table(stream).to_pylist()}
-
-
 def read_text(path: str | StoragePath) -> str:
     fs, key = filesystem_for(str(path))
     with fs.open(key, "rt") as stream:
         return stream.read()
-
-
-def paths(pattern: StoragePath) -> list[StoragePath]:
-    fs, key = filesystem_for(str(pattern))
-    return [StoragePath(fs.unstrip_protocol(path)) for path in sorted(fs.glob(key))]
 
 
 def exists(path: str | StoragePath) -> bool:
@@ -221,19 +210,10 @@ class PanelEvaluator:
             }
         ]
 
-    def configure(
-        self,
-        evaluation: Evaluation,
-        config: dict,
-        *,
-        selection: ArtifactStep,
-        default_selection: ArtifactStep,
-        seed: int,
-    ) -> tuple[ArtifactDataSource, ...]:
-        source = default_selection if evaluation.source == "default" else selection
+    def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
         if evaluation.sample is not None:
-            source = sampled_tasks_step(
-                source, evaluation.file, evaluation.sample, seed, local_only=evaluation.local_only
+            tasks = sampled_tasks_step(
+                tasks, evaluation.file, evaluation.sample, config["trainer"]["seed"], local_only=evaluation.local_only
             )
         config["trainer"].update(eval_num_prompts=None, dump_eval_results=True)
         config["generator"].update(
@@ -245,22 +225,14 @@ class PanelEvaluator:
                 "ignore_eos": config["generator"]["sampling_params"]["ignore_eos"],
             },
         )
-        return (ArtifactDataSource(source, relative_path=f"{evaluation.file}.parquet"),)
+        return (ArtifactDataSource(tasks, relative_path=f"{evaluation.file}.parquet"),)
 
 
 class Evaluator(Protocol):
     required_env: tuple[str, ...]
 
     def callbacks(self, evaluation: Evaluation, *, updates: int) -> list[dict]: ...
-    def configure(
-        self,
-        evaluation: Evaluation,
-        config: dict,
-        *,
-        selection: ArtifactStep,
-        default_selection: ArtifactStep,
-        seed: int,
-    ) -> tuple[ArtifactDataSource, ...]: ...
+    def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]: ...
 
 
 EVALUATORS: Mapping[EvalHarness, Evaluator] = MappingProxyType({EvalHarness.PANEL: PanelEvaluator()})
@@ -268,35 +240,10 @@ EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation(
-                name="panel-100",
-                harness=EvalHarness.PANEL,
-                source="default",
-                file=Path(VALIDATION_FILENAME).stem,
-            ),
-            Evaluation(
-                name="panel-910",
-                harness=EvalHarness.PANEL,
-                source="default",
-                file=Path(FULL_VALIDATION_FILENAME).stem,
-            ),
-            Evaluation(
-                name="speed-512x4",
-                harness=EvalHarness.PANEL,
-                source="default",
-                file=Path(TRAIN_FILENAME).stem,
-                sample=512,
-                answers=4,
-                local_only=True,
-            ),
-            Evaluation(
-                name="screen-256x4",
-                harness=EvalHarness.PANEL,
-                source="tasks",
-                file=Path(TRAIN_FILENAME).stem,
-                sample=256,
-                answers=4,
-            ),
+            Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
+            Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
+            Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
+            Evaluation(name="screen-256x4", file=Path(TRAIN_FILENAME).stem, source="tasks", sample=256, answers=4),
         )
     }
 )
@@ -599,13 +546,9 @@ def selection_summary(selection: ArtifactStep) -> dict:
     return json.loads(read_text(StoragePath(selection.path()) / "summary.json"))
 
 
-def evaluation_answer_count(evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep) -> int:
-    source = default if evaluation.source == "default" else selection
-    count = (
-        evaluation.sample
-        or selection_summary(source)["training_rows" if evaluation.file == "train" else f"{evaluation.file}_rows"]
-    )
-    return count * evaluation.answers
+def evaluation_answer_count(evaluation: Evaluation, tasks: ArtifactStep) -> int:
+    key = "training_rows" if evaluation.file == "train" else f"{evaluation.file}_rows"
+    return (evaluation.sample or selection_summary(tasks)[key]) * evaluation.answers
 
 
 def _write_sample(selection: str, filename: str, count: int, seed: int, local_only: bool, output: str) -> None:
@@ -664,12 +607,7 @@ BATCH_SETTINGS = {
     "generator.n_samples_per_prompt": "n_samples_per_prompt",
     "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
 }
-_COMPARISON_KEYS = {
-    "trainer.max_steps",
-    "trainer.seed",
-    "trainer.logger",
-    "trainer.project_name",
-}
+_COMPARISON_KEYS = {"trainer.max_steps", "trainer.seed", "trainer.logger", "trainer.project_name"}
 _DERIVED_KEYS = {
     "generator.max_input_length",
     "trainer.max_prompt_length",
@@ -679,55 +617,58 @@ _DERIVED_KEYS = {
     "generator.trajectory_reward_shaping.overlong.l_max",
     "generator.trajectory_reward_shaping.overlong.l_cache",
 }
-_SETTING_OWNERS = (
-    (("entrypoint",), "choose the preset's role plan"),
-    (("trainer.resume_mode",), "use --resume-from for checkpoint continuity"),
-    (("extra_env.NCCL_",), "choose network transport in Layout"),
-    (
-        ("trainer.placement", "generator.inference_engine_", "generator.num_inference_engines"),
-        "choose role geometry with --layout or Layout.role_plan",
-    ),
-    (("generator.trajectory_retention", "trainer.max_ckpts_to_keep"), "set checkpoint retention in the preset"),
-    (("generator.run_engines_locally",), "choose the preset's Layout"),
-    (
-        ("trainer.callbacks", "trainer.eval_", "generator.eval_"),
-        "choose evaluations with --eval on train-long or the preset's evaluations",
-    ),
-    (("trainer.ckpt_interval", "trainer.hf_save_interval"), "set checkpoint frequency in the preset"),
-)
 
 
 def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
     key = setting.key
-    fix = next((message for prefixes, message in _SETTING_OWNERS if key.startswith(prefixes)), None)
-    if fix:
-        raise click.BadParameter(f"{key} is owned by the preset: {fix}")
-    if key in role_plan_config_values(preset.recipe.layout.role_plan) and key not in BATCH_SETTINGS:
-        fix = "choose role geometry with --layout or Layout.role_plan"
-    elif key in _DERIVED_KEYS:
-        fix = "set the recipe's context budget instead of a derived key"
-    elif key.startswith("data.") and not (
-        preset.focus in (Focus.LEARNING, Focus.TRAIN) and (key == "data.shuffle" or key.startswith("data.sampling."))
-    ):
-        fix = "select curated data with --tasks on a data or train-long preset"
-    elif preset.focus != Focus.TRAIN and (
-        key in _COMPARISON_KEYS
-        or key.startswith("context_budget.")
-        or any(part in key.split(".") for part in ("max_generate_length", "ignore_eos", "min_tokens"))
-    ):
-        fix = "change the preset and recalibrate its control to keep runs comparable"
-    elif preset.focus == Focus.SPEED and key in (
-        "generator.sampling_params.logprobs",
-        "trainer.training_metrics",
-        "generator.apply_overlong_filtering",
-    ):
-        fix = "keep mismatch metrics and fixed-length training masks enabled in speed presets"
-    elif key in BATCH_SETTINGS and preset.focus not in (Focus.LEARNING, Focus.TRAIN):
-        fix = "change batch shape only in learning-medium or train-long"
-    elif preset.recipe.layout.role_plan.generate_only and (
-        not key.startswith("generator.") or key.startswith("generator.sampling_params.")
-    ):
-        fix = "use generator performance keys; generate-only sampling belongs to the evaluation"
+    owners = {
+        "choose the preset's role plan": key.startswith("entrypoint"),
+        "use --resume-from for checkpoint continuity": key.startswith("trainer.resume_mode"),
+        "choose network transport in Layout": key.startswith("extra_env.NCCL_"),
+        "choose role geometry with --layout or Layout.role_plan": (
+            key.startswith(("trainer.placement", "generator.inference_engine_", "generator.num_inference_engines"))
+            or (key in role_plan_config_values(preset.recipe.layout.role_plan) and key not in BATCH_SETTINGS)
+        ),
+        "set checkpoint retention in the preset": key.startswith(
+            ("generator.trajectory_retention", "trainer.max_ckpts_to_keep")
+        ),
+        "choose the preset's Layout": key.startswith("generator.run_engines_locally"),
+        "choose evaluations with --eval on train-long or the preset's evaluations": key.startswith(
+            ("trainer.callbacks", "trainer.eval_", "generator.eval_")
+        ),
+        "set checkpoint frequency in the preset": key.startswith(("trainer.ckpt_interval", "trainer.hf_save_interval")),
+        "set the recipe's context budget instead of a derived key": key in _DERIVED_KEYS,
+        "select curated data with --tasks on a data or train-long preset": (
+            key.startswith("data.")
+            and (
+                not (
+                    preset.focus in (Focus.LEARNING, Focus.TRAIN)
+                    and (key == "data.shuffle" or key.startswith("data.sampling."))
+                )
+            )
+        ),
+        "change the preset and recalibrate its control to keep runs comparable": (
+            preset.focus != Focus.TRAIN
+            and (
+                key in _COMPARISON_KEYS
+                or key.startswith("context_budget.")
+                or any(part in key.split(".") for part in ("max_generate_length", "ignore_eos", "min_tokens"))
+            )
+        ),
+        "keep mismatch metrics and fixed-length training masks enabled in speed presets": (
+            preset.focus == Focus.SPEED
+            and key
+            in ("generator.sampling_params.logprobs", "trainer.training_metrics", "generator.apply_overlong_filtering")
+        ),
+        "change batch shape only in learning-medium or train-long": (
+            key in BATCH_SETTINGS and preset.focus not in (Focus.LEARNING, Focus.TRAIN)
+        ),
+        "use generator performance keys; generate-only sampling belongs to the evaluation": (
+            preset.recipe.layout.role_plan.generate_only
+            and (not key.startswith("generator.") or key.startswith("generator.sampling_params."))
+        ),
+    }
+    fix = next((message for message, owned in owners.items() if owned), None)
     if fix:
         raise click.BadParameter(f"{key} is owned by the preset: {fix}")
     if (
@@ -743,11 +684,7 @@ def apply_setting(config: dict, setting: Setting, preset: Preset) -> None:
 
 
 def default_selection() -> ArtifactStep[Artifact]:
-    return ArtifactStep.adopt(
-        f"{SELECTION_PREFIX}/snowball-100k",
-        DEFAULT_SELECTION_VERSION,
-        str(StoragePath(SELECTION_ROOT) / "snowball-100k" / DEFAULT_SELECTION_VERSION),
-    )
+    return selection_artifact(f"snowball-100k@{DEFAULT_SELECTION_VERSION}")
 
 
 def artifact_prefix(cluster: str) -> str:
@@ -778,7 +715,7 @@ def published_artifact(value: str) -> ArtifactStep:
             return ArtifactStep.adopt(name, version, root, kind=SkyRLRun)
         path = StoragePath(root) / RECORD_FILENAME
         if exists(path):
-            record = ArtifactRecord.model_validate_json(read_text(path))
+            record = artifact_record(root)
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
