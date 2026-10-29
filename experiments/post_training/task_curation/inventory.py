@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType
@@ -26,6 +27,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     VerifyitGrader,
+    grades_in_process,
     grades_with_judge,
 )
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
@@ -35,6 +37,9 @@ from taskcompendium.runtime.resources import resource_bytes
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
+
+SELECTION_PREFIX = "rl-data/task-selection"
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
@@ -44,7 +49,6 @@ TASK_JSON_COLUMN = "task_json"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
 HELDOUT_SCHEMA_VERSION = "0.27"
 STRUCTURE_CLOSURE_DATASET = "structure-closure"
-NEMOTRON_COMPONENT_PREFIX = "MarinSkyRL:nemotron_ultra_rlvr1/"
 HELDOUT_FAMILIES = MappingProxyType(
     {
         "ultra_sft_step3200_calendar_v2": "calendar",
@@ -72,6 +76,13 @@ TASK_MANIFEST_SCHEMA = pa.schema(
         pa.field("upstream_pass_rate", pa.float64()),
     ]
 )
+
+
+class GraderKind(StrEnum):
+    PACKAGE = "package"
+    IMAGE = "image"
+    REMOTE_JUDGE = "remote_judge"
+    IN_PROCESS = "in_process"
 
 
 class HeldoutSource(BaseModel):
@@ -143,7 +154,7 @@ def _grader_contract(task: TaskSpec) -> dict[str, Any]:
 
 
 def validation_task(row: dict[str, Any], grader_environments: Mapping[str, EnvironmentRequirements]) -> TaskSpec:
-    """Import a pinned original Snowball development task into the current schema."""
+    """Import a historical task with its matching admitted component's grader environment."""
     raw = row["lowered_task_spec"]
     document = json.loads(raw, object_pairs_hook=unique_object)
     original = document["task"]
@@ -163,11 +174,10 @@ def validation_task(row: dict[str, Any], grader_environments: Mapping[str, Envir
         raise ValueError("The heldout source must use the one-turn Shellbox contract")
     if isinstance(task.grader, ScriptGrader) and task.grader.environment.docker_image is not None:
         dataset = _grader_contract(task)["dataset"]
-        component = f"{NEMOTRON_COMPONENT_PREFIX}{dataset}"
-        if component not in grader_environments:
-            raise ValueError(f"No admitted grader environment for {component}")
+        if dataset not in grader_environments:
+            raise ValueError(f"No admitted grader environment for {BLENDS['rlvr1'][dataset].id}")
         task = task.model_copy(
-            update={"grader": task.grader.model_copy(update={"environment": grader_environments[component]})}
+            update={"grader": task.grader.model_copy(update={"environment": grader_environments[dataset]})}
         )
     return task
 
@@ -222,53 +232,49 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
-    components = {f"{NEMOTRON_COMPONENT_PREFIX}{dataset}" for dataset in HELDOUT_FAMILIES}
+    components = {BLENDS["rlvr1"][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
         if source.source_id not in components:
             continue
-        record = next(_admitted_records(source), None)
-        if record is None:
-            raise ValueError(f"No admitted grader environment for {source.source_id}")
+        record = next(_admitted_records(source))
         task = TaskSpec.model_validate_json(record[TASK_JSON_COLUMN])
         if not isinstance(task.grader, ScriptGrader) or task.grader.environment.docker_image is not None:
             raise ValueError(f"Admitted component needs a local script grader: {source.source_id}")
-        environments[source.source_id] = task.grader.environment
+        environments[components[source.source_id]] = task.grader.environment
     return environments
 
 
-def _grader_kind(task: TaskSpec) -> str:
+def _grader_kind(task: TaskSpec) -> GraderKind:
     if grades_with_judge(task.grader):
-        return "remote_judge"
-    if not isinstance(task.grader, ScriptGrader | VerifyitGrader):
+        return GraderKind.REMOTE_JUDGE
+    if grades_in_process(task.grader):
+        return GraderKind.IN_PROCESS
+    if not isinstance(task.grader, ScriptGrader | VerifyitGrader) or task.grader.environment is None:
         raise ValueError(f"Task has no runnable grader: {task.id}")
     environment = task.grader.environment
-    if environment is None:
-        return "in_process"
-    return "image" if environment.docker_image is not None else "package"
+    return GraderKind.IMAGE if environment.docker_image is not None else GraderKind.PACKAGE
 
 
 def _manifest_records(tasks: tuple[TaskSpec, ...]) -> Iterator[dict[str, Any]]:
     for task in tasks:
-        family = validation_family(task)
-        passed = None
-        if task.source.dataset != STRUCTURE_CLOSURE_DATASET:
-            passed = _grader_contract(task).get("pass_rate_passed")
+        contract = None if task.source.dataset == STRUCTURE_CLOSURE_DATASET else _grader_contract(task)
+        family = "structural" if contract is None else HELDOUT_FAMILIES[contract["dataset"]]
         yield {
             "task_id": task.id,
             "family": family,
             "aaii_category": AAII_CATEGORIES[family],
             "agentic": "agentic" in task.tags,
             "grader_kind": _grader_kind(task),
-            "upstream_pass_rate": None if passed is None else passed / 8,
+            "upstream_pass_rate": None if contract is None else contract.get("pass_rate"),
         }
 
 
 def _grader_counts(path: Path) -> dict[str, int]:
-    counts: Counter[str] = Counter()
+    counts: Counter[GraderKind] = Counter()
     for batch in pq.ParquetFile(path).iter_batches(batch_size=256, columns=[TASK_SPEC_COLUMN]):
         counts.update(_grader_kind(TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])) for row in batch.to_pylist())
-    return {kind: counts[kind] for kind in ("package", "image", "remote_judge", "in_process")}
+    return {kind.value: counts[kind] for kind in GraderKind}
 
 
 def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destination: Path) -> dict[str, SourceCounts]:
@@ -410,7 +416,7 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
         )
 
     return ArtifactStep(
-        name=f"rl-data/task-selection/{recipe.name}",
+        name=f"{SELECTION_PREFIX}/{recipe.name}",
         version=recipe.version,
         artifact_type=Artifact,
         deps=(*inputs.values(), heldout),
