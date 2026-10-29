@@ -66,7 +66,7 @@ from marin.evaluation.selection import SELECTIONS_TABLE, EvaluationTokenizer, Se
 
 ATTEMPTS_TABLE = "evaluation_attempts"
 RUN_OBJECT = "evaluation/run.json"
-DRIVER_REVISION = "2026.10.28.4"
+DRIVER_REVISION = "2026.10.29.5"
 
 
 class EvaluationInfrastructureError(RuntimeError):

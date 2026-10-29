@@ -189,15 +189,24 @@ Local shared runtime caches use
 `~/.cache/marin/task-runtime`; mounted workers use `/cache/task-curation`.
 
 Python code grading prepares the private test program before executing the
-candidate. Shellbox owns execution and termination; no copied Python execution
-sandbox or monkeypatch guard remains. A completion receipt distinguishes finishing
-the tests from exiting the process early. Candidate timeout scores zero;
-preparation and machine failures remain infrastructure errors. The 3-second
-budget (10 seconds for CruxEval) includes Python startup and compilation. Iris
-worker limits replace the old executor's per-process memory limit and are shared
-across concurrent attempts. These are versioned protocol changes. The current code
-environments require CPython and NumPy; selecting Shellbox does not automatically
-select its Shellsim backend.
+candidate. Shellbox isolates and bounds the entire grader command. Inside that
+machine, the benchmark runner preloads dependencies, forks a worker and applies
+the source's 3-second execution alarm (10 seconds for CruxEval), with a separate
+one-second child termination allowance. Python and dependency startup have a
+separate 60-second outer deadline. A receipt distinguishes normal test completion
+from an early process exit. Candidate exceptions and timeouts score zero;
+preparation, startup and machine failures remain infrastructure errors.
+
+Sandbox Verifyit graders honor their declared empty-output policy. Instruction
+benchmarks grade empty responses to retain zero-valued metrics and instruction
+counts needed for weighted reductions. A missing submission remains distinct
+from an explicitly empty assistant answer.
+
+Iris worker limits replace the old executor's per-process memory limit and are
+shared across concurrent attempts. Execution times also depend on the Python
+build and worker load. These runtime changes are recorded in the acceptance
+evidence. The current code environments require CPython and NumPy; selecting
+Shellbox does not automatically select its Shellsim backend.
 
 Chat, raw-text completion and likelihood operations remain distinct. Chat keeps
 the source conversation without an added submission instruction. Raw completions
@@ -230,9 +239,9 @@ filters, instruction weights, flags and reduction inputs. Provider or verifier
 failures have no synthetic zero score. Malformed responses and partial likelihood
 results remain available for diagnosis.
 
-Repeat the same command to resume. The driver rejects a changed model, corpus,
-protocol or selection, skips completed logical attempts and retries failed ones
-with the same seed and a new physical retry index. Consumers must select the
+Repeat the same command to resume. The driver rejects a changed driver revision,
+model, corpus, protocol or selection. It skips completed logical attempts and
+retries failed ones with the same seed and a new physical retry index. Consumers must select the
 latest terminal physical attempt per dataset snapshot, source row and trial;
 otherwise resumed attempts would be counted twice.
 Concurrency remains part of the run identity because server batching can affect

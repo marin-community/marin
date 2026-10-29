@@ -27,7 +27,15 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-from verifyit.spec import RUBRIC_LABELS, JudgeSpec, ScriptSpec, render_spec, spec_from_table
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    ScriptSpec,
+    render_spec,
+    spec_from_table,
+)
 
 from taskcompendium.ejection import mark_unsolvable
 from taskcompendium.examples.ejection import ejection_examples
@@ -337,6 +345,29 @@ def trusted_bootstrap_task(shell_task):
         }
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
+
+
+@pytest.mark.parametrize("content", ["", " \n"])
+@pytest.mark.parametrize("policy", [EmptyOutputPolicy.GRADE, EmptyOutputPolicy.ZERO])
+@pytest.mark.asyncio
+async def test_sandbox_verifyit_honors_the_declared_empty_text_policy(tmp_path, content, policy):
+    package = verifyit_package(ExactSpec(expected=("",), empty_output=policy), environment=GRADER_ENVIRONMENT)
+    task = TaskSpec(
+        id="empty-text",
+        source=Source(dataset="fixture/empty-text", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Submit an empty answer."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        resources=ResourceGroups(verifier=package.resources),
+        grader=package.grader,
+    )
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content)))
+    )
+    result = await grade_in_sandbox(task, attempt, LocalGradingMachines(tmp_path), GRADER_MACHINE)
+    expected = (Outcome.GRADED, 1.0) if policy is EmptyOutputPolicy.GRADE else (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert (result.status, result.reward) == expected
 
 
 @pytest.mark.parametrize("candidate,expected", [(b"print(42)\n", 1.0), (b"raise RuntimeError('candidate')\n", 0.0)])

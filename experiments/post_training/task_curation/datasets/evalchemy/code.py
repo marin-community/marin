@@ -3,9 +3,9 @@
 
 """Pinned Python benchmarks with private test programs run as Shellbox commands.
 
-The 3-second (CruxEval: 10-second) budget includes Python startup and compilation,
-unlike the source's exec-only alarm. Backend limits replace the source's process
-memory limit and reliability guard.
+The source's 3-second (CruxEval: 10-second) execution alarm starts after Python
+startup and NumPy preload. A forked worker has the source's one-second termination allowance.
+Shellbox bounds startup separately and supplies isolation and resource limits.
 """
 
 import hashlib
@@ -21,7 +21,7 @@ from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation import EvaluationItem, EvaluationProtocol, Sampling, TextGeneration, TrialPolicy
 from taskcompendium.grader import GraderPackage
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExitCodeReward, ScriptGrader, TaskSpec, TextMessage
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat, ScriptGrader, TaskSpec, TextMessage
 from taskcompendium.pipeline.evaluation import chat_item
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, required_grader_environment
 from taskcompendium.pipeline.models import IntendedUse, RawRow
@@ -88,7 +88,6 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
         if suite in {"humaneval", "humanevalplus"}
         else problem["evaluation_prompt"]
     )
-    timeout = 10 if suite == "cruxeval" else 3
     environment = required_grader_environment(context)
     environment = environment.model_copy(
         update={
@@ -99,12 +98,14 @@ def convert_python(row: RawRow, context: ConversionContext, *, suite: str) -> Ta
     config = {"suite": suite, "problem": problem, "direction": problem.get("direction", "")}
     package = GraderPackage(
         ScriptGrader(
-            argv=("sh", "-c", "python3 /app/program.py && test -f /app/passed"),
+            argv=("python3", "/app/program.py"),
             cwd="/app",
             environment=environment,
-            timeout=timeout,
+            timeout=60,
             answer_path="/app/answer.txt",
-            reward=ExitCodeReward(),
+            reward=FileReward(
+                files=(RewardFile(path="/app/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
+            ),
         ),
         (*CODE_ASSETS, inline_resource("config.json", json.dumps(config, allow_nan=False, sort_keys=True).encode())),
     )

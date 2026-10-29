@@ -136,7 +136,7 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
     raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
 
 
-def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
+def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
@@ -164,7 +164,7 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
             return terminal
         candidate = _candidate(verifier, submission)
     except SubmissionFailure as error:
-        if not _gradeable_empty_text(task, attempt, verifier):
+        if not gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
@@ -185,7 +185,7 @@ def grade_remote_judge_answer(
     try:
         submission = answer_submission(task, attempt)
     except SubmissionFailure as error:
-        if not _gradeable_empty_text(task, attempt, verifier):
+        if not gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
     else:

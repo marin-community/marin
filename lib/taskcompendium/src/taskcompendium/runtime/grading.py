@@ -24,7 +24,7 @@ from uuid import uuid4
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.spec import Spec, render_spec
 
-from taskcompendium.grading import answer_submission, parse_grade_result, terminal_grade
+from taskcompendium.grading import answer_submission, gradeable_empty_text, parse_grade_result, terminal_grade
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -469,7 +469,10 @@ async def grade_in_sandbox(
             answer = _script_answer_bytes(answer_submission(task, attempt))
             submissions.append(StagedFile(grading.grader.answer_path, answer))
     except SubmissionFailure as error:
-        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        if grading.spec is None or not gradeable_empty_text(task, attempt, grading.spec):
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        assert answer_file is not None
+        submissions.append(StagedFile(answer_file, b""))
     if (
         grading.spec is not None
         and not submissions
@@ -487,10 +490,10 @@ async def grade_empty_in_sandbox(
     """Grade an agent that submitted nothing, staged in a fresh machine as ``grade_in_sandbox`` stages a rollout.
 
     The grader receives the task's resources, its conversation ending in an empty assistant reply,
-    an empty file where it reads an answer file, and no workspace files. ``grade_in_sandbox`` rejects
-    an empty reply or an empty verifyit workspace before a machine starts; this runs the grader on
-    them, so its result shows whether the grader runs and what it awards an empty answer. Graders
-    that collect inputs from the task machine are unsupported. Machine failures propagate.
+    an empty file where it reads an answer file, and no workspace files. This runs the grader
+    regardless of the task's empty-submission policy, so its result shows whether the grader runs
+    and what it awards an empty answer. Graders that collect inputs from the task machine are
+    unsupported. Machine failures propagate.
     """
     grading = _sandbox_grading(task, None, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
