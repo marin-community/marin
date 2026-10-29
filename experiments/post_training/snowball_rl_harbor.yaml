@@ -1,0 +1,134 @@
+# Cohorts from #10190 experiments/post_training/smartie/benchmark_selection.json.
+# Selection salt: smartie-target-benchmarks-20261015-v1.
+timeout: 10800
+minimum_coverage: 0.9
+job:
+  agents:
+  - kwargs:
+      max_turns: 32
+      model_info:
+        max_input_tokens: 32768
+        max_output_tokens: 8192
+      temperature: 1.0
+    name: terminus-2
+    override_setup_timeout_sec: 360
+    override_timeout_sec: 600
+  environment:
+    delete: true
+    type: daytona
+  n_attempts: 1
+  n_concurrent_trials: 30
+  retry:
+    include_exceptions:
+    - APIConnectionError
+    - APITimeoutError
+    - SandboxBuildFailedError
+    - ContainerRegistryThrottledError
+    - DaytonaProcessError
+    max_retries: 1
+  trial_attempt_timeout_sec: 1800
+  verifier:
+    override_timeout_sec: 300
+cohorts:
+- name: bfcl_parity
+  git_url: https://github.com/laude-institute/harbor-datasets.git
+  git_commit_id: 6bedd7878dc5d6f3456b4d80b781eb3c2d84f262
+  paths:
+  - datasets/bfcl_parity/bfcl-simple-python-161
+  - datasets/bfcl_parity/bfcl-live-irrelevance-103-3-0
+  - datasets/bfcl_parity/bfcl-live-irrelevance-781-290-0
+  - datasets/bfcl_parity/bfcl-simple-java-73
+  - datasets/bfcl_parity/bfcl-multiple-147
+  - datasets/bfcl_parity/bfcl-live-multiple-538-152-0
+  - datasets/bfcl_parity/bfcl-parallel-7
+  - datasets/bfcl_parity/bfcl-live-irrelevance-511-151-0
+  - datasets/bfcl_parity/bfcl-parallel-multiple-13
+  - datasets/bfcl_parity/bfcl-live-multiple-179-75-1
+  - datasets/bfcl_parity/bfcl-live-multiple-591-157-12
+  - datasets/bfcl_parity/bfcl-irrelevance-154
+  - datasets/bfcl_parity/bfcl-parallel-147
+  - datasets/bfcl_parity/bfcl-simple-javascript-7
+  - datasets/bfcl_parity/bfcl-live-irrelevance-600-193-2
+  - datasets/bfcl_parity/bfcl-simple-python-2
+  - datasets/bfcl_parity/bfcl-live-multiple-236-106-2
+  - datasets/bfcl_parity/bfcl-live-multiple-685-164-1
+  - datasets/bfcl_parity/bfcl-parallel-84
+  - datasets/bfcl_parity/bfcl-live-multiple-13-4-5
+  - datasets/bfcl_parity/bfcl-live-simple-248-130-0
+  - datasets/bfcl_parity/bfcl-simple-python-149
+  - datasets/bfcl_parity/bfcl-simple-python-14
+  - datasets/bfcl_parity/bfcl-simple-python-296
+  - datasets/bfcl_parity/bfcl-multiple-105
+  - datasets/bfcl_parity/bfcl-live-multiple-350-133-14
+  - datasets/bfcl_parity/bfcl-live-multiple-337-133-1
+  - datasets/bfcl_parity/bfcl-live-multiple-48-18-3
+  - datasets/bfcl_parity/bfcl-live-irrelevance-698-227-1
+  - datasets/bfcl_parity/bfcl-irrelevance-53
+- name: swebench-verified
+  git_url: https://github.com/laude-institute/harbor-datasets.git
+  git_commit_id: 86723674f04e4209ac479d0fb75d9d9f44b4377e
+  paths:
+  - datasets/swebench-verified/django__django-12419
+  - datasets/swebench-verified/django__django-11951
+  - datasets/swebench-verified/django__django-14007
+  - datasets/swebench-verified/django__django-15629
+  - datasets/swebench-verified/sphinx-doc__sphinx-10673
+  - datasets/swebench-verified/sympy__sympy-22080
+  - datasets/swebench-verified/django__django-11790
+  - datasets/swebench-verified/sphinx-doc__sphinx-7889
+  - datasets/swebench-verified/django__django-13513
+  - datasets/swebench-verified/sphinx-doc__sphinx-8721
+  - datasets/swebench-verified/sphinx-doc__sphinx-7462
+  - datasets/swebench-verified/matplotlib__matplotlib-23476
+  - datasets/swebench-verified/sphinx-doc__sphinx-8548
+  - datasets/swebench-verified/django__django-13363
+  - datasets/swebench-verified/sphinx-doc__sphinx-9461
+  - datasets/swebench-verified/sympy__sympy-15976
+  - datasets/swebench-verified/django__django-13658
+  - datasets/swebench-verified/django__django-11066
+  - datasets/swebench-verified/matplotlib__matplotlib-24637
+  - datasets/swebench-verified/scikit-learn__scikit-learn-13142
+  - datasets/swebench-verified/django__django-14034
+  - datasets/swebench-verified/django__django-12708
+  - datasets/swebench-verified/django__django-15569
+  - datasets/swebench-verified/psf__requests-2931
+  - datasets/swebench-verified/django__django-11555
+  - datasets/swebench-verified/django__django-12741
+  - datasets/swebench-verified/django__django-12193
+  - datasets/swebench-verified/django__django-16485
+  - datasets/swebench-verified/django__django-12143
+  - datasets/swebench-verified/scikit-learn__scikit-learn-14087
+- name: openthoughts-tblite
+  git_url: https://github.com/open-thoughts/OpenThoughts-TBLite.git
+  git_commit_id: f075e463472c7790b85793b392dff1fff20cc0e3
+  paths:
+  - malicious-package-forensics
+  - book-portfolio-analysis
+  - industrial-kiln-controller
+  - iris-dataset-classification
+  - task-xxe-exploit
+  - protein-sequence
+  - reverse-engineer-stack-vm
+  - cryptographic-protocol-verifier
+  - mtls-cert-rotation
+  - symlink-chain-traversal
+  - monorepo-changelog-cli
+  - raft-log-repair-concurrent-access
+  - vimscript-vim-quine
+  - systemd-log-monitoring
+  - ekf-localization
+  - api-endpoint-permission-canonicalizer
+  - grpc-plant-position-server
+  - pandas-numpy-data-analysis
+  - hydra-debug-slurm-mode
+  - grid-pathfinding
+  - competitive-programming-solver
+  - todos-api
+  - etl_checkpoint_resume_bug
+  - iot-device-registration-server
+  - reproducibility-and-envsetup
+  - mlflow-register
+  - application-debug
+  - acl-permissions-inheritance
+  - maven-slf4j-conflict
+  - schedule-vacation

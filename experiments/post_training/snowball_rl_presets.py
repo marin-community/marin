@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import random
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -58,6 +59,8 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
 DEFAULT_SELECTION_VERSION = "2026.10.26"
 JUDGE_KEY = "TOGETHER_API_KEY"
+DAYTONA_EVAL_KEY = "DAYTONA_EVAL_API_KEY"
+MINIMUM_PANEL_COVERAGE = 0.99
 
 
 class Focus(StrEnum):
@@ -89,10 +92,12 @@ class Gap(StrEnum):
     NO_GRADING_TIMER = "no-grading-timer"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
     EVAL_USES_TRAINING_SAMPLING = "eval-uses-training-sampling"
+    HARBOR_ON_DAYTONA = "harbor-on-daytona"
 
 
 class EvalHarness(StrEnum):
     PANEL = "panel"
+    HARBOR = "harbor"
 
 
 @dataclass(frozen=True)
@@ -197,6 +202,44 @@ def exists(path: str | StoragePath) -> bool:
     return fs.exists(key)
 
 
+class HarborEvaluator:
+    required_env = (DAYTONA_EVAL_KEY,)
+
+    def callbacks(self, evaluation: Evaluation, *, updates: int) -> list[dict]:
+        config = yaml.safe_load(Path(__file__).with_name(evaluation.file).read_text())
+        cohorts = []
+        for cohort in config["cohorts"]:
+            job = deepcopy(config["job"])
+            job["tasks"] = [
+                dict(
+                    sorted(
+                        {
+                            "git_url": cohort["git_url"],
+                            "git_commit_id": cohort["git_commit_id"],
+                            "path": path,
+                            "source": cohort["name"],
+                        }.items()
+                    )
+                )
+                for path in cohort["paths"]
+            ]
+            cohorts.append({"job": dict(sorted(job.items())), "name": cohort["name"], "reward_key": "reward"})
+        return [
+            {
+                "cohorts": cohorts,
+                "minimum_coverage": config["minimum_coverage"],
+                "timeout": config["timeout"],
+                "type": "harbor_evaluation",
+                "daytona_api_key_env": DAYTONA_EVAL_KEY,
+                "minimum_native_coverage": MINIMUM_PANEL_COVERAGE,
+            }
+        ]
+
+    def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]:
+        config["generator"]["enable_http_endpoint"] = True
+        return ()
+
+
 class PanelEvaluator:
     required_env: tuple[str, ...] = ()
 
@@ -235,11 +278,22 @@ class Evaluator(Protocol):
     def configure(self, evaluation: Evaluation, config: dict, tasks: ArtifactStep) -> tuple[ArtifactDataSource, ...]: ...
 
 
-EVALUATORS: Mapping[EvalHarness, Evaluator] = MappingProxyType({EvalHarness.PANEL: PanelEvaluator()})
+EVALUATORS: Mapping[EvalHarness, Evaluator] = MappingProxyType(
+    {EvalHarness.PANEL: PanelEvaluator(), EvalHarness.HARBOR: HarborEvaluator()}
+)
 EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
+            # Harbor follows the native panel's evaluation schedule.
+            Evaluation(
+                name="harbor-smartie",
+                file="snowball_rl_harbor.yaml",
+                harness=EvalHarness.HARBOR,
+                source="harbor",
+                every=10,
+                at_start=True,
+            ),
             Evaluation(name="panel-100", file=Path(VALIDATION_FILENAME).stem),
             Evaluation(name="panel-910", file=Path(FULL_VALIDATION_FILENAME).stem),
             Evaluation(name="speed-512x4", file=Path(TRAIN_FILENAME).stem, sample=512, answers=4, local_only=True),
