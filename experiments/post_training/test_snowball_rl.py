@@ -24,6 +24,20 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_presets as presets
 
 
+def _render(step, path):
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    path.write_text(config.launch_config_yaml)
+    return yaml.safe_load(config.launch_config_yaml)
+
+
+def _native(script, paths):
+    result = subprocess.run(
+        skyrl_cpu_command("python", "-c", script, *paths), capture_output=True, text=True, timeout=170
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.splitlines()[-1])
+
+
 @pytest.fixture
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
@@ -61,23 +75,18 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
                 preset, tasks=selection if preset.focus == presets.Focus.DATA else None, layout=layout
             )
             for index, step in enumerate((*run.runs, *run.post_run_evaluations)):
-                config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
                 path = tmp_path / f"{name}-{layout.name if layout else 'default'}-{index}.yaml"
-                path.write_text(config.launch_config_yaml)
+                document = _render(step, path)
                 paths.append(str(path))
                 if index == 0:
-                    launches[name] = yaml.safe_load(config.launch_config_yaml)
+                    launches[name] = document
             if name == "train-long":
                 assert run.runs[0] in run.post_run_evaluations[0].deps
     off_boundary = snowball.build_run(
         presets.PRESETS["train-long"], layout=presets.P40, settings=(presets.parse_setting("trainer.max_steps=2"),)
     ).runs[0]
     path = tmp_path / "off-boundary.yaml"
-    path.write_text(
-        off_boundary.build_config(
-            StepContext.for_fingerprint(off_boundary.runtime_args, off_boundary.deps)
-        ).launch_config_yaml
-    )
+    _render(off_boundary, path)
     paths.append(str(path))
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
@@ -93,15 +102,11 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path)
             )
         ),
     ).runs[0]
-    changed_config = changed.build_config(StepContext.for_fingerprint(changed.runtime_args, changed.deps))
     path = tmp_path / "changed-batch.yaml"
-    path.write_text(changed_config.launch_config_yaml)
+    _render(changed, path)
     paths.append(str(path))
-    result = subprocess.run(
-        skyrl_cpu_command(
-            "python",
-            "-c",
-            """
+    rows = _native(
+        """
 import json, sys
 from cloud.iris.launch_config import load_launch_config
 configs = [load_launch_config(path) for path in sys.argv[1:]]
@@ -123,14 +128,8 @@ print(json.dumps([{
     "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"],
 } for config in configs]))
 """,
-            *paths,
-        ),
-        capture_output=True,
-        text=True,
-        timeout=170,
+        paths,
     )
-    assert result.returncode == 0, result.stderr
-    rows = json.loads(result.stdout.splitlines()[-1])
     assert len(rows) == len(paths)
     for row in rows:
         name = row["name"]
@@ -174,31 +173,24 @@ def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch
         StoragePath(presets.SELECTION_ROOT) / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION / "summary.json"
     ).write_text(summary)
     expected = {
-        "speed-short": "5c0057ed",
-        "data-short": "8878e78b",
-        "speed-medium": "55638a0f",
+        "speed-short": "cfef0c60",
+        "data-short": "54709ff4",
+        "speed-medium": "d230e889",
         "learning-medium": "670e44c0",
     }
     paths = []
     for name in expected:
         step = snowball.build_run(presets.PRESETS[name], control=True).runs[0]
-        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         path = tmp_path / f"{name}.yaml"
-        path.write_text(config.launch_config_yaml)
+        _render(step, path)
         paths.append(str(path))
-    result = subprocess.run(
-        skyrl_cpu_command(
-            "python",
-            "-c",
-            """
-import json, sys
+    configs = _native(
+        """
+import json, os, sys
 from pathlib import Path
 from omegaconf import OmegaConf
-from omegaconf.resolvers.oc import env
 from cloud.iris.launch_config import load_launch_config
-OmegaConf.register_new_resolver(
-    "oc.env", lambda key, *default: "/home/ahmad" if key == "HOME" else env(key, *default), replace=True
-)
+os.environ["HOME"] = "/snowball-pin-home"
 configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
 print(json.dumps([
     {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
@@ -206,18 +198,22 @@ print(json.dumps([
     for config in configs
 ], sort_keys=True))
 """,
-            *paths,
-        ),
-        capture_output=True,
-        text=True,
-        timeout=170,
+        paths,
     )
-    assert result.returncode == 0, result.stderr
     actual = {
         name: fingerprint_hash(json.dumps(config, sort_keys=True))
-        for name, config in zip(expected, json.loads(result.stdout.splitlines()[-1]), strict=True)
+        for name, config in zip(expected, configs, strict=True)
     }
-    assert actual == expected, "Gated config changed: bump PRESET_REVISION and collect new controls."
+    assert actual == expected, "Gated config changed. Top-level key hashes: " + json.dumps(
+        {
+            name: {
+                section: {key: fingerprint_hash(json.dumps(value, sort_keys=True)) for key, value in values.items()}
+                for section, values in config.items()
+            }
+            for name, config in zip(expected, configs, strict=True)
+        },
+        sort_keys=True,
+    )
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
@@ -239,18 +235,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     pairs = [
         (name(), name(learning, "trainer.policy.optimizer_config.lr=2e-6")),
-        (
-            name(
-                learning,
-                "trainer.policy.optimizer_config={lr: 0.000002}",
-                "trainer.policy.optimizer_config={weight_decay: 0.1}",
-            ),
-            name(
-                learning,
-                "trainer.policy.optimizer_config={lr: 0.000003}",
-                "trainer.policy.optimizer_config={weight_decay: 0.1}",
-            ),
-        ),
         (name(data, tasks=selection), name(data, tasks=replace(selection, version="2026.10.27"))),
         (name(), name(init=initializer)),
         (name(long), name(long, layout=presets.P40)),

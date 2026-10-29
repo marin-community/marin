@@ -700,9 +700,6 @@ class SkyRLLaunchResponse(BaseModel):
     state: str
     iris_job_id: str | None = None
     failure: str | None = None
-    iris_job_state: str | None = None
-    provenance: dict | None = None
-    run_id: str | None = None
     model: _SkyRLTerminalModel | None = None
 
 
@@ -768,7 +765,6 @@ def read_skyrl_launch_receipt(run_output: str) -> SkyRLLaunchReceipt | None:
             "result": {
                 "state": state,
                 "iris_job_id": str(JobName.from_wire(job.job_id)),
-                "iris_job_state": job_pb2.JobState.Name(job.state),
                 "model": None,
             },
         }
