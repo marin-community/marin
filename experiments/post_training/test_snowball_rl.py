@@ -17,10 +17,12 @@ import yaml
 from click.testing import CliRunner
 from iris.rpc import controller_pb2, job_pb2
 from marin.execution.artifact import RECORD_FILENAME
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl import SkyRLRun, skyrl_cpu_command
 from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_rl as snowball
@@ -163,6 +165,56 @@ print(json.dumps([config.iris.allocation.num_nodes for config in configs]))
     for value in ("+extra_env.NCCL_NET=Socket", "generator.apply_overlong_filtering=true"):
         with pytest.raises(click.BadParameter, match="owned by"):
             snowball.build_run(snowball.PRESETS["speed-medium"], settings=(snowball.parse_setting(value),))
+
+
+@pytest.mark.timeout(180)
+def test_gated_presets_match_calibrated_configs(selection, tmp_path, monkeypatch):
+    summary = (Path(selection.path()) / "summary.json").read_text()
+    monkeypatch.setattr(snowball, "SELECTION_ROOT", "memory://snowball-calibration")
+    (
+        StoragePath(snowball.SELECTION_ROOT) / "snowball-100k" / snowball.DEFAULT_SELECTION_VERSION / "summary.json"
+    ).write_text(summary)
+    expected = {
+        "speed-short": "5c0057ed",
+        "data-short": "8878e78b",
+        "speed-medium": "55638a0f",
+        "learning-medium": "670e44c0",
+    }
+    paths = []
+    for name in expected:
+        step = snowball.build_run(snowball.PRESETS[name], control=True).runs[0]
+        config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(config.launch_config_yaml)
+        paths.append(str(path))
+    result = subprocess.run(
+        skyrl_cpu_command(
+            "python",
+            "-c",
+            """
+import json, sys
+from pathlib import Path
+from omegaconf import OmegaConf
+from cloud.iris.launch_config import load_launch_config
+configs = [load_launch_config(Path(path)) for path in sys.argv[1:]]
+print(json.dumps([
+    {"skyrl": OmegaConf.to_container(config.skyrl, resolve=True),
+     "allocation": OmegaConf.to_container(config.iris.allocation, resolve=True)}
+    for config in configs
+], sort_keys=True))
+""",
+            *paths,
+        ),
+        capture_output=True,
+        text=True,
+        timeout=170,
+    )
+    assert result.returncode == 0, result.stderr
+    actual = {
+        name: fingerprint_hash(json.dumps(config, sort_keys=True))
+        for name, config in zip(expected, json.loads(result.stdout.splitlines()[-1]), strict=True)
+    }
+    assert actual == expected, "Gated config changed: bump PRESET_REVISION and collect new controls."
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
