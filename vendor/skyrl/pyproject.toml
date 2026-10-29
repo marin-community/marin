@@ -196,6 +196,7 @@ override-dependencies = [
     "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
+    "oauthlib>=4.0.0",
     "uv>=0.13.5",
     "gcsfs==2026.4.0",
     "botocore==1.42.97 ; sys_platform == 'linux'",
