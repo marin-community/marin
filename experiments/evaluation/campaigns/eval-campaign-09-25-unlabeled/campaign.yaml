@@ -56,6 +56,9 @@ model_config_overrides:
   open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28:
     swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28.yaml
+  open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29.yaml
+    tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05:
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.yaml
   Aleph-Alpha-Kolibri-1:
