@@ -1,4 +1,4 @@
-// Runs the applet scripts under a stub DOM and verifies the tree layout:
+// Runs the app scripts under a stub DOM and verifies the tree layout:
 // every visible node placed, every visible parent->child pair drawn exactly
 // once, and every arrow terminating at the child's final top-center.
 const fs = require("fs");

@@ -186,7 +186,7 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
 @click.option(
     "--catalog-root", default=DEFAULT_CATALOG_ROOT, show_default=True, help="Published FineStore catalog to import."
 )
-@click.option("--applet-id", required=True)
+@click.option("--app-id", "applet_id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(catalog_root: str, applet_id: str, service_url: str) -> None:
     configure_coreweave_s3()

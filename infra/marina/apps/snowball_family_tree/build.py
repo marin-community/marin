@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the Snowball family tree applet from its reviewed graph and frontend."""
+"""Build the Snowball family tree app from its reviewed graph and frontend."""
 
 import json
 import shutil

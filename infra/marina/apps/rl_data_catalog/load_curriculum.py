@@ -17,7 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
-from infra.marina.applets.rl_data_catalog.load import batches, insert_rows
+from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -234,7 +234,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
 @click.command(help=__doc__)
 @click.option("--release", "release_uri", required=True, help="Immutable release.json; run in its storage region.")
 @click.option("--coverage", "coverage_uri", required=True, help="Compact coverage.json with statistics and samples.")
-@click.option("--applet-id", required=True)
+@click.option("--app-id", "applet_id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def main(release_uri: str, coverage_uri: str, applet_id: str, service_url: str) -> None:
     configure_coreweave_s3()

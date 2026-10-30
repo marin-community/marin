@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small dynamic backend used by the Marina applet example."""
+"""Small dynamic backend used by the Marina app example."""
 
 from fastapi import FastAPI
 from marina.applets import AppletServices

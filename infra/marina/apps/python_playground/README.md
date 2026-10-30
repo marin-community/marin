@@ -15,7 +15,7 @@ Run the commands below from the repository root.
 Start a disposable local preview:
 
 ```bash
-uv run marina release infra/marina/applets/python_playground --local --json
+uv run marina release infra/marina/apps/python_playground --local --json
 ```
 
 Open the printed `url`. Stop the preview with Ctrl-C to remove its
@@ -25,7 +25,7 @@ the printed `version` is the current package version.
 To update a running preview, use its origin and inspected current package version:
 
 ```bash
-uv run marina release infra/marina/applets/python_playground \
+uv run marina release infra/marina/apps/python_playground \
   --url LOCAL_ORIGIN --base-version CURRENT_VERSION --allow-dirty --json
 ```
 
@@ -33,7 +33,7 @@ This preserves its database. Starting another `--local` preview creates a new da
 Inspect revisions before a later update with:
 
 ```bash
-uv run marina applets versions 95b59a50-a74b-4aa6-870c-b89d05f501ba --url LOCAL_ORIGIN --json
+uv run marina apps versions 95b59a50-a74b-4aa6-870c-b89d05f501ba --url LOCAL_ORIGIN --json
 ```
 
 ## Editing and execution
@@ -67,7 +67,7 @@ to Postgres; the Save button retries a failed save. Run
 waits for pending saves before executing. Conflicting edits from another tab return
 an error and keep the local editor open for export.
 
-The applet's Postgres schema contains `projects`, `input_files`, `runs`,
+The app's Postgres schema contains `projects`, `input_files`, `runs`,
 `output_files` and `blobs`. Project and run metadata use typed columns; file contents
 use binary `BYTEA` blobs. JSON is used for HTTP requests and project exports only.
 Unchanged input blobs are reused when saving metadata edits. The app keeps the latest
@@ -110,7 +110,7 @@ the existing files.
 Upload a directory from the repository root:
 
 ```bash
-uv run -m infra.marina.applets.python_playground.cli upload ./my-analysis \
+uv run -m infra.marina.apps.python_playground.cli upload ./my-analysis \
   --title "My analysis"
 ```
 
@@ -199,9 +199,9 @@ and advice.
 Connection is best effort. Marina's runtime environment variable
 `MARINA_AGENT_ORIGIN` supplies the Loom URL; environments without it show an
 unavailable state. Browser connections require a Loom sign-in and Loom's
-`browser.allowed_origins` setting to permit the private applet origin
+`browser.allowed_origins` setting to permit the private app origin
 (`https://applets.marina.oa.dev` in production). The production policy permits
-both the main Marina origin and its private applet origin. Operators manage it in
+both the main Marina origin and its private app origin. Operators manage it in
 `infra/loom/Pulumi.marin-loom.yaml`. The playground's `applet.toml` permits
 connections to `https://loom.oa.dev` through `connect_src`; a different Loom URL
 also requires updating that list.

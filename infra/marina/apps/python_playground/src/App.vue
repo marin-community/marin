@@ -32,7 +32,7 @@ const agentContext = computed(() => ({
     "Projects",
   state: {
     applet_id: "95b59a50-a74b-4aa6-870c-b89d05f501ba",
-    source_path: "infra/marina/applets/python_playground",
+    source_path: "infra/marina/apps/python_playground",
     page_url: window.location.href,
     ...(record.value
       ? workspace.value?.agentState || {

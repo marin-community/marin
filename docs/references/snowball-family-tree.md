@@ -3,7 +3,7 @@
 [Open the Snowball model family tree](https://public.applets.marina.oa.dev/a/d3b5517a-c119-4fd9-999d-362183422bf3/)
 to explore 130 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
 without signing in. This is a curated snapshot of the evidence available on
-October 19, 2026. The stable URL opens the current applet revision.
+October 19, 2026. The stable URL opens the current app revision.
 
 The lineage map opens with the whole tree visible and its shared pretrain centered.
 Click a node to expand its summary, algorithms, compute estimate and evidence.
@@ -50,10 +50,10 @@ fresh optimizer from `.32` step 14, then retains optimizer and step state across
 complete-evaluation winner. Public model cards, pinned source configurations,
 W&B links and the complete recorded `.32` W&B archive support these nodes.
 
-## Maintain the applet
+## Maintain the app
 
-The source package is `infra/marina/applets/snowball_family_tree/`.
-Follow the [contributor README](https://github.com/marin-community/marin/blob/main/infra/marina/applets/snowball_family_tree/README.md)
+The source package is `infra/marina/apps/snowball_family_tree/`.
+Follow the [contributor README](https://github.com/marin-community/marin/blob/main/infra/marina/apps/snowball_family_tree/README.md)
 to add a checkpoint to `graph-data.json`, verify its parent and timeline, and
 submit a focused PR. The extracts
 `evidence/evidence-glm53async48-telemetry.json` and
@@ -65,25 +65,25 @@ public campaign archive.
 Build and validate from the repository root:
 
 ```bash
-uv run marina validate infra/marina/applets/snowball_family_tree
-uv run marina release infra/marina/applets/snowball_family_tree --dry-run --json
-uv run marina release infra/marina/applets/snowball_family_tree --local --json
+uv run marina validate infra/marina/apps/snowball_family_tree
+uv run marina release infra/marina/apps/snowball_family_tree --dry-run --json
+uv run marina release infra/marina/apps/snowball_family_tree --local --json
 ```
 
 The local command starts a disposable Marina/Postgres instance and prints its
-revision URL. Ctrl-C removes it. The manifest declares the existing applet UUID.
+revision URL. Ctrl-C removes it. The manifest declares the existing app UUID.
 For production updates, use a clean checkout at current remote main and inspect
 the release status and live revision:
 
 ```bash
-uv run marina release-status infra/marina/applets/snowball_family_tree --json
-uv run marina applets versions d3b5517a-c119-4fd9-999d-362183422bf3 --json
-uv run marina release infra/marina/applets/snowball_family_tree \
+uv run marina release-status infra/marina/apps/snowball_family_tree --json
+uv run marina apps versions d3b5517a-c119-4fd9-999d-362183422bf3 --json
+uv run marina release infra/marina/apps/snowball_family_tree \
   --base-version CURRENT_VERSION --json
 ```
 
 Replace `CURRENT_VERSION` with the inspected current version. Release preserves
-the applet's public mode and records Git source provenance. The manifest's build
+the app's public mode and records Git source provenance. The manifest's build
 command validates graph lineage and produces `dist/` from the HTML, JavaScript,
 CSS, graph and token-count extracts. Release packages that output and restores
 previous local build output afterward. Generated files are ignored by Git. Asset
