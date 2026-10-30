@@ -9,7 +9,7 @@ from torch.distributed import checkpoint
 from torch.distributed.checkpoint import DefaultSavePlanner
 
 from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
-from skyrl_train.distributed.megatron.master_export import load_fp32_masters
+from skyrl_train.distributed.megatron.master_export import load_fp32_masters, fp32_master_names, load_fp32_master
 
 EXPERT_KEY = "decoder.layers.mlp.experts.weight"
 ROUTER_KEY = "decoder.layers.mlp.router.weight"
@@ -54,6 +54,9 @@ def test_load_returns_only_the_fp32_masters_keyed_by_model_name(tmp_path: Path):
     assert masters[EXPERT_KEY].dtype == torch.float32
     torch.testing.assert_close(masters[EXPERT_KEY], expert_master, rtol=0, atol=0)
     torch.testing.assert_close(masters[ROUTER_KEY], router_master, rtol=0, atol=0)
+    assert fp32_master_names(str(tmp_path)) == {EXPERT_KEY, ROUTER_KEY}
+    for name, expected in [(EXPERT_KEY, expert_master), (ROUTER_KEY, router_master)]:
+        torch.testing.assert_close(load_fp32_master(str(tmp_path), name), expected, rtol=0, atol=0)
 
 
 def test_export_refuses_a_checkpoint_without_master_records(tmp_path: Path):
