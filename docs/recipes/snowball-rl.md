@@ -131,8 +131,7 @@ commit, or explains missing git metadata. This list does not affect the verdict.
 
 `snowball_pass_rates` answers each panel task eight times at temperature 1. Its artifact
 pins the initializer revision and records task IDs, passed answers, scored samples and
-mean normalized scores,
-excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
+mean normalized scores, excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
 (< 0.1) pass-rate bands for reporting only. Refresh when the initializer revision changes.
 
 ## Tasks and evaluation
