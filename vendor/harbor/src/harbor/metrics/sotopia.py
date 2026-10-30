@@ -133,7 +133,7 @@ def read_episodes(cell: SotopiaCell) -> list[EpisodeScore]:
     if rows is None:
         raise ValueError(f"no normalized SOTOPIA samples for {cell.model}")
     sample_rows = rows.to_pylist(maps_as_pydicts="strict")
-    pattern = StoragePath(prefix_join(cell.results_path, "harbor_jobs", "**", "sotopia-summary.json"))
+    pattern = StoragePath(prefix_join(cell.results_path, "harbor_jobs/**/sotopia-summary.json"))
     summaries: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for path in pattern.glob():
         if match := SUMMARY.search(str(path)):
