@@ -1038,7 +1038,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # The reference config could not be read: the repo is gated, or the Hub is unreachable
             # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
             # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
-            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so an HF outage never blocks model config construction. Record `architectures` from the model type (torch-free)
             # so the checkpoint stays loadable.
             warnings.warn(
                 f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
@@ -1112,6 +1112,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param generation_config: explicit generation settings. Otherwise, preserves
+        generation_config.json from the pinned reference checkpoint, when present.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
@@ -1253,7 +1255,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                if generation_config is not None:
+                if generation_config is None:
+                    self._save_reference_generation_config(local_path)
+                else:
                     logger.info(
                         "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
                     )
@@ -1277,6 +1281,26 @@ class HFCheckpointConverter(Generic[LevConfig]):
         run_on_export_writer(save_metadata)
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
+
+    def _save_reference_generation_config(self, local_path: str) -> None:
+        if self.reference_checkpoint is None:
+            return
+        repo, revision = self._get_ref(self.reference_checkpoint)
+        if _is_url_like(repo) or os.path.isdir(repo):
+            source = StoragePath(repo) / "generation_config.json"
+            try:
+                contents = source.read_bytes()
+            except FileNotFoundError:
+                return
+        else:
+            try:
+                source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
+            except EntryNotFoundError:
+                return
+            with open(source_path, "rb") as source_file:
+                contents = source_file.read()
+        with open(os.path.join(local_path, "generation_config.json"), "wb") as destination:
+            destination.write(contents)
 
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
