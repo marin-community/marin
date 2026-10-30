@@ -204,11 +204,28 @@ def test_released_job_resolves_runtime_storage_configuration(tmp_path: Path, job
     assert output.read_text() == store_config(StoreType.COREWEAVE).endpoint
 
 
-def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_url: str) -> None:
+def test_apps_list_includes_named_and_unnamed_releases(tmp_path: Path, job_registry: tuple[AppletStore, str]) -> None:
+    store, _url = job_registry
+    release_job(tmp_path, store, "alpha", "def main(): pass")
+    source = Path(__file__).parents[1] / "examples" / "static-html-app"
+    published = store.publish(read_applet_package(package_applet(source)), "anonymous")
+    config = MarinaConfig(data_root=str(tmp_path), iap_audience=None, database=store.database)
+    expected_names = {"alpha", str(published.applet_id)}
+    with running_kernel(config) as kernel:
+        runner = CliRunner()
+        listed = runner.invoke(cli, ["apps", "list", "--url", kernel.origin])
+        assert listed.exit_code == 0, listed.output
+        assert {line.split()[0] for line in listed.output.splitlines()} == expected_names
+        listed_json = runner.invoke(cli, ["apps", "list", "--json", "--url", kernel.origin])
+        assert listed_json.exit_code == 0, listed_json.output
+        assert {app["name"] for app in json.loads(listed_json.output)["apps"]} == expected_names
+
+
+def test_app_host_commands_change_persisted_binding(tmp_path: Path, database_url: str) -> None:
     store = AppletStore(UrlDatabase(database_url))
     ensure_applet_provisioning(store.engine)
     store.migrate()
-    package = read_applet_package(package_applet(Path(__file__).parents[1] / "examples" / "static-html-applet"))
+    package = read_applet_package(package_applet(Path(__file__).parents[1] / "examples" / "static-html-app"))
     published = store.publish(package, "anonymous")
     config = MarinaConfig(
         data_root=str(tmp_path),
@@ -220,13 +237,13 @@ def test_applet_host_commands_change_persisted_binding(tmp_path: Path, database_
     with running_kernel(config) as kernel:
         runner = CliRunner()
         bound = runner.invoke(
-            cli, ["applets", "hosts", "bind", "cli.example", str(published.applet_id), "--url", kernel.origin]
+            cli, ["apps", "hosts", "bind", "cli.example", str(published.applet_id), "--url", kernel.origin]
         )
         assert bound.exit_code == 0, bound.output
         assert store.host_applet("cli.example") == published.applet_id
-        listed = runner.invoke(cli, ["applets", "hosts", "list", "--url", kernel.origin])
+        listed = runner.invoke(cli, ["apps", "hosts", "list", "--url", kernel.origin])
         assert listed.exit_code == 0, listed.output
         assert json.loads(listed.output)["hosts"]["cli.example"] == str(published.applet_id)
-        unbound = runner.invoke(cli, ["applets", "hosts", "unbind", "cli.example", "--url", kernel.origin])
+        unbound = runner.invoke(cli, ["apps", "hosts", "unbind", "cli.example", "--url", kernel.origin])
         assert unbound.exit_code == 0, unbound.output
         assert store.host_bindings()["cli.example"] is None

@@ -46,7 +46,8 @@ These stages finish before the run is recorded as successful. Missing cohort evi
 produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
 Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
 The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
-`record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
+`record.json` records the FinanceBench and OlympiadBench judge configuration in
+`eval.postprocessing`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
 absolute path to this YAML by default.
 

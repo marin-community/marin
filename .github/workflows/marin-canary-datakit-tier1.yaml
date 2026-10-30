@@ -94,11 +94,13 @@ jobs:
         id: wait
         shell: bash -l {0}
         run: |
+          # Oct 28 completed in 4h44m after store workers waited for capacity.
+          # Leave 14m under the 350m job limit for failure diagnostics.
           uv run python scripts/ci/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
-            --timeout 7100 \
+            --timeout 20200 \
             --resource-exhaustion-policy shutdown \
             --github-output
 

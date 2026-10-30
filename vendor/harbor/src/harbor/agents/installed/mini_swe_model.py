@@ -116,8 +116,11 @@ class OpenAIModel(OpenRouterModel):
             model = self.config.model_name
             if model.startswith(("hosted_vllm/", "openai/")):
                 model = model.split("/", 1)[1]
+            # Mini-SWE's default YAML includes this LiteLLM-only option.
             return client.chat.completions.create(
-                model=model, messages=messages, **kwargs
+                model=model,
+                messages=messages,
+                **{key: value for key, value in kwargs.items() if key != "drop_params"},
             ).model_dump()
 
     def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:

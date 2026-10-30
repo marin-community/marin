@@ -25,6 +25,7 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
   tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
+- Gradient clip: the global gradient norm is clipped to 1.0 (`HERO_MAX_GRAD_NORM`).
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
