@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Plot the sealed policy scores for the base, SFT repro, and full SFT models."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import re
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MultipleLocator
+
+
+HERE = Path(__file__).resolve().parent
+MODEL_ORDER = (
+    ("open-athena/snowball-67b-a2b-base-262k-qk175-skew8", "Base"),
+    ("open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25", "Step 222"),
+    ("open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step471-2026.10.25", "Step 471"),
+    ("open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28", "Step 1024"),
+    ("open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29", "Step 2048"),
+    ("open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05", "Full SFT\n(Oct 5)"),
+)
+MIN_ENDPOINT_CHANGE = 0.05
+SCORE_CELL = re.compile(r"^(\d+(?:\.\d+)?) \(([^)]+)\)$")
+BENCHMARK_NAMES = {
+    "math500": "MATH500",
+    "humanevalplus": "HumanEval+",
+    "mbppplus": "MBPP+",
+    "olympiadbench": "OlympiadBench",
+    "gsm8k-0shot": "GSM8K",
+    "piqa": "PIQA",
+    "winogrande": "WinoGrande",
+    "boolq": "BoolQ",
+    "truthfulqa": "TruthfulQA",
+    "triviaqa": "TriviaQA",
+    "aime24": "AIME24",
+    "mmlu-pro": "MMLU-Pro",
+    "gpqa-diamond": "GPQA-Diamond",
+    "cruxeval": "CruxEval",
+    "financebench": "FinanceBench",
+    "ifbench": "IFBench",
+    "mrcr": "MRCR",
+    "NUPA": "NUPA",
+    "swebench-verified": "SWE-bench Verified",
+    "ot-tblite-recovery": "OpenThoughts-TBLite",
+    "tb2-recovery": "Terminal-Bench 2",
+    "ds-1000-local": "DS-1000",
+    "bfclparity-pi": "BFCL parity",
+    "bixbench-pi": "BixBench",
+    "tau3-pi": "τ³",
+    "SOTOPIA-hard": "SOTOPIA-hard",
+}
+
+
+def tracker_rows(path: Path) -> list[dict[str, str]]:
+    """Extract the six model rows and durable result links from a tracker."""
+    lines = path.read_text().splitlines()
+    header = next(line for line in lines if line.startswith("| Model |"))
+    benchmarks = [value.strip() for value in header.strip("|").split("|")][1:]
+    if len(benchmarks) != 26 or set(benchmarks) != set(BENCHMARK_NAMES):
+        raise ValueError("unexpected tracker benchmark columns")
+
+    wanted = {model for model, _ in MODEL_ORDER}
+    found: dict[str, list[str]] = {}
+    for line in lines:
+        if not line.startswith("|"):
+            continue
+        cells = [value.strip() for value in line.strip("|").split("|")]
+        if cells[0] in wanted:
+            if cells[0] in found:
+                raise ValueError(f"duplicate tracker model: {cells[0]}")
+            if len(cells) != len(benchmarks) + 1:
+                raise ValueError(f"wrong cell count for {cells[0]}")
+            found[cells[0]] = cells[1:]
+    if set(found) != wanted:
+        raise ValueError(f"missing tracker models: {sorted(wanted - set(found))}")
+
+    rows = []
+    for position, (model, label) in enumerate(MODEL_ORDER):
+        for benchmark, cell in zip(benchmarks, found[model], strict=True):
+            match = SCORE_CELL.fullmatch(cell)
+            if match is None:
+                raise ValueError(f"unsealed or malformed score: {model} / {benchmark}: {cell}")
+            score = float(match.group(1))
+            if not 0 <= score <= 1:
+                raise ValueError(f"score outside [0, 1]: {model} / {benchmark}")
+            rows.append(
+                {
+                    "position": str(position),
+                    "model": model,
+                    "label": label.replace("\n", " "),
+                    "benchmark": benchmark,
+                    "score": f"{score:.3f}",
+                    "result_uri": match.group(2),
+                }
+            )
+    return rows
+
+
+def save_scores(rows: list[dict[str, str]], tracker: Path) -> None:
+    with (HERE / "scores.csv").open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    (HERE / "source.json").write_text(
+        json.dumps(
+            {
+                "tracker": str(tracker.resolve()),
+                "tracker_sha256": hashlib.sha256(tracker.read_bytes()).hexdigest(),
+                "models": [model for model, _ in MODEL_ORDER],
+                "stage_filter_pp": 100 * MIN_ENDPOINT_CHANGE,
+                "stages": [[0, 1], [1, 4], [1, 5]],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def load_scores() -> tuple[list[str], dict[str, list[float]]]:
+    with (HERE / "scores.csv").open(newline="") as source:
+        rows = list(csv.DictReader(source))
+    expected = len(MODEL_ORDER) * len(BENCHMARK_NAMES)
+    if len(rows) != expected:
+        raise ValueError(f"expected {expected} model/benchmark scores, got {len(rows)}")
+    benchmarks = [row["benchmark"] for row in rows[: len(BENCHMARK_NAMES)]]
+    if set(benchmarks) != set(BENCHMARK_NAMES):
+        raise ValueError("score CSV benchmark set does not match the plot specification")
+    values = {benchmark: [] for benchmark in benchmarks}
+    for position, (model, _) in enumerate(MODEL_ORDER):
+        segment = rows[position * len(benchmarks) : (position + 1) * len(benchmarks)]
+        if [row["benchmark"] for row in segment] != benchmarks:
+            raise ValueError(f"benchmark order differs at model position {position}")
+        if any(row["model"] != model or int(row["position"]) != position for row in segment):
+            raise ValueError(f"model order differs at position {position}")
+        for row in segment:
+            values[row["benchmark"]].append(float(row["score"]))
+    return benchmarks, values
+
+
+def selected_benchmarks(
+    benchmarks: list[str], values: dict[str, list[float]], start: int, end: int, name: str
+) -> list[str]:
+    selected = [benchmark for benchmark in benchmarks if abs(values[benchmark][end] - values[benchmark][start]) > MIN_ENDPOINT_CHANGE]
+    selected.sort(key=lambda benchmark: abs(values[benchmark][end] - values[benchmark][start]), reverse=True)
+    with (HERE / f"{name}.csv").open("w", newline="") as output:
+        writer = csv.writer(output)
+        writer.writerow(["rank", "benchmark", "start_score", "end_score", "change_pp"])
+        for rank, benchmark in enumerate(selected, 1):
+            points = values[benchmark]
+            writer.writerow([rank, benchmark, f"{points[start]:.3f}", f"{points[end]:.3f}", f"{100 * (points[end] - points[start]):+.1f}"])
+    return selected
+
+
+def draw_plot(
+    name: str,
+    title: str,
+    benchmarks: list[str],
+    values: dict[str, list[float]],
+    colors: dict[str, object],
+    positions: list[int],
+    overview: bool,
+) -> None:
+    figure, axis = plt.subplots(figsize=(18 if overview else 15, 9 if overview else 7.5))
+    handles = []
+    start, end = positions[0], positions[-1]
+    for benchmark in benchmarks:
+        scores = [100 * value for value in values[benchmark]]
+        color = colors[benchmark]
+        solid_positions = [position for position in positions if position <= 4]
+        axis.plot(solid_positions, [scores[position] for position in solid_positions], color=color, linewidth=2, marker="o", markersize=4)
+        if end == 5:
+            axis.plot([4, 5], scores[4:6], color=color, linewidth=2, linestyle="--", marker="o", markersize=4)
+        change = scores[end] - scores[start]
+        label = f"{BENCHMARK_NAMES[benchmark]}  {scores[start]:.1f}→{scores[end]:.1f} ({change:+.1f} pp)"
+        handles.append(Line2D([0], [0], color=color, linewidth=2, marker="o", markersize=4, label=label))
+
+    axis.set_xticks(positions, [MODEL_ORDER[position][1] for position in positions])
+    axis.set_xlim(start - 0.12, end + 0.12)
+    axis.set_ylim(0, 100)
+    axis.yaxis.set_major_locator(MultipleLocator(10))
+    axis.grid(axis="y", color="#d8dde5", linewidth=0.8)
+    axis.set_axisbelow(True)
+    axis.set_ylabel("Policy score (%)")
+    axis.set_xlabel("Checkpoint")
+    axis.set_title(title, loc="left", fontsize=16, pad=15)
+    if end == 5:
+        axis.axvspan(4.5, 5.12, color="#f2f4f7", zorder=-1)
+    axis.legend(
+        handles=handles,
+        title="Benchmark: start → end",
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=8.3 if overview else 9.5,
+        title_fontsize=9.5,
+    )
+    note = "Only benchmarks with >5 pp change between these endpoints are plotted."
+    if end == 5:
+        note = "Dashed final segments connect to the separately trained Oct 5 SFT reference. " + note
+    figure.text(0.075, 0.025, note, fontsize=9, color="#4b5563")
+    figure.subplots_adjust(left=0.075, right=0.63 if overview else 0.67, top=0.89, bottom=0.14)
+    for suffix in ("png", "svg", "pdf"):
+        figure.savefig(HERE / f"{name}.{suffix}", dpi=220)
+    plt.close(figure)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tracker", type=Path, help="extract a fresh scores.csv from this tracker first")
+    args = parser.parse_args()
+    if args.tracker is not None:
+        save_scores(tracker_rows(args.tracker), args.tracker)
+    benchmarks, values = load_scores()
+    first = selected_benchmarks(benchmarks, values, 0, 1, "base_to_step222")
+    repro = selected_benchmarks(benchmarks, values, 1, 4, "step222_to_step2048")
+    later = selected_benchmarks(benchmarks, values, 1, 5, "step222_to_full")
+    if not first or not repro or not later:
+        raise ValueError("a stage has no benchmarks passing the endpoint filter")
+    palette = plt.get_cmap("tab20")
+    combined = list(dict.fromkeys(first + repro + later))
+    colors = {benchmark: palette(index % 20) if index < 20 else "#111827" for index, benchmark in enumerate(combined)}
+    draw_plot("base_to_step222", "Base to Step 222", first, values, colors, [0, 1], True)
+    draw_plot("step222_to_step2048_all", "Step 222 to Step 2048: all qualifying benchmarks", repro, values, colors, [1, 2, 3, 4], True)
+    draw_plot("step222_to_step2048_gains", "Step 222 to Step 2048: gains", [benchmark for benchmark in repro if values[benchmark][4] > values[benchmark][1]], values, colors, [1, 2, 3, 4], False)
+    draw_plot("step222_to_step2048_declines", "Step 222 to Step 2048: declines", [benchmark for benchmark in repro if values[benchmark][4] < values[benchmark][1]], values, colors, [1, 2, 3, 4], False)
+    draw_plot("step222_to_full_all", "Step 222 to full SFT: all qualifying benchmarks", later, values, colors, [1, 2, 3, 4, 5], True)
+    midpoint = (len(later) + 1) // 2
+    draw_plot("step222_to_full_largest", "Step 222 to full SFT: largest changes", later[:midpoint], values, colors, [1, 2, 3, 4, 5], False)
+    draw_plot("step222_to_full_other", "Step 222 to full SFT: other changes above 5 pp", later[midpoint:], values, colors, [1, 2, 3, 4, 5], False)
+    print(f"Base→222: {len(first)} benchmarks; 222→2048: {len(repro)} benchmarks; 222→full SFT: {len(later)} benchmarks.")
+
+
+if __name__ == "__main__":
+    main()

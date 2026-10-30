@@ -1,0 +1,9 @@
+# Earlier Snowball R2E-Gym report: input to cleaning follow-up
+
+Source: https://claude.ai/artifact/TefbJfphaTBsYFtFgrNgMY. The HTTP endpoint returned403; the experiment owner supplied the complete report text in chat on2026-10-30. Summary below is attributed to that report, not independently reproduced.
+
+The report studies a separate Stage-3 Snowball67B-A2B checkpoint on R2E-Gym train tasks through Terminus-2, with eight temperature1 samples. It reports13.3% pass@1 and37.1% pass@8 on4,206 fully sampled tasks, with the scored-attempt and total-attempt populations distinguished in the source. This is not the10-05 cold-start reproduction and its32k SFT context is not the262k context used here.
+
+The actionable findings are: correct intended fixes fail to reach source files; unsupported SEARCH/REPLACE patch syntax and/app/solution.patch conventions transfer to a plain terminal harness; corrected copies remain in/tmp; tests are skipped; unsuccessful repair and package workflows repeat; demonstrations often fail to declare completion; retained reasoning consumes context; and unchanged tmux screens lead to repeated commands or control characters. The source attributes several habits to the Nemotron-Terminal SWE slice, but those attributions must be rechecked against the current216-source mixture.
+
+Cleaning follow-up should preserve valid task-specific patch contracts, require grounded source edits and test evidence when appropriate, teach finite recovery and explicit completion, and separate terminal-observation/harness fixes from training-data changes. The report's sampled manual judgments do not establish that all remaining tasks are solvable or that all failure causes are SFT defects.

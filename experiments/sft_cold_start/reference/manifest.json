@@ -2682,6 +2682,22 @@
       "sha256": "fcbbb79441b6fa38a8b26ccfa1b0495d0b41d7da70741593e89b3f43ffebfa1c",
       "bytes": 7149,
       "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/figures/plot_sft_repro.py",
+      "restore_path": "artifacts/figures/plot_sft_repro.py",
+      "snapshot": "artifacts/figures/plot_sft_repro.py.source",
+      "sha256": "5418693a884706ab8e53ca81d78fcbb994bd032b3059b8b137bbf6c1896ad6aa",
+      "bytes": 11060,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/prior-snowball-report-notes.md",
+      "restore_path": "artifacts/publication/prior-snowball-report-notes.md",
+      "snapshot": "artifacts/publication/prior-snowball-report-notes.md.source",
+      "sha256": "d09f819a00afbd4ecf413cda6e566c4a31028e09b820d618dae6108813431829",
+      "bytes": 1709,
+      "encoding": "utf-8"
     }
   ],
   "training_patch_sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242"
