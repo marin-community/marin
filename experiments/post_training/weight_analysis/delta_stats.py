@@ -26,6 +26,7 @@ Port of the #9920/#9984 weight-delta analyses (``weight_delta_stats.py``,
 from the method text in those issues.
 """
 
+import hashlib
 import itertools
 import math
 from collections.abc import Iterable, Iterator
@@ -38,6 +39,7 @@ from experiments.post_training.weight_analysis.checkpoint_io import SafetensorsC
 from experiments.post_training.weight_analysis.components import (
     Block,
     Component,
+    ExpertKey,
     Keyed,
     component_of,
     layer_of,
@@ -157,6 +159,12 @@ class DeltaSummary:
     changed: int = 0
     elements: int = 0
 
+    def merge(self, other: "DeltaSummary") -> None:
+        self.delta_sq += other.delta_sq
+        self.base_sq += other.base_sq
+        self.changed += other.changed
+        self.elements += other.elements
+
     @property
     def delta_norm(self) -> float:
         return math.sqrt(self.delta_sq)
@@ -174,19 +182,24 @@ class DeltaSummary:
         return self.changed / self.elements
 
 
+def block_summary(base: Block, checkpoint: Block) -> DeltaSummary:
+    """One aligned (B, checkpoint) block pair's :class:`DeltaSummary`."""
+    delta = checkpoint.array - base.array
+    return DeltaSummary(
+        delta_sq=sum_squares(delta),
+        base_sq=sum_squares(base.array),
+        changed=int(np.count_nonzero(delta)),
+        elements=delta.size,
+    )
+
+
 def summarize_deltas(pairs: Iterable[tuple[Block, Block]]) -> Keyed[DeltaSummary]:
     """Per-key delta norms, relative norms and changed fractions from :func:`paired_blocks`."""
     summary = Keyed(overall=DeltaSummary())
     for base_block, checkpoint_block in pairs:
-        delta = checkpoint_block.array - base_block.array
-        delta_sq = sum_squares(delta)
-        base_sq = sum_squares(base_block.array)
-        changed = int(np.count_nonzero(delta))
+        block = block_summary(base_block, checkpoint_block)
         for target in summary.targets(base_block, DeltaSummary):
-            target.delta_sq += delta_sq
-            target.base_sq += base_sq
-            target.changed += changed
-            target.elements += delta.size
+            target.merge(block)
     return summary
 
 
@@ -238,6 +251,14 @@ class DeltaComparison:
     changed_both: int = 0
     same_sign: int = 0
 
+    def merge(self, other: "DeltaComparison") -> None:
+        self.geometry.merge(other.geometry)
+        self.elements += other.elements
+        self.changed_left += other.changed_left
+        self.changed_right += other.changed_right
+        self.changed_both += other.changed_both
+        self.same_sign += other.same_sign
+
     @property
     def cosine(self) -> float:
         return self.geometry.cosine
@@ -254,29 +275,30 @@ def _new_comparison() -> DeltaComparison:
     return DeltaComparison(PairGeometry())
 
 
+def block_comparison(left: Block, right: Block) -> DeltaComparison:
+    """One aligned delta-block pair's :class:`DeltaComparison`."""
+    geometry = PairGeometry()
+    geometry.update(left.array, right.array)
+    sign_left = np.sign(left.array)
+    sign_right = np.sign(right.array)
+    both = (sign_left != 0) & (sign_right != 0)
+    return DeltaComparison(
+        geometry=geometry,
+        elements=left.array.size,
+        changed_left=int(np.count_nonzero(sign_left)),
+        changed_right=int(np.count_nonzero(sign_right)),
+        changed_both=int(np.count_nonzero(both)),
+        same_sign=int(np.count_nonzero(both & (sign_left == sign_right))),
+    )
+
+
 def compare_deltas(left: Iterable[Block], right: Iterable[Block]) -> Keyed[DeltaComparison]:
     """Task conflict between two deltas (``Δ_A`` vs ``Δ_B``, or a method vs an expert)."""
     comparisons = Keyed(overall=_new_comparison())
     for left_block, right_block in aligned(left, right):
-        sign_left = np.sign(left_block.array)
-        sign_right = np.sign(right_block.array)
-        both = (sign_left != 0) & (sign_right != 0)
-        counts = (
-            left_block.array.size,
-            int(np.count_nonzero(sign_left)),
-            int(np.count_nonzero(sign_right)),
-            int(np.count_nonzero(both)),
-            int(np.count_nonzero(both & (sign_left == sign_right))),
-        )
-        block_geometry = PairGeometry()
-        block_geometry.update(left_block.array, right_block.array)
+        block = block_comparison(left_block, right_block)
         for target in comparisons.targets(left_block, _new_comparison):
-            target.geometry.merge(block_geometry)
-            target.elements += counts[0]
-            target.changed_left += counts[1]
-            target.changed_right += counts[2]
-            target.changed_both += counts[3]
-            target.same_sign += counts[4]
+            target.merge(block)
     return comparisons
 
 
@@ -320,7 +342,7 @@ class SubspaceOverlap:
         return self._share(self.inside_permuted)
 
 
-def _top_right_singular_basis(matrix: np.ndarray, k: int | None) -> tuple[np.ndarray, int]:
+def half_energy_basis(matrix: np.ndarray, k: int | None) -> tuple[np.ndarray, int]:
     """The top-k right singular directions of ``matrix`` as an [n, k] basis.
 
     With ``k=None``, k is the smallest rank holding half of the matrix energy.
@@ -352,7 +374,8 @@ def _top_right_singular_basis(matrix: np.ndarray, k: int | None) -> tuple[np.nda
     return basis, k
 
 
-def _energy_inside(matrix: np.ndarray, basis: np.ndarray) -> float:
+def energy_inside(matrix: np.ndarray, basis: np.ndarray) -> float:
+    """The energy of ``matrix`` inside the subspace spanned by ``basis``."""
     rows = max(1, _CHUNK_ELEMENTS // matrix.shape[1])
     total = 0.0
     for start in range(0, matrix.shape[0], rows):
@@ -361,42 +384,131 @@ def _energy_inside(matrix: np.ndarray, basis: np.ndarray) -> float:
     return total
 
 
-def subspace_overlap(delta: Iterable[Block], reference: Iterable[Block], *, seed: int) -> Keyed[SubspaceOverlap]:
-    """Share of ``delta``'s energy inside ``reference``'s top singular directions.
+@dataclass(frozen=True)
+class MatrixOverlap:
+    """One 2-D matrix's subspace overlap against the aligned reference matrix.
 
-    Per matrix (each 2-D tensor, and each expert of a stacked routed-expert
-    tensor), k is the number of right singular directions holding 50% of the
-    reference matrix's energy, and the delta's energy is projected onto them.
-    Two nulls use the same k: a random k-dimensional subspace, and the top-k
-    directions of the reference with its entries permuted within the matrix.
-    1-D tensors (norm scales, the selection bias) have no subspace and are
-    skipped. See :class:`SubspaceOverlap` for the aggregation.
+    k is the reference matrix's half-energy rank. ``random`` projects onto a
+    random k-dimensional basis and ``permuted`` onto the top-k basis of the
+    reference with its entries permuted; those two nulls draw from the matrix's
+    own generator (:func:`matrix_generator`).
     """
-    generator = np.random.default_rng(seed)
-    overlaps = Keyed(overall=SubspaceOverlap())
+
+    total: float
+    projected: float
+    random: float
+    permuted: float
+    k: int
+    zero_reference: bool
+
+
+@dataclass(frozen=True)
+class ReferenceBases:
+    """What one reference matrix offers every delta compared with it.
+
+    ``basis`` is its half-energy top-k right singular basis; ``random_basis`` and
+    ``permuted_basis`` are the two k-dimensional nulls. They depend only on the
+    reference and its generator, so one computation serves every compared model.
+    """
+
+    basis: np.ndarray
+    random_basis: np.ndarray
+    permuted_basis: np.ndarray
+    k: int
+
+
+def matrix_generator(seed: int, name: str, expert: ExpertKey | None) -> np.random.Generator:
+    """The null draws' generator for one matrix, keyed by its identity.
+
+    A per-matrix key makes each null independent of iteration order and of which
+    other matrices or models were scored, and lets matrices be computed in parallel.
+    """
+    key = hashlib.sha256(f"{name}:{expert}".encode()).digest()
+    return np.random.default_rng([seed, int.from_bytes(key[:8], "little")])
+
+
+def reference_bases(reference: np.ndarray, *, generator: np.random.Generator) -> ReferenceBases | None:
+    """The reference matrix's basis and nulls; ``None`` for a zero reference, which has no subspace."""
+    if reference.ndim != 2:
+        raise ValueError(f"overlap needs a 2-D matrix, got shape {reference.shape}")
+    if sum_squares(reference) == 0.0:
+        return None
+    basis, k = half_energy_basis(reference, None)
+    random_basis, _ = np.linalg.qr(generator.standard_normal((reference.shape[1], k)))
+    permuted = generator.permutation(reference.reshape(-1)).reshape(reference.shape)
+    permuted_basis, _ = half_energy_basis(permuted, k)
+    return ReferenceBases(basis=basis, random_basis=random_basis, permuted_basis=permuted_basis, k=k)
+
+
+def overlap_against(matrix: np.ndarray, bases: ReferenceBases | None) -> MatrixOverlap:
+    """Subspace overlap of one delta matrix with a reference's precomputed bases."""
+    if matrix.ndim != 2:
+        raise ValueError(f"overlap needs a 2-D matrix, got shape {matrix.shape}")
+    total = sum_squares(matrix)
+    if bases is None:
+        return MatrixOverlap(total=total, projected=0.0, random=0.0, permuted=0.0, k=0, zero_reference=True)
+    if total == 0.0:
+        return MatrixOverlap(total=0.0, projected=0.0, random=0.0, permuted=0.0, k=0, zero_reference=False)
+    return MatrixOverlap(
+        total=total,
+        projected=energy_inside(matrix, bases.basis),
+        random=energy_inside(matrix, bases.random_basis),
+        permuted=energy_inside(matrix, bases.permuted_basis),
+        k=bases.k,
+        zero_reference=False,
+    )
+
+
+@dataclass(frozen=True)
+class MatrixOverlapRecord:
+    """A :class:`MatrixOverlap` with its block identity."""
+
+    name: str
+    component: Component
+    expert: ExpertKey | None
+    overlap: MatrixOverlap
+
+
+def matrix_overlaps(delta: Iterable[Block], reference: Iterable[Block], *, seed: int) -> Iterator[MatrixOverlapRecord]:
+    """Per-matrix subspace overlap of ``delta`` against ``reference``.
+
+    Each 2-D tensor, and each expert of a stacked routed-expert tensor, is one
+    matrix. 1-D tensors (norm scales, the selection bias) have no subspace and
+    are skipped. See :func:`reference_bases` and :func:`overlap_against` for the per-matrix computation.
+    """
     for delta_block, reference_block in aligned(delta, reference):
         if delta_block.array.ndim != 2:
             continue
-        matrix = delta_block.array
-        targets = overlaps.targets(delta_block, SubspaceOverlap)
-        if sum_squares(reference_block.array) == 0.0:
-            for target in targets:
+        generator = matrix_generator(seed, delta_block.name, delta_block.expert)
+        bases = reference_bases(reference_block.array, generator=generator)
+        overlap = overlap_against(delta_block.array, bases)
+        yield MatrixOverlapRecord(delta_block.name, delta_block.component, delta_block.expert, overlap)
+
+
+def record_block(record: MatrixOverlapRecord) -> Block:
+    """A block carrying only a record's identity, for :meth:`Keyed.targets`."""
+    return Block(record.name, record.component, record.expert, np.empty(0, dtype=np.float32))
+
+
+def subspace_overlap(delta: Iterable[Block], reference: Iterable[Block], *, seed: int) -> Keyed[SubspaceOverlap]:
+    """Share of ``delta``'s energy inside ``reference``'s top singular directions.
+
+    Per matrix, k is the number of right singular directions holding 50% of the
+    reference matrix's energy, and the delta's energy is projected onto them.
+    Two nulls use the same k: a random k-dimensional subspace, and the top-k
+    directions of the reference with its entries permuted within the matrix.
+    Aggregates are energy-weighted over the key's matrices; see
+    :class:`SubspaceOverlap`.
+    """
+    overlaps = Keyed(overall=SubspaceOverlap())
+    for record in matrix_overlaps(delta, reference, seed=seed):
+        for target in overlaps.targets(record_block(record), SubspaceOverlap):
+            if record.overlap.zero_reference:
                 target.zero_reference_matrices += 1
-            continue
-        energy = sum_squares(matrix)
-        inside = inside_random = inside_permuted = 0.0
-        if energy > 0.0:
-            basis, k = _top_right_singular_basis(reference_block.array, None)
-            inside = _energy_inside(matrix, basis)
-            random_basis, _ = np.linalg.qr(generator.standard_normal((matrix.shape[1], k)))
-            inside_random = _energy_inside(matrix, random_basis)
-            permuted = generator.permutation(reference_block.array.reshape(-1)).reshape(matrix.shape)
-            permuted_basis, _ = _top_right_singular_basis(permuted, k)
-            inside_permuted = _energy_inside(matrix, permuted_basis)
-        for target in targets:
-            target.delta_energy += energy
-            target.inside += inside
-            target.inside_random += inside_random
-            target.inside_permuted += inside_permuted
+                continue
+            target.delta_energy += record.overlap.total
+            target.inside += record.overlap.projected
+            target.inside_random += record.overlap.random
+            target.inside_permuted += record.overlap.permuted
             target.matrices += 1
     return overlaps
