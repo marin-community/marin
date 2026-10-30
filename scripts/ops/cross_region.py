@@ -5,38 +5,67 @@
 """Analyze cross-region GCS operations from archived Iris task logs.
 
 This script:
-- locates finelog log parquet segments under ``<finelog.remote_log_dir>/log``
-- downloads the recent segments needed for a time window
+- pins the finelog ``log`` table's object catalog under ``<finelog.remote_log_dir>``
+  and selects the stable segments created recently enough to hold the window
+- scans those segments in place with one DuckDB httpfs query
 - downloads the latest controller checkpoint unless a checkpoint directory is supplied
 - joins task log entries against task attempt / worker region metadata
 - reports cross-region ``gs://`` path mentions
 
-The default mode analyzes the last 24 hours.
+The default mode analyzes the last 24 hours. The log segments live in
+us-central2; run outside that region, the scan pays internet egress on every
+selected segment. ``egress_report.py`` runs it as an Iris job in us-central2.
 """
 
+import contextlib
 import csv
 import datetime as dt
+import heapq
+import itertools
 import json
 import logging
 import re
 import sqlite3
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import duckdb
+import google.auth
+import google.auth.transport.requests
+from finelog.client import DirectQuerySegment, ObjectQueryClient
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
+from iris.env_resources import TaskResources
 from rigging.filesystem.cluster_config import get_bucket_location, region_from_prefix
-from rigging.filesystem.factory import url_to_fs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 GS_RE = re.compile(r"gs://[^\s'\"`]+")
+
+# Finelog namespace that holds Iris task log lines (``key`` = ``<task_id>:<attempt>``).
+LOG_NAMESPACE = "log"
+# Where finelog keeps object-backed tables under its remote_log_dir.
+LOG_TABLE_PREFIX = ("_finelog", "tables")
+# Repository-relative Iris config for the cluster whose task logs are analyzed.
+DEFAULT_IRIS_CONFIG = "lib/iris/config/marin.yaml"
+
+DEFAULT_LOOKBACK_HOURS = 12.0
+ROW_BATCH_SIZE = 10_000
+# DuckDB sizes its defaults from the host, not the container's limits, so a scan on
+# a large Iris worker would otherwise outgrow its resource request. The headroom
+# above this fraction covers the Python analysis and its result batches.
+SCAN_MEMORY_FRACTION = 0.8
+GCS_HTTPS_ENDPOINT = "https://storage.googleapis.com/"
+GCS_READ_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
+
+SUMMARY_JSON = "cross_region_ops_summary.json"
+APPENDIX_CSV = "cross_region_ops_appendix.csv"
+REPORT_MD = "cross_region_ops_report.md"
 
 # Extensions that typically carry bulk bytes. A single cross-region read of one
 # of these is orders of magnitude more expensive than a small JSON/config file.
@@ -241,106 +270,95 @@ def classify_op(line: str) -> str:
     return "other"
 
 
-def choose_log_objects(
-    remote_logs_dir: str,
+def choose_log_segments(
+    segments: Sequence[DirectQuerySegment],
     window: TimeWindow,
     lookback_hours: float,
-) -> list[dict]:
-    logging.info(f"Listing log objects in {remote_logs_dir}")
-    fs, path = url_to_fs(remote_logs_dir)
-    entries = sorted(fs.ls(path, detail=True), key=lambda e: e["mtime"])
-    logging.info(f"Found {len(entries)} total log objects")
-    mtime_cutoff = window.start - dt.timedelta(hours=lookback_hours)
+) -> list[DirectQuerySegment]:
+    """Select the catalog segments that can hold log lines from ``window``.
+
+    A segment only holds rows ingested before it was created, so anything
+    created earlier than ``window.start - lookback_hours`` cannot contribute;
+    the lookback covers shipping delay between a worker emitting a line and
+    the finelog server sealing the segment that carries it.
+    """
+    cutoff = window.start - dt.timedelta(hours=lookback_hours)
+    cutoff_ms = int(cutoff.timestamp() * 1000)
     logging.info(f"Analysis window: {window.start.isoformat()} to {window.end.isoformat()}")
-    logging.info(f"Lookback: {lookback_hours} hours, so filtering for objects modified after {mtime_cutoff.isoformat()}")
-
-    before_window: dict | None = None
-    chosen: list[dict] = []
-    for entry in entries:
-        entry_mtime = entry["mtime"].astimezone(dt.UTC)
-        if entry_mtime < mtime_cutoff:
-            before_window = entry
-            continue
-        chosen.append(entry)
-
-    if before_window is not None:
-        chosen.insert(0, before_window)
-        before_mtime = before_window["mtime"].astimezone(dt.UTC)
-        logging.info(f"Included 1 file before cutoff (mtime: {before_mtime.isoformat()})")
-
+    logging.info(f"Lookback: {lookback_hours} hours, so selecting segments created after {cutoff.isoformat()}")
+    chosen = sorted(
+        (segment for segment in segments if segment.created_at_ms >= cutoff_ms),
+        key=lambda segment: segment.created_at_ms,
+    )
     if chosen:
-        oldest = chosen[0]["mtime"].astimezone(dt.UTC)
-        newest = chosen[-1]["mtime"].astimezone(dt.UTC)
-        logging.info(f"Selected {len(chosen)} files (mtime range: {oldest.isoformat()} to {newest.isoformat()})")
-        logging.info(f"File names: {[Path(e['name']).name for e in chosen]}")
+        oldest = _fmt_ms(chosen[0].created_at_ms)
+        newest = _fmt_ms(chosen[-1].created_at_ms)
+        total_bytes = sum(segment.byte_size for segment in chosen)
+        logging.info(
+            f"Selected {len(chosen)} of {len(segments)} segments "
+            f"(created {oldest} to {newest}, {total_bytes / 2**20:.0f} MiB)"
+        )
+        logging.info(f"Object names: {[Path(segment.object_uri).name for segment in chosen]}")
     return chosen
 
 
-def _download_one(fs, entry: dict, target_dir: Path, index: int, total: int) -> Path:
-    name = entry["name"]
-    remote_size = entry.get("size")
-    local_path = target_dir / Path(name).name
-    cached_ok = local_path.exists() and remote_size is not None and local_path.stat().st_size == remote_size
-    if cached_ok:
-        logging.info(f"  [{index}/{total}] {Path(name).name} already cached")
-        return local_path
-    if local_path.exists():
-        logging.info(
-            f"  [{index}/{total}] {Path(name).name} cached but size mismatch "
-            f"(local={local_path.stat().st_size}, remote={remote_size}); re-downloading"
-        )
-    else:
-        logging.info(f"  [{index}/{total}] Downloading {Path(name).name}")
-    tmp_path = local_path.with_suffix(local_path.suffix + ".part")
-    with fs.open(name, "rb") as src, tmp_path.open("wb") as dst:
-        while True:
-            chunk = src.read(8 * 1024 * 1024)
-            if not chunk:
-                break
-            dst.write(chunk)
-    tmp_path.replace(local_path)
-    return local_path
+def gcs_https_url(uri: str) -> str:
+    """Map ``gs://bucket/key`` to the GCS XML API URL that DuckDB's httpfs reads with a bearer token."""
+    return GCS_HTTPS_ENDPOINT + uri.removeprefix("gs://")
 
 
-def download_log_objects(remote_logs_dir: str, entries: list[dict], target_dir: Path) -> list[Path]:
-    fs, _ = url_to_fs(remote_logs_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Downloading {len(entries)} parquet files to {target_dir}")
-
-    index_map = {id(entry): i for i, entry in enumerate(entries, 1)}
-    total = len(entries)
-    results: dict[int, Path] = {}
-
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {
-            pool.submit(_download_one, fs, entry, target_dir, index_map[id(entry)], total): entry for entry in entries
-        }
-        for fut in as_completed(futures):
-            entry = futures[fut]
-            results[index_map[id(entry)]] = fut.result()
-
-    local_paths = [results[i] for i in range(1, total + 1)]
-    logging.info(f"Finished downloading {len(local_paths)} parquet files")
-    return local_paths
+def gcs_bearer_token() -> str:
+    credentials, _ = google.auth.default(scopes=[GCS_READ_SCOPE])
+    credentials.refresh(google.auth.transport.requests.Request())
+    return credentials.token
 
 
-def validate_parquet_files(paths: list[Path]) -> list[Path]:
-    """Return parquets whose footer duckdb can read; log and drop the rest.
+def iter_log_rows(
+    con: duckdb.DuckDBPyConnection, sources: Sequence[str], window: TimeWindow
+) -> Iterator[tuple[str, int, str]]:
+    """Yield ``(key, epoch_ms, data)`` for in-window task log lines that mention ``gs://``.
 
-    The most recent segment is frequently still being written upstream, so the
-    GCS read races the writer and we get a file without a parquet footer.
+    One query scans every source so DuckDB parallelizes across files and row
+    groups; matching rows stream back in batches.
     """
-    con = duckdb.connect()
-    good: list[Path] = []
-    for path in paths:
-        try:
-            con.execute(f"SELECT 1 FROM read_parquet('{path}') LIMIT 0")
-            good.append(path)
-        except duckdb.Error as exc:
-            logging.warning(f"Skipping unreadable parquet {path.name}: {exc}")
-            # Remove so a later resume re-downloads it fresh.
-            path.unlink(missing_ok=True)
-    return good
+    cursor = con.execute(
+        """
+        SELECT key, epoch_ms, data
+        FROM read_parquet(?)
+        WHERE epoch_ms >= ? AND epoch_ms < ?
+          AND key LIKE '/%:%'
+          AND data LIKE '%gs://%'
+        """,
+        [list(sources), window.start_ms, window.end_ms],
+    )
+    while batch := cursor.fetchmany(ROW_BATCH_SIZE):
+        yield from batch
+
+
+@contextlib.contextmanager
+def gcs_scan_connection(resources: TaskResources) -> Iterator[duckdb.DuckDBPyConnection]:
+    """A DuckDB connection that reads GCS objects natively through httpfs.
+
+    DuckDB's GCS secret only takes HMAC keys, so this authenticates the XML API
+    endpoint with an OAuth bearer token from the ambient Google credentials;
+    sources must be passed through :func:`gcs_https_url`. The token lasts about
+    an hour, far longer than a scan. Threads and memory follow the task's
+    resource request.
+    """
+    threads = max(1, int(resources.cpu_cores))
+    memory_limit = f"{int(resources.memory_bytes * SCAN_MEMORY_FRACTION) // 2**20}MiB"
+    logging.info(f"DuckDB scan: threads={threads}, memory_limit={memory_limit}")
+    con = duckdb.connect(config={"threads": threads, "memory_limit": memory_limit})
+    try:
+        con.execute("INSTALL httpfs")
+        con.execute("LOAD httpfs")
+        con.execute(
+            "CREATE SECRET gcs_bearer (TYPE http, BEARER_TOKEN ?, SCOPE ?)",
+            [gcs_bearer_token(), GCS_HTTPS_ENDPOINT],
+        )
+        yield con
+    finally:
+        con.close()
 
 
 def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
@@ -426,11 +444,28 @@ def load_attempt_windows(db_path: Path) -> dict[tuple[str, int], AttemptWindow]:
     return attempts
 
 
+def _keep_newest(pool: list[tuple[int, int, dict]], sample: dict, order: int, cap: int) -> None:
+    """Add ``sample`` to a min-heap that retains the ``cap`` newest samples."""
+    entry = (sample["timestamp_ms"], order, sample)
+    if len(pool) < cap:
+        heapq.heappush(pool, entry)
+    else:
+        heapq.heappushpop(pool, entry)
+
+
+def _newest_first(pool: list[tuple[int, int, dict]]) -> list[dict]:
+    return [sample for _, _, sample in sorted(pool, key=lambda entry: (-entry[0], entry[1]))]
+
+
 def analyze(
-    parquet_paths: list[Path],
+    rows: Iterable[tuple[str, int, str]],
     db_path: Path,
     window: TimeWindow,
 ) -> dict:
+    """Tally cross-region ``gs://`` mentions in ``(key, epoch_ms, data)`` log rows.
+
+    Rows may arrive in any order; samples are the newest by timestamp.
+    """
     attempts = load_attempt_windows(db_path)
     bucket_cache: dict[str, str | None] = {}
 
@@ -460,38 +495,23 @@ def analyze(
     cross_region_extension_counts = Counter()
     unmatched_tasks = Counter()
     unknown_buckets = Counter()
-    samples: list[dict] = []
+    samples: list[tuple[int, int, dict]] = []
     # Per-user sample buffer: keep a small, diverse slice for each user so a
     # single loud user can't crowd everyone else out of the report.
-    user_samples: dict[str, list[dict]] = {}
+    user_pools: dict[str, list[tuple[int, int, dict]]] = {}
+    sample_order = itertools.count()
     # Dedup identical (task, attempt, path, ms) rows — the same log line
     # frequently appears twice in the parquet stream.
     seen_sample_keys: set[tuple] = set()
     # Collect a wider pool per user so we can rank by tier priority at the end
-    # (large ≫ medium ≫ small ≫ unknown) rather than just taking whatever
-    # arrived first in reverse-chron order.
+    # (large ≫ medium ≫ small ≫ unknown) rather than just taking the newest.
     per_user_sample_cap = 10
     per_user_sample_pool = 40
     tier_priority = {"large": 0, "medium": 1, "unknown": 2, "small": 3}
 
-    logging.info(f"Querying {len(parquet_paths)} parquet files for logs with gs:// paths")
-    con = duckdb.connect()
-    rows = con.execute(
-        """
-        SELECT key, epoch_ms, data
-        FROM read_parquet(?)
-        WHERE epoch_ms >= ? AND epoch_ms < ?
-          AND key LIKE '/%:%'
-          AND data LIKE '%gs://%'
-        ORDER BY epoch_ms DESC
-        """,
-        [[str(p) for p in parquet_paths], window.start_ms, window.end_ms],
-    ).fetchall()
-    logging.info(f"Found {len(rows)} log lines with gs:// paths in time window")
-
     for i, (key, epoch_ms, data) in enumerate(rows, 1):
-        if i % 10000 == 0:
-            logging.info(f"  Processed {i}/{len(rows)} log lines...")
+        if i % 100_000 == 0:
+            logging.info(f"  Processed {i} log lines...")
 
         total_lines += 1
         task_id, attempt_str = key.rsplit(":", 1)
@@ -577,17 +597,16 @@ def analyze(
                     "size_tier": size_tier,
                     "data": data,
                 }
-                if len(samples) < 50:
-                    samples.append(sample)
-                bucket = user_samples.setdefault(user, [])
-                if len(bucket) < per_user_sample_pool:
-                    bucket.append(sample)
+                order = next(sample_order)
+                _keep_newest(samples, sample, order, cap=50)
+                _keep_newest(user_pools.setdefault(user, []), sample, order, cap=per_user_sample_pool)
         if line_cross_region:
             cross_region_lines += 1
 
-    for u, pool in user_samples.items():
-        pool.sort(key=lambda s: (tier_priority.get(s["size_tier"], 99), -s["timestamp_ms"]))
-        user_samples[u] = pool[:per_user_sample_cap]
+    user_samples: dict[str, list[dict]] = {}
+    for u, pool in user_pools.items():
+        ranked = sorted(_newest_first(pool), key=lambda s: tier_priority.get(s["size_tier"], 99))
+        user_samples[u] = ranked[:per_user_sample_cap]
 
     logging.info("Analysis complete:")
     logging.info(f"  Total log lines with gs:// paths: {total_lines}")
@@ -627,7 +646,7 @@ def analyze(
         "cross_region_large_users": dict(large_user_counts.most_common()),
         "unmatched_tasks_top25": dict(unmatched_tasks.most_common(25)),
         "unknown_buckets_top25": dict(unknown_buckets.most_common(25)),
-        "samples": samples,
+        "samples": _newest_first(samples),
         "samples_by_user": user_samples,
     }
 
@@ -851,16 +870,72 @@ def write_csv(summary: dict, path: Path) -> None:
             writer.writerow(["extension", key, value])
 
 
+def run_analysis(
+    config_path: str,
+    window: TimeWindow,
+    lookback_hours: float,
+    checkpoint_dir: str | None,
+    workdir: Path,
+) -> dict:
+    """Scan the finelog ``log`` table for ``window`` and return the cross-region summary.
+
+    ``workdir`` holds the controller checkpoint. Log segments are read in place
+    from GCS, so run this in the bucket's region to avoid internet egress.
+    """
+    logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
+    cfg = load_config(config_path)
+    if not cfg.finelog.config:
+        raise ValueError(
+            f"Iris config {config_path!r} has no finelog.config; "
+            "cross-region analysis requires logs shipped via finelog."
+        )
+    finelog_cfg = load_finelog_config(cfg.finelog.config)
+    if not finelog_cfg.remote_log_dir:
+        raise ValueError(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
+    remote_log_dir = finelog_cfg.remote_log_dir.rstrip("/")
+
+    # The pin is an immutable catalog snapshot; its objects stay readable for at
+    # least the catalog's query lifetime, which comfortably covers the scan.
+    pin = ObjectQueryClient(remote_log_dir).pin_catalog(LOG_NAMESPACE)
+    logging.info(
+        f"Pinned {LOG_NAMESPACE!r} catalog generation {pin.catalog_generation} "
+        f"under {remote_log_dir}: {len(pin.segments)} stable segments"
+    )
+    log_segments = choose_log_segments(pin.segments, window, lookback_hours)
+    db_path = download_checkpoint(cfg, workdir, checkpoint_dir)
+
+    sources = [gcs_https_url(segment.object_uri) for segment in log_segments]
+    started = time.monotonic()
+    with gcs_scan_connection(TaskResources.from_environment()) as con:
+        summary = analyze(iter_log_rows(con, sources, window), db_path, window)
+    logging.info(f"Scanned {len(sources)} segments in {time.monotonic() - started:.1f}s")
+    # Segments are read in place, so no log files are cached locally.
+    summary["local_log_files"] = []
+    summary["local_db_path"] = str(db_path)
+    summary["remote_logs_dir"] = f"{remote_log_dir}/{'/'.join(LOG_TABLE_PREFIX)}/{LOG_NAMESPACE}"
+    return summary
+
+
+def write_reports(summary: dict, summary_json_path: Path, appendix_csv_path: Path, report_md_path: Path) -> None:
+    logging.info(f"Writing summary to {summary_json_path}")
+    summary_json_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    logging.info(f"Writing appendix CSV to {appendix_csv_path}")
+    write_csv(summary, appendix_csv_path)
+    logging.info(f"Writing markdown report to {report_md_path}")
+    write_markdown(summary, report_md_path)
+
+
 @click.command(help=__doc__)
 @click.option(
     "--config",
-    default="lib/iris/config/marin.yaml",
-    help="Iris cluster config to use. Defaults to lib/iris/config/marin.yaml.",
+    default=DEFAULT_IRIS_CONFIG,
+    show_default=True,
+    help="Iris cluster config to use.",
 )
 @click.option(
     "--outdir",
     default=None,
-    help="Directory for downloaded parquet segments, checkpoint DB, and reports. Defaults to a temp dir.",
+    help="Directory for the controller checkpoint DB and reports. Defaults to a temp dir.",
 )
 @click.option(
     "--hours",
@@ -881,8 +956,9 @@ def write_csv(summary: dict, path: Path) -> None:
 @click.option(
     "--download-lookback-hours",
     type=float,
-    default=12.0,
-    help="Extra lookback on log object mtimes when choosing parquet segments. Defaults to 12.",
+    default=DEFAULT_LOOKBACK_HOURS,
+    show_default=True,
+    help="Extra lookback on segment creation time when choosing parquet segments.",
 )
 @click.option(
     "--summary-json",
@@ -913,40 +989,14 @@ def main(
     window = parse_window(end_time, hours)
     out_path = Path(outdir) if outdir is not None else default_outdir()
     out_path.mkdir(parents=True, exist_ok=True)
-
-    logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     logging.info(f"Output directory: {out_path}")
 
-    cfg = load_config(config)
-    if not cfg.finelog.config:
-        raise click.ClickException(
-            f"Iris config {config!r} has no finelog.config; cross-region analysis " "requires logs shipped via finelog."
-        )
-    finelog_cfg = load_finelog_config(cfg.finelog.config)
-    if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.finelog.config!r} has no remote_log_dir.")
-    remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
+    summary = run_analysis(config, window, download_lookback_hours, checkpoint_dir, out_path)
 
-    log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)
-    local_logs_dir = out_path / "logs"
-    local_logs = download_log_objects(remote_logs_dir, log_entries, local_logs_dir)
-    local_logs = validate_parquet_files(local_logs)
-    db_path = download_checkpoint(cfg, out_path, checkpoint_dir)
-
-    summary = analyze(local_logs, db_path, window)
-    summary["local_log_files"] = [str(path) for path in local_logs]
-    summary["local_db_path"] = str(db_path)
-    summary["remote_logs_dir"] = remote_logs_dir
-
-    summary_json_path = Path(summary_json) if summary_json else out_path / "cross_region_ops_summary.json"
-    appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / "cross_region_ops_appendix.csv"
-    report_md_path = Path(report_md) if report_md else out_path / "cross_region_ops_report.md"
-    logging.info(f"Writing summary to {summary_json_path}")
-    summary_json_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
-    write_csv(summary, appendix_csv_path)
-    logging.info(f"Writing appendix CSV to {appendix_csv_path}")
-    write_markdown(summary, report_md_path)
-    logging.info(f"Writing markdown report to {report_md_path}")
+    summary_json_path = Path(summary_json) if summary_json else out_path / SUMMARY_JSON
+    appendix_csv_path = Path(appendix_csv) if appendix_csv else out_path / APPENDIX_CSV
+    report_md_path = Path(report_md) if report_md else out_path / REPORT_MD
+    write_reports(summary, summary_json_path, appendix_csv_path, report_md_path)
 
     gist_desc = f"Iris cross-region GCS ops {_fmt_ms(summary['window_start_ms'])} to {_fmt_ms(summary['window_end_ms'])}"
     logging.info("To publish this report as a private gist, run:")
@@ -960,8 +1010,8 @@ def main(
                 "appendix_csv": str(appendix_csv_path),
                 "report_md": str(report_md_path),
                 "gist_command": f"gh gist create --desc {gist_desc!r} {report_md_path} {appendix_csv_path}",
-                "local_db_path": str(db_path),
-                "local_log_files": [str(path) for path in local_logs],
+                "local_db_path": summary["local_db_path"],
+                "local_log_files": summary["local_log_files"],
                 "cross_region_log_lines": summary["cross_region_log_lines"],
                 "cross_region_path_mentions": summary["cross_region_path_mentions"],
                 "top_pairs": list(summary["cross_region_region_pairs"].items())[:10],
