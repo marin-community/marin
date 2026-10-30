@@ -17,9 +17,12 @@ and the reference is gathered on those ids. Neither tail is floored: a floor
 replaces the tail's value with a constant, so a candidate tail of 0.01 against
 a floored support tail adds about 0.23 nats the models did not produce.
 
-Both retained log masses derive on device from the stored top-K logprobs, so a
-row's tail can never disagree with its support, and a peaked model keeps its
-true (near-zero) tail instead of an fp32 ``1 - sum(exp)`` rounding artifact.
+Each tail is the scoring pass's own log mass outside the support, a logsumexp
+over the complement of the full log-softmax. Deriving it from the stored top-K
+as ``1 - sum(exp)`` cannot resolve a tail below the fp32 rounding of that sum
+(about 1e-6): on the dev pair it rounded 28% of candidate tails to exactly zero
+and their KL to infinity. ``binned_kl`` checks that each side's support and tail
+sum to one distribution, so a tail cannot silently disagree with its support.
 
 Rows compared across checkpoints must come from scoring passes that share one
 engine, dtype and kernel set for both models, with a B-vs-B rescoring floor
@@ -29,7 +32,6 @@ otherwise comparable to engine and batch-layout logprob noise.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -37,10 +39,11 @@ import torch
 
 from experiments.post_training.mismatch_probe.protocol import request_seed
 
-# Full-vocabulary logprobs must satisfy logsumexp == 0 within this tolerance, and a
-# retained log mass may exceed 0 by no more than this float noise before the input
-# is rejected as summing to more than the whole distribution.
+# Full-vocabulary logprobs must satisfy logsumexp == 0 within this tolerance.
 NORMALIZATION_TOLERANCE = 1e-6
+# A support's logprobs and its tail log mass, both from fp32 log-softmax over a
+# ~128k vocabulary, must sum to one distribution within this float noise.
+BIN_NORMALIZATION_TOLERANCE = 1e-5
 
 
 class KLForm(StrEnum):
@@ -55,13 +58,17 @@ class ProbeBucket(StrEnum):
 
     WP8 (PR #10511) owns the values; reconcile this mirror when that PR lands.
     Only bucketed tokens are scored — fixed context carries no bucket — so every
-    scored position tags with one of these.
+    scored position tags with one of these. ``assistant_text`` is earlier assistant
+    content outside the structured buckets, and ``delimiter`` the generated
+    structural tokens; both are assistant output and are scored.
     """
 
     REASONING = "reasoning"
     TOOL_NAME = "tool_name"
     TOOL_ARGUMENTS = "tool_arguments"
     FINAL_MESSAGE = "final_message"
+    ASSISTANT_TEXT = "assistant_text"
+    DELIMITER = "delimiter"
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,29 @@ class SequenceKLRow:
     exact_kl: float | None = None
 
 
+@dataclass(frozen=True)
+class SequenceFlipRow:
+    """One scored position's greedy token against the reference's top-1.
+
+    ``reference_top1_logprob`` is the reference's own confidence at the position,
+    so summaries can report flip rates per reference-margin quartile.
+    """
+
+    sequence_id: str
+    position: int
+    reference_top1: int
+    candidate_top1: int
+    flipped: bool
+    reference_top1_logprob: float
+    candidate_top1_logprob: float
+    candidate_step: int
+    reference_id: str
+    candidate_id: str
+    probe_hash: str
+    token_type_tag: ProbeBucket
+    position_tag: int
+
+
 def _relative_entropy(probability: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
     """KL contribution per bin with the 0·log(0) = 0 convention (objective/teacher.py)."""
     positive = probability > 0
@@ -98,50 +128,43 @@ def _relative_entropy(probability: torch.Tensor, reference: torch.Tensor) -> tor
     return torch.where(positive, probability * (log_probability - log_reference), torch.zeros_like(probability))
 
 
-def _retained_log_mass(topk_logprobs: torch.Tensor) -> torch.Tensor:
-    """The support's log mass, computed on device in float64 from the stored top-K logprobs."""
-    retained = torch.logsumexp(topk_logprobs.double(), dim=-1)
-    if bool((retained > NORMALIZATION_TOLERANCE).any()):
-        raise ValueError("top-K logprobs sum to more than the full distribution (retained log mass > 0)")
-    # A subset's retained mass is at most the whole distribution; anything in
-    # (0, NORMALIZATION_TOLERANCE] is float noise for a support that carries all of
-    # it, and would otherwise propagate a NaN tail through log(-expm1(x)).
-    return retained.clamp(max=0.0)
+def _bins(support_logprobs: torch.Tensor, tail_logmass: torch.Tensor, name: str) -> torch.Tensor:
+    """Probabilities of the K support bins and the tail bin, after checking they sum to one."""
+    log_bins = torch.cat((support_logprobs.double(), tail_logmass.double().unsqueeze(-1)), dim=-1)
+    total = torch.logsumexp(log_bins, dim=-1)
+    if bool((total.abs() > BIN_NORMALIZATION_TOLERANCE).any()):
+        worst = float(total.abs().max())
+        raise ValueError(f"{name} support and tail do not sum to one distribution (|log total| up to {worst:.2e})")
+    return log_bins.exp()
 
 
-def tail_log_mass(topk_logprobs: torch.Tensor) -> torch.Tensor:
-    """The complement's log mass of a stored top-K support, derived from its logprobs.
-
-    Public so row builders record exactly the tail the KL used. Never floored: a
-    peaked model's tail is its own near-zero mass, not a constant.
-    """
-    retained = _retained_log_mass(topk_logprobs)
-    return torch.where(
-        retained < -math.log(2),
-        torch.log1p(-retained.exp()),
-        torch.log(-torch.expm1(retained)),
-    )
-
-
-def binned_kl(support_logprobs: torch.Tensor, scored_support_logprobs: torch.Tensor) -> torch.Tensor:
+def binned_kl(
+    support_logprobs: torch.Tensor,
+    support_tail_logmass: torch.Tensor,
+    scored_support_logprobs: torch.Tensor,
+    scored_tail_logmass: torch.Tensor,
+) -> torch.Tensor:
     """Per-position KL over the support model's top-K plus one tail bin.
 
     ``support_logprobs`` are the support model's stored top-K log probabilities
-    (``[..., K]``); ``scored_support_logprobs`` are the other model's log
-    probabilities gathered on the same ids (``[..., K]``). Both tails derive from
-    these tensors on device and neither is floored. Forward KL(reference ‖
-    candidate) passes the reference's top-K as the support; the reverse form is
-    the role swap — the candidate's top-K and tail are the support and the
-    reference is gathered on those ids.
+    (``[..., K]``) and ``support_tail_logmass`` its log mass outside them
+    (``[...]``); ``scored_support_logprobs`` are the other model's log
+    probabilities gathered on the same ids and ``scored_tail_logmass`` its log
+    mass outside those ids. Forward KL(reference ‖ candidate) passes the
+    reference's top-K as the support; the reverse form is the role swap — the
+    candidate's top-K and tail are the support and the reference is gathered on
+    those ids. Neither tail is floored: a scored tail that is truly zero against
+    a positive support tail is an infinite divergence.
     """
     if support_logprobs.shape != scored_support_logprobs.shape:
         raise ValueError("support and scored logprobs must share a shape")
-    support_bins = torch.cat(
-        (support_logprobs.double().exp(), tail_log_mass(support_logprobs).exp().unsqueeze(-1)), dim=-1
-    )
-    scored_bins = torch.cat(
-        (scored_support_logprobs.double().exp(), tail_log_mass(scored_support_logprobs).exp().unsqueeze(-1)), dim=-1
-    )
+    if (
+        support_tail_logmass.shape != support_logprobs.shape[:-1]
+        or scored_tail_logmass.shape != support_tail_logmass.shape
+    ):
+        raise ValueError("each tail must hold one log mass per support row")
+    support_bins = _bins(support_logprobs, support_tail_logmass, "support")
+    scored_bins = _bins(scored_support_logprobs, scored_tail_logmass, "scored")
     return _relative_entropy(support_bins, scored_bins).sum(-1)
 
 
