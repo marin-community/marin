@@ -9,10 +9,15 @@
 - ``calibrate.fit_cutpoints`` / ``fit_calibration`` — the monotonic cutpoint remap
   that makes the fixed 0.2-bucket quantization recover the oracle quality level,
   and ``Calibration``'s global vs per-type routing.
+- the knot guards: a curve ``np.interp`` cannot be trusted with (non-increasing
+  ``xk``) is refused at construction and at load, the fitter's anchors cannot land
+  inside the cutpoints, and the one released file known to carry an inverted knot
+  loads only under its own digest, with a warning.
 
 Both use a deterministic fake scorer / synthetic labels, so no model or I/O is needed.
 """
 
+import logging
 from itertools import pairwise
 from typing import cast
 
@@ -21,7 +26,10 @@ import pytest
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
+    KNOWN_INVERTED_KNOT_DIGESTS,
     Calibration,
+    Curve,
+    anchored_knots,
     fit_calibration,
     fit_cutpoints,
 )
@@ -161,3 +169,97 @@ def test_per_type_calibration_requires_types():
 @pytest.mark.parametrize("data", [FLAT_JSON, PER_TYPE_JSON], ids=["global", "per-type"])
 def test_calibration_json_round_trips_both_layouts(data):
     assert Calibration.from_json(data).to_json() == data
+
+
+# ---------- knot guards: np.interp needs strictly increasing xk ----------
+
+# The ``agentic`` curve of the released ``nemotron_88k/calib_bme.json``: the floor
+# anchor (raw.min() - 1e-6 under the old fitter) landed above the first cutpoint.
+INVERTED_AGENTIC = {
+    "xk": [
+        0.31555674807929995,
+        0.28216151148080826,
+        0.477378249168396,
+        0.5607410967350006,
+        0.7496630549430847,
+        0.886433349681854,
+    ],
+    "yk": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+}
+
+
+def test_curve_refuses_non_increasing_knots_at_construction():
+    with pytest.raises(ValueError, match=r"strictly increasing.*xk\[0\]=0.315557 >= xk\[1\]=0.282162"):
+        Curve(**INVERTED_AGENTIC)
+
+
+def test_from_json_validates_every_curve_and_names_the_offender():
+    with pytest.raises(ValueError, match="curve 'agentic'"):
+        Calibration.from_json({"default": FLAT_JSON, "types": {"agentic": INVERTED_AGENTIC}})
+    with pytest.raises(ValueError, match="curve 'default'"):
+        Calibration.from_json({"xk": [0.5, 0.5, 1.0], "yk": [0.0, 0.2, 1.0]})
+
+
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ({"xk": [0.1, 0.5], "yk": [0.0]}, "len"),
+        ({"xk": [0.1], "yk": [0.0]}, "len"),
+        ({"xk": [0.1, 0.4, 0.5], "yk": [0.0, 0.6, 0.5]}, "non-decreasing"),
+        ({"xk": [0.1, float("nan")], "yk": [0.0, 1.0]}, "finite"),
+    ],
+    ids=["short-yk", "one-knot", "decreasing-yk", "nan"],
+)
+def test_from_json_refuses_malformed_curves(bad, message):
+    with pytest.raises(ValueError, match=message):
+        Calibration.from_json(bad)
+
+
+def test_known_released_digest_loads_the_defective_file_with_a_warning(caplog):
+    data = {"default": FLAT_JSON, "types": {"agentic": INVERTED_AGENTIC}}
+    digest = next(iter(KNOWN_INVERTED_KNOT_DIGESTS))
+    with caplog.at_level(logging.WARNING):
+        calibration = Calibration.from_json(data, digest=digest)
+    assert "known-defective" in caplog.text and "agentic" in caplog.text
+    # Loaded as released, not repaired: the bucket output is what it always was.
+    assert calibration.types["agentic"].xk == INVERTED_AGENTIC["xk"]
+    with pytest.raises(ValueError, match="curve 'agentic'"):
+        Calibration.from_json(data, digest="0" * 64)
+
+
+def test_inverted_agentic_knots_change_scores_but_not_buckets():
+    """Why the released file may load: both curves cross 0.2 at raw 0.31556 and 0.4 at 0.47738."""
+    xk, yk = np.array(INVERTED_AGENTIC["xk"]), np.array(INVERTED_AGENTIC["yk"])
+    raw = np.linspace(0.0, 1.0, 200_001)
+    released, intended = np.interp(raw, xk, yk), np.interp(raw, np.sort(xk), yk)
+    assert np.array_equal(np.digitize(released, BUCKET_EDGES), np.digitize(intended, BUCKET_EDGES))
+    distorted = raw[np.abs(released - intended) > 1e-9]
+    assert distorted.min() == pytest.approx(0.28216, abs=1e-4)
+    assert distorted.max() == pytest.approx(0.47738, abs=1e-4)
+
+
+def test_anchors_cannot_land_inside_shared_cutpoints():
+    # The agentic case: shared cutpoints anchored on one type's raw range whose minimum lies
+    # above the first cutpoint. The old floor (raw.min() - 1e-6) became the second-largest knot.
+    shared_cuts = [0.28216151148080826, 0.477378249168396, 0.5607410967350006, 0.7496630549430847]
+    raw_agentic = np.array([0.31555774807929995, 0.40, 0.55, 0.70, 0.886432])
+    assert raw_agentic.min() - 1e-6 > shared_cuts[0]
+    knots = anchored_knots(raw_agentic, shared_cuts)
+    assert all(b > a for a, b in pairwise(knots))
+    assert knots[0] < shared_cuts[0] and knots[-1] > max(raw_agentic.max(), shared_cuts[-1])
+
+
+def test_global_fit_yields_increasing_knots_on_tight_clusters():
+    levels = np.repeat([1, 2, 3, 4, 5], 50).astype(float)
+    rng = np.random.default_rng(0)
+    raw = np.clip(np.concatenate([rng.normal(c, 0.004, 50) for c in (0.40, 0.42, 0.60, 0.75, 0.90)]), 0.35, 1.0)
+    assert all(b > a for a, b in pairwise(fit_calibration(raw, levels).default.xk))
+
+
+def test_fitter_spreads_tied_cutpoints_into_increasing_knots():
+    levels = np.repeat([1, 2, 3, 4, 5], 20).astype(float)
+    raw = np.concatenate([np.full(60, 0.3), np.full(20, 0.7), np.full(20, 0.9)])
+    _, cuts = fit_cutpoints(raw, levels)
+    assert cuts[0] == cuts[1]  # np.maximum.accumulate ties
+    knots = anchored_knots(raw, cuts)
+    assert len(knots) == 6 and all(b > a for a, b in pairwise(knots))
