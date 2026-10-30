@@ -3,7 +3,7 @@
 
 import pytest
 
-from experiments.post_training.phase1a.noise_floor import SeedMetrics, gate_inputs
+from experiments.post_training.phase1a.noise_floor import SeedMetrics, gate_inputs, seed_metrics
 
 
 def test_gate_keeps_forward_reverse_and_range_conclusions_distinct():
@@ -50,3 +50,26 @@ def test_duplicate_seed_cannot_masquerade_as_three_independent_runs():
     ]
     with pytest.raises(ValueError, match="expected exactly seeds 0, 1, 2"):
         gate_inputs(records, forward_baseline=0.9, reverse_baseline=0.7)
+
+
+def test_vocabulary_flips_do_not_satisfy_routing_measurement():
+    summaries = {}
+    for family, count in (("P_X", 1000), ("P_R", 1000), ("P_chat", 1500), ("P_think", 300)):
+        for kind in (("kl", "reverse", "flip") if family == "P_X" else ("kl", "flip")):
+            field = "flip_rate" if kind == "flip" else "token_mean_kl"
+            summaries[f"{kind}_{family}"] = {
+                "sequences": count,
+                "positions": 1702261,
+                field: 0.2,
+                "buckets": {"answer": {"positions": 1702261, field: 0.2}},
+            }
+    records = [
+        seed_metrics(dict(method=method, step=step, seed=seed, learning_rate=5e-7, summaries=summaries))
+        for method in ("m1", "m4")
+        for step in (10, 30, 50, 100)
+        for seed in (0, 1, 2)
+    ]
+    result = gate_inputs(records, forward_baseline=0.9, reverse_baseline=0.7)[0]
+    assert result["metrics"]["token_flip_P_X"]["mean"] == pytest.approx(0.2)
+    assert "flip_P_X" not in result["metrics"]
+    assert result["routing_flip_status"] == "not_measured"

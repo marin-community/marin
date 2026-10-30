@@ -62,14 +62,15 @@ def seed_metrics(record: dict) -> SeedMetrics:
         if name in ("kl_P_X", "flip_P_X") and summary["positions"] != FORWARD_POSITIONS:
             raise ValueError(f"{name}: does not cover the frozen forward task-X positions")
         field = "flip_rate" if name.startswith("flip_") else "token_mean_kl"
-        metrics[name] = float(summary[field])
+        metric_name = f"token_{name}" if name.startswith("flip_") else name
+        metrics[metric_name] = float(summary[field])
         buckets = summary["buckets"]
         if sum(b["positions"] for b in buckets.values()) != summary["positions"]:
             raise ValueError(f"{name}: buckets do not partition the scored positions")
         for bucket, result in buckets.items():
-            metrics[f"{name}/bucket/{bucket}"] = float(result[field])
+            metrics[f"{metric_name}/bucket/{bucket}"] = float(result[field])
         for quartile, result in summary.get("reference_margin_quartiles", {}).items():
-            metrics[f"{name}/margin/{quartile}"] = float(result[field])
+            metrics[f"{metric_name}/margin/{quartile}"] = float(result[field])
     if not all(math.isfinite(value) for value in metrics.values()):
         raise ValueError("Noise estimates require finite metrics")
     if float(record["learning_rate"]) != 5e-7:
@@ -136,6 +137,8 @@ def gate_inputs(records: list[SeedMetrics], forward_baseline: float, reverse_bas
                 progress=progress,
                 metrics=comparisons,
                 unavailable_metrics=unavailable,
+                routing_flip_status="not_measured",
+                token_flip_definition="Next-token argmax disagreement; not selected-expert-set disagreement",
             )
         )
     return output
