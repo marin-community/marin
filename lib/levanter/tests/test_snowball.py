@@ -707,6 +707,88 @@ def test_snowball_qk_rms_reference_matches_native_projection_across_row_chunks_a
     np.testing.assert_allclose(np.asarray(reference_grad), np.asarray(expected_grad), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.timeout(120)
+def test_snowball_qk_rms_reference_restores_caller_layout_for_bfloat16_cache_pack(monkeypatch):
+    monkeypatch.delenv("JAX_NUM_CPU_DEVICES", raising=False)
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from haliax import Axis
+        from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+        from levanter.layers.kv_cache import KvPageCache
+        from levanter.models.snowball import SnowballAttention, SnowballConfig
+
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
+            axes,
+            axis_types=(AxisType.Explicit,) * len(axes),
+        )
+        caller_spec = P(("replica_dcn", "data"), "expert", None)
+        caller_sharding = NamedSharding(mesh, caller_spec)
+        config = SnowballConfig(
+            hidden_dim=128,
+            num_heads=1,
+            num_kv_heads=1,
+            head_dim=128,
+            qk_rms_norm_implementation="reference",
+            attention_implementation="reference",
+        )
+        host_x = jnp.linspace(-0.5, 0.5, 4 * 1 * 128, dtype=jnp.float32).reshape(4, 1, 128)
+        with jax.set_mesh(mesh):
+            attention = SnowballAttention.init(config, key=jax.random.key(19))
+            x = jax.device_put(host_x, caller_sharding)
+            q, k, v = eqx.filter_jit(
+                lambda module, value: module._project_qkv(value, disable_rope=True)
+            )(attention, x)
+            expected_projection_spec = P(("replica_dcn", "data"), None, None, "model")
+            assert q.sharding.spec == expected_projection_spec, q.sharding.spec
+            assert k.sharding.spec == v.sharding.spec == q.sharding.spec, (k.sharding.spec, v.sharding.spec)
+
+            _, input_grad = eqx.filter_jit(
+                jax.value_and_grad(lambda value: jnp.sum(attention._project_qkv(value, disable_rope=True)[0]))
+            )(x)
+            assert input_grad.sharding.spec == caller_spec
+            assert bool(jnp.isfinite(input_grad).all())
+
+            cache = KvPageCache.init(
+                PageTableSpec(num_pages=4, page_size=1, max_seqs=4),
+                Axis("kv_head", 1),
+                Axis("head_size", 128),
+                dtype=jnp.bfloat16,
+            )
+            info = PageBatchInfo(
+                slot_ids=hax.named(jnp.arange(4, dtype=jnp.int32), "seq"),
+                page_indices=hax.named(jnp.arange(4, dtype=jnp.int32)[:, None], ("seq", "page")),
+                seq_lens=hax.named(jnp.ones(4, dtype=jnp.int32), "seq"),
+                cu_q_lens=hax.named(jnp.arange(5, dtype=jnp.int32), "seq"),
+                num_seqs=jnp.asarray(4, dtype=jnp.int32),
+                new_token_dests=hax.named(jnp.arange(4, dtype=jnp.int32), "position"),
+                page_size=1,
+            )
+            cache_keys = hax.named(k[:, 0], ("position", "kv_head", "head_size"))
+            cache_values = hax.named(v[:, 0], ("position", "kv_head", "head_size"))
+            updated = eqx.filter_jit(
+                lambda state, batch, keys, values: state.update(batch, keys, values)
+            )(cache, info, cache_keys, cache_values)
+
+        expected = np.concatenate((np.asarray(k[:, 0]), np.asarray(v[:, 0])), axis=1).astype(jnp.bfloat16)
+        np.testing.assert_array_equal(
+            np.asarray(updated.kv_pages.array)[:, 0].view(np.uint16), expected.view(np.uint16)
+        )
+        assert updated.kv_pages.array.dtype == jnp.bfloat16
+        assert bool(jnp.isfinite(updated.kv_pages.array).all())
+        """,
+        device_count=4,
+    )
+
+
 @pytest.mark.skipif(jax.default_backend() != "tpu" or jax.device_count() != 4, reason="requires four-device TPUv4")
 def test_snowball_pallas_rms_norm_explicit_train_decode_layouts_and_context_rejection():
     train_mesh = compact_grug_mesh(expert_axis_size=1, context_axis_size=1)

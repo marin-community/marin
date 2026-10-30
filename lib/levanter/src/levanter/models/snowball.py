@@ -414,17 +414,22 @@ def _qk_rms_norm(
     if implementation == "native":
         return rms_norm(x)
 
-    x = _normalize_qk_rms_layout(x)
-    sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
+    original_x = x
+    normalized_x = _normalize_qk_rms_layout(x)
+    sharding = (
+        jax.typeof(normalized_x).sharding if isinstance(normalized_x, jax.core.Tracer) else normalized_x.sharding
+    )
     if implementation == "reference" and isinstance(sharding, NamedSharding) and not sharding.mesh.empty:
-        return jax.shard_map(
+        output = jax.shard_map(
             lambda local_x: _qk_rms_norm_local(local_x, implementation),
             mesh=sharding.mesh,
             in_specs=sharding.spec,
             out_specs=sharding.spec,
             check_vma=False,
-        )(x)
-    return _qk_rms_norm_local(x, implementation)
+        )(normalized_x)
+    else:
+        output = _qk_rms_norm_local(normalized_x, implementation)
+    return _match_activation_layout(output, original_x)
 
 
 def _qk_rms_norm_local(
@@ -473,7 +478,7 @@ class SnowballConfig(HFCompatConfig):
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
     projection_implementation: SnowballProjectionImplementation = "native"
-    # Runtime knob only; fixed-schedule gating is opt-in and does not affect the block MLP gate.
+    # Runtime knob only; fixed-schedule gating is opt-in.
     gated_norm_implementation: SnowballGatedNormImplementation = "native"
     # Runtime knob only; it is intentionally omitted from the HF architectural config.
     rms_norm_implementation: SnowballRMSNormImplementation = "native"
