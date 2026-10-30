@@ -68,6 +68,8 @@ On GB200, more than one collective in flight silently corrupted training with Gr
 
 The flags were measured only with this layout on two nodes. Cross-node FSDP and EP16 runs also get them through the wrapper, but were not measured with them.
 
+With this venv, runs with the flags sometimes crash as the processes shut down after the last step (`double free or corruption` while `jax.distributed` disconnects, or a segfault): 4 of 17 runs with some of these flags on k007-002 and k007-004, against 0 of 6 runs without them, and one more run with the flags segfaulted about 4 minutes into compilation. Output up to the crash is complete, but Slurm records the step as failed. Twenty-two flagged runs in the MI355X container exited cleanly.
+
 ## Build the venv
 
 The wrapper runs `uv run --no-sync`, so build the venv once on a login node:
