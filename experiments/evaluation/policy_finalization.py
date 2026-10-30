@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind policy #10197 grading and cohort correction to evaluation completion."""
+"""Bind policy #10197 judging to evaluation completion."""
 
 from __future__ import annotations
 
@@ -11,12 +11,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import yaml
-from finestore.eval import sample_from_archive_row
-from finestore.reader import ReadView
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import AcceleratorChoice
-from marin.evaluation.lm_eval_samples import task_coverage
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import EvalRef, RunStatus
 from marin.evaluation.runner import (
@@ -33,7 +30,7 @@ from marin.inference.types import InferenceBackendState
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
-OLYMPIAD_REPETITIONS = 10
+POLICY_JUDGED_BENCHMARKS = frozenset({"financebench", "olympiadbench"})
 
 
 @dataclass(frozen=True)
@@ -68,39 +65,11 @@ def _complete_coverage(outcome: EvaluationOutcome) -> None:
             raise ValueError(f"{task}: fewer than 90% of declared trials have valid scores")
 
 
-def trial_coverage(outcome: EvaluationOutcome, root: str, repetitions: int) -> EvaluationOutcome:
-    """Count seeded repetitions separately while preserving native aggregate metrics."""
-    task, original = next(iter(outcome.coverage.items()))
-    if repetitions == 1:
-        return outcome
-    samples = [
-        sample_from_archive_row(row).model_copy(update={"doc_id": json.dumps([row["doc_id"], row["trial_id"]])})
-        for row in ReadView(root).iter_rows("samples")
-        if row["task"] == task
-    ]
-    assert original.n_attempted is not None
-    coverage = task_coverage(
-        samples,
-        n_attempted=original.n_attempted * repetitions,
-        n_benchmark=original.n_benchmark * repetitions if original.n_benchmark is not None else None,
-    )
-    reference = outcome.tasks[0]
-    assert reference.benchmark is not None
-    benchmark = reference.benchmark.model_copy(
-        update={
-            "n_attempted": coverage.n_attempted,
-            "n_benchmark": coverage.n_benchmark,
-        }
-    )
-    return replace(outcome, coverage={task: coverage}, tasks=(reference.model_copy(update={"benchmark": benchmark}),))
-
-
 @dataclass(frozen=True)
 class PolicyJudge:
     """Run Evalchemy with the policy judge as its native grading endpoint."""
 
     source: EvalchemyExecutor
-    repetitions: int
     model: ModelConfig
     accelerator: AcceleratorChoice
     priority: int
@@ -150,7 +119,6 @@ class PolicyJudge:
                     raise
                 jobs.update(outcome.jobs)
                 try:
-                    outcome = trial_coverage(outcome, output_dir, self.repetitions)
                     _complete_coverage(outcome)
                 except Exception as exc:
                     raise EvaluationError(
@@ -178,13 +146,12 @@ def policy_executor(
     priority: int,
 ) -> tuple[EvalExecutor, EvalRef]:
     """Bind each policy benchmark to its own grading configuration."""
-    if reference.name in {"financebench", "olympiadbench"}:
+    if reference.name in POLICY_JUDGED_BENCHMARKS:
         assert judge_accelerator is not None
         if not isinstance(source, EvalchemyExecutor):
             raise TypeError("policy answer-equivalence grading requires Evalchemy")
         executor = PolicyJudge(
             source,
-            OLYMPIAD_REPETITIONS if reference.name == "olympiadbench" else 1,
             config.judge,
             judge_accelerator,
             priority,
