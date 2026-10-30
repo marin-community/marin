@@ -3,7 +3,7 @@
 
 from experiments.post_training.chat_template import GRUG_TOKENS
 from experiments.post_training.probe_sets.continuations import render_prompt_ids
-from experiments.post_training.probe_sets.test_continuations import byte_level_tokenizer
+from experiments.post_training.probe_sets.tokenizer_test_support import byte_level_tokenizer
 from experiments.post_training.task_data.sample_m1 import m1_row, verdict
 
 TASK = {"task_id": "r-0", "prompt": "add two and five", "answer": "7"}
