@@ -17,7 +17,8 @@ from experiments.post_training.probe_sets.builder import (
     HARBOR_SWE_BENCH_REF,
     P_AGENT_SIZE,
     P_CHAT_SIZE,
-    P_THINK_OLYMPIADBENCH_SIZE,
+    P_THINK_SIZE,
+    STAGE0_CONTAMINATION_SHARE,
     T_DOMAINS,
     T_TOKENS_PER_DOMAIN,
     ScreeningInputs,
@@ -28,9 +29,11 @@ from experiments.post_training.probe_sets.builder import (
     p_agent_instance_ids,
     require_pairwise_disjoint,
     screen,
+    screening_hits,
     seeded_selection,
 )
 from experiments.post_training.probe_sets.sources import ProbeRow, SourceSpec, multi_turn_chats
+from experiments.post_training.task_data.math_r import r_prompt
 
 LONG = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho"
 
@@ -57,7 +60,7 @@ def inputs(tmp_path):
 
 def test_screen_drops_stage0_and_task_train_overlap(inputs):
     rows = [row("clean", distinct(1)), row("stage0", f"say {LONG}"), row("train", distinct(901))]
-    kept, drops = screen(rows, inputs, x_task_rows=False)
+    kept, drops = screen(rows, screening_hits(rows, inputs), x_task_rows=False)
     assert [r.probe_id for r in kept] == ["clean"]
     assert drops == {"dropped_stage0_overlap": 1, "dropped_task_train_overlap": 1}
 
@@ -67,7 +70,7 @@ def test_x_probe_rows_screen_by_function_identity(inputs):
         row("same-function", distinct(2), template_name="mod_loop", parameter=5),
         row("sibling-function", distinct(3), template_name="mod_loop", parameter=6),
     ]
-    kept, drops = screen(rows, inputs, x_task_rows=True)
+    kept, drops = screen(rows, screening_hits(rows, inputs), x_task_rows=True)
     assert [r.probe_id for r in kept] == ["sibling-function"]
     assert drops["dropped_task_train_overlap"] == 1
 
@@ -83,13 +86,13 @@ def test_seeded_selection_is_reproducible_and_raises_on_shortfall():
 def test_p_chat_keeps_every_constraint_prompt_and_fills_with_chats(inputs):
     constraints = [row(f"c{index}", distinct(index)) for index in range(40)] + [row("c-dirty", f"x {LONG}")]
     chats = [row(f"m{index}", distinct(1000 + index)) for index in range(P_CHAT_SIZE)]
-    rows, counts = build_p_chat(constraints, chats, inputs, seed=0)
+    rows, counts = build_p_chat(constraints, chats, screening_hits([*constraints, *chats], inputs), seed=0)
     assert len(rows) == P_CHAT_SIZE
     assert counts["constraint_prompts"] == 40 and counts["multi_turn_chats"] == P_CHAT_SIZE - 40
     assert "c-dirty" not in {r.probe_id for r in rows}
 
 
-def test_p_think_raises_when_a_fixed_benchmark_is_contaminated(inputs):
+def test_p_think_drops_contaminated_core_problems_and_fills_to_300(inputs):
     def benchmark(name, count, offset):
         return [row(f"{name}-{index}", distinct(offset + index)) for index in range(count)]
 
@@ -99,12 +102,30 @@ def test_p_think_raises_when_a_fixed_benchmark_is_contaminated(inputs):
         "hmmt_feb_2025": benchmark("hmmt_feb_2025", 30, 200),
         "olympiadbench": benchmark("olympiadbench", 300, 300),
     }
-    rows, counts = build_p_think(benchmarks, inputs, seed=0)
-    assert len(rows) == 90 + P_THINK_OLYMPIADBENCH_SIZE
-    assert counts["olympiadbench"] == P_THINK_OLYMPIADBENCH_SIZE
-    benchmarks["aime_2025"][3] = row("aime_2025-3", f"find {LONG}")
-    with pytest.raises(ValueError, match="aime_2025 overlaps training data"):
-        build_p_think(benchmarks, inputs, seed=0)
+
+    def hits():
+        return screening_hits([r for rows in benchmarks.values() for r in rows], inputs)
+
+    rows, counts = build_p_think(benchmarks, hits(), seed=0)
+    assert len(rows) == P_THINK_SIZE and counts["olympiadbench"] == P_THINK_SIZE - 90
+    benchmarks["aime_2025"][3] = row("aime_2025-3", f"find {LONG}")  # a near-copy of a Stage 0 row
+    rows, counts = build_p_think(benchmarks, hits(), seed=0)
+    assert len(rows) == P_THINK_SIZE and "aime_2025-3" not in {r.probe_id for r in rows}
+    assert (counts["aime_2025"], counts["olympiadbench"]) == (29, P_THINK_SIZE - 89)
+
+
+def test_stage0_contamination_needs_half_the_grams_while_task_train_needs_one(inputs):
+    stock = " ".join(LONG.split()[:13])  # one 13-gram shared with the Stage 0 row
+    rows = [
+        row("stock-wording", f"{stock} {distinct(7)}"),
+        row("near-copy", f"say {LONG}"),
+        row("train-gram", f"{' '.join(distinct(901).split()[:13])} {distinct(8)}"),
+    ]
+    hits = screening_hits(rows, inputs)
+    kept, drops = screen(rows, hits, x_task_rows=False)
+    assert [r.probe_id for r in kept] == ["stock-wording"]
+    assert drops == {"dropped_stage0_overlap": 1, "dropped_task_train_overlap": 1}
+    assert 0 < hits.stage0_shares["stock-wording"] < STAGE0_CONTAMINATION_SHARE <= hits.stage0_shares["near-copy"]
 
 
 def test_probe_sets_must_be_pairwise_disjoint():
@@ -243,3 +264,57 @@ def test_terminus_json_reply_buckets_and_reasoning_deciles():
         if b is Bucket.REASONING and t == 0
     ]
     assert first_turn == sorted(first_turn) and first_turn[0] == 0 and first_turn[-1] == 8
+
+
+@pytest.mark.parametrize(
+    "reply,reasoning,final",
+    [
+        ("<|start_think|> add the digits <|end_think|> it is 7", ["add", "the", "digits"], ["it", "is", "7"]),
+        ("<|start_think|> add the digits and keep going", ["add", "the", "digits", "and", "keep", "going"], []),
+        ("add the digits <|end_think|> it is 7", ["add", "the", "digits"], ["it", "is", "7"]),
+        ("<|end_think|> it is 7", [], ["it", "is", "7"]),
+        ("<|start_think|> add <|start_think|> carry <|end_think|> 7 <|end_think|>", ["add", "carry"], ["7"]),
+        ("no markers at all", [], ["no", "markers", "at", "all"]),
+    ],
+    ids=["paired", "unclosed", "unopened", "empty-unopened", "repeated-markers", "unmarked"],
+)
+def test_raw_think_markers_in_a_sampled_reply(reply, reasoning, final):
+    tokenizer = tiny_tokenizer(GRUG_TOKENS)
+    messages = [{"role": "user", "content": "sum the digits"}, {"role": "assistant", "content": reply}]
+    tagged = tag_conversation(tokenizer, "grug", messages)
+    words = bucket_words(tokenizer, "grug", messages, tagged)
+    assert words.get(Bucket.REASONING, []) == reasoning
+    assert words.get(Bucket.FINAL_MESSAGE, []) == final
+    markers = [word for word in reply.split() if word.startswith("<|")]
+    assert words[Bucket.DELIMITER] == [*markers, GRUG_TOKENS.turn_close]
+    decile = [d for d, b in zip(tagged.reasoning_decile, tagged.buckets, strict=True) if b is Bucket.REASONING]
+    assert decile == sorted(decile) and (not decile or decile[0] == 0)
+
+
+def test_screen_refuses_rows_that_were_not_screened(inputs):
+    hits = screening_hits([row("clean", distinct(1))], inputs)
+    with pytest.raises(ValueError, match="not among the screened candidates"):
+        screen([row("late", distinct(2))], hits, x_task_rows=False)
+
+
+def test_the_shared_r_instruction_alone_is_not_an_overlap(tmp_path, inputs):
+    r_train = tmp_path / "r_train_instructed.jsonl"
+    r_train.write_text(json.dumps({"prompt": r_prompt(distinct(901))}) + "\n")
+    instructed = ScreeningInputs(
+        stage0_files=inputs.stage0_files,
+        task_train_files=(inputs.x_train_file, r_train),
+        x_train_file=inputs.x_train_file,
+    )
+    rows = [row("other-problem", r_prompt(distinct(5))), row("same-problem", r_prompt(distinct(901)))]
+    kept, _drops = screen(rows, screening_hits(rows, instructed), x_task_rows=False)
+    assert [r.probe_id for r in kept] == ["other-problem"]
+
+
+def test_a_terminus_value_cut_at_the_cap_runs_to_the_end_of_the_reply():
+    messages = [
+        {"role": "user", "content": "fix it"},
+        {"role": "assistant", "content": '{"analysis": "look at the failing'},
+    ]
+    tokenizer = tiny_tokenizer(QWEN_TOKENS)
+    words = bucket_words(tokenizer, "qwen3_moe", messages, tag_conversation(tokenizer, "qwen3_moe", messages))
+    assert words[Bucket.REASONING] == ["look", "at", "the", "failing"]
