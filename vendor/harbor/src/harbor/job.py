@@ -29,6 +29,7 @@ from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
 from harbor.models.benchmark import (
     BenchmarkMetadata,
+    SOTOPIA_PRIMARY_METRIC,
     reward_benchmark_metadata,
     sotopia_benchmark_metadata,
 )
@@ -1219,7 +1220,7 @@ class Job:
             self._job_result.trial_results = combined_trial_results
 
             if any(
-                item.primary_metric == "length_controlled_overall"
+                item.primary_metric == SOTOPIA_PRIMARY_METRIC
                 for item in self.benchmark_metadata
             ):
                 # SOTOPIA's statistical dependencies are optional for other Harbor jobs.

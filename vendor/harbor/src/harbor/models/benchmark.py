@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BENCHMARK_METADATA_SCHEMA_VERSION = 1
+SOTOPIA_PRIMARY_METRIC = "length_controlled_overall"
 
 
 class MetricKind(StrEnum):
@@ -73,8 +74,8 @@ def reward_benchmark_metadata(
 
 def sotopia_benchmark_metadata(metadata: BenchmarkMetadata) -> BenchmarkMetadata:
     metric = MetricMetadata(
-        name="length_controlled_overall",
-        source_name="length_controlled_overall",
+        name=SOTOPIA_PRIMARY_METRIC,
+        source_name=SOTOPIA_PRIMARY_METRIC,
         kind=MetricKind.CONTINUOUS,
         higher_is_better=True,
     )

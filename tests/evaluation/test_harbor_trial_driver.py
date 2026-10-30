@@ -425,9 +425,9 @@ datasets:
         assert local_harbor_dataset_path(config) == worker_dataset
 
 
-def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
+def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path):
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["ot-tblite.yaml"]["stable_policy_json"])
+    policy_path.write_text(json.dumps(yaml.safe_load((_POLICIES / "ot-tblite.yaml").read_text())))
     overlay_path = tmp_path / "overlay.json"
     write_runtime_overlay(
         overlay_path,
@@ -787,11 +787,11 @@ def test_effective_terminus_job_applies_output_limit_to_llm_requests(tmp_path, p
     assert effective["agents"][0]["kwargs"]["llm_call_kwargs"]["max_tokens"] == expected_max_tokens
 
 
-def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path):
     capability_token = "dummy-capability-token"
     capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["aime-smoke.yaml"]["stable_policy_json"])
+    policy_path.write_text(json.dumps(yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())))
     overlay_path = tmp_path / "overlay.json"
     write_runtime_overlay(
         overlay_path,

@@ -22,6 +22,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
 from upath import UPath
 
+from harbor.models.benchmark import SOTOPIA_PRIMARY_METRIC
 from harbor.models.trial.result import TrialResult
 from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.job.config import SotopiaCohort
@@ -441,6 +442,6 @@ def correct_sotopia(
         selected_regularization=fit.selected_regularization,
         cross_validation_losses=fit.cross_validation_losses,
         canonical_metrics={
-            "length_controlled_overall": selected.length_controlled_overall
+            SOTOPIA_PRIMARY_METRIC: selected.length_controlled_overall
         },
     )
