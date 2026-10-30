@@ -759,3 +759,23 @@ def test_selected_primary_metric_missing_from_sample_does_not_publish_result(tmp
         with FineStoreOutput(root, "piqa", ("piqa",), primary_metrics={"piqa": metric}) as output:
             output.write_sample("piqa", {"doc_id": 0, "doc": {}, "acc": 1.0})
     assert not completed_finestore_output(root, "piqa")
+
+
+@pytest.mark.parametrize("sample_score", [0.0, 1.0])
+def test_selected_repeated_accuracy_persists_underlying_sample_metric(tmp_path, sample_score):
+    root = str(tmp_path / "archive")
+    metric = MetricMetadata("accuracy", "accuracy_avg", MetricKind.BINARY, True)
+    with FineStoreOutput(root, "OlympiadBench", ("OlympiadBench",), primary_metrics={"OlympiadBench": metric}) as output:
+        output.write_sample("OlympiadBench", {
+            "doc_id": 0, "doc": {}, "target": "42", "resps": [["42"]],
+            "accuracy": sample_score,
+        })
+        output.finish_task()
+        output.finish({"results": {"OlympiadBench": {"accuracy_avg": sample_score}}})
+    row = ReadView(root).scan(ARCHIVE_SAMPLES_TABLE).to_pylist(maps_as_pydicts="strict")[0]
+    sample = sample_from_archive_row(row)
+    assert sample.metrics == {"accuracy": sample_score}
+    assert sample.grading.metric == "accuracy"
+    assert sample.grading.score == sample_score
+    assert sample.correct is (sample_score == 1.0)
+    assert completed_finestore_output(root, "OlympiadBench")
