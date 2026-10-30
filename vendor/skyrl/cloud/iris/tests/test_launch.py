@@ -27,7 +27,7 @@ class RecordingBackend:
         self.launched_config = yaml.safe_load(config_path.read_text())
         return self.outcome
 
-    def export_terminal_policy(self, _config_path: Path) -> None:
+    def export_pending_policies(self, _config_path: Path) -> None:
         self.exported = True
 
 

@@ -117,7 +117,12 @@ def runner_batch(dataset, runner, indices=None):
 def consumed_batches(cfg, dataset, num_batches: int) -> list[list[dict]]:
     """Draw ``num_batches`` training batches through the trainer's prompt loader and order."""
     batch_size = cfg.trainer.train_batch_size
-    loader = PromptLoader(dataset, prompt_order_from_config(cfg, dataset), batch_size=batch_size)
+    loader = PromptLoader(
+        dataset,
+        prompt_order_from_config(cfg, dataset),
+        batch_size=batch_size,
+        max_stale_retries=cfg.trainer.rollout_buffer.max_stale_retries,
+    )
     batches = []
     for _ in range(num_batches):
         batch, live = [], set()

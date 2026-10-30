@@ -74,7 +74,7 @@ class LaunchBackend(Protocol):
 
     def launch(self, config_path: Path) -> LaunchOutcome: ...
 
-    def export_terminal_policy(self, config_path: Path) -> None: ...
+    def export_pending_policies(self, config_path: Path) -> None: ...
 
 
 def _prepared_sources(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -194,9 +194,9 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
         if config.run.export_hf:
             try:
-                active_backend.export_terminal_policy(resolved_path)
+                active_backend.export_pending_policies(resolved_path)
             except (OSError, subprocess.CalledProcessError, ValueError) as error:
-                return _record_failure(config, outcome, f"Terminal policy export failed: {error}")
+                return _record_failure(config, outcome, f"Policy export failed: {error}")
 
     model = None
     if config.run.export_hf:
