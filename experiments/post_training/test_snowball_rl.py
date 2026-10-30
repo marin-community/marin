@@ -38,30 +38,8 @@ def _native(script, paths):
     return json.loads(result.stdout.splitlines()[-1])
 
 
-@pytest.fixture
-def selection(tmp_path, monkeypatch):
-    monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
-    monkeypatch.setenv(presets.JUDGE_KEY, "fixture")
-    root = tmp_path / "snowball-100k" / presets.DEFAULT_SELECTION_VERSION
-    root.mkdir(parents=True)
-    (root / "summary.json").write_text(
-        json.dumps(
-            {
-                "recipe": {"heldout": {"version": "2026.10.23.1", "rows": 910}},
-                "validation_rows": 100,
-                "full_validation_rows": 910,
-                "grader_kind_counts": {"train": {"remote_judge": 1}},
-            }
-        )
-    )
-    return ArtifactStep.adopt("tests/candidate", "2026.10.26", str(root))
-
-
-@pytest.fixture(autouse=True)
-def source_provenance(monkeypatch):
-    monkeypatch.setattr(
-        snowball, "_provenance", lambda **kwargs: Provenance("tree-one", "commit-one", False, "branch", "test")
-    )
+pytest_plugins = ("experiments.post_training.snowball_rl_test_fixtures",)
+pytestmark = pytest.mark.usefixtures("source_provenance")
 
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
@@ -216,7 +194,7 @@ print(json.dumps([
     )
 
 
-def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
+def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path):
     learning = presets.PRESETS["learning-medium"]
     data = presets.PRESETS["data-short"]
     long = presets.PRESETS["train-long"]
@@ -248,6 +226,36 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch):
     original = run(long)
     run(long, "trainer.policy.megatron_config.ddp_config.overlap_grad_reduce=true")
     assert run(long).fingerprint() == original.fingerprint()
+    panel_key = "panel-910/mean"
+    first = snowball.build_run(learning, requirements=(panel_key + ">=0",))
+    second = snowball.build_run(learning, requirements=(panel_key + ">=0.1",))
+    assert first.runs[0].name == second.runs[0].name == name()
+    assert first.gate.name != second.gate.name
+    monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
+    pin = snowball.snowball_rl_gate.CONTROLS["speed-short"][0]
+    control_path = (
+        tmp_path
+        / presets.control_name(pin.preset, pin.main_commit, 0)
+        / pin.revision
+        / "exports/metrics/step-000000.json"
+    )
+    control_path.parent.mkdir(parents=True)
+    control_path.write_text('{"generate/tokens_per_second_per_gpu": 1}')
+
+    def forbidden_step(*args, **kwargs):
+        pytest.fail("requirement preflight reached GPU step construction")
+
+    with monkeypatch.context() as preflight:
+        preflight.setattr(snowball, "_run_step", forbidden_step)
+        for preset, requirement, kwargs in (
+            (presets.PRESETS["speed-short"], "typo>=0", {}),
+            (presets.PRESETS["speed-short"], "policy/raw_grad_norm<=1", {}),
+            (long, panel_key + ">=0", {}),
+            (learning, panel_key + ">=0", {"control": True}),
+            (learning, "invalid", {}),
+        ):
+            with pytest.raises(click.BadParameter):
+                snowball.build_run(preset, requirements=(requirement,), **kwargs)
     original_name = name()
     monkeypatch.setattr(
         snowball, "_provenance", lambda **kwargs: Provenance("tree-two", "commit-one", False, "branch", "test")

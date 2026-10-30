@@ -19,7 +19,6 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_status import get_status_path
-from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -38,8 +37,9 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance
+from rigging.provenance import Provenance, git_output
 
+from experiments.post_training import snowball_rl_gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training.task_curation.inventory import (
     TRAIN_FILENAME,
@@ -48,7 +48,9 @@ from experiments.post_training.task_curation.inventory import (
 
 
 def training_config(
-    preset: presets.Preset, settings: tuple[presets.Setting, ...] = (), evaluations: tuple[presets.Evaluation, ...] = ()
+    preset: presets.Preset,
+    settings: tuple[presets.Setting, ...] = (),
+    evaluations: tuple[presets.Evaluation, ...] = (),
 ) -> dict:
     recipe = preset.recipe
     plan = recipe.layout.role_plan
@@ -147,6 +149,7 @@ def training_config(
 class SnowballRun:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     post_run_evaluations: tuple[ArtifactStep[SkyRLRun], ...] = ()
+    gate: ArtifactStep[snowball_rl_gate.GateReport] | None = None
 
 
 def _model_input(init: ArtifactStep | None) -> SkyRLModelSource:
@@ -337,8 +340,10 @@ def build_run(
     evaluations: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
+    requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct the complete Snowball experiment and its terminal evaluation dependencies."""
+    snowball_rl_gate.check_requirements(preset, requirements, control=control)
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -432,7 +437,25 @@ def build_run(
         runs.append(run)
         for evaluation in post:
             post_runs.append(_post_evaluation(run, evaluation, default, preset, config))
-    return SnowballRun(tuple(runs), tuple(post_runs))
+    gate = (
+        snowball_rl_gate.gate_step(
+            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements)
+        )
+        if preset.name in snowball_rl_gate.CONTROLS and not control
+        else None
+    )
+    return SnowballRun(tuple(runs), tuple(post_runs), gate)
+
+
+def _changed_paths(ref: str, paths: tuple[str, ...]) -> tuple[list[dict[str, str]] | None, str | None]:
+    if not (presets.REPO_ROOT / ".git").exists():
+        return None, "git metadata is unavailable on this host"
+    try:
+        output = git_output(["diff", "--no-renames", "--name-status", "-z", ref, "--", *paths], cwd=presets.REPO_ROOT)
+    except (RuntimeError, FileNotFoundError) as error:
+        return None, str(error)
+    fields = output.split("\0")[:-1] if output else []
+    return [{"path": path, "status": status} for status, path in zip(fields[::2], fields[1::2], strict=True)], None
 
 
 def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
@@ -473,6 +496,25 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "output": path,
             }
         )
+    verdict = {}
+    if run.gate is not None:
+        path = (
+            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))) / "gate_report.json"
+        )
+        if presets.exists(path):
+            report = snowball_rl_gate.GateReport.model_validate_json(presets.read_text(path))
+            verdict = {"report": str(path), **report.model_dump(mode="json", include={"verdict", "label", "reason"})}
+            changes, reason = _changed_paths(
+                report.control.main_commit,
+                ("experiments/post_training", "lib/marin/src/marin/rl", "lib/taskcompendium", "vendor/skyrl"),
+            )
+            verdict["rl_path_changes_since_control"] = changes
+            if reason:
+                verdict["rl_path_changes_reason"] = reason
+        else:
+            crashed = next((row for row in rows if str(row["state"]).lower() in ("failed", "killed")), None)
+            if crashed is not None:
+                verdict = {"verdict": "fail", "reason": "run crashed", "iris_job_id": crashed["iris_job_id"]}
     click.echo(
         yaml.safe_dump(
             {
@@ -495,23 +537,14 @@ def _print_status(run: SnowballRun, preset: presets.Preset) -> None:
                 "reported_metrics": [{**asdict(metric), "window": metric.window.value} for metric in preset.reported],
                 "gaps": [gap.value for gap in preset.gaps],
                 "runs": rows,
+                **verdict,
             },
             sort_keys=False,
         )
     )
 
 
-@click.command(help=__doc__)
-@click.option("--preset", "preset_name", required=True, type=click.Choice(sorted(presets.PRESETS)))
-@click.option("--set", "settings", multiple=True)
-@click.option("--tasks", "tasks_name")
-@click.option("--init", "init_name")
-@click.option("--resume-from", "resume_name")
-@click.option("--layout", "layout_name", type=click.Choice(sorted(presets.TRAIN_LONG_RECIPES)))
-@click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(presets.EVALUATIONS)))
-@click.option("--replicates", type=click.IntRange(1, 5), default=1)
-@click.option("--control", is_flag=True)
-@rl_build_options
+@presets.run_command(help_text=__doc__)
 def main(
     preset_name: str,
     settings: tuple[str, ...],
@@ -522,6 +555,7 @@ def main(
     evaluations: tuple[str, ...],
     replicates: int,
     control: bool,
+    requirements: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
@@ -537,22 +571,17 @@ def main(
         evaluations=evaluations,
         replicates=replicates,
         control=control,
+        requirements=requirements,
     )
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
-        changes = subprocess.run(
-            ["git", "diff", "--name-only", source_tree, "--", "vendor/skyrl", "lib/marin/src/marin/rl"],
-            cwd=presets.REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if changes.returncode == 0 and changes.stdout.strip():
+        changes, _ = _changed_paths(source_tree, ("vendor/skyrl", "lib/marin/src/marin/rl"))
+        if changes:
             click.echo(
                 "Resume crosses SkyRL runtime changes; verify optimizer and checkpoint compatibility before continuing."
             )
     _print_status(run, preset)
-    return (*run.runs, *run.post_run_evaluations)
+    return (*run.runs, *run.post_run_evaluations, *((run.gate,) if run.gate else ()))
 
 
 if __name__ == "__main__":

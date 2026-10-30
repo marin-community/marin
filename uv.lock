@@ -7647,6 +7647,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "seaborn" },
     { name = "sqlalchemy" },
+    { name = "tabulate" },
     { name = "watchdog" },
 ]
 
@@ -7692,6 +7693,7 @@ requires-dist = [
     { name = "quack-kernels", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==0.6.4" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "sqlalchemy", specifier = ">=2" },
+    { name = "tabulate" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = "==2.11.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-root", extra = "pipeline" } },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=3.6.0,<3.7" },
     { name = "watchdog" },

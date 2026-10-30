@@ -22,6 +22,7 @@ from marin.execution.artifact import RECORD_FILENAME, Artifact, ArtifactRecord, 
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     MISSING_CONFIG_VALUE,
     ArtifactDataSource,
@@ -531,7 +532,7 @@ TRAIN_LONG_RECIPES = MappingProxyType(
 
 def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
     if control:
-        return f"checkpoints/snowball-rl/control/{preset.name}-{provenance.base_commit}-r{replicate}"
+        return control_name(preset.name, provenance.base_commit, replicate)
     name = f"checkpoints/snowball-rl/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if preset.focus != Focus.TRAIN:
         name += f"-r{replicate}"
@@ -719,3 +720,29 @@ def published_artifact(value: str) -> ArtifactStep:
             kind = SkyRLRun if record.result_type.endswith(".SkyRLRun") else LevanterCheckpoint
             return ArtifactStep.adopt(name, version, record.source or root, kind=kind, config=record.config)
     raise click.BadParameter(f"no published artifact record for {name}@{version}")
+
+
+def control_name(preset: str, commit: str, replicate: int) -> str:
+    return f"checkpoints/snowball-rl/control/{preset}-{commit}-r{replicate}"
+
+
+def run_command(*, help_text: str | None = None):
+    def decorate(function):
+        options = (
+            click.option("--preset", "preset_name", required=True, type=click.Choice(sorted(PRESETS))),
+            click.option("--set", "settings", multiple=True),
+            click.option("--require", "requirements", multiple=True),
+            click.option("--tasks", "tasks_name"),
+            click.option("--init", "init_name"),
+            click.option("--resume-from", "resume_name"),
+            click.option("--layout", "layout_name", type=click.Choice(sorted(TRAIN_LONG_RECIPES))),
+            click.option("--eval", "evaluations", multiple=True, type=click.Choice(sorted(EVALUATIONS))),
+            click.option("--replicates", type=click.IntRange(1, 5), default=1),
+            click.option("--control", is_flag=True),
+        )
+        command = rl_build_options(function)
+        for option in reversed(options):
+            command = option(command)
+        return click.command(help=help_text)(command)
+
+    return decorate
