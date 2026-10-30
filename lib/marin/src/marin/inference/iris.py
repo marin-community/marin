@@ -18,7 +18,7 @@ from typing import cast
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
+from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus, TpuConfig
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
@@ -51,6 +51,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.iris_tpu_vllm import submit_tpu_gang, tpu_ray_gang
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
     iris_vllm_launch,
@@ -245,7 +246,12 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     api_model = model.model_id
     weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
+    if isinstance(iris.worker_resources.device, TpuConfig):
+        num_chips *= iris.worker_resources.device.vm_count()
     tensor_parallel_size = model.tensor_parallel_size
+    if tensor_parallel_size is None and isinstance(iris.worker_resources.device, TpuConfig):
+        if iris.worker_resources.device.vm_count() > 1:
+            tensor_parallel_size = num_chips
     revision = model.revision if weights == model.weights else None
     tokenizer = model.tokenizer or model.weights
     tokenizer_revision = model.effective_tokenizer_revision
@@ -493,6 +499,10 @@ def run_iris_service(service: IrisServiceConfig) -> None:
         raise RuntimeError("Iris service must run inside an Iris job")
     if job_info.num_tasks != service.iris.worker_resources.replicas:
         raise ValueError("Iris task count must match the serving resource replicas")
+    device = service.iris.worker_resources.device
+    if isinstance(device, TpuConfig) and device.vm_count() > 1:
+        _run_tpu_service(service)
+        return
     geometry = service.iris.serving_geometry
     if geometry is not None and geometry.task_count > 1:
         _run_pipeline_service(service)
@@ -532,18 +542,12 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
-def _run_pipeline_service(service: IrisServiceConfig) -> None:
-    from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
-
-    geometry = service.iris.serving_geometry
-    assert geometry is not None
-    assert isinstance(service.engine, VllmEngineConfig)
-    model, num_chips = _resolved_model(service.model, service.iris)
-    spec = ModelSpec(
+def _vllm_model_spec(model: ServedModelConfig, num_chips: int, tensor_parallel_size: int | None) -> ModelSpec:
+    return ModelSpec(
         weights=model.weights,
         api_model=model.model_id,
         num_chips=num_chips,
-        tensor_parallel_size=None,
+        tensor_parallel_size=tensor_parallel_size,
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
@@ -551,6 +555,70 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
     )
+
+
+@contextlib.contextmanager
+def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, backend_name):
+    environment.wait_until_ready()
+    running_model = RunningModel(
+        endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
+        tokenizer=model.tokenizer,
+    )
+    with _register_dashboard(
+        service,
+        running_model,
+        tensor_parallel_size=tensor_parallel_size,
+        backend_name=backend_name,
+        streaming=True,
+        chat_template_content=_model_tool_chat_template(model),
+    ):
+        yield
+
+
+def _run_tpu_service(service: IrisServiceConfig) -> None:
+    from marin.inference.vllm_backend import VllmBackend, vllm_launcher  # noqa: PLC0415
+    from marin.inference.vllm_server import IsolatedTpuVllm  # noqa: PLC0415
+
+    assert isinstance(service.engine, VllmEngineConfig)
+    device = service.iris.worker_resources.device
+    assert isinstance(device, TpuConfig)
+    launcher = vllm_launcher(service.engine)
+    assert isinstance(launcher, IsolatedTpuVllm)
+    with tpu_ray_gang(
+        launcher, chips_per_host=device.chip_count(), timeout_seconds=service.engine.startup_timeout_seconds
+    ) as gang:
+        if not gang.leader:
+            return
+        model, num_chips = _resolved_model(service.model, service.iris)
+        backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
+        with _staged_model(model) as model:
+            spec = _vllm_model_spec(model, num_chips, model.tensor_parallel_size)
+            with backend.start(
+                spec, extra_args=("--distributed-executor-backend", "ray"), subprocess_env=gang.subprocess_env
+            ) as environment:
+                with _ready_vllm_dashboard(
+                    service,
+                    model,
+                    environment,
+                    tensor_parallel_size=cast(int, model.tensor_parallel_size),
+                    backend_name=backend.name,
+                ):
+
+                    def check_alive() -> None:
+                        gang.check_alive()
+                        environment.check_alive()
+
+                    _block_until_timeout(check_alive, service.timeout_hours)
+
+
+def _run_pipeline_service(service: IrisServiceConfig) -> None:
+    from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
+
+    geometry = service.iris.serving_geometry
+    assert geometry is not None
+    assert isinstance(service.engine, VllmEngineConfig)
+    model, num_chips = _resolved_model(service.model, service.iris)
+    spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
@@ -560,18 +628,12 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
-                    environment.wait_until_ready()
-                    running_model = RunningModel(
-                        endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
-                        tokenizer=model.tokenizer,
-                    )
-                    with _register_dashboard(
+                    with _ready_vllm_dashboard(
                         service,
-                        running_model,
+                        model,
+                        environment,
                         tensor_parallel_size=geometry.tensor_parallel_size,
                         backend_name=backend.name,
-                        streaming=True,
-                        chat_template_content=_model_tool_chat_template(service.model),
                     ):
                         _block_until_timeout(environment.check_alive, service.timeout_hours)
             else:
@@ -674,7 +736,9 @@ def _start_direct_inference(
         timeout_hours=24 * 365,
         port_name=None,
     )
-    job = current_client().submit(
+    device = iris.worker_resources.device
+    submit = submit_tpu_gang if isinstance(device, TpuConfig) and device.vm_count() > 1 else current_client().submit
+    job = submit(
         JobRequest(
             name=f"inference-{run_id}",
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
