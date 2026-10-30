@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.reader import ReadView
+from upath import UPath
 from harbor_config.models.job.config import SotopiaCohort
 from harbor.metrics.sotopia import (
     EpisodeScore,
@@ -101,6 +102,7 @@ def candidate_trials(root):
                 task_name=row["doc_id"],
                 trial_name=row["trial_id"],
                 trial_uri=directory.as_uri(),
+                trial_relpath=row["trial_id"],
                 task_id=config.task.get_task_id(),
                 task_checksum="fixture",
                 config=config,
@@ -118,12 +120,15 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     sotopia_archive(baseline, 0)
     raw = sotopia_archive(candidate, 200)
     trials = candidate_trials(candidate)
+    trials_dir = UPath(candidate / "harbor_jobs" / "job")
     before = [trial.model_dump() for trial in trials]
     cohort = {
         "version": "test-v1",
         "models": [{"model": "baseline", "results_path": str(baseline)}],
     }
-    result = correct_sotopia(trials, model="candidate", cohort=SotopiaCohort.model_validate(cohort))
+    result = correct_sotopia(
+        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+    )
     adjusted = [
         row.length_controlled_overall
         for row in result.adjusted_episodes
@@ -136,7 +141,9 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
     assert [trial.model_dump() for trial in trials] == before
     assert result.cohort == cohort
     assert len(result.source_episodes) == 200
-    assert correct_sotopia(trials, model="candidate", cohort=SotopiaCohort.model_validate(cohort)) == result
+    assert correct_sotopia(
+        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+    ) == result
     replacement = {
         **cohort,
         "models": [
@@ -144,12 +151,23 @@ def test_sotopia_correction_preserves_raw_scores_and_records_reproducible_inputs
             {"model": "candidate", "results_path": str(tmp_path / "superseded")},
         ],
     }
-    replaced = correct_sotopia(trials, model="candidate", cohort=SotopiaCohort.model_validate(replacement))
+    replaced = correct_sotopia(
+        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(replacement)
+    )
     assert replaced.source_episodes == result.source_episodes
     assert replaced.canonical_metrics == result.canonical_metrics
+    relocated = tmp_path / "relocated-candidate"
+    candidate.rename(relocated)
+    trials_dir = UPath(relocated / "harbor_jobs" / "job")
+    resumed = correct_sotopia(
+        trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+    )
+    assert resumed == result
     next((baseline / "harbor_jobs").rglob("sotopia-summary.json")).unlink()
     with pytest.raises(ValueError, match="missing SOTOPIA summary"):
-        correct_sotopia(trials, model="candidate", cohort=SotopiaCohort.model_validate(cohort))
+        correct_sotopia(
+            trials, model="candidate", trials_dir=trials_dir, cohort=SotopiaCohort.model_validate(cohort)
+        )
 
 
 def test_length_control_removes_synthetic_verbosity_bonus() -> None:

@@ -1233,6 +1233,7 @@ class Job:
                     combined_trial_results,
                     model=model,
                     cohort=self.config.sotopia_cohort,
+                    trials_dir=self.job_dir,
                 )
                 dataset = self.benchmark_metadata[0].task
                 self._job_result.canonical_metrics[dataset] = evidence.canonical_metrics

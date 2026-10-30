@@ -44,7 +44,8 @@ answers once and preserves judge verdicts with the samples. Judge requests use c
 labels and escalate empty final answers through 128, 512, and 2048 output tokens.
 
 These stages finish before the run is recorded as successful. Missing cohort evidence
-produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
+fails the Harbor job and records the run as `failed`. Evalchemy preserves checkpoints for
+interrupted judge requests.
 Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
 The launch snapshot includes the finalization configuration, judge YAML, and Harbor YAML
 containing the campaign cohort. Harbor saves the resolved baseline cohort with the correction

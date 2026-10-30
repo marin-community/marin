@@ -20,6 +20,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
+from upath import UPath
 
 from harbor.models.trial.result import TrialResult
 from harbor_config.errors import ErrorCategory, error_category
@@ -374,7 +375,7 @@ class SotopiaCorrection:
 
 
 def correct_sotopia(
-    trials: list[TrialResult], *, model: str, cohort: SotopiaCohort
+    trials: list[TrialResult], *, model: str, cohort: SotopiaCohort, trials_dir: UPath
 ) -> SotopiaCorrection:
     """Return corrected scores and the full inputs needed to reproduce the fit."""
     cohort_document = cohort.model_dump()
@@ -403,7 +404,7 @@ def correct_sotopia(
                 candidate.append(EpisodeScore(model, trial.task_name, 0.0, None))
                 continue
             raise ValueError(f"SOTOPIA trial {trial.trial_name} lacks dimension scores")
-        directory = trial.resolve_trial_path()
+        directory = trial.resolve_trial_path(trials_dir)
         paths = list(directory.glob("attempts/*/agent/sotopia-summary.json"))
         path = (
             max(paths, key=lambda item: int(item.parent.parent.name))

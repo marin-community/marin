@@ -61,11 +61,11 @@ H100s, using its 262,144-token context. SOTOPIA fits the length correction over 
 replaces its prior source in the fit. Each launch preserves its exact cohort sources and judge
 configuration.
 
-A run is marked successful only after finalization succeeds. Its normalized samples and
-canonical metrics contain native judge accuracy or length-controlled SOTOPIA scores. Evalchemy
+A run is marked successful only after finalization succeeds. Its canonical metrics contain
+native judge accuracy or length-controlled SOTOPIA scores. Evalchemy
 preserves judge verdicts with each sample. SOTOPIA preserves raw rewards in its FineStore
-archive and saves cohort-fit evidence under `metric_evidence` in Harbor's `result.json`. Failed SOTOPIA finalization is recorded as
-`artifact_failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
+archive and saves cohort-fit evidence under `metric_evidence` in Harbor's `result.json`.
+A SOTOPIA correction failure fails the Harbor job and is recorded as `failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
 baseline source changes invalidate only SOTOPIA.
 
 ### Dataset caching
