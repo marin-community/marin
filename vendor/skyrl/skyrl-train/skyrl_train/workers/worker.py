@@ -368,6 +368,7 @@ class Worker(DistributedTorchRayActor):
         return {
             "allocated": torch.cuda.memory_allocated(),
             "reserved": torch.cuda.memory_reserved(),
+            "peak_allocated": torch.cuda.max_memory_allocated(),
             "free": free,
             "total": total,
         }

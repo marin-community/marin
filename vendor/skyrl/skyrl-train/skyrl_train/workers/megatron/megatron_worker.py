@@ -106,9 +106,7 @@ ROUTER_POLICY_MANIFEST_FILENAME = "router_policy.json"
 _BIAS_GUARD_MODEL_TYPES = ("grug_moe",)
 
 
-def _write_router_policy_manifest(
-    cfg, model_type: str, model_chunks: list[nn.Module], *, bias_guarded: bool
-) -> None:
+def _write_router_policy_manifest(cfg, model_type: str, model_chunks: list[nn.Module], *, bias_guarded: bool) -> None:
     """Record the router policy this rank's live model trains under, beside the run's exports."""
     router_weights = [
         parameter
@@ -337,6 +335,63 @@ class MegatronWorker:
                 module.training = was_training
             MegatronStrategy.load_rng_state(rng_state)
             rng_tracker.set_states(tracker_states)
+
+    def probe_score_forward(self, data):
+        """Score frozen sequences for the KL passes on the Megatron policy.
+
+        ``data.metadata["probe_score_top_k"]`` selects the reference pass (per
+        position, the top-K token ids and their fp32 log-softmax). Leaving it
+        ``None`` selects the candidate pass, which gathers the log-softmax at
+        ``data["probe_score_gather_ids"]`` ([B, T, K], of which the first
+        ``data.metadata["probe_score_support_width"]`` are the support whose tail
+        log mass comes back beside them), or the exact pass when the
+        batch carries ``data["probe_score_positions"]`` ([B, T] int64: row id + 1 at positions
+        whose full-vocabulary log-softmax rows come back compacted). Rows are
+        aligned with the model's logits positions — position t predicts the token
+        at t+1. ``data.metadata["probe_micro_batch_size"]`` sizes the micro-batch,
+        so the B-vs-B noise floor can rescore under a different layout.
+        """
+        top_k = data.metadata.get("probe_score_top_k")
+        support_width = data.metadata.get("probe_score_support_width")
+        micro_batch_size = (
+            data.metadata.get("probe_micro_batch_size") or self.cfg.trainer.micro_forward_batch_size_per_gpu
+        )
+        micro_batches = []
+        device = torch.cuda.current_device()
+        for micro in data.chunk(micro_batch_size):
+            micro.to(device)
+            sequences = micro["sequences"]
+            attention_mask = micro["attention_mask"]
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 0)
+            micro_batches.append(
+                MegatronForwardMicroBatch(
+                    sequences=sequences,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    num_actions=sequences.shape[1],
+                    probe_score_gather_ids=micro.get("probe_score_gather_ids"),
+                    probe_score_positions=micro.get("probe_score_positions"),
+                )
+            )
+        self.model.eval()
+        seq_len = micro_batches[0].sequences.shape[1]
+        mbs = micro_batches[0].sequences.shape[0]
+        with torch.no_grad():
+            results = self.model.probe_score_forward(
+                micro_batches=micro_batches,
+                seq_len=seq_len,
+                micro_batch_size=mbs,
+                top_k=top_k,
+                support_width=support_width,
+            )
+        if top_k is not None and "topk_logprobs" not in results:
+            raise ValueError("the reference pass returned no top-K logprobs")
+        if top_k is None and not ({"gathered_logprobs", "exact_logprobs"} & set(results)):
+            raise ValueError("the score pass returned neither gathered nor exact logprobs")
+        output = TrainingOutputBatch({key: value.to("cpu") for key, value in results.items()})
+        output.metadata = dict(data.metadata)
+        return output
 
     def _log_forward_fingerprint(self, call: str, micro_payloads: list[MegatronForwardMicroBatch]) -> None:
         """Log checksums of this rank's inputs and parameters so two calls can be compared."""
@@ -576,9 +631,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # its correction bias during pretraining-style Stage 0, so the guard
         # must not fire there.
         self._bias_guard_active = self.strategy.hf_config.model_type in _BIAS_GUARD_MODEL_TYPES
-        self._expert_bias_snapshot = (
-            snapshot_expert_bias(self.actor_module[0]) if self._bias_guard_active else {}
-        )
+        self._expert_bias_snapshot = snapshot_expert_bias(self.actor_module[0]) if self._bias_guard_active else {}
         if self.strategy.is_rank_0():
             _write_router_policy_manifest(
                 self.cfg,
