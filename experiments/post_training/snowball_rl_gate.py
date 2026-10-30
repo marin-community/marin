@@ -34,7 +34,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.10.30"
+GATE_REVISION = "2026.10.30.1"
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,19 @@ CONTROLS = {
     for name, count in (("speed-short", 5), ("data-short", 4), ("speed-medium", 4), ("learning-medium", 4))
 }
 CONTROLS["data-medium"] = CONTROLS["learning-medium"]
+
+
+_DETAIL_METRICS = {
+    "speed-medium": (
+        presets.Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
+        presets.Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
+    ),
+    "learning-medium": (
+        presets.Metric("async/rejected_rate", False),
+        presets.Metric("consumed/length_stop_fraction", False),
+        presets.Metric("generate/std_num_tokens", False),
+    ),
+}
 
 
 class Verdict(StrEnum):
@@ -103,9 +116,8 @@ def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, c
         return
     if control or preset.name not in CONTROLS:
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
-    parsed = tuple(map(parse_requirement, requirements))
     prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
-    raw = [item.key for item in parsed if not item.key.startswith(prefixes)]
+    raw = [item.key for item in map(parse_requirement, requirements) if not item.key.startswith(prefixes)]
     if raw:
         pin = CONTROLS[preset.name][0]
         root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
@@ -488,7 +500,12 @@ def _compare(
     n_control = sum(map(len, controls.values()))
     guards = []
     relative = [parse_requirement(text) for text in requirements if parse_requirement(text).bound is None]
-    metrics = (*preset.guards, *(presets.Metric(item.key, item.higher_is_better) for item in relative))
+    metrics = tuple(
+        {
+            (metric.key, metric.higher_is_better): metric
+            for metric in (*preset.guards, *(presets.Metric(item.key, item.higher_is_better) for item in relative))
+        }.values()
+    )
     for metric in metrics:
         row = _comparison(metric, values, noise.get(metric.key), n_control, len(metrics))
         if row.delta is None:
@@ -496,9 +513,9 @@ def _compare(
         if row.sd == 0:
             raise InvalidComparison(f"control variation is zero for guard metric: {metric.key}; use a number bound")
         guards.append(GuardComparison(**row.model_dump(), passes=row.delta >= -row.tolerance, change=_change(row)))
-    declared = {metric.key: metric for metric in preset.reported}
-    prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
     guard_keys = {metric.key for metric in metrics}
+    declared = {metric.key: metric for metric in preset.reported if metric.key not in guard_keys}
+    prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
     keys = dict.fromkeys(
         key
         for row in (*values, noise)
@@ -508,21 +525,34 @@ def _compare(
         and key not in declared
         and key not in guard_keys
     )
-    details = [] if preset.focus == presets.Focus.SPEED else list(keys)
+    details = (
+        {}
+        if preset.focus == presets.Focus.SPEED
+        else {key: presets.Metric(key, not key.endswith("all_wrong_fraction")) for key in keys}
+    )
+    telemetry = _DETAIL_METRICS.get(CONTROLS[preset.name][0].preset, ())
+    details.update({metric.key: metric for metric in telemetry if metric.key in noise and metric.key not in guard_keys})
     counts = Counter(map(_breakdown_group, (*details, *(key for key in declared if key.startswith(prefixes)))))
     reported = []
-    for metric in (
-        *declared.values(),
-        *(presets.Metric(key, not key.endswith("all_wrong_fraction")) for key in details),
-    ):
+    for metric in (*declared.values(), *details.values()):
         row = _comparison(
             metric,
             values,
             noise.get(metric.key),
             n_control,
-            counts[_breakdown_group(metric.key)] if metric.key.startswith(prefixes) or metric.key in details else 1,
+            (
+                counts[_breakdown_group(metric.key)]
+                if metric.key.startswith(prefixes) or metric.key.startswith("reward/domain/")
+                else 1
+            ),
         )
-        tasks, initializer = runs[0].slices.get(metric.key, (None, None))
+        slices = [run.slices.get(metric.key, (None, None)) for run in runs]
+        tasks = slices[0][0] if len({count for count, _ in slices}) == 1 else None
+        initializer = (
+            statistics.mean(initial for _, initial in slices)
+            if all(initial is not None for _, initial in slices)
+            else None
+        )
         control_values = [
             run.values[metric.key] for group in controls.values() for run in group if metric.key in run.values
         ]
@@ -546,32 +576,26 @@ def _render_markdown(report: GateReport) -> str:
     for title, value in (("Run", report.run), ("Control", report.control)):
         lines += ["", f"## {title}", ""]
         lines += [f"- {key}: {json.dumps(item, default=str)}" for key, item in value.model_dump().items()]
-    for title, rows in (("Guards", report.guards), ("Reported", report.reported), ("Invariants", report.invariants)):
+    prefixes = (*(evaluation.name + "/" for evaluation in presets.PRESETS[report.preset].evaluations), "reward/domain/")
+    breakdown = [row for row in report.reported if row.metric.startswith(prefixes)]
+    summary = [row for row in report.reported if not row.metric.startswith(prefixes)]
+    for title, rows in (("Guards", report.guards), ("Reported", summary), ("Invariants", report.invariants)):
         rows = [row.model_dump() for row in rows]
         lines += ["", f"## {title}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
     groups = {}
-    declared = {metric.key for metric in presets.PRESETS[report.preset].reported}
-    for row in report.reported:
-        if row.tasks is not None or row.metric not in declared:
-            groups.setdefault(_breakdown_group(row.metric), []).append(
-                {
-                    "slice": row.metric,
-                    "tasks": row.tasks,
-                    "initializer": row.initializer,
-                    "control mean (min-max)": (
-                        f"{row.control:.8g} ({row.control_min:.8g}-{row.control_max:.8g})"
-                        if row.control is not None
-                        else None
-                    ),
-                    "run": row.run,
-                    "Δ": row.delta,
-                    "τ": row.tolerance,
-                    "change": row.change,
-                }
-            )
+    for row in breakdown:
+        control = f"{row.control:.8g} ({row.control_min:.8g}-{row.control_max:.8g})" if row.control is not None else None
+        values = (row.metric, row.tasks, row.initializer, control, row.run, row.delta, row.tolerance, row.change)
+        groups.setdefault(_breakdown_group(row.metric), []).append(values)
     lines += ["", "## Breakdown"]
+    headers = ("slice", "tasks", "initializer", "control mean (min-max)", "run", "Δ", "τ", "change")
     for name, rows in groups.items():
-        lines += ["", f"### {name}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
+        lines += [
+            "",
+            f"### {name}",
+            "",
+            tabulate(rows, headers, "github", floatfmt=".8g", missingval="unavailable"),
+        ]
     return "\n".join([*lines, "", "## Gaps", "", *[f"- {gap}" for gap in report.gaps], ""])
 
 
