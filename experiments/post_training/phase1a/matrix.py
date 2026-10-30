@@ -4,9 +4,10 @@
 """Phase 1a's run matrix: every run's identity, role plan, and SkyRL recipe.
 
 Phase 1a compares SFT on expert samples (M1) with on-policy distillation (M4) on
-Snowball at router level R1. Thirty runs cover two methods x five conditions x
-three seeds; two procedure nulls train each method on B's own samples. Phase 0c
-sweeps four learning rates over both methods on ``theta_X``.
+Snowball at router level R1. Twenty-four runs cover two methods — theta_X, theta_R
+and theta_XR at three seeds each, the two batch-noise controls (theta_X_prime,
+theta_R_prime) at seed 0 — plus two procedure nulls that train each method on B's
+own samples. Phase 0c sweeps four learning rates over both methods on ``theta_X``.
 
 The two arms of a cell differ only in the training signal. Both read the same
 prompts in the same order with ``data.shuffle=false`` (see
@@ -88,6 +89,14 @@ EXPORT_CHECKPOINT_STEPS = tuple(
 )
 SEEDS = (0, 1, 2)
 PHASE1A_CONDITIONS = (Condition.X, Condition.R, Condition.XR, Condition.X_PRIME, Condition.R_PRIME)
+# The user cut the batch-noise controls to one seed (DESIGN decision log, 2026-10-30):
+# X' and R' plan seed 0 only, and the seed spread stays on the main conditions.
+BATCH_NOISE_CONTROLS = (Condition.X_PRIME, Condition.R_PRIME)
+
+
+def condition_seeds(condition: Condition) -> tuple[int, ...]:
+    """The seeds one condition's cells run: seed 0 only for the batch-noise controls."""
+    return (SEEDS[0],) if condition in BATCH_NOISE_CONTROLS else SEEDS
 # Phase 0c sweeps {0.5, 1, 2, 4} x 1e-6 over M1 and M4 on theta_X (control C10).
 LR_SWEEP = (5e-7, 1e-6, 2e-6, 4e-6)
 
@@ -137,12 +146,15 @@ class RunPlan:
 
 
 def phase1a_runs(learning_rate: float) -> list[RunPlan]:
-    """Thirty cells plus one procedure null per method, all at one common learning rate."""
+    """Twenty-two cells plus one procedure null per method, all at one common learning rate.
+
+    The main conditions run all three seeds; the batch-noise controls run seed 0 only.
+    """
     runs = [
         RunPlan(method, condition, seed, learning_rate)
         for method in Method
         for condition in PHASE1A_CONDITIONS
-        for seed in SEEDS
+        for seed in condition_seeds(condition)
     ]
     return runs + [RunPlan(method, Condition.PROCEDURE_NULL, SEEDS[0], learning_rate) for method in Method]
 

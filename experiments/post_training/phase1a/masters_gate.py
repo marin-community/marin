@@ -55,6 +55,7 @@ def gate_recipe(*, learning_rate: float, max_steps: int, weight_steps: list[int]
         max_steps=max_steps,
         checkpoint_steps=weight_steps,
         optimizer_checkpoint_steps=optimizer_steps,
+        hf_export_steps=list(weight_steps),
         ckpt_interval=weight_steps[0],
     )
     # Megatron's scheduler needs fewer warmup steps than the run's few total steps.

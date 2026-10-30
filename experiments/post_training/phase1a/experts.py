@@ -90,8 +90,9 @@ def expert_recipe(plan: ExpertPlan) -> dict:
     trainer.update(
         epochs=EXPERT_EPOCHS,
         max_steps=plan.steps,
-        checkpoint_steps=[],
-        optimizer_checkpoint_steps=[],
+        checkpoint_steps=[plan.steps],
+        optimizer_checkpoint_steps=[plan.steps],
+        hf_export_steps=[plan.steps],
         ckpt_interval=plan.steps,
     )
     recipe["data"]["shuffle"] = True
