@@ -33,7 +33,6 @@ the training sequence length cannot drift apart.
 import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
@@ -46,7 +45,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.training.training import resolve_checkpointer_output_path, temporary_checkpoint_base_path
+from marin.training.training import resolve_checkpointer_output_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
@@ -74,13 +73,11 @@ class GrugMoeSFTConfig:
     the latest under it is loaded). Optimizer state and step are not taken from it -- SFT
     starts a fresh schedule. Loaded only on the first launch; iris restarts auto-resume from
     this run's own output checkpoints instead."""
+    checkpointer: CheckpointerConfig
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = None
     expert_parallel: int = 1
-    checkpointer: CheckpointerConfig | None = None
-    checkpoint_keep: list[dict] | None = None
-    save_interval_minutes: int = 30
     per_device_parallelism: int = -1
 
 
@@ -130,14 +127,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         mesh=mesh_config,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=config.checkpointer
-        or CheckpointerConfig(
-            base_path=prefix_join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=config.save_interval_minutes),
-            keep=config.checkpoint_keep,
-        ),
+        checkpointer=config.checkpointer,
         # First launch: output dir empty -> weights-only init from initialize_from. Once this
         # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
         load_checkpoint=None,

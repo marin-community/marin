@@ -278,7 +278,7 @@ def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     )
     # Exercise a mid-run permanent save explicitly; production stages keep only their final checkpoint.
     spec = dataclasses.replace(
-        spec, checkpointer=CheckpointerConfig(save_interval=timedelta(minutes=5), keep=[{"every": 20}])
+        spec, checkpointer=CheckpointerConfig(save_interval=timedelta(minutes=5), keep=[{"every": 4}])
     )
     return sft_step(spec, _gpu_resources(_SMOKE_NODES))
 
