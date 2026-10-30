@@ -25,6 +25,11 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
   tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
+- Gradient clip: from `hero-gradclip-step354k` on, the train step rescales the whole gradient to
+  global L2 norm 1.0 when it is larger (`HERO_MAX_GRAD_NORM`; the median norm is about 0.5). The clip
+  runs before the optimizer, so the optimizer state and checkpoints keep their layout. Every step logs
+  the pre-clip norm as `train/grad_norm` and the clip as `train/grad_clipped`; the watch's
+  `grad/norm/*` stay pre-clip and log every 10 steps. The narrow scaling-ladder rungs do not clip.
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
   migrates in process on restore: its stored fp32 master is read directly into the run's params
   (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
@@ -269,6 +274,8 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
 | `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
+| `--max-grad-norm` | sets the train step's global gradient-norm clip (default: the hero's 1.0); 0 disables it |
+| `--optimizer-batch-size`, `--lr-scale` | size the optimizer heuristic from another global batch, e.g. the hero's 2816 on one rack, and multiply both learning rates |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes periodic and final checkpoints |
