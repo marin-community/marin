@@ -92,7 +92,8 @@ def reasoning_template_kwargs(reasoning: ReasoningMode) -> dict[str, bool]:
 class ReasoningApplied(StrEnum):
     """The reasoning setting a served prompt actually rendered, as the serving side observed it.
 
-    ``UNVERIFIED`` means the template renders the same prompt either way, so the setting had no effect.
+    ``UNVERIFIED`` means the serving side could not confirm which setting the prompt rendered, for example
+    because the template renders the same prompt either way or the prompt was not observable.
     """
 
     ON = "on"

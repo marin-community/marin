@@ -25,6 +25,7 @@ from verifyit.spec import DEFAULT_WORKSPACE, ExactSpec
 from taskcompendium.fetch import FETCH_TOOL, HttpPage, fetch_requirement
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
+    ENABLE_THINKING,
     AnswerType,
     AssistantToolCalls,
     ConversationEvent,
@@ -211,7 +212,7 @@ def golden_transcript(task: TaskSpec) -> Transcript | None:
         page: dict[str, JsonValue] = {"url": check.url, "status": 200, "body": nonce}
         return Transcript((*_tool_turn(check.tool, {"url": check.url}, page), answer))
     if isinstance(check, ThinkingDisabledCheck):
-        settings: dict[str, JsonValue] = {"chat_template_kwargs": {"enable_thinking": False}}
+        settings: dict[str, JsonValue] = {"chat_template_kwargs": {ENABLE_THINKING: False}}
         turn = TurnEvidence(nonce, settings, ReasoningApplied.OFF, ("<think>", "</think>"))
         return Transcript((answer,), turns=(turn,))
     return None
