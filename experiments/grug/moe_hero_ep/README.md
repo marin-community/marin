@@ -293,7 +293,6 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--permanent-checkpoint-on-resume` | with `--restore-from` and `--save-checkpoints`, writes a permanent checkpoint at the restored step to the run's checkpoint path |
 | `--max-grad-norm` | sets the train step's global gradient-norm clip (default: the hero's 1.0); 0 disables it |
-| `--optimizer-batch-size`, `--lr-scale` | size the optimizer heuristic from another global batch, e.g. the hero's 2816 on one rack, and multiply both learning rates |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes periodic and final checkpoints |
