@@ -18,7 +18,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -307,9 +307,37 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
     @abc.abstractmethod
-    def hf_checkpoint_converter(cls) -> "HFCheckpointConverter":
-        """The default HFCheckpointConverter to use for this config class. We recommend that you
+    def hf_checkpoint_converter(cls) -> "HfLmCheckpointConverter":
+        """The default HfLmCheckpointConverter to use for this config class. We recommend that you
         define this as a @cached_property on your config class."""
+        pass
+
+
+class HfSerializableConfig(Protocol):
+    """Configuration contract for checkpoint deserialization."""
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig) -> Self: ...
+
+
+class HfVisionConfig(HfSerializableConfig, Protocol):
+    def to_hf_config(self, config_overrides: Optional[dict] = None) -> HfConfig: ...
+
+
+VisionConfig = TypeVar("VisionConfig", bound=HfVisionConfig)
+
+
+class VisionModelWithHfSerializationMixin(Generic[VisionConfig]):
+    """Vision checkpoint contract with config-only initialization."""
+
+    @property
+    @abc.abstractmethod
+    def config(self) -> VisionConfig:
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def init(cls, config: VisionConfig, *, key: PRNGKeyArray) -> Self:
         pass
 
 
@@ -347,7 +375,7 @@ def _coerce_to_rr(s: Union[str, RepoRef]) -> RepoRef:
         return RepoRef.from_string(s)
 
 
-LevConfig = TypeVar("LevConfig", bound=HFCompatConfig)
+LevConfig = TypeVar("LevConfig", bound=HfSerializableConfig)
 
 # just for generating unique ids
 
@@ -487,7 +515,9 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin | VisionModelWithHfSerializationMixin,
+    dtype,
+    subset: tuple[str, ...] | None,
 ) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
@@ -520,191 +550,16 @@ def _to_state_dict_with_dtype(
     return state_dict
 
 
-@dataclass_with_default_init(frozen=True)
-class HFCheckpointConverter(Generic[LevConfig]):
-    """
-    A class to convert between Levanter and HF models. This class establishes a bidirectional mapping
-    between Levanter and HF models, and provides methods to convert between configs and loading/saving HF checkpoints.
-    It also handles the bundled tokenizer and code, as applicable.
-
-    This mapping supports:
-    * translating between Levanter and HF configs
-    * loading a Levanter model from an HF checkpoint
-    * saving a HF checkpoint from a Levanter model
-
-    HF checkpoints can be saved with params and config, and optionally with the tokenizer and code.
-    """
+@dataclass(frozen=True)
+class HfCheckpointIO(Generic[LevConfig]):
+    """Shared checkpoint configuration, state-dict I/O, and shard export."""
 
     LevConfigClass: Type[LevConfig]
     reference_checkpoint: Optional[RepoRef]
-    "A reference HF Hub checkpoint to extract non-parameter files (like model code an config from)"
-
     HfConfigClass: Type
-    "The HFConfig class to use. If None is provided, will be inferred from the reference_checkpoint"
-
-    tokenizer: Any
-    "The tokenizer to use. May be an HF tokenizer, a MarinTokenizer, or similar. If None, will be inferred from the reference_checkpoint."
-
-    feature_extractor: Optional["FeatureExtractionMixin"] = None
-    "The non-text preprocessor to use for multi-modality."
-
     config_overrides: Optional[dict] = None
-    "A dictionary of config overrides to apply to the HFConfig when saving. typically used for auto_map"
-
     trust_remote_code: bool = False
-    "If True, will trust the remote code and not download it locally."
-
     ignore_prefix: Optional[str] = None
-    """A prefix to optionally ignore when loading checkpoints. For "gpt2" this is 'transformer' to deal with the
-    fact that some models are saved as XXXPreTrainedModel and others are saved as XXXLMHeadModel"""
-
-    def __init__(
-        self,
-        LevConfigClass: Type[LevConfig],
-        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
-        HfConfigClass: Optional[Union[str, Type]] = None,
-        tokenizer: Optional[Any] = None,
-        feature_extractor: Optional["FeatureExtractionMixin"] = None,
-        config_overrides: Optional[dict] = None,
-        trust_remote_code: bool = False,
-        ignore_prefix: Optional[str] = None,
-    ):
-        # stupid python won't let you have a custom constructor with a frozen dataclass
-
-        ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
-        HfConfigClass = HFCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
-
-        self.__default_init__(  # type: ignore
-            LevConfigClass=LevConfigClass,
-            reference_checkpoint=ref,
-            HfConfigClass=HfConfigClass,
-            tokenizer=tokenizer,
-            feature_extractor=feature_extractor,
-            config_overrides=config_overrides,
-            trust_remote_code=trust_remote_code,
-            ignore_prefix=ignore_prefix,
-        )
-
-    @staticmethod
-    def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
-        ref = _coerce_to_rr(model_name_or_path)
-        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
-        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
-        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
-        # inside `_infer_config_class` needs those imports to have already run.
-        LmConfig.get_known_choices()
-        config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
-
-        # TODO: this is very hacky, we should add another registry or something
-        # attempt to find the Levanter config class by checking the registry
-        # TODO: hacky hacky
-        for k, v in LmConfig.get_known_choices().items():
-            if issubclass(v, HFCompatConfig):
-                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
-                # requires max_seq_len; at runtime every registered choice is a concrete config
-                # that supplies a default, so the no-arg construction is safe.
-                instance = v()  # pyrefly: ignore[missing-argument]
-                # Building a candidate converter loads that model's default reference tokenizer, and
-                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
-                # access. A candidate whose converter cannot even be built is not the target model, so
-                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
-                try:
-                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
-                except Exception:
-                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
-                    continue
-                if candidate_hf_config_name == config_class.__name__:
-                    LevConfigClass = v
-                    break
-        else:
-            raise ValueError(f"No Levanter config found for {config_class}")
-
-        return HFCheckpointConverter(
-            LevConfigClass=LevConfigClass,
-            reference_checkpoint=ref,
-            HfConfigClass=config_class,
-            tokenizer=tokenizer,
-            trust_remote_code=trust_remote_code,
-        )
-
-    def replaced(
-        self,
-        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
-        tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
-        feature_extractor: Optional["FeatureExtractionMixin"] = None,
-        trust_remote_code: Optional[bool] = None,
-    ) -> "HFCheckpointConverter":
-        replacements: dict = {}
-        if reference_checkpoint is not None:
-            replacements["reference_checkpoint"] = reference_checkpoint
-        if tokenizer is not None:
-            replacements["tokenizer"] = tokenizer
-        if feature_extractor is not None:
-            replacements["feature_extractor"] = feature_extractor
-        if trust_remote_code is not None:
-            replacements["trust_remote_code"] = trust_remote_code
-
-        return dataclasses.replace(self, **replacements)  # type: ignore
-
-    def with_tokenizer_padded_to_match_model(
-        self, ref: Optional[Union[str, RepoRef]] = None
-    ) -> "HFCheckpointConverter":
-        """
-        Returns a new converter with the tokenizer padded to match the model's vocab size.
-
-        This is useful when the model checkpoint has a larger vocab than the tokenizer
-        (e.g., Qwen models pad their vocab to be divisible by 4 for TPU efficiency).
-        Padding the tokenizer ensures the Vocab axis matches the model's embedding size.
-
-        Args:
-            ref: The reference checkpoint to get the model vocab size from.
-                 If None, uses the converter's reference_checkpoint.
-
-        Returns:
-            A new HFCheckpointConverter with the tokenizer padded to match the model vocab.
-        """
-        hf_config = self.hf_config_from_hf_checkpoint(ref)
-        model_vocab_size = hf_config.vocab_size
-        tokenizer_vocab_size = len(self.tokenizer)
-
-        if tokenizer_vocab_size >= model_vocab_size:
-            logger.info(
-                f"Tokenizer vocab size ({tokenizer_vocab_size}) >= model vocab size ({model_vocab_size}). "
-                "No padding needed."
-            )
-            return self
-
-        num_to_add = model_vocab_size - tokenizer_vocab_size
-        logger.info(
-            f"Padding tokenizer vocab from {tokenizer_vocab_size} to {model_vocab_size} "
-            f"(adding {num_to_add} dummy tokens) to match model vocab size."
-        )
-
-        # Add dummy tokens to the tokenizer. MarinTokenizer is read-only,
-        # so we convert to an HF tokenizer which supports add_tokens.
-        dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
-        tokenizer = self.tokenizer
-        if isinstance(tokenizer, MarinTokenizer):
-            tokenizer = tokenizer.as_hf_tokenizer()
-        tokenizer.add_tokens(dummy_tokens)
-
-        return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
-
-    def warn_if_tokenizer_mismatch(self, tokenizer) -> None:
-        """Log a warning if ``tokenizer`` appears to differ from this converter's tokenizer.
-
-        Used before initializing from an HF checkpoint so that a mismatched vocab is surfaced
-        rather than silently producing garbage. Tokenizers without a ``vocab`` attribute are skipped.
-        """
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != self.tokenizer.vocab:
-            logger.warning("The tokenizers appear to be different. You may want to check this.")
-
-    def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
-        if self.config_overrides is not None and merge:
-            config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
-        return dataclasses.replace(self, config_overrides=config_overrides)  # type: ignore
 
     @staticmethod
     def _infer_config_class(hf_config_class, ref, trust_remote_code):
@@ -730,23 +585,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
             clss = hf_config_class
         return clss
 
-    @staticmethod
-    def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
-        if tokenizer is None:
-            if ref is None:
-                return None
-            tokenizer = ref
-
-        if isinstance(tokenizer, (str, RepoRef)):
-            ref = _coerce_to_rr(tokenizer)
-            path, rev = ref.model_name_or_path, ref.revision
-            tokenizer = load_tokenizer(
-                path,
-                revision=rev,
-                trust_remote_code=trust_remote_code,
-            )
-        return tokenizer
-
     @cached_property
     def default_hf_config(self) -> HfConfig:
         return self.hf_config_from_hf_checkpoint(None)
@@ -754,12 +592,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @cached_property
     def default_config(self) -> LevConfig:
         return self.config_from_hf_config(self.default_hf_config)
-
-    @cached_property
-    def Vocab(self) -> Axis:
-        if self.tokenizer is None:
-            raise ValueError("Cannot infer vocabulary size without a tokenizer")
-        return Axis("vocab", len(self.tokenizer))
 
     def config_from_hf_config(self, hf_config, overrides: Optional[dict] = None) -> LevConfig:
         config = self.LevConfigClass.from_hf_config(hf_config)
@@ -936,80 +768,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return shard_files, loader  # type: ignore
 
-    def load_pretrained(
-        self,
-        lm_model_cls: Type[ModelWithHfSerializationMixin],
-        ref: Optional[Union[str, RepoRef]] = None,
-        config: Optional[HFCompatConfig] = None,
-        axis_mapping: Optional[ResourceMapping] = None,
-        resize_vocab_to_match_tokenizer: bool = False,
-        dtype: Optional[jnp.dtype] = None,
-    ) -> ModelWithHfSerializationMixin:
-        """
-        Loads a levanter model from a huggingface checkpoint.
-
-        Args:
-            config: The config to use to load the model class
-            ref: The reference to load from. If None, will use the reference_checkpoint
-            axis_mapping: The axis mapping to use for sharding. If None, will use the context axis mapping
-            resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
-                Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
-                beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
-        """
-
-        hf_config = self.hf_config_from_hf_checkpoint(ref)
-        if config is None:
-            config = self.config_from_hf_config(hf_config)
-        lm_model_cls = config.model_type
-
-        # Vocab: first we have to resize the vocab as loaded from the checkpoint
-        tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
-
-        # TODO: in an ideal world, we would only load the part of the array we needed, but
-        # AFAICT neither torch state dicts nor safetensors support this.
-        state_dict = self.load_state_dict(ref, dtype)
-
-        ignore_prefix: Optional[str] = None
-        if self.ignore_prefix:
-            for k in state_dict.keys():
-                if k.startswith(f"{self.ignore_prefix}."):
-                    ignore_prefix = self.ignore_prefix
-                    break
-
-        def load_from_state_dict(template, state_dict):
-            lev_model = from_torch_compatible_state_dict(template, state_dict, prefix=ignore_prefix)
-
-            # However, this might miss some buffers that don't get persisted in the state dict
-            # (e.g. pytorch buffers with persistent=false), so we have to reinitialize them. We then init the model
-            # again, this time keeping only the (missing) buffers, and then combine the two models.
-            lev_model = _patch_missing_buffers_for_deser(
-                lev_model, lm_model_cls, Vocab, config, PRNGKey(0), axis_mapping
-            )
-
-            if Vocab.size != tokenizer_Vocab.size:
-                logger.info(
-                    f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})."
-                )
-                if resize_vocab_to_match_tokenizer:
-                    logger.info(
-                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size."
-                    )
-                    lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
-                else:
-                    logger.info("Leaving model vocab size unchanged.")
-
-            lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
-
-            return lev_model
-
-        load_from_state_dict = haliax.named_jit(
-            load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
-        )
-        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
-        lev_model = load_from_state_dict(lev_model, state_dict)
-
-        return lev_model
+    def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> Self:
+        if self.config_overrides is not None and merge:
+            config_overrides = cast(dict, mergedeep.merge({}, self.config_overrides, config_overrides))
+        return dataclasses.replace(self, config_overrides=config_overrides)  # type: ignore
 
     def _resolve_save_reference_code(self, save_reference_code: Optional[bool]) -> bool:
         """Determine whether reference code should be bundled with the checkpoint."""
@@ -1021,109 +783,125 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return save_reference_code
 
-    def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
-        """Construct the Hugging Face config dictionary for the provided model."""
-        config = model.config.to_hf_config(model.Vocab.size)
-        dict_config = config.to_dict()
+    def _save_code_local(self, path):
+        if self.reference_checkpoint is None:
+            warnings.warn("No reference checkpoint provided, so no code will be saved")
+            return
 
-        try:
-            base_config = self.default_hf_config
-        except ValueError:
-            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
-            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
-            # sufficient for most built-in architectures.
-            base_config = None
-            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
-        except OSError as e:
-            # The reference config could not be read: the repo is gated, or the Hub is unreachable
-            # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
-            # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
-            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
-            # so the checkpoint stays loadable.
-            warnings.warn(
-                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
-                " saving with architecture metadata derived from the model type."
-            )
-            base_config = None
-            architecture = _causal_lm_architecture_name(self.HfConfigClass)
-            if architecture is not None:
-                dict_config["architectures"] = [architecture]
+        repo, revision = self._get_ref(self.reference_checkpoint)
 
-        if base_config is not None:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(base_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+        # first we're going to decide what code to save
+        # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
+        # need to also save the .gitattributes file itself
+        # TODO: .gitignore too? it's not used a lot with the hub
+        if _is_url_like(repo):
+            remote_attributes = StoragePath(repo) / ".gitattributes"
+            attributes_path = str(remote_attributes) if remote_attributes.exists() else None
+        elif os.path.exists(repo):
+            # local path
+            if revision is not None:
+                warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
+            attributes_path = os.path.join(repo, ".gitattributes")
+            if not os.path.exists(attributes_path):
+                attributes_path = None
+        else:
+            # check hub
+            try:
+                attributes_path = hf_hub_download(repo_id=repo, filename=".gitattributes", revision=revision)
+            except EntryNotFoundError:
+                attributes_path = None
+            except GatedRepoError:
+                attributes_path = None
 
-        if self.tokenizer:
-            tokenizer_dependent_config = {}
-            suppress_tokens = []
-            if self.tokenizer.pad_token_id is not None:
-                tokenizer_dependent_config["pad_token_id"] = self.tokenizer.pad_token_id
-                suppress_tokens.append(self.tokenizer.pad_token_id)
-            if self.tokenizer.eos_token_id is not None:
-                tokenizer_dependent_config["eos_token_id"] = self.tokenizer.eos_token_id
-                suppress_tokens.append(self.tokenizer.eos_token_id)
-            if self.tokenizer.bos_token_id is not None:
-                tokenizer_dependent_config["bos_token_id"] = self.tokenizer.bos_token_id
-                tokenizer_dependent_config["decoder_start_token_id"] = self.tokenizer.bos_token_id
-                suppress_tokens.append(self.tokenizer.bos_token_id)
-            if len(suppress_tokens) > 0:
-                tokenizer_dependent_config["begin_suppress_tokens"] = list(set(suppress_tokens))
-            dict_config = mergedeep.merge({}, dict_config, tokenizer_dependent_config)
+        if attributes_path is None:
+            warnings.warn("HF Export - No .gitattributes file found, using a heuristic to decide what to save")
+            ignore_files = [
+                ".git",
+                "*.bin.*",
+                "*.lfs.*",
+                "*.bin",
+                "*.h5",
+                "*.tflite",
+                "*.tar.gz",
+                "*.ot",
+                "*.onnx",
+                "*.msgpack",
+                "model.safetensors",
+            ]
+        else:
+            # read the attributes file and get the globs
+            with StoragePath(attributes_path).open("r") as f:
+                attributes = f.read()
+            ignore_files = [".git"]
+            for line in attributes.split("\n"):
+                line = line.strip()
+                if line.startswith("#") or line == "":
+                    continue
+                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
+                if "filter=lfs" in line:
+                    ignore_files.append(line.split()[0])
 
-        if self.config_overrides:
-            dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
+        # Reference weights must never overwrite the newly trained export.
+        ignore_files.extend(
+            [
+                "*.safetensors",
+                "*.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model-*.bin",
+                "pytorch_model.bin.index.json",
+            ]
+        )
+        if _is_url_like(repo):
+            reference_root = StoragePath(repo)
+            walked_root = None
+            for directory, _, filenames in reference_root.walk():
+                # The filesystem may canonicalize the URI authority (for example memory://).
+                if walked_root is None:
+                    walked_root = directory
+                for filename in filenames:
+                    source = directory / filename
+                    relative = source.relative_to(walked_root)
+                    if any(
+                        fnmatch.fnmatch(relative, pattern)
+                        or any(fnmatch.fnmatch(part, pattern) for part in relative.split("/"))
+                        for pattern in ignore_files
+                    ):
+                        continue
+                    destination = os.path.join(path, relative)
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    source.download_to(destination)
+            return
+        if os.path.exists(repo):
+            local_code_path = repo
+        else:
+            local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
 
-        dict_config = _add_legacy_rope_keys(dict_config)
+        # now we'll save the code
+        os.makedirs(path, exist_ok=True)
 
-        return dict_config
+        shutil_ignore = shutil.ignore_patterns(*ignore_files)
+        shutil.copytree(local_code_path, path, ignore=shutil_ignore, dirs_exist_ok=True)
 
-    def save_pretrained(
+        logger.debug(f"Saved code to {path}")
+
+    def _save_pretrained(
         self,
-        model: ModelWithHfSerializationMixin,
+        model: ModelWithHfSerializationMixin | VisionModelWithHfSerializationMixin,
         path,
+        dict_config: dict,
+        *,
         upload_to_hf: Union[bool, str, RepoRef] = False,
         save_reference_code: Optional[bool] = None,
-        save_tokenizer: bool = True,
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
         export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES,
         max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS,
-        save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
-        generation_config: Optional[GenerationConfigDict] = None,
-        chat_template: Optional[str] = None,
+        save_extra_metadata: Optional[Callable[[str], None]] = None,
         **hf_upload_kwargs,
     ):
-        """
-        Saves a Levanter model to a huggingface "pretrained model" checkpoint.
-
-        If hf_repo is provided, this will upload the checkpoint to the huggingface hub, passing
-        any additional kwargs to the huggingface_hub.upload_folder function. A new private model
-        repository will be created in the huggingface hub if one does not exist already.
-
-        :param path: the path to save the checkpoint to. path may be a GCS bucket path or other fsspec path,
-        in which case the checkpoint will be uploaded to GCS after being written to a tmpdir
-        :param model: the model to save
-        :param hf_repo: if provided, the checkpoint will be uploaded to the huggingface hub. If True, will use
-        the reference_checkpoint as the repo name
-        :param hf_upload_kwargs: any additional kwargs to pass to huggingface_hub.upload_folder
-        :param save_reference_code: if True, will save the reference code (from reference_checkpoint) to the checkpoint.
-        This is useful when using custom architectures, as it will allow the model to be loaded without the custom
-        architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
-        If None, will save code for models that aren't in the HF repo.
-        :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
-        (written to both tokenizer_config.json and chat_template.jinja)
-        :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
-            Each shard reserves twice its payload size; a shard larger than the target runs alone.
-        :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
-        All initialized JAX processes must call this with the same model and options.
-        Shard and metadata writer failures propagate to every process through matched collectives.
-        """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
         save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
-        dict_config = self._build_hf_config_dict(model)
 
         if not _is_url_like(path):
             os.makedirs(path, exist_ok=True)
@@ -1242,23 +1020,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     logger.info(f"Copying reference code from {self.reference_checkpoint}")
                     self._save_code_local(local_path)
 
-                if save_tokenizer:
-                    logger.info("Saving tokenizer")
-                    _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
-
-                if save_feature_extractor and self.feature_extractor is not None:
-                    logger.info("Saving feature extractor")
-                    self.feature_extractor.save_pretrained(local_path)
+                if save_extra_metadata is not None:
+                    save_extra_metadata(local_path)
 
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
-
-                if generation_config is not None:
-                    logger.info(
-                        "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
-                    )
-                    with open(os.path.join(local_path, "generation_config.json"), "w") as f:
-                        json.dump(generation_config, f)
 
                 if index is not None:
                     with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
@@ -1278,106 +1044,432 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
-    def _save_code_local(self, path):
-        if self.reference_checkpoint is None:
-            warnings.warn("No reference checkpoint provided, so no code will be saved")
-            return
 
-        repo, revision = self._get_ref(self.reference_checkpoint)
+@dataclass_with_default_init(frozen=True)
+class HfLmCheckpointConverter(HfCheckpointIO[MConfig]):
+    """Convert language-model checkpoints, including vocabulary and tokenizer metadata."""
 
-        # first we're going to decide what code to save
-        # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
-        # need to also save the .gitattributes file itself
-        # TODO: .gitignore too? it's not used a lot with the hub
-        if _is_url_like(repo):
-            remote_attributes = StoragePath(repo) / ".gitattributes"
-            attributes_path = str(remote_attributes) if remote_attributes.exists() else None
-        elif os.path.exists(repo):
-            # local path
-            if revision is not None:
-                warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
-            attributes_path = os.path.join(repo, ".gitattributes")
-            if not os.path.exists(attributes_path):
-                attributes_path = None
-        else:
-            # check hub
-            try:
-                attributes_path = hf_hub_download(repo_id=repo, filename=".gitattributes", revision=revision)
-            except EntryNotFoundError:
-                attributes_path = None
-            except GatedRepoError:
-                attributes_path = None
+    tokenizer: Any = None
+    feature_extractor: Optional["FeatureExtractionMixin"] = None
 
-        if attributes_path is None:
-            warnings.warn("HF Export - No .gitattributes file found, using a heuristic to decide what to save")
-            ignore_files = [
-                ".git",
-                "*.bin.*",
-                "*.lfs.*",
-                "*.bin",
-                "*.h5",
-                "*.tflite",
-                "*.tar.gz",
-                "*.ot",
-                "*.onnx",
-                "*.msgpack",
-                "model.safetensors",
-            ]
-        else:
-            # read the attributes file and get the globs
-            with StoragePath(attributes_path).open("r") as f:
-                attributes = f.read()
-            ignore_files = [".git"]
-            for line in attributes.split("\n"):
-                line = line.strip()
-                if line.startswith("#") or line == "":
-                    continue
-                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
-                if "filter=lfs" in line:
-                    ignore_files.append(line.split()[0])
+    def __init__(
+        self,
+        LevConfigClass: Type[MConfig],
+        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+        HfConfigClass: Optional[Union[str, Type]] = None,
+        tokenizer: Optional[Any] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
+        config_overrides: Optional[dict] = None,
+        trust_remote_code: bool = False,
+        ignore_prefix: Optional[str] = None,
+    ):
+        # stupid python won't let you have a custom constructor with a frozen dataclass
 
-        # Reference weights must never overwrite the newly trained export.
-        ignore_files.extend(
-            [
-                "*.safetensors",
-                "*.safetensors.index.json",
-                "pytorch_model.bin",
-                "pytorch_model-*.bin",
-                "pytorch_model.bin.index.json",
-            ]
+        ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
+        HfConfigClass = HfLmCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
+        tokenizer = self._infer_tokenizer(tokenizer, ref, trust_remote_code)
+
+        self.__default_init__(  # type: ignore
+            LevConfigClass=LevConfigClass,
+            reference_checkpoint=ref,
+            HfConfigClass=HfConfigClass,
+            tokenizer=tokenizer,
+            feature_extractor=feature_extractor,
+            config_overrides=config_overrides,
+            trust_remote_code=trust_remote_code,
+            ignore_prefix=ignore_prefix,
         )
-        if _is_url_like(repo):
-            reference_root = StoragePath(repo)
-            walked_root = None
-            for directory, _, filenames in reference_root.walk():
-                # The filesystem may canonicalize the URI authority (for example memory://).
-                if walked_root is None:
-                    walked_root = directory
-                for filename in filenames:
-                    source = directory / filename
-                    relative = source.relative_to(walked_root)
-                    if any(
-                        fnmatch.fnmatch(relative, pattern)
-                        or any(fnmatch.fnmatch(part, pattern) for part in relative.split("/"))
-                        for pattern in ignore_files
-                    ):
-                        continue
-                    destination = os.path.join(path, relative)
-                    os.makedirs(os.path.dirname(destination), exist_ok=True)
-                    source.download_to(destination)
-            return
-        if os.path.exists(repo):
-            local_code_path = repo
+
+    @staticmethod
+    def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HfLmCheckpointConverter":
+        ref = _coerce_to_rr(model_name_or_path)
+        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
+        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
+        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
+        # inside `_infer_config_class` needs those imports to have already run.
+        LmConfig.get_known_choices()
+        config_class = HfLmCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
+        tokenizer = HfLmCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
+
+        # TODO: this is very hacky, we should add another registry or something
+        # attempt to find the Levanter config class by checking the registry
+        # TODO: hacky hacky
+        for k, v in LmConfig.get_known_choices().items():
+            if issubclass(v, HFCompatConfig):
+                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
+                # requires max_seq_len; at runtime every registered choice is a concrete config
+                # that supplies a default, so the no-arg construction is safe.
+                instance = v()  # pyrefly: ignore[missing-argument]
+                # Building a candidate converter loads that model's default reference tokenizer, and
+                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
+                # access. A candidate whose converter cannot even be built is not the target model, so
+                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
+                try:
+                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
+                except Exception:
+                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
+                    continue
+                if candidate_hf_config_name == config_class.__name__:
+                    LevConfigClass = v
+                    break
         else:
-            local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
+            raise ValueError(f"No Levanter config found for {config_class}")
 
-        # now we'll save the code
-        os.makedirs(path, exist_ok=True)
+        return HfLmCheckpointConverter(
+            LevConfigClass=LevConfigClass,
+            reference_checkpoint=ref,
+            HfConfigClass=config_class,
+            tokenizer=tokenizer,
+            trust_remote_code=trust_remote_code,
+        )
 
-        shutil_ignore = shutil.ignore_patterns(*ignore_files)
-        shutil.copytree(local_code_path, path, ignore=shutil_ignore, dirs_exist_ok=True)
+    def replaced(
+        self,
+        reference_checkpoint: Optional[Union[RepoRef, str]] = None,
+        tokenizer: Optional[Union[str, PreTrainedTokenizerBase]] = None,
+        feature_extractor: Optional["FeatureExtractionMixin"] = None,
+        trust_remote_code: Optional[bool] = None,
+    ) -> "HfLmCheckpointConverter":
+        replacements: dict = {}
+        if reference_checkpoint is not None:
+            replacements["reference_checkpoint"] = reference_checkpoint
+        if tokenizer is not None:
+            replacements["tokenizer"] = tokenizer
+        if feature_extractor is not None:
+            replacements["feature_extractor"] = feature_extractor
+        if trust_remote_code is not None:
+            replacements["trust_remote_code"] = trust_remote_code
 
-        logger.debug(f"Saved code to {path}")
+        return dataclasses.replace(self, **replacements)  # type: ignore
+
+    def with_tokenizer_padded_to_match_model(
+        self, ref: Optional[Union[str, RepoRef]] = None
+    ) -> "HfLmCheckpointConverter":
+        """
+        Returns a new converter with the tokenizer padded to match the model's vocab size.
+
+        This is useful when the model checkpoint has a larger vocab than the tokenizer
+        (e.g., Qwen models pad their vocab to be divisible by 4 for TPU efficiency).
+        Padding the tokenizer ensures the Vocab axis matches the model's embedding size.
+
+        Args:
+            ref: The reference checkpoint to get the model vocab size from.
+                 If None, uses the converter's reference_checkpoint.
+
+        Returns:
+            A new HfLmCheckpointConverter with the tokenizer padded to match the model vocab.
+        """
+        hf_config = self.hf_config_from_hf_checkpoint(ref)
+        model_vocab_size = hf_config.vocab_size
+        tokenizer_vocab_size = len(self.tokenizer)
+
+        if tokenizer_vocab_size >= model_vocab_size:
+            logger.info(
+                f"Tokenizer vocab size ({tokenizer_vocab_size}) >= model vocab size ({model_vocab_size}). "
+                "No padding needed."
+            )
+            return self
+
+        num_to_add = model_vocab_size - tokenizer_vocab_size
+        logger.info(
+            f"Padding tokenizer vocab from {tokenizer_vocab_size} to {model_vocab_size} "
+            f"(adding {num_to_add} dummy tokens) to match model vocab size."
+        )
+
+        # Add dummy tokens to the tokenizer. MarinTokenizer is read-only,
+        # so we convert to an HF tokenizer which supports add_tokens.
+        dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
+        tokenizer = self.tokenizer
+        if isinstance(tokenizer, MarinTokenizer):
+            tokenizer = tokenizer.as_hf_tokenizer()
+        tokenizer.add_tokens(dummy_tokens)
+
+        return dataclasses.replace(self, tokenizer=tokenizer)  # type: ignore
+
+    def warn_if_tokenizer_mismatch(self, tokenizer) -> None:
+        """Log a warning if ``tokenizer`` appears to differ from this converter's tokenizer.
+
+        Used before initializing from an HF checkpoint so that a mismatched vocab is surfaced
+        rather than silently producing garbage. Tokenizers without a ``vocab`` attribute are skipped.
+        """
+        if hasattr(tokenizer, "vocab") and tokenizer.vocab != self.tokenizer.vocab:
+            logger.warning("The tokenizers appear to be different. You may want to check this.")
+
+    @staticmethod
+    def _infer_tokenizer(tokenizer, ref, trust_remote_code: bool = False) -> Any:
+        if tokenizer is None:
+            if ref is None:
+                return None
+            tokenizer = ref
+
+        if isinstance(tokenizer, (str, RepoRef)):
+            ref = _coerce_to_rr(tokenizer)
+            path, rev = ref.model_name_or_path, ref.revision
+            tokenizer = load_tokenizer(
+                path,
+                revision=rev,
+                trust_remote_code=trust_remote_code,
+            )
+        return tokenizer
+
+    @cached_property
+    def Vocab(self) -> Axis:
+        if self.tokenizer is None:
+            raise ValueError("Cannot infer vocabulary size without a tokenizer")
+        return Axis("vocab", len(self.tokenizer))
+
+    def load_pretrained(
+        self,
+        model_cls: Type[LmHeadModel | ModelWithHfSerializationMixin],
+        ref: Optional[Union[str, RepoRef]] = None,
+        config: Optional[HFCompatConfig] = None,
+        axis_mapping: Optional[ResourceMapping] = None,
+        resize_vocab_to_match_tokenizer: bool = False,
+        dtype: Optional[jnp.dtype] = None,
+    ) -> ModelWithHfSerializationMixin:
+        """
+        Loads a levanter model from a huggingface checkpoint.
+
+        Args:
+            config: The config to use to load the model class
+            ref: The reference to load from. If None, will use the reference_checkpoint
+            axis_mapping: The axis mapping to use for sharding. If None, will use the context axis mapping
+            resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
+                Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
+                beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
+        """
+
+        hf_config = self.hf_config_from_hf_checkpoint(ref)
+        if config is None:
+            config = self.config_from_hf_config(hf_config)
+
+        model_cls = config.model_type
+
+        # Vocab: first we have to resize the vocab as loaded from the checkpoint
+        tokenizer_Vocab = self.Vocab
+        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+
+        def initialize():
+            return model_cls.init(Vocab, config, key=PRNGKey(0))
+
+        lev_model = _load_pretrained_model(self, initialize, ref, axis_mapping, dtype)
+        if Vocab.size != tokenizer_Vocab.size and resize_vocab_to_match_tokenizer:
+
+            @haliax.named_jit(axis_resources=axis_mapping, out_axis_resources=axis_mapping)
+            def resize(model):
+                return model.resize_vocab(tokenizer_Vocab.size)
+
+            lev_model = resize(lev_model)
+        return lev_model
+
+    def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
+        """Construct the Hugging Face config dictionary for the provided model."""
+        config = model.config.to_hf_config(model.Vocab.size)
+        dict_config = config.to_dict()
+
+        try:
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
+        except OSError as e:
+            # The reference config could not be read: the repo is gated, or the Hub is unreachable
+            # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
+            # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
+            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so the checkpoint stays loadable.
+            warnings.warn(
+                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
+                " saving with architecture metadata derived from the model type."
+            )
+            base_config = None
+            architecture = _causal_lm_architecture_name(self.HfConfigClass)
+            if architecture is not None:
+                dict_config["architectures"] = [architecture]
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
+
+        if self.tokenizer:
+            tokenizer_dependent_config = {}
+            suppress_tokens = []
+            if self.tokenizer.pad_token_id is not None:
+                tokenizer_dependent_config["pad_token_id"] = self.tokenizer.pad_token_id
+                suppress_tokens.append(self.tokenizer.pad_token_id)
+            if self.tokenizer.eos_token_id is not None:
+                tokenizer_dependent_config["eos_token_id"] = self.tokenizer.eos_token_id
+                suppress_tokens.append(self.tokenizer.eos_token_id)
+            if self.tokenizer.bos_token_id is not None:
+                tokenizer_dependent_config["bos_token_id"] = self.tokenizer.bos_token_id
+                tokenizer_dependent_config["decoder_start_token_id"] = self.tokenizer.bos_token_id
+                suppress_tokens.append(self.tokenizer.bos_token_id)
+            if len(suppress_tokens) > 0:
+                tokenizer_dependent_config["begin_suppress_tokens"] = list(set(suppress_tokens))
+            dict_config = mergedeep.merge({}, dict_config, tokenizer_dependent_config)
+
+        if self.config_overrides:
+            dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
+
+        dict_config = _add_legacy_rope_keys(dict_config)
+
+        return dict_config
+
+    def save_pretrained(
+        self,
+        model: ModelWithHfSerializationMixin,
+        path,
+        upload_to_hf: Union[bool, str, RepoRef] = False,
+        save_reference_code: Optional[bool] = None,
+        save_tokenizer: bool = True,
+        max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
+        export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES,
+        max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS,
+        save_feature_extractor: bool = False,
+        dtype: Optional[jnp.dtype] = None,
+        generation_config: Optional[GenerationConfigDict] = None,
+        chat_template: Optional[str] = None,
+        **hf_upload_kwargs,
+    ):
+        """
+        Saves a Levanter model to a huggingface "pretrained model" checkpoint.
+
+        If hf_repo is provided, this will upload the checkpoint to the huggingface hub, passing
+        any additional kwargs to the huggingface_hub.upload_folder function. A new private model
+        repository will be created in the huggingface hub if one does not exist already.
+
+        :param path: the path to save the checkpoint to. path may be a GCS bucket path or other fsspec path,
+        in which case the checkpoint will be uploaded to GCS after being written to a tmpdir
+        :param model: the model to save
+        :param hf_repo: if provided, the checkpoint will be uploaded to the huggingface hub. If True, will use
+        the reference_checkpoint as the repo name
+        :param hf_upload_kwargs: any additional kwargs to pass to huggingface_hub.upload_folder
+        :param save_reference_code: if True, will save the reference code (from reference_checkpoint) to the checkpoint.
+        This is useful when using custom architectures, as it will allow the model to be loaded without the custom
+        architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
+        If None, will save code for models that aren't in the HF repo.
+        :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+        (written to both tokenizer_config.json and chat_template.jinja)
+        :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
+            Each shard reserves twice its payload size; a shard larger than the target runs alone.
+        :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
+        All initialized JAX processes must call this with the same model and options.
+        Shard and metadata writer failures propagate to every process through matched collectives.
+        """
+
+        def save_extra_metadata(local_path: str) -> None:
+            if save_tokenizer and self.tokenizer is not None:
+                _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
+            if save_feature_extractor and self.feature_extractor is not None:
+                self.feature_extractor.save_pretrained(local_path)
+            if generation_config is not None:
+                with open(os.path.join(local_path, "generation_config.json"), "w") as f:
+                    json.dump(generation_config, f)
+
+        self._save_pretrained(
+            model,
+            path,
+            self._build_hf_config_dict(model),
+            upload_to_hf=upload_to_hf,
+            save_reference_code=save_reference_code,
+            max_shard_size=max_shard_size,
+            export_host_budget_bytes=export_host_budget_bytes,
+            max_concurrent_shards=max_concurrent_shards,
+            dtype=dtype,
+            save_extra_metadata=save_extra_metadata,
+            **hf_upload_kwargs,
+        )
+
+
+@dataclass_with_default_init(frozen=True)
+class HfVisionCheckpointConverter(HfCheckpointIO[VisionConfig]):
+    """Convert vision checkpoints without language-model vocabulary or tokenizer state."""
+
+    def __init__(
+        self,
+        LevConfigClass: Type[VisionConfig],
+        reference_checkpoint: Optional[RepoRef] = None,
+        HfConfigClass: Optional[Type] = None,
+        config_overrides: Optional[dict] = None,
+        trust_remote_code: bool = False,
+        ignore_prefix: Optional[str] = None,
+    ):
+        hf_class = self._infer_config_class(HfConfigClass, reference_checkpoint, trust_remote_code)
+        self.__default_init__(  # type: ignore
+            LevConfigClass=LevConfigClass,
+            reference_checkpoint=reference_checkpoint,
+            HfConfigClass=hf_class,
+            config_overrides=config_overrides,
+            trust_remote_code=trust_remote_code,
+            ignore_prefix=ignore_prefix,
+        )
+
+    def load_pretrained(
+        self,
+        model_cls: Type[VisionModelWithHfSerializationMixin[VisionConfig]],
+        ref: Optional[RepoRef] = None,
+        config: Optional[VisionConfig] = None,
+        axis_mapping: Optional[ResourceMapping] = None,
+        dtype: Optional[jnp.dtype] = None,
+    ) -> VisionModelWithHfSerializationMixin[VisionConfig]:
+        """Load model weights and initialize non-persistent buffers."""
+        if config is None:
+            config = self.config_from_hf_checkpoint(ref)
+
+        def initialize():
+            return model_cls.init(config, key=PRNGKey(0))
+
+        return _load_pretrained_model(self, initialize, ref, axis_mapping, dtype)
+
+    def save_pretrained(
+        self,
+        model: VisionModelWithHfSerializationMixin[VisionConfig],
+        path,
+        upload_to_hf: Union[bool, str, RepoRef] = False,
+        save_reference_code: Optional[bool] = None,
+        max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
+        export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES,
+        max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS,
+        dtype: Optional[jnp.dtype] = None,
+        **hf_upload_kwargs,
+    ) -> None:
+        """Export weights and vision configuration in Hugging Face format."""
+        config = model.config.to_hf_config(config_overrides=self.config_overrides).to_dict()
+        self._save_pretrained(
+            model,
+            path,
+            config,
+            upload_to_hf=upload_to_hf,
+            save_reference_code=save_reference_code,
+            max_shard_size=max_shard_size,
+            export_host_budget_bytes=export_host_budget_bytes,
+            max_concurrent_shards=max_concurrent_shards,
+            dtype=dtype,
+            **hf_upload_kwargs,
+        )
+
+
+def _load_pretrained_model(converter, initialize, ref, axis_mapping, dtype):
+    state_dict = converter.load_state_dict(ref, dtype)
+    prefix = converter.ignore_prefix
+    if prefix and not any(k.startswith(f"{prefix}.") for k in state_dict):
+        prefix = None
+
+    def restore(state_dict):
+        # Initialize inside JIT so buffers omitted from the checkpoint retain their values.
+        # XLA eliminates initialization of parameters replaced by checkpoint weights.
+        model = from_torch_compatible_state_dict(initialize(), state_dict, prefix=prefix)
+        return haliax.shard_with_axis_mapping(model, axis_mapping)
+
+    restore = haliax.named_jit(
+        restore, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
+    )
+    return restore(state_dict)
 
 
 def _is_url_like(path):
@@ -1386,7 +1478,7 @@ def _is_url_like(path):
 
 def save_hf_checkpoint_callback(
     base_path,
-    converter: HFCheckpointConverter,
+    converter: HfLmCheckpointConverter,
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
@@ -1548,38 +1640,6 @@ def _convert_to_jnp(v, dtype):
             arr = arr.astype(dtype)
 
         return arr
-
-
-def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key, axis_mapping):
-    """
-    State dict serialization doesn't always save buffers, so when we initialize a model from a state dict, we might
-    need to re-initialize the buffers. We do this by rerunning the constructor, but only save the buffers.
-    JAX jit will avoid actually doing the computation.
-    """
-    dtype_structs, real_arrays = eqx.partition(lev_model, lambda x: isinstance(x, jax.ShapeDtypeStruct))
-
-    buffer_leaves = jax.tree_util.tree_leaves(dtype_structs)
-    if len(buffer_leaves) == 0:
-        return lev_model
-
-    # ok, we now want to re-initialize the buffers by running the constructor for real, getting only the missing
-    # arrays. We're relying on jit to do all the work in eliminating the unnecessary computation/memory
-    @haliax.named_jit(axis_resources=axis_mapping)
-    def _init_buffers():
-        new_model = lm_model_cls.init(Vocab, config, key=key)
-
-        def select_if_missing(missing_leaf, new_value):
-            if isinstance(missing_leaf, jax.ShapeDtypeStruct):
-                return new_value
-            else:
-                return None
-
-        return jax.tree.map(select_if_missing, dtype_structs, new_model, is_leaf=lambda x: x is None)
-
-    new_buffers = _init_buffers()
-
-    result = eqx.combine(real_arrays, new_buffers)
-    return result
 
 
 # copied/adapted from HF Transformers

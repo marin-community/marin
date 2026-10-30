@@ -15,7 +15,6 @@ import subprocess
 import sys
 import textwrap
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -132,7 +131,7 @@ def test_snowball_hf_config_does_not_initialize_jax_backend():
 
 
 def test_snowball_hf_converter_matches_config_class():
-    # This is exactly the match HFCheckpointConverter.from_hf performs (by HfConfigClass name).
+    # This is exactly the match HfLmCheckpointConverter.from_hf performs (by HfConfigClass name).
     converter = SnowballConfig().hf_checkpoint_converter()
     assert converter.HfConfigClass is GrugMoeHfConfig
 
@@ -269,19 +268,18 @@ def test_snowball_requires_explicit_mesh_axes():
 
 
 def test_snowball_load_pretrained_machinery_is_exact():
-    """Snowball survives load_pretrained's eval_shape-template + named_jit(from_state_dict) core.
-
-    HFCheckpointConverter.load_pretrained builds an abstract template with eqx.filter_eval_shape and
-    fills it inside haliax.named_jit; Snowball's explicit-mesh reshards must lower under both. This
-    guards the marin-serve load path (LevanterBackend.load_model) without an on-disk checkpoint.
-    """
+    """Snowball initialization and state-dict restore preserve exact logits inside JIT."""
     cfg = _tiny_config()
     Vocab = Axis("vocab", cfg.vocab_size)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         src = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(5))
         sd = to_torch_compatible_state_dict(src)
-        template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=jax.random.key(0))
-        loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
+
+        def restore(state_dict):
+            template = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(0))
+            return from_torch_compatible_state_dict(template, state_dict)
+
+        loaded = hax.named_jit(restore)(sd)
 
         ids = _device_batched_ids(cfg.vocab_size, 8)
         run = hax.named_jit(lambda m, x: m(x))
