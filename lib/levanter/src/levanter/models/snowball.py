@@ -577,8 +577,7 @@ class SnowballMoEMLP(eqx.Module):
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
-        # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
-        # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
+        # unsharded.
         biased_logits = router_logits + unshard(self.router_bias)
         # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
@@ -879,7 +878,7 @@ def snowball_embeddings_from_state_dict(
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
     m = template
     m = eqx.tree_at(lambda t: t.token_embed, m, _reshard_for_init(g("model.embed_tokens.weight"), Pembed_vocab))
-    m = eqx.tree_at(lambda t: t.embed_norm.weight, m, g("model.embed_norm.weight"))
+    m = eqx.tree_at(lambda t: t.embed_norm.weight, m, _reshard_replicated(g("model.embed_norm.weight")))
     m = eqx.tree_at(
         lambda t: t.embed_gated_norm.w_down, m, _reshard_replicated(_T(g("model.embed_gated_norm.down_proj.weight")))
     )
@@ -895,7 +894,7 @@ def snowball_final_from_state_dict(
     """Load canonical HF final weights into the current mesh."""
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
     m = template
-    m = eqx.tree_at(lambda t: t.final_norm.weight, m, g("model.norm.weight"))
+    m = eqx.tree_at(lambda t: t.final_norm.weight, m, _reshard_replicated(g("model.norm.weight")))
     m = eqx.tree_at(
         lambda t: t.final_gated_norm.w_down, m, _reshard_replicated(_T(g("model.final_gated_norm.down_proj.weight")))
     )
@@ -914,7 +913,7 @@ def snowball_block_from_state_dict(
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
     m = template
     p = f"model.layers.{layer_index}"
-    m = eqx.tree_at(lambda t: t.rms_attn.weight, m, g(f"{p}.input_layernorm.weight"))
+    m = eqx.tree_at(lambda t: t.rms_attn.weight, m, _reshard_replicated(g(f"{p}.input_layernorm.weight")))
     m = eqx.tree_at(
         lambda t: t.attn_gated_norm.w_down,
         m,
@@ -930,7 +929,7 @@ def snowball_block_from_state_dict(
     m = eqx.tree_at(lambda t: t.attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P(_FSDP_AXES, "model")))
     m = eqx.tree_at(lambda t: t.attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", _FSDP_AXES)))
     m = eqx.tree_at(lambda t: t.attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight"))))
-    m = eqx.tree_at(lambda t: t.rms_mlp.weight, m, g(f"{p}.post_attention_layernorm.weight"))
+    m = eqx.tree_at(lambda t: t.rms_mlp.weight, m, _reshard_replicated(g(f"{p}.post_attention_layernorm.weight")))
     m = eqx.tree_at(
         lambda t: t.mlp_gated_norm.w_down,
         m,
@@ -942,7 +941,7 @@ def snowball_block_from_state_dict(
         _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.up_proj.weight"))),
     )
     m = eqx.tree_at(lambda t: t.mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
-    m = eqx.tree_at(lambda t: t.mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
+    m = eqx.tree_at(lambda t: t.mlp.router_bias, m, _reshard_replicated(g(f"{p}.mlp.router.bias")))
     m = eqx.tree_at(
         lambda t: t.mlp.expert_mlp.w_gate,
         m,
@@ -1001,7 +1000,7 @@ _EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:
-    return _reshard_for_init(arr, P(None, None))
+    return _reshard_for_init(arr, P(*(None,) * arr.ndim))
 
 
 def _reshard(arr: jax.Array, spec: P) -> jax.Array:
