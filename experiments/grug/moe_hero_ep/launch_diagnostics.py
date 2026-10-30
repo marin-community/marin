@@ -120,6 +120,7 @@ def build_diagnostic_run(
     eval_every: int = 0,
     gc_interval: int | None = None,
     save_checkpoints: bool = False,
+    permanent_checkpoint_on_resume: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
     checkpoint_debug: CheckpointDebugConfig | None = None,
@@ -255,6 +256,7 @@ def build_diagnostic_run(
     )
     grug_trainer = dataclasses.replace(
         grug_trainer,
+        permanent_checkpoint_on_resume=permanent_checkpoint_on_resume,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
         balance_attention_rows=balance_attention_rows,
@@ -486,6 +488,13 @@ def build_diagnostic_run(
     help="Write periodic and final checkpoints, and resume from the newest complete checkpoint.",
 )
 @click.option(
+    "--permanent-checkpoint-on-resume/--no-permanent-checkpoint-on-resume",
+    default=False,
+    show_default=True,
+    help="After --restore-from, write a permanent checkpoint at the restored step to --checkpoint-path. "
+    "Requires --save-checkpoints.",
+)
+@click.option(
     "--checkpoint-minutes",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_CHECKPOINT_INTERVAL.total_seconds() / 60,
@@ -629,6 +638,7 @@ def main(
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
+    permanent_checkpoint_on_resume: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
     checkpoint_debug: bool,
@@ -677,6 +687,7 @@ def main(
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
+        permanent_checkpoint_on_resume=permanent_checkpoint_on_resume,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
         checkpoint_debug=(

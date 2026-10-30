@@ -302,6 +302,11 @@ def build_ladder_run(
         max_grad_norm=HERO_MAX_GRAD_NORM if size == "d6144" else None,
         gc_interval=100,
     )
+    # A handoff source may be another run's expiring temporary checkpoint; keep a permanent copy of
+    # the restored step in this run's own root.
+    grug_trainer = dataclasses.replace(
+        grug_trainer, permanent_checkpoint_on_resume=initialize_from_checkpoint is not None
+    )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,

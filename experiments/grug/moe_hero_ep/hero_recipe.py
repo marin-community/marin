@@ -53,7 +53,7 @@ HERO_QB_HIST_BINS = 10_000
 # stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
 HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
 HERO_WATCH_INTERVAL = 10
-# Global gradient-norm clip from step 354k on (#10677): the median norm is about 0.5, and the rare
+# Global gradient-norm clip from the hero-gradclip handoff on (#10677): the median norm is about 0.5, and the rare
 # sequence-driven spikes reach 4-21. The clip rescales the whole gradient before the optimizer.
 HERO_MAX_GRAD_NORM = 1.0
 HERO_MODEL_CONFIG = dataclasses.replace(

@@ -16,8 +16,12 @@ Record the following with the user before changing the live run:
   request one from the old run's `training-control` endpoint with the
   `request-permanent-checkpoint` header value. Only a run whose code includes
   that action can take the request; otherwise schedule the cutover shortly after
-  a scheduled permanent checkpoint. Do not hand off from a temporary checkpoint:
-  it expires three days after it is written.
+  a scheduled permanent checkpoint. A temporary checkpoint expires three days
+  after it is written, so hand off from one only with a launcher that writes a
+  permanent copy at the restored step into the child's root
+  (`permanent_checkpoint_on_resume`, set by `--initialize-from-checkpoint` in the
+  hero ladder), stop the old run before its next hourly save, and verify the
+  child's copy before the source expires.
 - A new run ID and checkpoint tree, the unchanged W&B entity/project, and the
   verified parent history boundary. Follow the
   [launcher procedure](../../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).

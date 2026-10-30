@@ -25,7 +25,7 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
   The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
   tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Gradient clip: from `hero-gradclip-step354k` on, the train step rescales the whole gradient to
+- Gradient clip: from the `hero-gradclip-*` handoff on, the train step rescales the whole gradient to
   global L2 norm 1.0 when it is larger (`HERO_MAX_GRAD_NORM`; the median norm is about 0.5). The clip
   runs before the optimizer, so the optimizer state and checkpoints keep their layout. Every step logs
   the pre-clip norm as `train/grad_norm` and the clip as `train/grad_clipped`; the watch's
@@ -129,11 +129,28 @@ for preflight, the 200-step trial, and rollback. `current_run.py` records the
 current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
 Update the run ID, handoff checkpoint, and fork point together and land them on main.
 Record the old run's exact launch SHA and command for rollback.
-The handoff must be a complete permanent checkpoint: the newest scheduled one, or one requested from the old
-run's `training-control` endpoint with the `request-permanent-checkpoint` header value (see
-[Train an LM](../../../docs/tutorials/train-an-lm.md)). Permanent checkpoints are written to the run's
-output root and never pruned. Temporary checkpoints expire three days after they are written, so
-those a replaced run leaves behind clear themselves.
+The handoff must be a complete checkpoint (`metadata.json` present). It can be a permanent one: the
+newest scheduled one, or one requested from the old run's `training-control` endpoint with the
+`request-permanent-checkpoint` header value (see [Train an LM](../../../docs/tutorials/train-an-lm.md)).
+It can also be the old run's newest hourly temporary checkpoint, which lets a cutover happen at any
+time. A launch with `--initialize-from-checkpoint` sets `permanent_checkpoint_on_resume`: right after
+the restore, the child writes a permanent checkpoint at the handoff step into its own permanent root.
+That copy is the durable handoff point that `hero_checkpoint_paths` lists, and retries restore it
+instead of the source. The child never writes into the old run's tree. Permanent checkpoints are written
+to the run's output root and never pruned. Temporary checkpoints expire three days after they are
+written, so those a replaced run leaves behind clear themselves.
+
+To hand off from a temporary checkpoint:
+
+1. Wait for the old run to commit a temporary checkpoint (`Saving temporary checkpoint at step N`, then
+   `metadata.json` under `s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/<old-run>/2026.08.19.2/checkpoints/step-N`).
+2. Stop the old coordinator before its next hourly save. A running hero prunes its previous temporary
+   checkpoint once the next one commits.
+3. Set `current_run.py` to `hero-<change>-step<N/1000>k`, set `HANDOFF_CHECKPOINT` to that `step-N`, and set
+   `WANDB_FORK_FROM` to `<old-run>?_step=<N-1>`. Land them on main.
+4. Run `fork-wandb` and `launch` well within the three-day TTL. Confirm `Writing permanent resume
+   checkpoint at step N` in the child's log and `metadata.json` with `"is_temporary": false` under the
+   child's `checkpoints/step-N` before relying on the temporary source expiring.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
 and a pristine checkout. Fork creation requires fetched main; subsequent launches
@@ -274,6 +291,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
 | `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
+| `--permanent-checkpoint-on-resume` | with `--restore-from` and `--save-checkpoints`, writes a permanent checkpoint at the restored step to the run's checkpoint path |
 | `--max-grad-norm` | sets the train step's global gradient-norm clip (default: the hero's 1.0); 0 disables it |
 | `--optimizer-batch-size`, `--lr-scale` | size the optimizer heuristic from another global batch, e.g. the hero's 2816 on one rack, and multiply both learning rates |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |

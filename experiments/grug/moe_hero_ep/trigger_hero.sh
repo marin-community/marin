@@ -11,11 +11,12 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Permanent checkpoint 354000 of hero-ctx16k-step257k resumes at global_step 354000.
-# Parent W&B _step 353999 records global_step 353999.
+# The handoff is hero-ctx16k-step257k's newest hourly temporary checkpoint step-N, taken right after the
+# old run is stopped. The child writes a permanent copy of step-N into its own checkpoint root on its first
+# start, so the 3-day TTL of the temporary tree does not bound the lineage. Fork at parent W&B _step N-1.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ctx16k-step257k/2026.08.19.2/checkpoints/step-354000
-WANDB_FORK_FROM='hero-ctx16k-step257k?_step=353999'
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-ctx16k-step257k/2026.08.19.2/checkpoints/step-REPLACE_BEFORE_DEPLOYMENT
+WANDB_FORK_FROM='hero-ctx16k-step257k?_step=REPLACE_BEFORE_DEPLOYMENT'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506
