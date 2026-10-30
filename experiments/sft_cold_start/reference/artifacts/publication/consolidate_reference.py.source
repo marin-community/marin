@@ -1,0 +1,46 @@
+import gzip
+import hashlib
+import json
+import re
+import subprocess
+from pathlib import Path
+
+CAMPAIGN = Path('/Users/benfeuer/Documents/experiments/active/sft-pipe-repro')
+ARTIFACTS = CAMPAIGN / 'artifacts'
+WORK = ARTIFACTS / 'worktrees/cold-start-reference'
+OUT = WORK / 'experiments/sft_cold_start/reference'
+OLD = ARTIFACTS / 'worktrees/marin'
+EVAL = ARTIFACTS / 'worktrees/evals-rerun'
+OUT.mkdir(parents=True, exist_ok=True)
+entries = []
+
+def add(path, relative):
+    raw = path.read_bytes()
+    if re.search(rb'(?:hf_[A-Za-z0-9]{25,}|gh[pousr]_[A-Za-z0-9]{25,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|-----BEGIN .*PRIVATE KEY)', raw):
+        raise ValueError(f'Credential-like content in {path}')
+    if re.search(rb'https?://[^\s\"\']*/proxy/t/[^\s\"\']+',raw):
+        raise ValueError(f'Capability URL in {path}')
+    suffix = '.source.gz' if len(raw) > 250000 or not raw.endswith(b'\n') or any(line.rstrip() != line for line in raw.splitlines()) else '.source'
+    dest = OUT / (relative + suffix)
+    dest.parent.mkdir(parents=True,exist_ok=True)
+    dest.write_bytes(gzip.compress(raw,mtime=0) if suffix.endswith('.gz') else raw)
+    entries.append({'original':str(path.relative_to(CAMPAIGN)), 'restore_path':relative,'snapshot':str(dest.relative_to(OUT)), 'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'encoding':'gzip' if suffix.endswith('.gz') else 'utf-8'})
+
+for directory in ['scripts','configs','evals-rerun','reports','audits','sources']:
+    for path in sorted((ARTIFACTS/directory).rglob('*')):
+        if path.is_file() and path.suffix in {'.py','.sh','.yaml','.yml','.jinja','.patch','.toml'} and '__pycache__' not in path.parts:
+            add(path,str(path.relative_to(CAMPAIGN)))
+changed=subprocess.check_output(['git','diff','--name-only'],cwd=OLD,text=True).splitlines()
+for name in changed:
+    if name.endswith('.py'): add(OLD/name,'training-worktree/'+name)
+for root in ['experiments/grug/snowball_sft','experiments/evaluation/campaigns/sft-pipe-repro-retries']:
+    for path in sorted((OLD/root).rglob('*')):
+        if path.is_file() and path.suffix in {'.py','.yaml','.json','.jinja','.sh'} and '__pycache__' not in path.parts:
+            add(path,'training-worktree/'+str(path.relative_to(OLD)))
+patch=subprocess.check_output(['git','diff','--binary'],cwd=OLD)
+(OUT/'training-worktree.patch.source.gz').write_bytes(gzip.compress(patch,mtime=0))
+for path in sorted((EVAL/'experiments/evaluation/campaigns/sft-thinking-eos-20261030').rglob('*.yaml')):
+    add(path,'eval-worktree/'+str(path.relative_to(EVAL)))
+manifest={'source_base':'8577d258214dd0dcb992c04458ee4eb10496d4e5','eval_source_commit':'2a174c5fff27ecbcf2db4a300441e247ea18ebbd','reference_base':subprocess.check_output(['git','rev-parse','HEAD'],cwd=WORK,text=True).strip(),'files':entries,'training_patch_sha256':hashlib.sha256(patch).hexdigest()}
+(OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print(json.dumps({'files':len(entries),'source_bytes':sum(x['bytes'] for x in entries),'reference_bytes':sum(p.stat().st_size for p in OUT.rglob('*') if p.is_file())}))

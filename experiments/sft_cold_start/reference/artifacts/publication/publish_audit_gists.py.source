@@ -1,0 +1,33 @@
+import hashlib,json,os,re,subprocess
+from pathlib import Path
+R=Path(__file__).resolve().parent
+S=R.parent/'reports/training-data-audit'
+groups={
+'overview':['README.md','provenance.md','provenance.json','audit_provenance.py','shared-corpus-manifest.json','audit-artifact-manifest.json'],
+'protocol':['protocol.md','protocol_sample.py','protocol_scan.py','protocol-results.json','protocol-candidates.jsonl','protocol-run-manifest.json','protocol-token-validation.json'],
+'grounding':['grounding-report.md','grounding_scan.py','grounding_calibrate.py','grounding-summary.json','grounding-candidates.json','grounding-manual-review.json','grounding-calibration.json','grounding-controls.json','grounding-review-selection.json'],
+'recovery':['recovery.md','recovery_detect.py','recovery-results.summary.json','recovery-results.candidates.jsonl','recovery-manual-review.json']}
+receipt_path=R/'audit-gists.json'
+receipts=json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+for group,names in groups.items():
+ if group in receipts:continue
+ dst=R/'audit-gists'/group;dst.mkdir(parents=True,exist_ok=True)
+ manifest=[]
+ for name in names:
+  src=S/name;raw=src.read_text()
+  assert not re.search(r'\b(?:hf_[A-Za-z0-9]{25,}|gh[pousr]_[A-Za-z0-9]{25,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16})\b',raw),name
+  assert not re.search(r'https?://[^\s"\']*/proxy/t/[^\s"\']+',raw),name
+  for key,val in os.environ.items():
+   if any(x in key.upper() for x in ['TOKEN','SECRET','PASSWORD','API_KEY']) and len(val)>20:
+    assert val not in raw,f'Credential content in {name}'
+  # Publish exact source content, including reproducibility paths, but no credentials.
+  (dst/name).write_text(raw)
+  manifest.append({'name':name,'source_sha256':hashlib.sha256(src.read_bytes()).hexdigest(),'bytes':src.stat().st_size})
+ (dst/'PUBLICATION.md').write_text('Published by a coding agent at the experiment owner\'s request. Audit date: 2026-10-30. These are research artifacts, not a cleaned training dataset. Candidate hits include false positives; consult the manual reviews. The 102 MB decoded corpus and acquisition log remain in the campaign archive; its hash and exact sampling manifest are included. The corpus is reproducible with protocol_sample.py and authorized source access. Relative links may refer to sibling gists; the experiment draft links all four.\n')
+ files=[str(dst/n) for n in names]+[str(dst/'PUBLICATION.md')]
+ proc=subprocess.run(['gh','gist','create','--public','--desc',f'SFT cold-start training-data audit: {group} (2026-10-30)',*files],capture_output=True,text=True,check=True)
+ url=proc.stdout.strip();gid=url.rsplit('/',1)[-1]
+ remote=json.loads(subprocess.check_output(['gh','api',f'gists/{gid}'],text=True))
+ assert set(n for n in names)<=set(remote['files'])
+ receipts[group]={'url':url,'id':gid,'files':manifest,'public':remote['public']}
+ receipt_path.write_text(json.dumps(receipts,indent=2)+'\n');print(group,url,flush=True)

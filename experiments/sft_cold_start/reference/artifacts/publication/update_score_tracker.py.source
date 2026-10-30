@@ -1,0 +1,90 @@
+"""Render independent score tracker; publish only when --publish is requested."""
+import argparse
+import datetime
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+ARTIFACTS = ROOT.parent
+RERUN = ARTIFACTS / 'evals-rerun'
+BENCHMARKS = ['swebench-verified', 'ot-tblite-recovery', 'tb2-recovery', 'ds-1000-local', 'bixbench-pi', 'bfclparity-pi']
+LABELS = ['SWE-bench Verified', 'OT-TBLite', 'Terminal-Bench 2.1 v6', 'DS-1000 mini-200', 'BixBench v3', 'BFCL-Parity']
+EXPECTED = [500, 300, 267, 200, 205, 123]
+STEPS = ['222', '471', '1024', '2048']
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--publish', action='store_true')
+    args = parser.parse_args()
+    snapshots = sorted(RERUN.glob('provisional-scores-*.json'))
+    latest = json.loads(snapshots[-1].read_text()) if snapshots else {'rows': [], 'observed_at': None}
+    finals_path = RERUN / 'audit-approved-final-scores.json'
+    finals = json.loads(finals_path.read_text()) if finals_path.exists() else []
+    # Finals require explicit operator audit approval, never infer it from job success.
+    for row in finals:
+        assert row['audit_approved'] is True
+        assert row['provenance']
+        assert 0 <= row['score'] <= 1
+    models = json.loads((RERUN / 'models.json').read_text())
+    text = ['# SFT Cold Start Subsampling — evaluation tracker', '',
+            'Agent-maintained experiment tracker. Corrected evaluations remain in progress. Provisional means are descriptive, not final scores or a matched-task comparison.', '',
+            f"Latest provisional snapshot: {latest.get('observed_at')}. Generated: {datetime.datetime.now(datetime.timezone.utc).isoformat()}.", '',
+            'The corrected cohort uses thinking mode and both EOS tokens (128001, 128009), fixed checkpoint revisions, and eval policy #10197 benchmark pins/budgets. Missing attempts are not zero-filled. Provisional means can include invalid grader/setup zeros until audited; completion order can bias partial scores. OT-TBLite is mean fractional reward, not binary accuracy.', '',
+            '| Checkpoint | Benchmark | Provisional mean | Scored / expected | Audited final mean | Final scored / expected |',
+            '|---|---|---:|---:|---:|---:|']
+    for step in STEPS:
+        for benchmark, label, expected in zip(BENCHMARKS, LABELS, EXPECTED, strict=True):
+            matched = [r for r in latest['rows'] if f'-{step}-' in r['run_id'] and f'-{benchmark}-' in r['run_id']]
+            assert len(matched) <= 1
+            provisional = matched[0] if matched else None
+            final_matches = [r for r in finals if r['model'] == models[step]['repo'] and r['benchmark'] == benchmark]
+            assert len(final_matches) <= 1
+            final = final_matches[0] if final_matches else None
+            mean = f"{100*provisional['mean_reward']:.2f}%" if provisional else 'Pending'
+            count = f"{provisional['scored']} / {expected}" if provisional else f'— / {expected}'
+            final_mean = f"{100*final['score']:.2f}%" if final else 'Pending audit'
+            final_count = f"{final['scored']} / {final['expected']}" if final else '—'
+            text.append(f'| [Step {step}](https://huggingface.co/{models[step]["repo"]}) | {label} | {mean} | {count} | {final_mean} | {final_count} |')
+    historical = json.loads((ARTIFACTS/'reports/confound-audit-20261030/eval-comparison-records.json').read_text())
+    text += ['', '## Historical comparison (previous published/figure cells)', '',
+             'These are historical endpoint cells, not corrected finals. Reproduction cells used the confounded generation settings; original 10-05 is a separate run. Record status/coverage and runtime differ, so do not treat this as a matched before/after estimate. Exact native record provenance is in historical-scores.json.', '',
+             '| Model | ' + ' | '.join(LABELS) + ' |', '|---|' + '---:|'*len(LABELS)]
+    selected = []
+    for pos, label in [('0','Base'),('1','Step 222'),('2','Step 471'),('3','Step 1024'),('4','Step 2048'),('5','Original 10-05')]:
+        cells=[]
+        for benchmark in BENCHMARKS:
+            rows=[r for r in historical if str(r['position'])==pos and r['benchmark']==benchmark]
+            scores={r['score'] for r in rows};assert len(scores)<=1
+            cells.append(f'{100*float(rows[0]["score"]):.1f}%' if rows else '—')
+            selected.extend({k:r.get(k) for k in ['label','benchmark','score','status','coverage','record_url','record_sha256']} for r in rows)
+        text.append('| '+label+' | '+' | '.join(cells)+' |')
+    text += ['', '## Links and update rules', '',
+             '- [Model collection](https://huggingface.co/collections/open-athena/sft-cold-start-subsampling-6ae4c434d2f87e2ae7ea0392)',
+             '- [Evaluation policy #10197](https://github.com/marin-community/marin/issues/10197)',
+             '- [Reference branch](https://github.com/marin-community/marin/tree/codex/sft-cold-start-reference-20261030)',
+             '- Final columns require audit_approved=true, per-trial verifier/coverage review, exact model revision and source evidence. A succeeded job alone does not qualify.',
+             '- All earlier snapshots remain in the campaign archive and gist revision history. Do not overwrite historical confounded cells with corrected results.', '']
+    (ROOT/'EVAL_TRACKER.md').write_text('\n'.join(text))
+    (ROOT/'provisional-scores.json').write_text(json.dumps(latest,indent=2)+'\n')
+    (ROOT/'audited-final-scores.json').write_text(json.dumps(finals,indent=2)+'\n')
+    (ROOT/'historical-scores.json').write_text(json.dumps(selected,indent=2)+'\n')
+    (ROOT/'checkpoint-pins.json').write_text(json.dumps({s:models[s] for s in STEPS},indent=2)+'\n')
+    files=['EVAL_TRACKER.md','provisional-scores.json','audited-final-scores.json','historical-scores.json','checkpoint-pins.json']
+    if args.publish:
+        receipt=ROOT/'tracker-gist.json'
+        if receipt.exists():
+            info=json.loads(receipt.read_text())
+            payload={'files':{name:{'content':(ROOT/name).read_text()} for name in files}}
+            body=ROOT/'tracker-gist-payload.json';body.write_text(json.dumps(payload))
+            subprocess.run(['gh','api','--method','PATCH',f'gists/{info["id"]}','--input',str(body)],check=True,stdout=subprocess.DEVNULL)
+        else:
+            url=subprocess.check_output(['gh','gist','create','--public','--desc','SFT Cold Start Subsampling — provisional and audited final scores',*[str(ROOT/name) for name in files]],text=True).strip()
+            info={'url':url,'id':url.rsplit('/',1)[-1]}
+        remote=json.loads(subprocess.check_output(['gh','api',f'gists/{info["id"]}'],text=True))
+        for name in files:assert remote['files'][name]['content']==(ROOT/name).read_text()
+        info.update({'verified_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'tracker_sha256':hashlib.sha256((ROOT/'EVAL_TRACKER.md').read_bytes()).hexdigest()})
+        receipt.write_text(json.dumps(info,indent=2)+'\n');print(info['url'])
+
+if __name__=='__main__':main()

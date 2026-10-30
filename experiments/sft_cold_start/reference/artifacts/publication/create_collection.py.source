@@ -1,0 +1,16 @@
+import os,json
+from pathlib import Path
+from huggingface_hub import HfApi
+r=Path(__file__).resolve().parent
+api=HfApi(token=os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN'))
+models=['open-athena/snowball-67b-a2b-base-262k-qk175-skew8']+[f'open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step{s}-{date}' for s,date in [(222,'2026.10.25'),(471,'2026.10.25'),(1024,'2026.10.28'),(1536,'2026.10.28'),(2048,'2026.10.29'),(2338,'2026.10.29')]]+['open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05']
+existing=[c for c in api.list_collections(owner='open-athena') if c.title=='SFT Cold Start Subsampling']
+assert len(existing)<=1
+c=existing[0] if existing else api.create_collection(title='SFT Cold Start Subsampling',namespace='open-athena',description='H100 cold-start SFT reproduction: base, six checkpoints and original 10-05 reference. Subsampling findings are provisional.',private=False)
+for m in models:
+ api.model_info(m)
+ note='Original 10-05 reference; separate full cold-start run.' if m.endswith('2026.10.05') else ('Base initializer.' if 'base-262k' in m else 'Reproduction checkpoint; corrected EOS generation config. Eval requires explicit thinking. Results provisional.')
+ api.add_collection_item(c.slug,m,'model',note=note,exists_ok=True)
+c=api.get_collection(c.slug);actual={i.item_id for i in c.items};assert set(models)<=actual
+receipt={'url':f'https://huggingface.co/collections/{c.slug}','slug':c.slug,'models':models,'verified_items':sorted(actual),'private':c.private}
+(r/'hf-collection.json').write_text(json.dumps(receipt,indent=2)+'\n');print(receipt['url'])

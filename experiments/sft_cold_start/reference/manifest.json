@@ -2650,6 +2650,38 @@
       "sha256": "27291b2666a9fd079e65a093c23a41307d51eb9cb81076dd8cf1be03fbee7638",
       "bytes": 6445,
       "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/consolidate_reference.py",
+      "restore_path": "artifacts/publication/consolidate_reference.py",
+      "snapshot": "artifacts/publication/consolidate_reference.py.source",
+      "sha256": "d3c86398ef0f89cd4d3f3b459150a2ccc8e963bbda96e7c216e8f5eff23dc88e",
+      "bytes": 3104,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/create_collection.py",
+      "restore_path": "artifacts/publication/create_collection.py",
+      "snapshot": "artifacts/publication/create_collection.py.source",
+      "sha256": "c8c826d98f54acbd33af0018b0e3794582aaa2d77230a7b7e568402398935b88",
+      "bytes": 1642,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/publish_audit_gists.py",
+      "restore_path": "artifacts/publication/publish_audit_gists.py",
+      "snapshot": "artifacts/publication/publish_audit_gists.py.source",
+      "sha256": "c9799986ff5e9e37f8843a444bbfe0c817a49dc58737451dff594ad9f4a871cd",
+      "bytes": 2959,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/update_score_tracker.py",
+      "restore_path": "artifacts/publication/update_score_tracker.py",
+      "snapshot": "artifacts/publication/update_score_tracker.py.source",
+      "sha256": "fcbbb79441b6fa38a8b26ccfa1b0495d0b41d7da70741593e89b3f43ffebfa1c",
+      "bytes": 7149,
+      "encoding": "utf-8"
     }
   ],
   "training_patch_sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242"
