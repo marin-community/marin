@@ -13,8 +13,8 @@ import gzip
 import json
 import os
 
-from transformers.utils.chat_template_utils import _compile_jinja_template
 import pytest
+from transformers.utils.chat_template_utils import _compile_jinja_template
 
 from experiments.post_training.chat_template import (
     FAMILY_TOKEN_MAPS,
