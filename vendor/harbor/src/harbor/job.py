@@ -1225,7 +1225,7 @@ class Job:
                 # SOTOPIA's statistical dependencies are optional for other Harbor jobs.
                 from harbor.metrics.sotopia import correct_sotopia
 
-                model = self.config.sotopia_model or self.config.agents[0].model_name
+                model = self.config.agents[0].model_name_without_provider
                 if model is None:
                     raise ValueError("SOTOPIA correction requires a model name")
                 assert self.config.sotopia_cohort is not None

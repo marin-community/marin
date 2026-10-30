@@ -403,8 +403,6 @@ class JobConfig(BaseModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)
-    sotopia_model: str | None = None
-    """Candidate identity for cohort replacement when the served model uses an alias."""
     sotopia_cohort: SotopiaCohort | None = None
     """Comparison cohort required for SOTOPIA length correction."""
     agents: list[AgentConfig] = Field(default_factory=lambda: [AgentConfig()])

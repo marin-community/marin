@@ -272,6 +272,7 @@ def _agent_config(
     *,
     endpoint_url: str,
     served_model: str,
+    model_identity: str,
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
@@ -283,7 +284,8 @@ def _agent_config(
     configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
-            "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
+            "model_name": f"{_HOSTED_VLLM_PROVIDER}/{model_identity}",
+            "model_alias": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
             "env": runtime_env,
         },
@@ -309,6 +311,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
         agent,
         endpoint_url=overlay.endpoint_url,
         served_model=overlay.served_model,
+        model_identity=overlay.model_identity,
         kwargs=kwargs,
     )
 
@@ -319,6 +322,7 @@ def _stable_agent(agent: AgentConfig) -> AgentConfig:
         agent,
         endpoint_url=_STABLE_ENDPOINT,
         served_model=_STABLE_MODEL,
+        model_identity=_STABLE_MODEL,
         kwargs=agent.kwargs,
     )
 
@@ -350,7 +354,6 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "sotopia_model": overlay.model_identity,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
@@ -458,6 +461,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                     AgentName.PI,
                     logs_dir=Path(jobs_dir) / "agent",
                     model_name=effective_agent.model_name,
+                    model_alias=effective_agent.model_alias,
                     **effective_agent.kwargs,
                 )
             except ValueError as exc:
