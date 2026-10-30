@@ -86,3 +86,24 @@ async def test_tokenizer_propagates_exhausted_or_permanent_errors(monkeypatch, s
 
     assert error.value.response.status_code == status
     assert len(requests) == attempts
+
+
+@pytest.mark.parametrize("model_alias, expected_model", [(None, "org/original"), ("hosted_vllm/resumed-endpoint", "resumed-endpoint")])
+async def test_agent_routes_target_alias_and_preserves_model_identity(tmp_path, model_alias, expected_model):
+    agent = SotopiaAgent(
+        logs_dir=tmp_path,
+        model_name="hosted_vllm/org/original",
+        model_alias=model_alias,
+        api_base="https://target.example/v1",
+        partner_model="openai/partner",
+        partner_api_base="https://partner.example/v1",
+        evaluator_model="openai/judge",
+        evaluator_api_base="https://judge.example/v1",
+    )
+    environment = SimpleNamespace(exec=AsyncMock(return_value=SimpleNamespace(return_code=0, stdout="", stderr="")))
+    await agent.run("Start the episode", environment, object())
+    env = environment.exec.await_args.kwargs["env"]
+    assert env["SOTOPIA_TARGET_MODEL"] == f"custom/{expected_model}@https://target.example/v1"
+    assert env["SOTOPIA_PARTNER_MODEL"] == "custom/partner@https://partner.example/v1"
+    assert env["SOTOPIA_EVALUATOR_MODEL"] == "custom/judge@https://judge.example/v1"
+    assert agent.to_agent_info().model_info.model_dump() == {"name": "org/original", "provider": "hosted_vllm"}

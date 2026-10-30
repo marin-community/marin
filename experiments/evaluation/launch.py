@@ -78,7 +78,7 @@ from experiments.evaluation.evals import (
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
-from experiments.evaluation.policy_finalization import PolicyFinalization, SotopiaLengthControl, policy_executor
+from experiments.evaluation.policy_finalization import POLICY_JUDGED_BENCHMARKS, PolicyFinalization, policy_executor
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -409,7 +409,7 @@ def build_evaluation_batch(
                         },
                     ),
                 )
-                if definition.record_ref.name in {"financebench", "olympiadbench"}
+                if definition.record_ref.name in POLICY_JUDGED_BENCHMARKS
                 else (name, definition)
             )
             for name, definition in definitions
@@ -422,7 +422,7 @@ def build_evaluation_batch(
             secret_env[name] = spec_value
     policy_judge = None
     if spec.policy_finalization is not None and any(
-        definition.record_ref.name in {"financebench", "olympiadbench"} for _, definition in definitions
+        definition.record_ref.name in POLICY_JUDGED_BENCHMARKS for _, definition in definitions
     ):
         policy_judge = _resolve_hosted_judge(
             replace(spec, judge_model=spec.policy_finalization.judge, judge_accelerator="H100x8"), accelerator
@@ -434,7 +434,6 @@ def build_evaluation_batch(
                 definition.executor,
                 definition.record_ref,
                 spec.policy_finalization,
-                model.location,
                 policy_judge.accelerator if policy_judge is not None else None,
                 spec.priority_band,
             )
@@ -585,16 +584,11 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
-    extras = (
-        ("eval-policy",)
-        if any(isinstance(evaluation.executor, SotopiaLengthControl) for evaluation in batch.evaluations)
-        else ()
-    )
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
-        environment=EnvironmentSpec(env_vars=launch_env, extras=extras),
+        environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         egress_allow=batch.egress_allow,
         max_retries_failure=0,

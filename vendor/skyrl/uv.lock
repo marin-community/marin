@@ -2071,7 +2071,8 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "gcsfs", marker = "extra == 'runtime'" },
     { name = "harbor", extras = ["analysis", "cloud", "datasets", "tinker"], marker = "extra == 'all'" },
-    { name = "harbor", extras = ["archive", "telemetry", "daytona"], marker = "extra == 'runtime'" },
+    { name = "harbor", extras = ["archive", "telemetry"], marker = "extra == 'sotopia'" },
+    { name = "harbor", extras = ["archive", "telemetry", "daytona", "sotopia"], marker = "extra == 'runtime'" },
     { name = "harbor", extras = ["cwsandbox", "wandb", "e2b", "daytona", "islo", "modal", "runloop", "gke", "tensorlake", "novita"], marker = "extra == 'cloud'" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", specifier = ">=1.3.2" },
@@ -2082,6 +2083,7 @@ requires-dist = [
     { name = "marin-rigging", marker = "extra == 'telemetry'", editable = "../../lib/rigging" },
     { name = "modal", marker = "extra == 'modal'", specifier = ">=1.4.0" },
     { name = "novita-sandbox", marker = "extra == 'novita'", specifier = "==2.0.0a3" },
+    { name = "numpy", marker = "extra == 'sotopia'" },
     { name = "openai", specifier = ">=2" },
     { name = "orjson", specifier = ">=3.11.6" },
     { name = "packaging", specifier = ">=25.0" },
@@ -2094,6 +2096,8 @@ requires-dist = [
     { name = "rich", specifier = ">=14.1.0" },
     { name = "runloop-api-client", marker = "extra == 'runloop'", specifier = ">=1.2.0" },
     { name = "s3fs", marker = "extra == 'runtime'" },
+    { name = "scikit-learn", marker = "extra == 'sotopia'" },
+    { name = "scipy", marker = "extra == 'sotopia'" },
     { name = "shortuuid", specifier = ">=1.0.13" },
     { name = "supabase", specifier = ">=2.28.2" },
     { name = "tenacity", specifier = ">=9.1.2" },
@@ -2107,7 +2111,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.38.0" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.27" },
 ]
-provides-extras = ["runtime", "analysis", "archive", "telemetry", "datasets", "e2b", "daytona", "islo", "modal", "runloop", "tensorlake", "gke", "novita", "cwsandbox", "wandb", "cloud", "all", "tinker"]
+provides-extras = ["runtime", "sotopia", "analysis", "archive", "telemetry", "datasets", "e2b", "daytona", "islo", "modal", "runloop", "tensorlake", "gke", "novita", "cwsandbox", "wandb", "cloud", "all", "tinker"]
 
 [package.metadata.requires-dev]
 test = [

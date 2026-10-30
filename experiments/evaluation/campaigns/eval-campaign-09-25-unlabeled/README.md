@@ -28,24 +28,29 @@ the evaluated model at each request. It counts the rendered prompt with the serv
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
 The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Policy launches
-apply the length correction automatically using the 13 baseline archives in
-`sotopia-baselines.json` plus the evaluated model’s current run. A rerun of a baseline model
-replaces its previous source in the fit. The archive preserves raw rewards, the
-complete cohort fit, and each adjusted episode. Goal achievement remains an explicit
+dimensions. It also records the evaluated agent's emitted character count. Harbor applies
+length correction at job completion using the campaign's `sotopia_cohort` in
+`harbor-configs/sotopia-hard.yaml`: the versioned `policy-10197-v1` cohort of 13 baseline
+archives plus the evaluated model’s current run. SOTOPIA jobs require an explicit cohort
+with a `version` and a `models` list containing `model` and `results_path` for each baseline. A rerun of a baseline model
+replaces its previous source in the fit. Harbor preserves raw rewards and saves the cohort sources, input digest, fit parameters,
+and adjusted episodes in the job result. Marin reads the corrected metric from that result. Goal achievement remains an explicit
 non-default dataset generation mode.
 
-`finalization.yaml` also selects MiniMax for native FinanceBench and OlympiadBench grading.
+`finalization.yaml` selects MiniMax for native FinanceBench and OlympiadBench grading.
 Each judged benchmark starts the pinned 262,144-token TP8 MiniMax service on eight H100s
 in the candidate's cluster before evaluation and releases it afterward. Evalchemy grades
 answers once and preserves judge verdicts with the samples. Judge requests use constrained
 labels and escalate empty final answers through 128, 512, and 2048 output tokens.
 
 These stages finish before the run is recorded as successful. Missing cohort evidence
-produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
+fails the Harbor job and records the run as `failed`. Evalchemy preserves checkpoints for
+interrupted judge requests.
 Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
-The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
-`record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
+The launch snapshot includes the finalization configuration, judge YAML, and Harbor YAML
+containing the campaign cohort. Harbor saves the resolved baseline cohort with the correction
+evidence in its job result. `record.json` records the FinanceBench and OlympiadBench judge
+configuration in `eval.postprocessing`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
 absolute path to this YAML by default.
 
