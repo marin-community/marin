@@ -34,7 +34,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.10.29.1"
+GATE_REVISION = "2026.10.30"
 
 
 @dataclass(frozen=True)
@@ -77,12 +77,50 @@ class GateInputs:
     settings: tuple[str, ...] = ()
     tasks: str | None = None
     init: str | None = None
+    requirements: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Requirement:
+    key: str
+    higher_is_better: bool
+    bound: float | None
+
+
+def parse_requirement(text: str) -> Requirement:
+    match = re.fullmatch(r"([^<>=\s]+)(<=|>=)(control|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)", text)
+    if match is None:
+        raise click.BadParameter(f"expected KEY<=NUMBER, KEY>=NUMBER, KEY<=control or KEY>=control: {text}")
+    key, operator, value = match.groups()
+    bound = None if value == "control" else float(value)
+    if bound is not None and not math.isfinite(bound):
+        raise click.BadParameter(f"requirement bound must be finite: {text}")
+    return Requirement(key, operator == ">=", bound)
+
+
+def check_requirements(preset: presets.Preset, requirements: Sequence[str], *, control: bool) -> None:
+    if not requirements:
+        return
+    if control or preset.name not in CONTROLS:
+        raise click.BadParameter("--require needs a gated candidate preset, without --control")
+    parsed = tuple(map(parse_requirement, requirements))
+    prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
+    raw = [item.key for item in parsed if not item.key.startswith(prefixes)]
+    if raw:
+        pin = CONTROLS[preset.name][0]
+        root = StoragePath(presets.artifact_prefix(preset.recipe.layout.cluster))
+        path = root / presets.control_name(pin.preset, pin.main_commit, 0) / pin.revision
+        metrics = json.loads(presets.read_text(path / f"exports/metrics/step-{preset.measured[0]:06d}.json"))
+        for key in raw:
+            if key not in metrics:
+                raise click.BadParameter(f"requirement metric absent from control r0 first measured step: {key}")
 
 
 def gate_inputs(
     settings: Sequence[presets.Setting] = (),
     tasks: ArtifactStep | str | None = None,
     init: ArtifactStep | str | None = None,
+    requirements: Sequence[str] = (),
 ) -> GateInputs:
     values = {leaf.key: leaf.value for setting in settings for leaf in presets.setting_leaves(setting)}
     tasks, init = (f"{item.name}@{item.version}" if isinstance(item, ArtifactStep) else item for item in (tasks, init))
@@ -90,6 +128,7 @@ def gate_inputs(
         tuple(f"{key}={json.dumps(value, default=str)}" for key, value in sorted(values.items())),
         tasks.removeprefix(presets.SELECTION_PREFIX + "/") if tasks else None,
         init,
+        tuple(requirements),
     )
 
 
@@ -121,10 +160,15 @@ class Comparison(BaseModel):
 
 class GuardComparison(Comparison):
     passes: bool
+    change: Change
 
 
 class ReportedComparison(Comparison):
     change: Change
+    tasks: int | None = None
+    initializer: float | None = None
+    control_min: float | None = None
+    control_max: float | None = None
 
 
 class RunMetadata(BaseModel):
@@ -135,6 +179,7 @@ class RunMetadata(BaseModel):
     tasks: str | None
     init: str | None
     replicates: int
+    requirements: tuple[str, ...]
 
 
 class ControlMetadata(BaseModel):
@@ -224,8 +269,8 @@ def _verdict(
         )
     else:
         verdict = Verdict.PASS
-    better = any(row.change == Change.BETTER for row in declared)
-    worse = verdict == Verdict.FAIL or any(row.change == Change.WORSE for row in declared)
+    better = any(row.change == Change.BETTER for row in (*guards, *declared))
+    worse = verdict == Verdict.FAIL or any(row.change == Change.WORSE for row in (*guards, *declared))
     if better:
         return verdict, Label.TRADE_OFF if worse else Label.IMPROVES, None
     return verdict, Label.REGRESSION if worse else Label.NO_CHANGE, None
@@ -246,7 +291,9 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
         if key.startswith("timing/step_wall/") and key.rsplit("/", 1)[-1] not in ("evaluation", "checkpoint_work")
     ]
     values = {}
-    for metric in (*preset.guards, *preset.reported):
+    declared = {metric.key: metric for metric in (*preset.guards, *preset.reported)}
+    extra = set().union(*(row.keys() for row in metrics.values())) - declared.keys()
+    for metric in (*declared.values(), *(declared.get(key, presets.Metric(key, True)) for key in extra)):
         if metric.key.startswith("startup/"):
             first = next((row[metric.key] for _, row in sorted(metrics.items()) if metric.key in row), None)
             if first is not None:
@@ -291,6 +338,7 @@ class RunData:
     panel_ids: dict[str, frozenset[str]]
     invariants: tuple[Invariant, ...]
     missing_tokens: bool
+    slices: dict[str, tuple[int, float | None]]
 
 
 def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs: GateInputs = GateInputs()) -> RunData:
@@ -370,13 +418,28 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
     final = pa.concat_tables(scores)
     values = {
         **_window_values(preset, metrics),
-        **scoring.evaluation_statistics(final),
-        **(_difficulty_statistics(final, rates) if rates is not None else {}),
+        **scoring.evaluation_statistics(final, rates),
     }
     for key, value in scoring.evaluation_statistics(pa.concat_tables([scores[0], *initial_scores])).items():
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
+    for text in inputs.requirements:
+        requirement = parse_requirement(text)
+        value = values.get(requirement.key)
+        if value is None or not math.isfinite(value):
+            raise InvalidComparison(f"missing or non-finite requirement metric: {requirement.key}")
+        if requirement.bound is not None:
+            holds = value >= requirement.bound if requirement.higher_is_better else value <= requirement.bound
+            invariants.append(
+                Invariant(name=f"require/{requirement.key}", value=value, limit=requirement.bound, holds=holds)
+            )
+    initializer = {row["task_id"]: row["mean_score"] for row in rates.to_pylist()} if rates is not None else {}
+    slices = {}
+    for key, rows in scoring.score_slices(final, rates).items():
+        ids = {row["item"] for row in rows}
+        initial = statistics.mean(initializer[item] for item in ids) if ids <= initializer.keys() else None
+        slices[key] = len(ids), initial
     return RunData(
         path=path,
         version=presets.artifact_record(path).version,
@@ -385,6 +448,7 @@ def _load_run(path: str, preset: presets.Preset, rates: pa.Table | None, inputs:
         panel_ids=panel_ids,
         invariants=tuple(invariants),
         missing_tokens=missing,
+        slices=slices,
     )
 
 
@@ -395,58 +459,83 @@ def _check_control(run: RunData, pin: ControlPin) -> None:
         raise InvalidComparison(f"control has missing mismatch tokens or failed invariants: {run.path}")
 
 
-def _difficulty_statistics(scores: pa.Table, rates: pa.Table) -> dict[str, float]:
-    pass_rates = {row["task_id"]: row["passed"] / row["samples"] for row in rates.to_pylist()}
-    result = {}
-    for band, accepts in (
-        ("easy", lambda rate: rate > 0.7),
-        ("learnable", lambda rate: 0.1 <= rate <= 0.7),
-        ("hard", lambda rate: rate < 0.1),
-    ):
-        rows = [row for row in scores.to_pylist() if row["item"] in pass_rates and accepts(pass_rates[row["item"]])]
-        if rows:
-            for key, value in scoring.evaluation_statistics(pa.Table.from_pylist(rows, schema=scores.schema)).items():
-                if key.endswith("/mean") and key.count("/") == 1:
-                    result[f"{key.removesuffix('/mean')}/difficulty/{band}/mean"] = value
-    return result
+def _change(row: Comparison) -> Change:
+    if row.delta is None:
+        return Change.UNAVAILABLE
+    return Change.BETTER if row.delta > row.tolerance else Change.WORSE if row.delta < -row.tolerance else Change.SAME
+
+
+def _breakdown_group(key: str) -> str:
+    if key.startswith("reward/domain/"):
+        return "Training reward per source"
+    parts = key.split("/")
+    dimension = parts[1] if len(parts) > 2 else "overall"
+    if dimension == "agentic":
+        dimension = "overall"
+    if "difficulty" in parts and dimension != "difficulty":
+        dimension += " x difficulty"
+    return f"{parts[0]}: {dimension}"
 
 
 def _compare(
     preset: presets.Preset,
     runs: Sequence[RunData],
     controls: Mapping[ControlPin, Sequence[RunData]],
+    requirements: Sequence[str] = (),
 ) -> tuple[list[GuardComparison], list[ReportedComparison], list[ReportedComparison]]:
     noise = calibrate({pin: [run.values for run in group] for pin, group in controls.items()})
     values = [run.values for run in runs]
     n_control = sum(map(len, controls.values()))
     guards = []
-    for metric in preset.guards:
-        row = _comparison(metric, values, noise.get(metric.key), n_control, len(preset.guards))
+    relative = [parse_requirement(text) for text in requirements if parse_requirement(text).bound is None]
+    metrics = (*preset.guards, *(presets.Metric(item.key, item.higher_is_better) for item in relative))
+    for metric in metrics:
+        row = _comparison(metric, values, noise.get(metric.key), n_control, len(metrics))
         if row.delta is None:
             raise InvalidComparison(f"missing or non-finite guard metric: {metric.key}")
         if row.sd == 0:
-            raise InvalidComparison(f"control variation is zero for guard metric: {metric.key}")
-        guards.append(GuardComparison(**row.model_dump(), passes=row.delta >= -row.tolerance))
+            raise InvalidComparison(f"control variation is zero for guard metric: {metric.key}; use a number bound")
+        guards.append(GuardComparison(**row.model_dump(), passes=row.delta >= -row.tolerance, change=_change(row)))
     declared = {metric.key: metric for metric in preset.reported}
     prefixes = tuple(evaluation.name + "/" for evaluation in preset.evaluations)
-    keys = dict.fromkeys(key for row in values for key in row if key.startswith(prefixes) and key not in declared)
+    guard_keys = {metric.key for metric in metrics}
+    keys = dict.fromkeys(
+        key
+        for row in (*values, noise)
+        for key in row
+        if (key.startswith(prefixes) or key.startswith("reward/domain/"))
+        and (not key.startswith("reward/domain/") or key in noise)
+        and key not in declared
+        and key not in guard_keys
+    )
     details = [] if preset.focus == presets.Focus.SPEED else list(keys)
+    counts = Counter(map(_breakdown_group, (*details, *(key for key in declared if key.startswith(prefixes)))))
     reported = []
     for metric in (
         *declared.values(),
         *(presets.Metric(key, not key.endswith("all_wrong_fraction")) for key in details),
     ):
         row = _comparison(
-            metric, values, noise.get(metric.key), n_control, 1 if metric.key in declared else len(details)
+            metric,
+            values,
+            noise.get(metric.key),
+            n_control,
+            counts[_breakdown_group(metric.key)] if metric.key.startswith(prefixes) or metric.key in details else 1,
         )
-        change = Change.UNAVAILABLE
-        if row.delta is not None:
-            change = (
-                Change.BETTER
-                if row.delta > row.tolerance
-                else Change.WORSE if row.delta < -row.tolerance else Change.SAME
+        tasks, initializer = runs[0].slices.get(metric.key, (None, None))
+        control_values = [
+            run.values[metric.key] for group in controls.values() for run in group if metric.key in run.values
+        ]
+        reported.append(
+            ReportedComparison(
+                **row.model_dump(),
+                change=_change(row),
+                tasks=tasks,
+                initializer=initializer,
+                control_min=min(control_values) if control_values else None,
+                control_max=max(control_values) if control_values else None,
             )
-        reported.append(ReportedComparison(**row.model_dump(), change=change))
+        )
     return guards, reported[: len(declared)], reported[len(declared) :]
 
 
@@ -460,6 +549,29 @@ def _render_markdown(report: GateReport) -> str:
     for title, rows in (("Guards", report.guards), ("Reported", report.reported), ("Invariants", report.invariants)):
         rows = [row.model_dump() for row in rows]
         lines += ["", f"## {title}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
+    groups = {}
+    declared = {metric.key for metric in presets.PRESETS[report.preset].reported}
+    for row in report.reported:
+        if row.tasks is not None or row.metric not in declared:
+            groups.setdefault(_breakdown_group(row.metric), []).append(
+                {
+                    "slice": row.metric,
+                    "tasks": row.tasks,
+                    "initializer": row.initializer,
+                    "control mean (min-max)": (
+                        f"{row.control:.8g} ({row.control_min:.8g}-{row.control_max:.8g})"
+                        if row.control is not None
+                        else None
+                    ),
+                    "run": row.run,
+                    "Δ": row.delta,
+                    "τ": row.tolerance,
+                    "change": row.change,
+                }
+            )
+    lines += ["", "## Breakdown"]
+    for name, rows in groups.items():
+        lines += ["", f"### {name}", "", tabulate(rows, "keys", "github", floatfmt=".8g", missingval="unavailable")]
     return "\n".join([*lines, "", "## Gaps", "", *[f"- {gap}" for gap in report.gaps], ""])
 
 
@@ -506,7 +618,7 @@ def _write_gate(
             raise InvalidComparison("held-out panel task IDs differ")
         if any(candidate.missing_tokens for candidate in (*runs, *controls)):
             raise InvalidComparison("mismatch guard has missing or zero selected-token counts")
-        guards, declared, details = _compare(preset, runs, grouped)
+        guards, declared, details = _compare(preset, runs, grouped, inputs.requirements)
         reported = [*declared, *details]
         verdict, label, reason = _verdict(invariants, guards, declared)
     except (InvalidComparison, SkyRLReceiptLookupError, FileNotFoundError) as error:
@@ -559,6 +671,7 @@ def _gate_artifact(
         for pin in pins
     )
     rates = any(evaluation.source == "default" and _gated(evaluation, preset) for evaluation in preset.evaluations)
+    name += "-req-" + fingerprint_hash(canonical_json(inputs.requirements)) if inputs.requirements else ""
     return apply(
         name,
         _write_gate,
@@ -569,7 +682,7 @@ def _gate_artifact(
         control_paths=controls,
         pins=pins,
         inputs=inputs,
-        pass_rates_path=str(root / scoring.PASS_RATES_NAME / presets.PRESET_REVISION) if rates else None,
+        pass_rates_path=str(root / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION) if rates else None,
         output=OUT,
     )
 
@@ -598,14 +711,20 @@ def recorded_inputs(path: str) -> GateInputs:
         "snowball", list(argv), resilient_parsing=True, ignore_unknown_options=True, allow_extra_args=True
     )
     settings = tuple(map(presets.parse_setting, context.params.get("settings", ())))
-    return gate_inputs(settings, context.params.get("tasks_name"), context.params.get("init_name"))
+    return gate_inputs(
+        settings,
+        context.params.get("tasks_name"),
+        context.params.get("init_name"),
+        context.params.get("requirements", ()),
+    )
 
 
 @click.command(help=__doc__)
 @click.option("--preset", "preset_name", type=click.Choice(sorted(CONTROLS)), required=True)
 @click.option("--candidate", "candidate_name")
 @click.option("--leave-out", "leave_out")
-def main(preset_name: str, candidate_name: str | None, leave_out: str | None) -> None:
+@click.option("--require", "requirements", multiple=True)
+def main(preset_name: str, candidate_name: str | None, leave_out: str | None, requirements: tuple[str, ...]) -> None:
     if (candidate_name is None) == (leave_out is None):
         raise click.UsageError("choose --candidate NAME[@VERSION] or --leave-out r<index>")
     preset, pins = presets.PRESETS[preset_name], _pins(preset_name)
@@ -621,9 +740,11 @@ def main(preset_name: str, candidate_name: str | None, leave_out: str | None) ->
     namespace = user_owned_name(
         f"checkpoints/snowball-rl/rescore/{preset_name}-{fingerprint_hash(canonical_json((source, pins, index)))}"
     )
-    step = _gate_artifact(
-        f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), recorded_inputs(source), index
-    )
+    recorded = recorded_inputs(source)
+    inputs = GateInputs(recorded.settings, recorded.tasks, recorded.init, (*recorded.requirements, *requirements))
+    for text in inputs.requirements:
+        parse_requirement(text)
+    step = _gate_artifact(f"{namespace}/gate-n1-{pins[0].main_commit}", preset, (source,), inputs, index)
     report = run(step)[0]
     payload = {
         "report": str(StoragePath(report.path) / "gate_report.json"),
