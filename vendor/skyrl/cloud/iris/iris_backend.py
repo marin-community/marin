@@ -37,7 +37,7 @@ from rigging.config_discovery import find_project_root
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
-from cloud.iris.export_hf_checkpoint import export_terminal_policy
+from cloud.iris.export_hf_checkpoint import export_pending_policies
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     resolve_ray_spill_target,
@@ -334,8 +334,8 @@ class IrisBackend:
         with contextlib.redirect_stdout(sys.stderr):
             return launch(args, workspace)
 
-    def export_terminal_policy(self, config_path: Path) -> None:
-        export_terminal_policy(config_path)
+    def export_pending_policies(self, config_path: Path) -> None:
+        export_pending_policies(config_path)
 
 
 def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:

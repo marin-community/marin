@@ -1036,7 +1036,19 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     # HF model save callback
     if interval_hf_export_enabled(cfg):
         schedule = CheckpointSchedule.from_config(cfg)
-        if schedule.weight_steps:
+        export_steps = tuple(int(step) for step in cfg.trainer.get("hf_export_steps", ()))
+        if export_steps:
+            # The launcher derives the export steps from the checkpoints it scores;
+            # an export without a saved checkpoint has no marker and would kill the
+            # trainer at that step.
+            unsaved = [step for step in export_steps if not schedule.should_save_weights(step)]
+            if unsaved:
+                raise ValueError(
+                    f"trainer.hf_export_steps {unsaved} are not checkpoint steps "
+                    f"(checkpoint_steps={list(schedule.weight_steps)}, ckpt_interval={schedule.interval})"
+                )
+            callbacks.append(HFModelSaveCallback(save_steps=-1, save_at_steps=export_steps))
+        elif schedule.weight_steps:
             # Explicit checkpoint steps are the export steps: every export reads a
             # completed checkpoint marker, which only the schedule's weight steps
             # have. An interval would also fire between them and crash the run.

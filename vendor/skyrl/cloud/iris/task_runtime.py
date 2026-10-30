@@ -70,7 +70,7 @@ from marinskyrl.environment_contract import (
     ensure_debug_artifact_directories,
     ray_cluster_owner_environment,
 )
-from marinskyrl.hf_model import immutable_model_cache_key, validate_hf_model_weights
+from marinskyrl.hf_model import staged_model_path, validate_hf_model_weights
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
@@ -278,9 +278,22 @@ def stage_model(model_path: str, revision: str | None = None) -> None:
 
 
 def _metadata_path(source_uri: str, identity: str) -> str:
-    return os.path.join(
-        tempfile.gettempdir(), "marinskyrl", "model_metadata", immutable_model_cache_key(source_uri, identity)
-    )
+    return staged_model_path(source_uri, identity)
+
+
+def stage_cloud_teacher(source_uri: str, identity: str) -> None:
+    """Stage an object-store teacher export on this node, pinned by its manifest identity.
+
+    The teacher runtime reads it from ``staged_model_path(source_uri, identity)``.
+    """
+    manifest = load_model_manifest(source_uri)
+    if manifest.identity != identity:
+        raise ValueError(
+            f"Teacher manifest identity mismatch: pinned {identity}, found {manifest.identity} at {source_uri}"
+        )
+    local_path = staged_model_path(source_uri, identity)
+    staged_bytes = stage_artifact_model(source_uri, identity, local_path)
+    _log(f"Teacher staged on rank {_rank()}/{_num_tasks()}: {source_uri} -> {local_path} ({staged_bytes} bytes)")
 
 
 @dataclass(frozen=True)
@@ -2205,7 +2218,10 @@ def main() -> None:
             revision=(args.model_revision or None),
         )
     for teacher_model in args.prestage_teacher_models:
-        stage_model(teacher_model.path, revision=teacher_model.revision)
+        if is_cloud_uri(teacher_model.path):
+            stage_cloud_teacher(teacher_model.path, teacher_model.revision)
+        else:
+            stage_model(teacher_model.path, revision=teacher_model.revision)
     draft_model = args.draft_model
     if draft_model is not None:
         draft_model = prepare_draft_model(

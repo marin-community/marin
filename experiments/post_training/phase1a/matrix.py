@@ -79,6 +79,13 @@ WEIGHT_DECAY = 0.0
 MAX_GRAD_NORM = 1.0
 CHECKPOINT_STEPS = (10, 20, 30, 40, 50, 75, 100)
 OPTIMIZER_CHECKPOINT_STEPS = (10, 50, 100)
+# Scored checkpoints (decision 2026-10-26): every other checkpoint, ending at the
+# last one. HF exports are requested exactly here — an export converts a saved
+# checkpoint, so requesting one anywhere else would fail the trainer, and one at
+# every checkpoint would convert steps nobody scores.
+EXPORT_CHECKPOINT_STEPS = tuple(
+    step for index, step in enumerate(CHECKPOINT_STEPS) if index % 2 == 0 or index == len(CHECKPOINT_STEPS) - 1
+)
 SEEDS = (0, 1, 2)
 PHASE1A_CONDITIONS = (Condition.X, Condition.R, Condition.XR, Condition.X_PRIME, Condition.R_PRIME)
 # Phase 0c sweeps {0.5, 1, 2, 4} x 1e-6 over M1 and M4 on theta_X (control C10).
@@ -87,6 +94,12 @@ LR_SWEEP = (5e-7, 1e-6, 2e-6, 4e-6)
 # Snowball learner geometry from the OPD recipe: 4 nodes, PP2 x EP8.
 GPUS_PER_NODE = 8
 POLICY_NODES = 4
+# M4's pre-registered batch is 8 prompts/step; 4 policy nodes give DP=16 under
+# PP2 x EP8, which the runner rejected and would idle half. Standing decision
+# (2026-10-27): relax the runtime constraint, never the pre-registered design —
+# so M4 drops to 2 policy nodes (DP=8, nothing idle) while M1 keeps 4 to match
+# the completed sweep arm.
+M4_POLICY_NODES = 2
 M4_ROLLOUT_ENGINES = 2
 
 
@@ -149,7 +162,7 @@ def role_plan(run: RunPlan) -> SkyRLRolePlan:
         prompts = run.sequences_per_step // SAMPLES_PER_PROMPT
         return SkyRLRolePlan(
             colocate_all=False,
-            policy_num_nodes=POLICY_NODES,
+            policy_num_nodes=M4_POLICY_NODES,
             policy_num_gpus_per_node=GPUS_PER_NODE,
             num_inference_engines=M4_ROLLOUT_ENGINES,
             inference_engine_tensor_parallel_size=1,
@@ -180,7 +193,10 @@ def role_plan(run: RunPlan) -> SkyRLRolePlan:
 def topology(run: RunPlan) -> SkyRLTopology:
     """M4 adds two rollout nodes and one pinned node per teacher it routes to."""
     plan = role_plan(run)
-    nodes = POLICY_NODES if run.method is Method.M1 else POLICY_NODES + M4_ROLLOUT_ENGINES + len(run.tasks)
+    if run.method is Method.M1:
+        nodes = POLICY_NODES
+    else:
+        nodes = M4_POLICY_NODES + M4_ROLLOUT_ENGINES + len(run.tasks)
     return SkyRLTopology(num_nodes=nodes, gpus_per_node=GPUS_PER_NODE, gpu_variant="H100", role_plan=plan)
 
 
@@ -218,9 +234,11 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
     """The ``skyrl`` subtree for one run, with every matched field rendered explicitly.
 
     ``teachers`` maps each task to its expert (E_X, E_R) or, for the procedure null,
-    to B. M4 scores rollouts with them; M1's rows were sampled from them.
+    to B. M4 scores rollouts with them; M1 trains on fixed rows and takes none.
     """
-    if set(teachers) != set(run.tasks):
+    if run.method is Method.M1 and teachers:
+        raise ValueError(f"{run.name} is M1 and scores nothing; it takes no teachers")
+    if run.method is Method.M4 and set(teachers) != set(run.tasks):
         raise ValueError(f"{run.name} needs teachers for {sorted(run.tasks)}, got {sorted(teachers)}")
     recipe = _base_recipe()
     caps = {str(task): RESPONSE_CAP_TOKENS[task] for task in run.tasks}
@@ -234,12 +252,17 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
         seed=run.seed,
         checkpoint_steps=list(CHECKPOINT_STEPS),
         optimizer_checkpoint_steps=list(OPTIMIZER_CHECKPOINT_STEPS),
+        hf_export_steps=list(EXPORT_CHECKPOINT_STEPS),
         ckpt_interval=CHECKPOINT_STEPS[0],
         resume_mode="latest",
         micro_forward_batch_size_per_gpu=1,
         evaluation_runner="training",
         router_telemetry={"enabled": True},
     )
+    # Full optimizer saves in DP-local shards; fully_reshardable gathers a DP group's whole
+    # optimizer state onto one rank, which Snowball 67B does not survive. Every save also
+    # writes the FP32 master records weight analysis reads (master_records).
+    trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     trainer["policy"]["optimizer_config"].update(
         optimizer="AdamW",
         lr=run.learning_rate,
