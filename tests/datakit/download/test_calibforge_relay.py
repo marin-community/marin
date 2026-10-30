@@ -16,8 +16,8 @@ def _reply(analysis: str, keystrokes: str, task_complete: bool = False) -> dict:
     return {
         "analysis": analysis,
         "plan": "Run the next command.",
-        "commands": [{"keystrokes": keystrokes, "duration": 0.1}],
         "task_complete": task_complete,
+        "commands": [{"keystrokes": keystrokes, "duration": 0.1}],
     }
 
 
@@ -54,6 +54,7 @@ def test_relay_episode_keeps_teacher_reasoning_and_marks_trained_turns():
 
     assert doc["source_id"] == "episode-1"
     assert doc["source_train_turns"] == [False, False, False, True]
+    assert "train_turns" not in doc
     assert "Reasoning: /think" not in rendered
     assert PROMPT in rendered
     assert "<|start_think|>Look first.Let me look:\n\nThen write.<|end_think|>" in rendered
@@ -78,8 +79,8 @@ def test_assistant_reply_without_command_drops_the_episode(trained):
     assert row_to_chat_doc(row) == []
 
 
-@pytest.mark.parametrize("close_action", [False, True])
-def test_reasoning_example_keeps_the_actual_command(close_action):
+@pytest.mark.parametrize("missing_closers", [0, 1, 2, 3])
+def test_reasoning_example_keeps_the_actual_command(missing_closers):
     example = json.dumps(_reply("Example only.", "echo example\n"))
     action = _reply("Write the file.", "echo done > /app/out.txt\n", task_complete=True)
     action_json = json.dumps(action)
@@ -87,7 +88,7 @@ def test_reasoning_example_keeps_the_actual_command(close_action):
         "<|start_think|>An example would be "
         + example
         + ". Use the actual action.<|end_think|>"
-        + (action_json if close_action else action_json[:-1])
+        + (action_json[:-missing_closers] if missing_closers else action_json)
     )
     [doc] = row_to_chat_doc(
         _row(
@@ -117,3 +118,20 @@ def test_command_payload_wrapped_in_reasoning_is_retained():
         )
     )
     assert json.loads(doc["messages"][-1]["content"][0]["text"]) == action
+
+
+@pytest.mark.parametrize("trained", [False, True])
+def test_unclosed_reasoning_does_not_turn_an_example_into_an_action(trained):
+    example = json.dumps(_reply("Example only.", "echo example\n"))
+    actual = json.dumps(_reply("Write the file.", "echo done > /app/out.txt\n", task_complete=True))
+    row = _row(
+        [
+            {"role": "user", "content": PROMPT, "trained": False},
+            {
+                "role": "assistant",
+                "content": "<|start_think|>An example would be " + example + "\nThe actual command is " + actual,
+                "trained": trained,
+            },
+        ]
+    )
+    assert row_to_chat_doc(row) == []

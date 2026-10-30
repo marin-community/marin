@@ -50,7 +50,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
+from marin.datakit.download.terminus import TerminusParseMode, ThinkTokens, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -157,7 +157,7 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             return []
         messages, metadata = converted
     else:
-        messages = terminus_protocol_messages(conversations, TERMINUS_THINK_TOKENS)
+        messages = terminus_protocol_messages(conversations, TERMINUS_THINK_TOKENS, mode=TerminusParseMode.STRICT)
         if messages is None:
             return []
         metadata = {}
