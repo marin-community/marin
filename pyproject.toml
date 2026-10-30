@@ -92,6 +92,10 @@ constraint-dependencies = [
     "oauthlib>=4.0.0",
     # CVE-2026-111497: reject vulnerable transitive Brotli releases.
     "brotli>=1.2.1",
+    # Reject affected transitive releases while retaining upstream requirements.
+    "dnspython>=2.9.0",
+    "msgpack>=1.2.3",
+    "nltk>=3.10.4",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
@@ -112,10 +116,10 @@ override-dependencies = [
     "wheel>=0.46.2",
     "datasets>=3.1.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
-    "authlib>=1.7.2",
+    "authlib>=1.9.1",
     "cbor2>=6.0.1",
     "click>=8.3.1",
-    "gitpython>=3.1.59",
+    "gitpython>=3.2.0",
     "gradio>=6.14.0",
     "jupyter-server>=2.18.2",
     "jupyterlab>=4.6.4",

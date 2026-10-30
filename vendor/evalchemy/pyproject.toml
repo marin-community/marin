@@ -84,6 +84,7 @@ dev = [{ include-group = "test" }]
 [tool.uv]
 exclude-dependencies = ["litellm"]
 constraint-dependencies = [
+    "nltk>=3.10.4",
     # CVE-2026-115586: reject vulnerable transitive virtualenv releases.
     "virtualenv>=21.14.13",
 ]
