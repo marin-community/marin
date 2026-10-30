@@ -2908,7 +2908,7 @@ dev = [
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "marin-iris", extras = ["controller"], editable = "../../lib/iris" },
     { name = "memray", specifier = ">=1.19.3" },
-    { name = "nbconvert", specifier = ">=7.16.6" },
+    { name = "nbconvert", specifier = ">=7.17.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },
@@ -2921,7 +2921,7 @@ dev = [
 examples = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "nbconvert", specifier = ">=7.16.6" },
+    { name = "nbconvert", specifier = ">=7.17.2" },
     { name = "nbformat", specifier = ">=5.10.4" },
 ]
 test = [
@@ -3000,7 +3000,7 @@ requires-dist = [
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
@@ -3114,7 +3114,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=5.0.1,<6" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
@@ -5597,11 +5597,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.13.0"
+version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+    { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
 ]
 
 [package.optional-dependencies]

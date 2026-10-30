@@ -68,7 +68,7 @@ iris-run = "iris.cli.run:run"
 examples = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
-    "nbconvert>=7.16.6",
+    "nbconvert>=7.17.2",
     "nbformat>=5.10.4",
 ]
 test = [

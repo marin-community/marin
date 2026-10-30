@@ -28,9 +28,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use connectrpc::{
-    async_trait, ConnectError, Interceptor, Next, RequestContext, UnaryRequest, UnaryResponse,
-};
+use connectrpc::interceptor::{UnaryRequest, UnaryResponse};
+use connectrpc::{async_trait, ConnectError, Interceptor, Next, RequestContext};
 use tokio::sync::Semaphore;
 
 /// Default per-method slow-RPC threshold.
