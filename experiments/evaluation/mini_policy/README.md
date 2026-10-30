@@ -13,6 +13,8 @@ The directory contains task inventory and identity audits, random and learned se
 
 RL validation uses 65,536 total context tokens, 16,384 output tokens per turn, thinking enabled, Pi 0.87.0 for all agentic benchmarks, and generated-choice TruthfulQA. The separate original-policy index retains canonical benchmark-specific execution and MC2 TruthfulQA. The historical random-probe rank correlations use a fitted ridge predictor, which is not bundled in the validation datasets. Raw reward aggregation and the simplified execution profile have not been prospectively validated against the full policy.
 
+Frozen published revisions: Mini840 `bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7`; Micro210 `4564ed081c316bc3231ae5c3a53a46b39248c819`; index data/configs `d5d2f92ce4866c431063bd123ea31a3865530809`. Index metadata and public-readback verification are preserved at `f37d583e157163e4d1f43651447689f3a1339aef`. Pin these commits when downloading; unqualified links above are for browsing.
+
 ## Historical runtime and commands
 
 The exact dated launch manifests/configs are preserved compactly, without formatting changes, in `reproduction/runtime-configs-20261030.tar.gz`. Restore them before running historical timing/collection entrypoints:
