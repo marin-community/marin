@@ -27,6 +27,8 @@ CALENDAR_DATASET = "calendar"
 SCORER_PATH = "skyrl_gym/envs/nemotron_ultra/calendar.py"
 SLOT_MINUTES = 5
 """The granularity at which ``schedule`` searches start times."""
+MAX_SEARCH_STEPS = 100_000
+"""The start times that ``schedule`` tries before it gives up on an entry."""
 ROLES = ("system", "user", "assistant")
 NOON = 12 * 60
 
@@ -75,22 +77,30 @@ class CalendarScorer:
 
 def schedule(expected: Mapping[str, dict], scorer: CalendarScorer) -> list[dict] | None:
     """A schedule of the expected events that keeps each one's window and constraint, without overlaps, found by
-    backtracking over start times; ``None`` when there is none."""
-    events = sorted(expected.values(), key=lambda event: event["duration"], reverse=True)
-    placed: list[tuple[int, int, dict]] = []
-
-    def place(index: int) -> bool:
-        if index == len(events):
-            return True
-        event = events[index]
+    backtracking over start times from the event with the fewest of them; ``None`` when there is none, or when the
+    search passes ``MAX_SEARCH_STEPS`` (an entry that hard to schedule is not kept)."""
+    starts = {}
+    for event_id, event in expected.items():
         low, high = scorer.minutes(event["min_time"]), scorer.minutes(event["max_time"])
+        starts[event_id] = []
         for start in range(low, high - event["duration"] + 1, SLOT_MINUTES):
-            end = start + event["duration"]
-            if any(start < other_end and other_start < end for other_start, other_end, _ in placed):
-                continue
             entry = {"event_id": event["event_id"], "start_time": f"{start // 60:02d}:{start % 60:02d}"}
             entry["duration"] = event["duration"]
-            if not scorer.satisfies(entry, event):
+            if scorer.satisfies(entry, event):
+                starts[event_id].append((start, start + event["duration"], entry))
+    order = sorted(starts, key=lambda event_id: len(starts[event_id]))
+    placed: list[tuple[int, int, dict]] = []
+    steps = 0
+
+    def place(index: int) -> bool:
+        nonlocal steps
+        if index == len(order):
+            return True
+        for start, end, entry in starts[order[index]]:
+            steps += 1
+            if steps > MAX_SEARCH_STEPS:
+                return False
+            if any(start < other_end and other_start < end for other_start, other_end, _ in placed):
                 continue
             placed.append((start, end, entry))
             if place(index + 1):

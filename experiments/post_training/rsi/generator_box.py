@@ -227,7 +227,11 @@ async def generator_tasks(ideas: AsyncIterable[CapabilityIdea], config: Generato
                 # types nor the loop.
                 logger.exception("The generator of %s, %s failed", idea.capability_id, name)
                 continue
-            kept = [(question, entry) for question, entry in pairs if family.valid(question, entry)]
+            # Validity checks can be slow (a calendar's schedule search), so they run off the event loop, which also
+            # writes the training feed.
+            kept = await asyncio.to_thread(
+                lambda pairs=pairs, family=family: [(q, e) for q, e in pairs if family.valid(q, e)]
+            )
             logger.info("%s, %s: %d of %d instances are valid", idea.capability_id, name, len(kept), len(pairs))
             tasks = [
                 synthesized(family.task(f"{name}.generator-{k}", question, entry, capability), idea)

@@ -9,6 +9,7 @@ pytest.importorskip("taskforge")
 
 import base64
 import json
+import time
 from pathlib import Path
 
 from taskcompendium.models import (
@@ -114,3 +115,14 @@ def test_a_constraint_that_the_user_never_asked_for_is_invalid(scorer):
     noon = {**STATE, "2": {**STATE["2"], "constraint": "after 12pm"}}
     by_noon = [*MESSAGES[:-1], {"role": "user", "content": MESSAGES[-1]["content"] + " Lunch starts at noon or later."}]
     assert valid_calendar({"messages": by_noon, "exp_cal_state": noon}, scorer)
+
+
+def test_an_unschedulable_entry_is_rejected_quickly(scorer):
+    # Nine 50-minute events cannot fit in six hours; an exhaustive search would try every arrangement.
+    crowded = {
+        str(k): {"event_id": k, "duration": 50, "constraint": None, "min_time": "10:00", "max_time": "16:00"}
+        for k in range(9)
+    }
+    started = time.monotonic()
+    assert schedule(crowded, scorer) is None
+    assert time.monotonic() - started < 5
