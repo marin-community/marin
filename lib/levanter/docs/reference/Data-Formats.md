@@ -192,6 +192,27 @@ Direct datasets are expected to yield `LmExample` instances that already include
 ---
 
 
+## Image-caption and image-conversation records
+
+`levanter.data.image` provides `ImageDatasetSourceConfig` for image-caption pairs
+and `ConversationDatasetSourceConfig` for messages with image references.
+Sources support JSON, JSONL, and Parquet; Parquet readers resume by row and stream
+row groups. Image references can contain bytes, local paths, or URLs. `hf://`
+references use the configured Hugging Face credentials through `StoragePath`.
+
+`BatchMultimodalProcessor` accepts images and text together, applies the wrapped
+Hugging Face processor, and builds assistant-token loss masks. Pass `max_length`
+explicitly when constructing it directly. `ImageTaskConfig.max_length` supplies
+the dataset configuration default of 2048 tokens.
+
+Image tile dimensions come from the wrapped image processor's crop or resize
+configuration. The feature-grid height for any-resolution processing uses the processor's encoder
+`patch_size` in pixels; the data layer does not assume a 384-pixel tile or a 14-pixel patch.
+Configure square image tiles. Direct processor construction also accepts explicit
+`tile_size` in pixels, `grid_pinpoints` in pixels, `vision_feature_height` in
+encoder tokens per tile side, and `max_num_patches` (additional image tiles beyond
+the base tile) overrides. This processor supports images and text only.
+
 # API
 
 

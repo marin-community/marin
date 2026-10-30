@@ -39,7 +39,7 @@ from rich.panel import Panel
 import levanter
 import levanter.config
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import HfLmCheckpointConverter, load_tokenizer
 from levanter.tokenizers import MarinTokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import (
@@ -105,7 +105,7 @@ def _load_model(
                 + f"vocab_size={Vocab}, "
                 + f"dtype={trainer_config.mp.compute_dtype}"
             )
-            converter: HFCheckpointConverter = HFCheckpointConverter(
+            converter: HfLmCheckpointConverter = HfLmCheckpointConverter(
                 type(model_config),
                 reference_checkpoint=hf_checkpoint,
                 tokenizer=tokenizer,
