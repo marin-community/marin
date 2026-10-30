@@ -320,13 +320,14 @@ def test_snowball_rejects_off_recipe(overrides, message):
 
 
 def test_snowball_load_path_multidevice_sharding():
-    """The load-path forward must survive a data-sharded mesh (regression for the 67B router_bias).
+    """The load path must undo safetensors staging shardings on a multi-device mesh.
 
-    ``g()``-loaded leaves (norm weights, router_bias) inherit the sharding of the incoming state
-    dict, and a safetensors load auto-shards ``[E]``/``[D]`` tensors over ``data`` when the size
-    divides the axis. On a single device this is invisible; with 8 devices, ``router_logits +
-    router_bias`` was illegally sharded. Runs in a fresh 8-CPU-device interpreter (XLA device count
-    is process-global) and force-shards the state dict like safetensors to reproduce the condition.
+    A safetensors load auto-shards ``[E]``/``[D]`` tensors over ``data`` when the size divides the
+    axis. With 8 devices, that made ``router_logits + router_bias`` illegally sharded (the 67B
+    regression). Loaded leaves must also match the init sharding, which a resumed run restores, or
+    its checkpoint saves get a different chunk layout. Runs in a fresh 8-CPU-device interpreter
+    (XLA device count is process-global) and force-shards the state dict like safetensors to
+    reproduce the condition.
     """
     script = textwrap.dedent(
         """
@@ -378,6 +379,16 @@ def test_snowball_load_path_multidevice_sharding():
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
+        # A resumed run restores with the init layout, and checkpoint chunking follows sharding,
+        # so a different layout here makes a resumed save collide with this run's checkpoints.
+        template_specs = jax.tree_util.tree_leaves_with_path(jax.tree.map(lambda x: x.sharding.spec, template))
+        loaded_specs = jax.tree.leaves(jax.tree.map(lambda x: x.sharding.spec, loaded))
+        mismatched = [
+            (jax.tree_util.keystr(path), want, got)
+            for (path, want), got in zip(template_specs, loaded_specs, strict=True)
+            if want != got
+        ]
+        assert not mismatched, f"HF-loaded shardings differ from init: {mismatched}"
         print("OK")
         """
     )
