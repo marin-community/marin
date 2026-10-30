@@ -20,6 +20,7 @@ dependencies = [
     "marin-finestore",
     "marin-iris",
     "marin-rigging[prometheus]",
+    "marin-rolloutengine",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",

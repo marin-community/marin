@@ -8,7 +8,7 @@ import json
 
 import pytest
 from pydantic import ValidationError
-from verifyit.spec import ExactSpec
+from verifyit.spec import ExactSpec, JudgeSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
@@ -52,6 +52,14 @@ def specification():
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
+
+
+@pytest.mark.parametrize("answer_type", [AnswerType.FILE, AnswerType.WORKSPACE_STATE])
+def test_host_judge_rejects_workspace_answer_before_admission(specification, answer_type):
+    wire = specification.model_dump()
+    wire.update(answer_type=answer_type, grader=verifyit_package(JudgeSpec(references=("done",))).grader)
+    with pytest.raises(ValidationError, match="requires a grading environment"):
+        TaskSpec.model_validate(wire)
 
 
 @pytest.mark.parametrize(

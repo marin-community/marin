@@ -2984,6 +2984,61 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
     assert request["model"] == "environment-judge"
 
 
+@pytest.mark.parametrize(
+    "source_model,connection",
+    [
+        pytest.param(
+            "fixture-judge", JudgeConnection("http://judge.invalid/v1", "runtime-private-key"), id="source-model"
+        ),
+        pytest.param("", JudgeConnection("http://judge.invalid/v1", "runtime-private-key"), id="ambient-model"),
+        pytest.param("", None, id="ambient-connection"),
+    ],
+)
+async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monkeypatch, source_model, connection):
+    monkeypatch.setenv(BASE_URL_ENV, "http://judge.invalid/v1")
+    monkeypatch.setenv(API_KEY_ENV, "runtime-private-key")
+    monkeypatch.setenv(MODEL_ENV, "ambient-must-not-win" if source_model else "fixture-judge")
+    source_task = judge_task()
+    judge = JudgeSpec(
+        references=("12",),
+        rubric=RUBRIC_LABELS,
+        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+        label_scores={"PASS": 1.0, "FAIL": 0.0},
+        model=source_model,
+    )
+    script = (
+        b'test "$VERIFYIT_JUDGE_API_KEY" = runtime-private-key || exit 1\n'
+        b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
+        b'test "$VERIFYIT_JUDGE_BASE_URL" = http://judge.invalid/v1 || exit 1\n'
+        b"test -f /tests/judge.toml || exit 1\n"
+        b'printf \'{"status":"scored","reward":1,"detail":{"model":"fixture-judge"}}\' > /logs/verifier/verdict.json\n'
+    )
+    task = source_task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("sh", "/tests/grade.sh"),
+                environment=GRADER_ENVIRONMENT,
+                judge=judge,
+                reward=FileReward(
+                    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                ),
+            ),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
+        }
+    )
+    factory = RecordingShellSimFactory()
+    spec = rollout_spec(
+        task,
+        verifier_machine=machine_runtime(),
+        judge_connection=connection,
+    )
+    record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade
+    assert len(factory.machines) == 1
+    assert "runtime-private-key" not in spec.model_dump_json()
+    assert "runtime-private-key" not in json.dumps(record.grade.diagnostics)
+
+
 def test_a_judge_connection_never_reaches_the_serialized_spec():
     spec = rollout_spec(judge_task(), judge_connection=JudgeConnection("http://judge.invalid/v1", "private-test-key"))
     serialized = spec.model_dump_json()

@@ -28,6 +28,7 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
+    MathJudgeSpec,
     MathSpec,
     McqSpec,
     Mode,
@@ -298,6 +299,8 @@ def positive_candidate(spec: Spec) -> str | None:
         return f"Answer: {spec.expected}"
     if isinstance(spec, MathSpec | NumericSpec):
         return f"\\boxed{{{spec.expected}}}"
+    if isinstance(spec, MathJudgeSpec):
+        return f"\\boxed{{{spec.math.expected}}}"
     if isinstance(spec, ExactSpec):
         return "\n".join(spec.expected)
     if isinstance(spec, JudgeSpec):

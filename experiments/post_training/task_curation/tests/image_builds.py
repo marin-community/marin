@@ -17,7 +17,8 @@ from experiments.post_training.task_curation.images import build
 REPOSITORY = "registry.invalid/fixture/images"
 REQUIREMENTS = ("numpy==2.3.5",)
 COMPILED_LOCK = "numpy==2.3.5 \\\n    --hash=sha256:" + hashlib.sha256(b"numpy==2.3.5").hexdigest() + "\n"
-"""What the ``uv`` stand-in compiles ``REQUIREMENTS`` to."""
+COMPILED_LOCK += "tomli-w>=1.2 \\\n    --hash=sha256:" + hashlib.sha256(b"tomli-w>=1.2").hexdigest() + "\n"
+"""What the stand-in compiles the declared packages and Verifyit's base dependency to."""
 TOOLCHAIN_FRAGMENT = "ENV TOOLCHAIN_HOME=/opt/toolchain\nRUN mkdir -p /opt/toolchain && touch /opt/toolchain/ready\n"
 ARCHIVE_URL = "https://archives.invalid/fixture/data.zip"
 DATA_PATH = "/srv/fixture/english"

@@ -89,12 +89,16 @@ EMBEDDING_STAGES = (
 
 
 def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
-    """The named catalog sources in catalog order, or the whole catalog when none is named."""
+    """Select named sources, or training sources when no names are supplied."""
     catalog = runnable_sources()
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
-    return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
+    return {
+        name: pipeline
+        for name, pipeline in catalog.items()
+        if (name in sources if sources else pipeline.declaration.type != "eval")
+    }
 
 
 def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
@@ -133,7 +137,13 @@ def _conversion_steps(
         step = cast(CurationPipeline, source.pipeline)(source, options)
         declaration = source.declaration
         assert declaration.pipeline is not None
-        identity = canonical_sha256({"pipeline": declaration.pipeline.model_dump(), "dependencies": step.fingerprint()})
+        identity = canonical_sha256(
+            {
+                "pipeline": declaration.pipeline.model_dump(),
+                "step": f"{step.name}@{step.version}",
+                "dependencies": step.fingerprint(),
+            }
+        )
         steps[source.name] = replace(
             step, name=f"rl-semantics/converted/{source.name}-{identity[:16]}", version=CORPUS_CONVERSION_VERSION
         )
@@ -534,6 +544,10 @@ def main(
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
     selected = _selected_sources(sources)
+    if processing_mode != SourceProcessingMode.QUICK and any(
+        source.declaration.type == "eval" for source in selected.values()
+    ):
+        raise click.UsageError("Evaluation sources use --mode quick to publish their full benchmark population")
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
     if publication_catalog is not None and (

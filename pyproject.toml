@@ -485,6 +485,9 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    # Canonical upstream instruction checkers; wrappers remain checked.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
     "vendor/evalchemy/**",
     "vendor/harbor/**",

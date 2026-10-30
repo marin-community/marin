@@ -13,6 +13,9 @@ from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
+    MathJudgeSpec,
+    MathProfile,
+    MathSpec,
     McqSpec,
     NumericSpec,
     ScriptSpec,
@@ -319,6 +322,55 @@ def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_s
 
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
     assert len(judge_server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "reply,status,expected_status,expected_reward",
+    [
+        ("correct", 200, Outcome.GRADED, 1.0),
+        ("incorrect", 200, Outcome.GRADED, 0.0),
+        ("Maybe correct", 200, Outcome.INFRA_ERROR, None),
+        ("correct", 400, Outcome.INFRA_ERROR, None),
+    ],
+)
+def test_math_judge_task_roundtrip_routes_extracted_answer_and_keeps_provider_failures_unscored(
+    judge_server,
+    reply,
+    status,
+    expected_status,
+    expected_reward,
+):
+    judge_server.reply = reply
+    judge_server.status_code = status
+    package = verifyit_package(
+        MathJudgeSpec(
+            math=MathSpec(expected="2", profile=MathProfile.BOXED),
+            judge=JudgeSpec(
+                references=("2",),
+                rubric=RUBRIC_LABELS,
+                exact_gate=False,
+                prompt_template="Reference: {reference}\nCandidate: {candidate}",
+                label_scores={"correct": 1.0, "incorrect": 0.0, "not_attempted": 0.0},
+                label_scan="whole",
+                label_case="upper",
+                model="fixture-judge",
+                max_completion_tokens=2048,
+            ),
+        )
+    )
+    task = TaskSpec.model_validate_json(_task(package.grader).model_dump_json())
+    result = grade_task(
+        task,
+        _attempt(task, r"\boxed{2} then \boxed{4}"),
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+    assert (result.status, result.reward) == (expected_status, expected_reward)
+    assert judge_server.requests[0]["messages"] == [
+        {
+            "role": "user",
+            "content": "Reference: 2\nCandidate: 4",
+        }
+    ]
 
 
 @pytest.mark.parametrize("state,reward", [("null", 1.0), ('{"value": 1}', 0.0)])

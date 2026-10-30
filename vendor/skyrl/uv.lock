@@ -3115,6 +3115,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=5.0.1,<6" },
+    { name = "ijson", marker = "extra == 'pipeline'", specifier = ">=3.3" },
     { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-shellbox", editable = "../../lib/shellbox" },
@@ -3123,6 +3124,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
     { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tiktoken", marker = "extra == 'pipeline'", specifier = ">=0.8" },
     { name = "tomlkit", specifier = ">=0.13" },
 ]
 provides-extras = ["pipeline"]

@@ -1,4 +1,4 @@
-# RL data curation
+# Task data curation
 
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
@@ -35,11 +35,17 @@ review, grader execution, resource admission and deduplication. Outputs are
 `normalize/*.parquet`, `manifest.json` and `campaign.json`, with no admitted
 `final/` view. Failed sources are recorded while the rest continue.
 
+Evaluation sources also use QUICK, with stricter publication checks that preserve
+the complete benchmark population. They publish canonical TaskSpec rows and
+evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
+for declarations, outputs and the standard evaluation driver.
+
 Select `--mode quick`, `sample` or `full`, or resume with `--corpus` as described
 below. Omit `--run` to print a plan without downloading, converting or starting
 workers. QUICK preserves named sources in request order, ignoring repeated names.
-SAMPLE/FULL select sources in catalog order. Omitting `--source` selects every
-runnable source. Local QUICK needs no review model, controller, worker image or
+SAMPLE/FULL select sources in catalog order. Omitting `--source` selects runnable
+training sources. Select evaluation sources explicitly with `--mode quick`.
+Local QUICK needs no review model, controller, worker image or
 coordinator settings.
 
 Remote artifacts default to `s3://marin-us-east-02a/marin` on CW, independently
@@ -331,7 +337,7 @@ Add `--run` to execute. List runnable source names with:
 uv run python -c 'from experiments.post_training.task_curation.sources import runnable_sources; print("\n".join(runnable_sources()))'
 ```
 
-Repeat `--source NAME` to select sources; omit it for every runnable source. QUICK skips grading and admission, preserves
+Repeat `--source NAME` to select sources; omit it for runnable training sources. QUICK skips grading and admission, preserves
 converter rejections, and writes `corpus.json` after all selected sources finish.
 Conversion artifacts retain their pinned acquisition graph and recipe identities.
 The manifest includes completed source roots, immutable source-manifest hashes,

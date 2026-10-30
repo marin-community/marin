@@ -6,8 +6,10 @@
 import json
 from collections.abc import Callable
 
-from verifyit.adapters.skyrl import grade_literal_candidate
 from verifyit.grade import Aggregation, Reward, Status, aggregate_rewards, invalid_task
+from verifyit.modes.grade_exact import grade_literal_candidate
+
+from .nupa_preparation import NupaAnswerFormat, digit_parts, extract_answer, full_answer
 
 ALIGNMENT = {
     "Integer": (True,),
@@ -67,3 +69,21 @@ def grade_nupa_answer(
         "no_answer": float(not format_valid),
     }
     return Reward(exact.reward, exact.status, {**exact.detail, "metrics": metrics, "extracted": extracted})
+
+
+def grade_nupa_candidate(expected: str, answer_format: str, candidate: str) -> Reward:
+    """Retain source exact/digit/length/format metrics without numeric equivalence."""
+    representation = NupaAnswerFormat(answer_format)
+    verdict = grade_nupa_answer(
+        candidate,
+        expected,
+        representation,
+        extract_answer=extract_answer,
+        full_answer=full_answer,
+        digit_parts=digit_parts,
+    )
+    if verdict.status is not Status.SCORED:
+        return verdict
+    names = {"format_valid": "format_valid_rate", "no_answer": "no_answer_rate"}
+    metrics = {names.get(name, name): value for name, value in verdict.detail["metrics"].items()}
+    return Reward(verdict.reward, verdict.status, {**verdict.detail, "metrics": metrics})
