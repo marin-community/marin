@@ -10,9 +10,10 @@ requires at token granularity, not text presence.
 """
 
 import gzip
-import inspect
+import itertools
 import json
 import os
+from dataclasses import replace
 
 import pytest
 from transformers import AutoTokenizer
@@ -20,7 +21,13 @@ from transformers.utils.chat_template_utils import _compile_jinja_template
 
 import experiments.post_training.stage0.convert as convert_module
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES
-from experiments.post_training.axolotl_sft.launcher import axolotl_config, launch_axolotl
+from experiments.post_training.axolotl_sft.launcher import (
+    GPUS_PER_NODE,
+    ROUTER_AUX_LOSS_PLUGIN,
+    AttentionKernel,
+    PromptStrategy,
+    axolotl_config,
+)
 from experiments.post_training.chat_template import (
     FAMILY_TOKEN_MAPS,
     GRUG_TOKENS,
@@ -33,7 +40,9 @@ from experiments.post_training.chat_template import (
 )
 from experiments.post_training.stage0 import budget
 from experiments.post_training.stage0.axolotl_stage0 import (
+    QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT,
     ROUTER_AUX_LOSS,
+    qwen_native_curriculum_specs,
     stage_optimizer,
     stage_output,
     stage_specs,
@@ -54,10 +63,13 @@ from experiments.post_training.stage0.convert import (
 from experiments.post_training.stage0.snowball_stage0 import (
     BASE_HF_ID,
     BASE_REVISION,
+    SMOKE_ROWS_PER_SOURCE,
+    smoke_run,
     snowball_stage0,
     stage0_convert,
+    stage_chat_cache,
 )
-from experiments.sft.launcher import _TRAIN_RESOURCES, ArtifactDatasetSpec
+from experiments.sft.launcher import _TRAIN_RESOURCES, ArtifactDatasetSpec, sft_run_id
 
 _HF_REVISIONS = {
     "grug": ("open-athena/snowball-67b-a2b-base-262k-qk175", "11c9430da3075ef4596f92ee0af142d9d08215c1"),
@@ -246,6 +258,32 @@ def test_convert_source_filters_one_row_id_set_over_the_cap(tmp_path):
     ]
 
 
+def test_convert_source_drops_and_records_rows_with_an_unclosed_think_block(tmp_path):
+    rows = iter(
+        [
+            {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "<think>never closed"}]},
+            {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "<think>r</think>a"}]},
+        ]
+    )
+    spec = SourceSpec(
+        name="nemotron-science-reasoning",
+        repo="laion/llama-nemotron-science-reasoning-on-canonical-think-full",
+        revision="bae881d",
+        config=None,
+        adapt=adapt_nemotron_science,
+    )
+    entry = convert_source(
+        spec,
+        str(tmp_path),
+        load_dataset=lambda *args, **kwargs: rows,
+        render_lengths=lambda messages: {family: 10 for family in FAMILY_TOKEN_MAPS},
+    )
+    assert (entry["rows"], entry["seen"], entry["dropped_unclosed_think"]) == (1, 2, 1)
+    with gzip.open(tmp_path / "nemotron-science-reasoning.jsonl.gz", "rt") as handle:
+        (kept,) = [json.loads(line) for line in handle]
+    assert kept["messages"][1] == {"role": "assistant", "content": "a", "reasoning_content": "r"}
+
+
 def test_convert_source_raises_when_everything_is_dropped(tmp_path):
     def fake_load_dataset(repo, config, revision, split, streaming):
         return iter([{"messages": [{"role": "user", "content": "long"}, {"role": "assistant", "content": "x"}]}])
@@ -289,7 +327,10 @@ def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
     convert_module.STAGE0_SOURCES = tuple(specs[name] for name in STAGE_ORDER)
     try:
         manifest = build_manifest(
-            str(tmp_path), load_dataset=fake_load_dataset, render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS}
+            str(tmp_path),
+            load_dataset=fake_load_dataset,
+            render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS},
+            check_tokens=False,
         )
     finally:
         convert_module.STAGE0_SOURCES = original_sources
@@ -408,12 +449,12 @@ def test_axolotl_stages_chain_through_the_launchers_real_output_layout():
         # (os.path.join(output_root, spec.name)), never a separately recomputed path.
         for index, spec in enumerate(specs):
             if index == 0:
-                assert spec.init_checkpoint is None
+                assert spec.init_uri is None
             else:
                 expected = os.path.join(output_root, specs[index - 1].name)
-                assert spec.init_checkpoint == expected == stage_output(specs[index - 1], output_root=output_root)
+                assert spec.init_uri == expected == stage_output(specs[index - 1], output_root=output_root)
         for source, spec in zip(STAGE_ORDER, specs, strict=True):
-            assert spec.data_manifest == f"{data_root}/{source_filename(source)}"
+            assert spec.data_uri == f"{data_root}/{source_filename(source)}"
 
 
 def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
@@ -433,7 +474,7 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
 
     base_names = {base.architecture: base_name for base_name, base in AXOLOTL_BASES.items()}
     # The launcher launches 8 processes per node; anything else re-derives the budget.
-    gpus_per_node = inspect.signature(launch_axolotl).parameters["gpus_per_node"].default
+    gpus_per_node = GPUS_PER_NODE
     assert gpus_per_node == 8
     templates = {}
     for architecture, base_name in base_names.items():
@@ -441,18 +482,18 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
         for spec in specs:
             assert spec.sequence_len == SEQUENCE_LEN
             assert spec.epochs == EPOCHS_PER_STAGE
-            assert spec.sample_packing is False
-            # Global batch 64 examples = 8 per device x 8 GPUs x accumulation 1 — matched
+            # Global batch 64 examples = 1 per device x 16 GPUs x accumulation 4 — matched
             # to the Snowball run.
             assert spec.per_device_batch_size == PER_DEVICE_BATCH
             assert spec.gradient_accumulation_steps == GRADIENT_ACCUMULATION_STEPS
-            assert spec.per_device_batch_size * gpus_per_node * spec.gradient_accumulation_steps == GLOBAL_BATCH
+            assert spec.global_batch == GLOBAL_BATCH
             # The family's shared-template instance, identical on every stage of the base.
             assert spec.chat_template == shared_template(FAMILY_TOKEN_MAPS[architecture])
-            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
+            config = axolotl_config(spec)
+            assert config["sample_packing"] is True and config["pad_to_sequence_len"] is True
             assert config["sequence_len"] == SEQUENCE_LEN
             assert config["num_epochs"] == EPOCHS_PER_STAGE
-            assert config["per_device_train_batch_size"] == PER_DEVICE_BATCH
+            assert config["micro_batch_size"] == PER_DEVICE_BATCH
             assert config["gradient_accumulation_steps"] == GRADIENT_ACCUMULATION_STEPS
         templates[architecture] = specs[0].chat_template
     # One structure per family: the two Qwen bases share an instance, Nemotron differs.
@@ -470,13 +511,29 @@ def test_axolotl_stage_1_pins_the_base_and_later_stages_init_from_the_chain():
     base_name = "qwen3-30b-a3b-base"
     output_root = "/out"
     specs = stage_specs(base_name, data_root="/data", output_root=output_root)
-    stage1_config = axolotl_config(specs[0], scratch_output_dir=f"/scratch/axolotl/{specs[0].name}")
+    stage1_config = axolotl_config(specs[0])
     assert stage1_config["base_model"] == specs[0].base.hf_id
     assert stage1_config["revision_of_model"] == specs[0].base.revision
     for index in (1, 2):
-        config = axolotl_config(specs[index], scratch_output_dir=f"/scratch/axolotl/{specs[index].name}")
-        assert config["base_model"] == specs[index].init_checkpoint
-        assert config["base_model"] == f"{output_root}/{specs[index - 1].name}"
+        # The pod runner stages init_uri locally and points base_model at it.
+        assert specs[index].init_uri == f"{output_root}/{specs[index - 1].name}"
+
+
+def test_a_qwen_stage_without_the_router_aux_plugin_fails_at_construction():
+    from experiments.post_training.axolotl_sft.launcher import ROUTER_AUX_LOSS_PLUGIN  # noqa: PLC0415
+    from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415
+        require_router_aux_loss,
+        stage_specs,
+    )
+
+    spec = stage_specs("qwen3-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    config = axolotl_config(spec)
+    assert ROUTER_AUX_LOSS_PLUGIN in config["plugins"]
+    regressed = dict(config, plugins=[p for p in config["plugins"] if p != ROUTER_AUX_LOSS_PLUGIN])
+    with pytest.raises(ValueError, match="router aux loss is required"):
+        require_router_aux_loss(spec, regressed)
+    nemotron = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    require_router_aux_loss(nemotron, axolotl_config(nemotron))  # NemotronH's recorded deviation: off
 
 
 def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
@@ -503,7 +560,7 @@ def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
     assert optimizer.warmup_steps == WARMUP_STEPS
     assert optimizer.max_grad_norm == MAX_GRAD_NORM
     spec = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
-    config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
+    config = axolotl_config(spec)
     assert config["learning_rate"] == optimizer.learning_rate
     assert config["adam_beta1"] == ADAM_BETA1
     assert config["adam_beta2"] == ADAM_BETA2
@@ -515,6 +572,7 @@ def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
 
 def test_axolotl_router_policy_is_explicit_per_architecture():
     from experiments.post_training.axolotl_sft.launcher import (  # noqa: PLC0415 - pulls the launcher's iris stack
+        ROUTER_AUX_LOSS_PLUGIN,
         axolotl_config,
     )
     from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415 - pulls the launcher's iris stack
@@ -526,14 +584,49 @@ def test_axolotl_router_policy_is_explicit_per_architecture():
         expected = ROUTER_AUX_LOSS[base.architecture]
         for spec in specs:
             assert spec.output_router_logits is expected
-            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
-            # The key emits only when the aux loss trains; its absence IS the
-            # False case (the launcher never dispatches on architecture itself).
-            assert ("output_router_logits" in config) is expected
+            assert (ROUTER_AUX_LOSS_PLUGIN in axolotl_config(spec)["plugins"]) is expected
     # The deviation is deliberate: Qwen arms carry the aux loss, Nemotron-H does not.
     assert ROUTER_AUX_LOSS["qwen3_moe"] is True
     assert ROUTER_AUX_LOSS["qwen3_5_moe"] is True
     assert ROUTER_AUX_LOSS["nemotron_h"] is False
+
+
+# The pinned Qwen3-30B-A3B-Base template with generation markers (stage0/qwen3_native_template.py).
+QWEN3_NATIVE_TEMPLATE_SHA256 = "d8fd920a1572fc0db59063895afceaad3423a6dbffcfb5fa198c8ecbe9612dcb"
+
+
+def test_qwen3_native_curriculum_chains_three_stages_from_the_base_under_its_own_root():
+    specs = qwen_native_curriculum_specs("qwen3-30b-a3b-base", data_root="/data/cl12")
+    assert [spec.name for spec in specs] == [
+        f"stage0-qwen3-30b-a3b-base/s{index + 1}-{source}" for index, source in enumerate(STAGE_ORDER)
+    ]
+    assert specs[0].init_uri is None
+    assert axolotl_config(specs[0])["base_model"] == "Qwen/Qwen3-30B-A3B-Base"
+    for previous, spec in itertools.pairwise(specs):
+        assert spec.init_uri == f"{QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT}/{previous.name}"
+
+
+def test_qwen3_native_curriculum_differs_from_the_shared_one_only_in_template_labels_and_kernel():
+    native = qwen_native_curriculum_specs("qwen3-30b-a3b-base", data_root="/data/cl12")
+    shared = stage_specs("qwen3-30b-a3b-base", data_root="/data/cl12", output_root=QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT)
+    for native_spec, shared_spec in zip(native, shared, strict=True):
+        assert native_spec.template_sha256 == QWEN3_NATIVE_TEMPLATE_SHA256
+        assert native_spec.prompt_strategy is PromptStrategy.GENERATION_MASK
+        config = axolotl_config(native_spec)
+        assert config["chat_template_jinja"] == native_spec.chat_template
+        assert config["datasets"][0]["type"] == PromptStrategy.GENERATION_MASK.value
+        assert native_spec.output_router_logits is True
+        assert ROUTER_AUX_LOSS_PLUGIN in config["plugins"]
+        assert config["attn_implementation"] == AttentionKernel.FLASH_ATTN3.value
+        assert axolotl_config(shared_spec)["attn_implementation"] == AttentionKernel.SDPA.value
+        # Data, optimizer, batch, epochs, seed, nodes and the init chain are the shared stage's.
+        assert native_spec == replace(
+            shared_spec,
+            chat_template=native_spec.chat_template,
+            template_sha256=native_spec.template_sha256,
+            prompt_strategy=PromptStrategy.GENERATION_MASK,
+            attn_implementation=AttentionKernel.FLASH_ATTN3,
+        )
 
 
 @pytest.mark.skipif(not _hf_reachable(), reason="HF hub unreachable")
@@ -569,6 +662,9 @@ def test_snowball_stage0_chain_matches_the_budget_and_reads_the_converted_artifa
         assert spec.batch_size == GLOBAL_BATCH
         assert spec.seq_len == SEQUENCE_LEN
         assert spec.num_train_epochs == EPOCHS_PER_STAGE
+        # #8225's packed epoch: the step count counts packed sequences, so an unpacked
+        # run would see only a fraction of the rows.
+        assert spec.pack is True
         # The Grug instance of the shared template, and the one the length filter used.
         assert spec.chat_template == shared_template(GRUG_TOKENS)
         # #8225's optimizer, on every stage.
@@ -597,6 +693,39 @@ def test_snowball_stage0_chain_matches_the_budget_and_reads_the_converted_artifa
     assert not any(dep is graph.steps["s1-chat"] for dep in graph.steps["s1-chat"].deps)
 
 
+def test_snowball_smoke_runs_the_same_recipe_on_the_ladder_model_and_truncated_data():
+    full, smoke = snowball_stage0(), snowball_stage0(smoke_run())
+    assert smoke.convert.name == f"documents/stage0-cl12-first{SMOKE_ROWS_PER_SOURCE}"
+    assert smoke.convert.name != full.convert.name
+    for stage_name in full.specs:
+        full_spec, smoke_spec = full.specs[stage_name], smoke.specs[stage_name]
+        assert smoke_spec.name != full_spec.name
+        assert smoke_spec.datasets[0].artifact is smoke.convert
+        # Only the model, data size, batch and hardware differ.
+        for field in ("chat_template", "optimizer", "seq_len", "pack", "num_train_epochs"):
+            assert getattr(smoke_spec, field) == getattr(full_spec, field), field
+        assert smoke.steps[stage_name].runtime_args[_TRAIN_RESOURCES].replicas == 1
+
+
+def test_snowball_stage_runs_have_distinct_tracker_ids():
+    ids = [
+        sft_run_id(spec) for graph in (snowball_stage0(), snowball_stage0(smoke_run())) for spec in graph.specs.values()
+    ]
+    assert len(set(ids)) == len(ids) == 6
+    assert sft_run_id(snowball_stage0().specs["s1-chat"]) == "stage0-snowball-s1-chat-2026.10.22"
+
+
+def test_prebuilt_stage_cache_is_the_chains_cache_without_the_training_dependency():
+    graph = snowball_stage0()
+    for stage_name in ("s2-thinking", "s3-terminal"):
+        (chain_cache,) = [dep for dep in graph.steps[stage_name].deps if dep.name.startswith("tokenized/")]
+        early = stage_chat_cache(graph, stage_name)
+        assert (early.name, early.version) == (chain_cache.name, chain_cache.version)
+        assert early.deps == (graph.convert,)
+    with pytest.raises(ValueError, match="init step"):
+        stage_chat_cache(graph, "s1-chat")
+
+
 def test_snowball_and_axolotl_budgets_agree():
     """The one cross-trainer control: every shared budget value is the same constant."""
 
@@ -614,5 +743,33 @@ def test_snowball_and_axolotl_budgets_agree():
         assert hasattr(budget, name), f"budget must own {name}"
     # The Axolotl per-device arithmetic and the Snowball node request both resolve to the
     # single global batch.
-    assert budget.PER_DEVICE_BATCH * budget.GPUS_PER_NODE * budget.GRADIENT_ACCUMULATION_STEPS == budget.GLOBAL_BATCH
+    assert (
+        budget.PER_DEVICE_BATCH * budget.AXOLOTL_NODES * budget.GPUS_PER_NODE * budget.GRADIENT_ACCUMULATION_STEPS
+        == budget.GLOBAL_BATCH
+    )
     assert budget.TRAIN_NODES * budget.GPUS_PER_NODE == 64
+
+
+@pytest.mark.parametrize("family", list(FAMILY_TOKEN_MAPS))
+def test_completion_mask_covers_each_assistant_turn_through_its_end_of_turn(family):
+    """Levanter's completions-only mask: reasoning, answer and end-of-turn train; headers do not."""
+    if not _hf_reachable():
+        pytest.skip("HF hub unreachable")
+    tokens = FAMILY_TOKEN_MAPS[family]
+    repo, revision = _HF_REVISIONS[family]
+    tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision)
+    messages = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1", "reasoning_content": "r1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    rendered = tokenizer.apply_chat_template(
+        messages,
+        chat_template=shared_template(tokens),
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+    )
+    trained = tokenizer.decode([i for i, m in zip(rendered["input_ids"], rendered["assistant_masks"], strict=True) if m])
+    assert trained == f"{tokens.think_open}r1{tokens.think_close}a1{tokens.turn_close}a2{tokens.turn_close}"
