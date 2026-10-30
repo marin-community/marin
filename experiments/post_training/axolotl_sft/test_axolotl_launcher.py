@@ -1,12 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU tests for the Axolotl launcher: config build, pins, and the masking canary.
+"""CPU tests for the Axolotl launcher: config build, pins, payload, and the masking canary.
 
-The canary has two layers: a hermetic partition test that runs the shared template
-through a real pinned tokenizer (skipif offline), and a fork-side test that runs
-the fork's own ``ChatTemplateStrategy`` where the fork is installed (the pod image)
-— it imports cleanly everywhere and skips honestly elsewhere.
+The canary runs the shared template through each real pinned tokenizer (skipif
+offline). The fork's own masking is checked on the cluster by the 20-step smoke.
 """
 
 import hashlib
@@ -21,17 +19,21 @@ from experiments.post_training.axolotl_sft.bases import (
     QWEN3_30B_A3B_BASE,
 )
 from experiments.post_training.axolotl_sft.launcher import (
-    AXOLOTL_FORK_REVISION,
+    AXOLOTL_TASK_IMAGE,
     AXOLOTL_TRANSFORMERS_PIN,
-    EXPERT_PARALLEL_PLUGIN,
+    DECODER_LAYER_CLASSES,
+    FP32_MASTER_PLUGIN,
+    PACKED_ATTENTION_PLUGIN,
+    PAYLOAD_ENV,
+    POD_RUNNER,
+    ROUTER_AUX_LOSS_PLUGIN,
     SUPPORTED_ARCHITECTURES,
     TEMPLATE_INTEGRITY_PLUGIN,
-    AxolotlLaunchPayload,
     AxolotlOptimizer,
     AxolotlSpec,
     axolotl_config,
-    axolotl_launch_command,
-    training_command,
+    iris_command,
+    launch_payload,
 )
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 
@@ -41,6 +43,7 @@ STAGE0_OPTIMIZER = AxolotlOptimizer(
     weight_decay=0.0,
     adam_beta1=0.9,
     adam_beta2=0.95,
+    adam_epsilon=1e-8,
     lr_scheduler="cosine",
     warmup_steps=0,
     max_grad_norm=1.0,
@@ -63,69 +66,62 @@ CANARY_CONVERSATION = [
 
 
 def _spec(base, **overrides) -> AxolotlSpec:
-    template = shared_template(FAMILY_TOKEN_MAPS[base.architecture])
+    tokens = FAMILY_TOKEN_MAPS[base.architecture]
+    template = shared_template(tokens)
     kwargs = {
-        "name": f"stage0-{base.name}",
+        "name": f"stage0-{base.name}/s1",
         "base": base,
-        "data_manifest": "gs://example/stage0/data-*.jsonl",
+        "data_uri": "s3://bucket/stage0-cl12/wildchat-rewild.jsonl.gz",
         "optimizer": STAGE0_OPTIMIZER,
-        "sequence_len": 32768,
-        "epochs": 1,
         "chat_template": template,
         "template_sha256": hashlib.sha256(template.encode()).hexdigest(),
+        "turn_close": tokens.turn_close,
         "seed": 0,
         "output_router_logits": True,
+        "sequence_len": 32768,
+        "per_device_batch_size": 1,
+        "gradient_accumulation_steps": 4,
+        "epochs": 1,
+        "nodes": 2,
     }
     kwargs.update(overrides)
     return AxolotlSpec(**kwargs)
 
 
-def test_config_builds_for_each_base_with_the_integrity_plugin_and_inline_template():
+def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters():
     for base in AXOLOTL_BASES.values():
         spec = _spec(base)
-        config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
-        assert config["base_model"] == base.hf_id, "base_model must be a bare repo id"
-        assert config["revision_of_model"] == base.revision, "the pin rides in revision_of_model"
-        assert "@" not in config["base_model"]
-        assert config["sequence_len"] == 32768
+        config = axolotl_config(spec)
+        assert (config["base_model"], config["revision_of_model"]) == (base.hf_id, base.revision)
+        assert TEMPLATE_INTEGRITY_PLUGIN in config["plugins"] and FP32_MASTER_PLUGIN in config["plugins"]
         assert config["tokenizer_save_jinja_files"] is False
-        assert TEMPLATE_INTEGRITY_PLUGIN in config["plugins"], "template_integrity rides in plugins:"
-        assert config["chat_template"] == "jinja"
-        assert config["chat_template_jinja"] == spec.chat_template
-        assert config["seed"] == spec.seed
-        assert config["train_on_inputs"] is False
-        assert config["optimizer"] == "adamw_torch_fused"
-        assert config["learning_rate"] == "5e-6"
-        assert config["datasets"] == [{"path": "gs://example/stage0/data-*.jsonl", "type": "chat_template"}]
-        assert config["fsdp_version"] == 2 and config["fsdp"] == [
-            "full_shard",
-            "auto_wrap",
-        ], "one process on 8 GPUs cannot hold a 30B MoE's Adam state"
-        assert config["output_dir"].startswith("/scratch/"), "checkpoints must not be written to a shared mount"
+        assert (config["chat_template"], config["chat_template_jinja"]) == ("jinja", spec.chat_template)
+        assert config["processor_kwargs"] == {"chat_template": spec.chat_template}
+        (dataset,) = config["datasets"]
+        assert dataset["type"] == "chat_template" and dataset["field_messages"] == "messages"
+        # Assistant turns train through the family's end-of-turn token, which also ends generation.
+        assert dataset["roles_to_train"] == ["assistant"]
+        assert config["eot_tokens"] == [spec.turn_close] and dataset["train_on_eot"] == "turn"
+        assert config["special_tokens"]["eos_token"] == spec.turn_close
+        assert config["train_on_inputs"] is False and config["sample_packing"] is True
+        assert PACKED_ATTENTION_PLUGIN in config["plugins"], "packed conversations must not attend to each other"
+        assert config["micro_batch_size"] * 16 * config["gradient_accumulation_steps"] == spec.global_batch == 64
+        assert config["fsdp_config"]["fsdp_version"] == 2
+        # Sharded gradients through accumulation: an unsynced micro-batch keeps the model's full gradients.
+        assert config["accelerator_config"]["gradient_accumulation_kwargs"]["sync_each_batch"] is True
+        assert config["fsdp_config"]["transformer_layer_cls_to_wrap"] == DECODER_LAYER_CLASSES[base.architecture]
 
 
 def test_router_aux_loss_is_explicit_per_spec():
-    qwen = axolotl_config(_spec(QWEN3_30B_A3B_BASE), scratch_output_dir="/scratch/axolotl/q")
-    assert qwen["output_router_logits"] is True
-    # A run that turns the aux loss off simply does not emit the key; the
-    # manifest records the deviation either way.
-    off = axolotl_config(
-        _spec(QWEN3_30B_A3B_BASE, output_router_logits=False), scratch_output_dir="/scratch/axolotl/q-off"
-    )
-    assert "output_router_logits" not in off
-    nemotron = axolotl_config(
-        _spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False), scratch_output_dir="/scratch/axolotl/n"
-    )
-    assert "output_router_logits" not in nemotron
-
-
-def test_expert_parallel_wires_the_plugin_for_qwen_and_refuses_nemotron():
-    spec = _spec(QWEN3_30B_A3B_BASE, expert_parallel_size=8)
-    config = axolotl_config(spec, scratch_output_dir="/scratch/axolotl/q-ep8")
-    assert config["expert_parallel_size"] == 8
-    assert EXPERT_PARALLEL_PLUGIN in config["plugins"]
-    with pytest.raises(ValueError, match="not verified on 'nemotron_h'"):
-        _spec(NEMOTRON_3_NANO_30B_A3B_BASE, expert_parallel_size=8)
+    # Axolotl ignores a top-level output_router_logits; only the plugin turns the aux loss on.
+    qwen = axolotl_config(_spec(QWEN3_30B_A3B_BASE))
+    assert ROUTER_AUX_LOSS_PLUGIN in qwen["plugins"] and "output_router_logits" not in qwen
+    nemotron = axolotl_config(_spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False))
+    assert ROUTER_AUX_LOSS_PLUGIN not in nemotron["plugins"]
+    manifest = launch_payload(_spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False), output_uri="s3://b/o")[
+        "manifest"
+    ]
+    assert "deviation" in manifest["router_rules"]
 
 
 def test_template_hash_must_match_the_template_string():
@@ -135,56 +131,30 @@ def test_template_hash_must_match_the_template_string():
         _spec(QWEN3_30B_A3B_BASE, chat_template="")
 
 
-def test_seed_is_required_and_optimizers_reject_silent_defaults():
-    kwargs = {
-        "name": "s",
-        "base": QWEN3_30B_A3B_BASE,
-        "data_manifest": "gs://example/stage0/data-*.jsonl",
-        "optimizer": STAGE0_OPTIMIZER,
-        "chat_template": "t",
-        "template_sha256": hashlib.sha256(b"t").hexdigest(),
-        "output_router_logits": True,
+def test_optimizers_reject_invalid_settings():
+    fields = {
+        "learning_rate": "5e-6",
+        "weight_decay": 0.0,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.95,
+        "adam_epsilon": 1e-8,
+        "lr_scheduler": "cosine",
+        "warmup_steps": 0,
+        "max_grad_norm": 1.0,
     }
-    assert AxolotlSpec(**kwargs, seed=7).seed == 7
-    with pytest.raises(TypeError):
-        AxolotlSpec(**kwargs)  # no seed default; output_router_logits also required
-    with pytest.raises(ValueError, match="positive"):
-        AxolotlOptimizer(
-            learning_rate="0",
-            weight_decay=0.0,
-            adam_beta1=0.9,
-            adam_beta2=0.95,
-            lr_scheduler="cosine",
-            warmup_steps=0,
-            max_grad_norm=1.0,
-        )
-    with pytest.raises(ValueError, match="max_grad_norm"):
-        AxolotlOptimizer(
-            learning_rate="5e-6",
-            weight_decay=0.0,
-            adam_beta1=0.9,
-            adam_beta2=0.95,
-            lr_scheduler="cosine",
-            warmup_steps=0,
-            max_grad_norm=0.0,
-        )
-    with pytest.raises(ValueError, match=r"betas"):
-        AxolotlOptimizer(
-            learning_rate="5e-6",
-            weight_decay=0.0,
-            adam_beta1=1.0,
-            adam_beta2=0.95,
-            lr_scheduler="cosine",
-            warmup_steps=0,
-            max_grad_norm=1.0,
-        )
+    for override, message in (
+        ({"learning_rate": "0"}, "positive"),
+        ({"max_grad_norm": 0.0}, "max_grad_norm"),
+        ({"adam_beta1": 1.0}, "betas"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            AxolotlOptimizer(**(fields | override))
 
 
-def test_fork_and_transformer_pins_recorded():
+def test_pins_cover_the_three_architectures():
     assert AXOLOTL_TRANSFORMERS_PIN == "5.12.1"
-    assert set(SUPPORTED_ARCHITECTURES) == {"qwen3_moe", "qwen3_5_moe", "nemotron_h"}
-    architectures = {base.architecture for base in AXOLOTL_BASES.values()}
-    assert architectures == set(SUPPORTED_ARCHITECTURES)
+    assert {base.architecture for base in AXOLOTL_BASES.values()} == set(SUPPORTED_ARCHITECTURES)
+    assert set(DECODER_LAYER_CLASSES) == set(SUPPORTED_ARCHITECTURES)
 
 
 def test_transformers_pin_supports_the_three_architectures():
@@ -200,49 +170,15 @@ def test_transformers_pin_supports_the_three_architectures():
         assert architecture in CONFIG_MAPPING_NAMES, architecture
 
 
-def test_printed_smoke_command_is_what_the_pod_runs():
-    """The printed command and the pod-side subprocess share one builder, and the
-    smoke's step cap rides in the config, not a CLI override the trainer ignores."""
+def test_smoke_payload_caps_steps_and_skips_intermediate_saves():
     spec = _spec(QWEN3_30B_A3B_BASE)
-    config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
-    config["max_steps"] = 20
-    assert config["max_steps"] == 20
-    printed = axolotl_launch_command(spec, max_steps=20)
-    assert "git clone" in printed and AXOLOTL_FORK_REVISION in printed
-    assert "torchrun --nnodes=1 --nproc-per-node=8" in printed
-    assert "axolotl.cli.train" in printed
-    # The command the pod runs comes from the same builder.
-    assert training_command("/x/config.yaml", nodes=2, gpus_per_node=8) == [
-        "torchrun",
-        "--nnodes=2",
-        "--nproc-per-node=8",
-        "-m",
-        "axolotl.cli.train",
-        "/x/config.yaml",
-    ]
+    payload = launch_payload(spec, output_uri="s3://bucket/out", max_steps=20)
+    assert payload["config"]["max_steps"] == 20 and payload["config"]["save_strategy"] == "no"
+    assert "max_steps" not in launch_payload(spec, output_uri="s3://bucket/out")["config"]
+    restored = json.loads(json.dumps(payload))
+    assert restored["config"]["chat_template_jinja"] == spec.chat_template
+    assert restored["data_uri"] == spec.data_uri and restored["init_uri"] is None
 
-
-def test_chained_stages_initialize_from_the_previous_stage_export():
-    spec = _spec(QWEN3_30B_A3B_BASE, init_checkpoint="/scratch/axolotl/stage1/output")
-    config = axolotl_config(spec, scratch_output_dir="/scratch/axolotl/stage2")
-    assert config["base_model"] == "/scratch/axolotl/stage1/output"
-    assert "revision_of_model" not in config
-    first = axolotl_config(_spec(QWEN3_30B_A3B_BASE), scratch_output_dir="/scratch/axolotl/stage1")
-    assert first["base_model"] == QWEN3_30B_A3B_BASE.hf_id
-    assert first["revision_of_model"] == QWEN3_30B_A3B_BASE.revision
-
-
-def test_payload_json_round_trips():
-    spec = _spec(QWEN3_30B_A3B_BASE)
-    payload = AxolotlLaunchPayload(
-        config=axolotl_config(spec, scratch_output_dir="/scratch/axolotl/x"),
-        fork_revision=AXOLOTL_FORK_REVISION,
-        output_root="s3://marin-us-east-02a/stage0",
-        manifest={"spec_name": spec.name},
-    )
-    restored = AxolotlLaunchPayload(**json.loads(payload.to_json()))
-    assert restored.config["chat_template_jinja"] == spec.chat_template
-    assert restored.output_root.startswith("s3://")
 
 
 def _hf_reachable() -> bool:
@@ -305,27 +241,3 @@ def test_masking_canary_on_the_shared_template(base_name):
     assert template_sha256(tokens) == hashlib.sha256(template.encode()).hexdigest()
 
 
-def test_fork_chat_template_strategy_produces_the_same_partition():
-    """Where the fork is installed (the pod image), the fork's own
-    ``ChatTemplateStrategy`` must derive the same supervised region on the shared
-    template. Skipped honestly where axolotl is not installed."""
-    pytest.importorskip("axolotl")
-    from axolotl.prompt_strategies.chat_template import ChatTemplateStrategy  # noqa: PLC0415
-    from transformers import AutoTokenizer  # noqa: PLC0415 - optional dep guard
-
-    base = QWEN3_30B_A3B_BASE
-    tokens = FAMILY_TOKEN_MAPS[base.architecture]
-    tokenizer = AutoTokenizer.from_pretrained(base.hf_id, revision=base.revision)
-    tokenizer.chat_template = shared_template(tokens)
-    strategy = ChatTemplateStrategy(
-        prompter=None,
-        tokenizer=tokenizer,
-        train_on_inputs=False,
-        sequence_len=32768,
-    )
-    rendered = tokenizer.apply_chat_template(CANARY_CONVERSATION, chat_template=shared_template(tokens), tokenize=False)
-    result = strategy.tokenize(rendered)
-    labels = result["labels"] if isinstance(result, dict) else result
-    supervised = tokenizer.decode([token for token in labels if token != -100])
-    assert "It's 18C and cloudy in Paris." in supervised
-    assert "What is the weather in Paris?" not in supervised

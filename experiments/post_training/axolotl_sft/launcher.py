@@ -419,7 +419,6 @@ def main() -> None:
     submit.add_argument("--timeout-hours", type=int, default=96)
     submit.add_argument("--dry-run", action="store_true")
     submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
-    submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
     submit.add_argument("--init-uri", default=None, help="override the stage's init checkpoint (reload tests)")
     args = parser.parse_args()
 
@@ -439,8 +438,6 @@ def main() -> None:
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"
     payload = launch_payload(spec, output_uri=output_uri, max_steps=args.max_steps)
-    if args.probe_precision:
-        payload["config"]["plugins"].append(PRECISION_PROBE_PLUGIN)
     command = iris_command(
         payload,
         job_name=args.job_name,
