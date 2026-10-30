@@ -186,9 +186,12 @@ def main():
             resume="never",
             replicate_path=None,
         )
-        with tracker_cfg.init(None) as tracker:
+        tracker = tracker_cfg.init(None)
+        try:
             tracker.log_hyperparameters(draccus.encode(cfg))
             tracker.log({"logging_check/success": 1}, step=0)
+        finally:
+            tracker.finish()
         print(f"https://wandb.ai/{tracker_cfg.entity}/{tracker_cfg.project}/runs/{tracker_cfg.id}")
     if args.run:
         StepRunner().run([s.lower() for s in steps], max_concurrent=args.max_concurrent)
