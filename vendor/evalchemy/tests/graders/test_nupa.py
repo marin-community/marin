@@ -2,6 +2,9 @@ from importlib import import_module
 
 import pytest
 
+from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
+from eval.graders.math_specs import nupa
+
 scorer = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
 
 
@@ -57,6 +60,62 @@ def test_extract_answer_uses_final_content(prediction, answer_format, expected):
     assert scorer.extract_answer(prediction, answer_format) == expected
 
 
+@pytest.mark.parametrize(
+    ("prediction", "answer_format", "expected"),
+    [
+        ("The calculation ends here.42", scorer.INTEGER, "42"),
+        ("The calculation ends here.486.612", scorer.FLOAT, "486.612"),
+        ("The calculation ends here.43/20", scorer.FRACTION, "43/20"),
+        ("The calculation ends here.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
+    ],
+)
+def test_extract_answer_accepts_typed_terminal_suffix(prediction, answer_format, expected):
+    assert scorer.extract_answer(prediction, answer_format) == expected
+
+
+@pytest.mark.parametrize(
+    ("prediction", "gold", "answer_format"),
+    [
+        ("Thus the final answer is 18\n1818", "18", scorer.INTEGER),
+        ("Thus the final answer is 486.612\n486.612486.612", "486.612", scorer.FLOAT),
+        ("Thus the final answer is 43/20\n43/2043/20", "43/20", scorer.FRACTION),
+        ("Thus the final answer is 5.09786549e52\n5.09786549e525.09786549e52", "5.09786549e52", scorer.SCIENTIFIC),
+    ],
+)
+def test_score_prediction_accepts_exact_repeated_terminal_reference(prediction, gold, answer_format):
+    score = scorer.score_prediction(prediction, gold, answer_format)
+
+    assert score.extracted_answer == gold
+    assert score.exact_match == 1.0
+
+
+@pytest.mark.parametrize(
+    ("prediction", "gold"),
+    [("Thus the final answer is 1818", "19"), ("Thus the final answer is 11818", "18")],
+)
+def test_score_prediction_does_not_credit_repeated_nonreference_answer(prediction, gold):
+    score = scorer.score_prediction(prediction, gold, scorer.INTEGER)
+
+    assert score.exact_match == 0.0
+
+
+def test_nupa_grade_records_the_answer_used_for_scoring():
+    spec = EvalSpec(
+        task="NUPA5K-Loose",
+        source=SourceRef("fixture"),
+        source_id="1",
+        ordinal=0,
+        requests=(),
+        grader=GraderSpec("nupa", {"format": scorer.INTEGER}),
+        target="18",
+    )
+
+    grade = nupa(spec, ["Thus the final answer is 18\n1818"])
+
+    assert grade.metrics["exact_match"] == 1.0
+    assert grade.filtered_resps == ["18"]
+
+
 def test_score_prediction_preserves_numeric_representation():
     exact = scorer.score_prediction("9.9", "9.9", scorer.FLOAT)
     wrong_digits = scorer.score_prediction("9.11", "9.9", scorer.FLOAT)
@@ -105,3 +164,37 @@ def test_invalid_format_records_no_answer():
 )
 def test_length_bucket_matches_the_paper_intervals(digit, max_digit, expected):
     assert scorer.length_bucket(digit, max_digit=max_digit) == expected
+
+
+@pytest.mark.parametrize("prediction,gold,answer_format", [
+    ("The final answer is 123.42", "42", scorer.INTEGER),
+    ("The final answer is 123.42/7", "42/7", scorer.FRACTION),
+    ("The final answer is 33", "3", scorer.INTEGER),
+    ("The final answer is 1010", "10", scorer.INTEGER),
+    ("The final answer is 100100", "100", scorer.INTEGER),
+    ("Thus the final answer is 1818", "18", scorer.INTEGER),
+    ("The final answer is 19\n1818", "18", scorer.INTEGER),
+])
+def test_score_prediction_rejects_numeric_suffix_and_ambiguous_repetition(prediction, gold, answer_format):
+    assert scorer.score_prediction(prediction, gold, answer_format).exact_match == 0.0
+
+
+@pytest.mark.parametrize("prediction,extracted", [
+    ("<|start_think|>Let me check 1818", None),
+    ("<|start_think|>The answer is 18\n1818", None),
+    ("The answer is 18<|end_think|>1818", "1818"),
+    ("<|end_think|><|start_think|>The answer is 18\n1818", None),
+])
+def test_score_prediction_does_not_recover_repeated_answer_from_thinking(prediction, extracted):
+    score = scorer.score_prediction(prediction, "18", scorer.INTEGER)
+    assert score.exact_match == 0.0
+    assert score.extracted_answer == extracted
+    assert score.no_answer == (1.0 if extracted is None else 0.0)
+
+
+def test_score_prediction_recovers_repetition_after_completed_thinking():
+    score = scorer.score_prediction(
+        "<|start_think|>Maybe 19<|end_think|>The final answer is 3\n33", "3", scorer.INTEGER,
+    )
+    assert score.extracted_answer == "3"
+    assert score.exact_match == 1.0
