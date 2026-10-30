@@ -19,20 +19,16 @@ from experiments.post_training.axolotl_sft.bases import (
     QWEN3_30B_A3B_BASE,
 )
 from experiments.post_training.axolotl_sft.launcher import (
-    AXOLOTL_TASK_IMAGE,
     AXOLOTL_TRANSFORMERS_PIN,
     DECODER_LAYER_CLASSES,
     FP32_MASTER_PLUGIN,
     PACKED_ATTENTION_PLUGIN,
-    PAYLOAD_ENV,
-    POD_RUNNER,
     ROUTER_AUX_LOSS_PLUGIN,
     SUPPORTED_ARCHITECTURES,
     TEMPLATE_INTEGRITY_PLUGIN,
     AxolotlOptimizer,
     AxolotlSpec,
     axolotl_config,
-    iris_command,
     launch_payload,
 )
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
@@ -180,7 +176,6 @@ def test_smoke_payload_caps_steps_and_skips_intermediate_saves():
     assert restored["data_uri"] == spec.data_uri and restored["init_uri"] is None
 
 
-
 def _hf_reachable() -> bool:
     return os.environ.get("HF_HUB_OFFLINE") != "1"
 
@@ -239,5 +234,3 @@ def test_masking_canary_on_the_shared_template(base_name):
     # Positions, not token values, are disjoint: the partition assertion above
     # already places every rendered token in exactly one message's span.
     assert template_sha256(tokens) == hashlib.sha256(template.encode()).hexdigest()
-
-
