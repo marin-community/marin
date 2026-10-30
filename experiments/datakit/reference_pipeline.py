@@ -12,12 +12,12 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Decontamination has four stages that you can run separately:
 
-- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v4.
 - ``decon-drop`` builds source and global corpus DF filters.
 - ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
 - ``decon-report`` reads completed marks and writes the validation report.
 
-Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+Run preparation first. This reuses the canonical eval v4 Bloom when it is built::
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
@@ -179,6 +179,7 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
+    REQUIRED_LMH_TASKS,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -789,6 +790,7 @@ def decontamination_steps(
         required_eval_names=AA_BENCHMARK_NAMES,
         best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        best_effort_required_tasks=REQUIRED_LMH_TASKS,
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
