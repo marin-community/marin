@@ -374,7 +374,7 @@ def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monke
     write_started = threading.Event()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             write_started.set()
             return SimpleNamespace(commit=commit_future)
@@ -451,8 +451,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
             self.future.force()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
-            assert can_reference_source_data_indefinitely
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             return SimpleNamespace(commit=commit_future)
 
@@ -594,6 +593,17 @@ def test_host_arrays_without_a_sharding_roundtrip():
         restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
 
     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_large_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
+    # This size reproduces the referenced-source write path silently saving fill values.
+    shape = (26, 256, 64, 64)
+    source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
+
+    tree_serialize_leaves_tensorstore(str(tmp_path), source)
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), {"expert": jnp.zeros(shape, dtype=jnp.bfloat16)})
+
+    np.testing.assert_array_equal(np.asarray(restored["expert"]), source["expert"])
 
 
 def test_arrays_with_a_zero_length_axis_roundtrip():
