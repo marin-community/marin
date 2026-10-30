@@ -48,6 +48,7 @@ def inference_engine_kwargs_from_config(
         "seed": cfg.trainer.seed,
         "vllm_v1_disable_multiproc": cfg.generator.vllm_v1_disable_multiproc,
         "enable_prefix_caching": cfg.generator.enable_prefix_caching,
+        "enable_chunked_prefill": cfg.generator.enable_chunked_prefill,
         "enforce_eager": cfg.generator.enforce_eager,
         "shared_pg": role.shared_pg,
         "engine_init_timeout_seconds": cfg.generator.engine_init_timeout_seconds,
