@@ -16,6 +16,9 @@ bias in fp32 in every precision mode, so B's copy is a true fp32 value. A
 checkpoint whose every tensor is bf16-representable is a
 bf16 export mislabelled as fp32, and raises.
 
+``bf16_export_delta_blocks`` is a separate, explicitly quantized comparison;
+it does not implement C8 or recover optimizer updates erased by rounding.
+
 Deltas are ``checkpoint - B`` in fp32. Sterbenz's lemma makes the subtraction
 exact wherever the two values are within a factor of two, which holds for all
 but weights crossing or sitting near zero; there the rounding error is below
@@ -129,6 +132,27 @@ def delta_blocks(checkpoint_path: str, base_path: str) -> Iterator[Block]:
     """``checkpoint - B`` per block, in fp32."""
     for base_block, checkpoint_block in paired_blocks(checkpoint_path, base_path):
         delta = checkpoint_block.array - base_block.array
+        yield Block(base_block.name, base_block.component, base_block.expert, delta)
+
+
+def bf16_export_delta_blocks(checkpoint_path: str, base_path: str) -> Iterator[Block]:
+    """Saved BF16 model differences, upcast before subtraction; not C8 masters.
+
+    BF16 rounding can erase optimizer updates. This separate analysis path is
+    for comparing the served exports, including their unrounded selection bias.
+    """
+    checkpoint = SafetensorsCheckpoint(checkpoint_path)
+    base = SafetensorsCheckpoint(base_path)
+    for base_block, checkpoint_block in aligned(checkpoint_blocks(base), checkpoint_blocks(checkpoint)):
+        expected = np.float32 if checkpoint_block.component is Component.SELECTION_BIAS else ml_dtypes.bfloat16
+        if checkpoint_block.array.dtype != expected:
+            raise ValueError(f"{checkpoint_block.name}: expected {expected} in a BF16 export")
+        if base_block.array.dtype not in _BASE_DTYPES:
+            raise ValueError(f"{base_block.name}: base must be BF16 or its FP32 upcast")
+        base_array = base_block.array.astype(np.float32)
+        if base_block.component is not Component.SELECTION_BIAS and not _is_bf16_exact(base_array):
+            raise ValueError(f"{base_block.name}: base is not BF16-representable")
+        delta = checkpoint_block.array.astype(np.float32) - base_array
         yield Block(base_block.name, base_block.component, base_block.expert, delta)
 
 
