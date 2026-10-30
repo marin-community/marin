@@ -502,6 +502,12 @@ generator:
       free_tokens: 0
       penalty_per_token: 0.0
       max_penalty: 0.2
+    reasoning_span:
+      # Charged for a malformed reasoning span in any chat turn.
+      penalty: 0.0
+      # `rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token
+      # where each span goes wrong, or charges the reward when a violation has no such token.
+      target: rollout
 
   trajectory_retention:
     enabled: true
