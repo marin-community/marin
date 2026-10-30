@@ -22,21 +22,14 @@ layout of :class:`Calibration`.
 ``train.py`` runs :func:`calibrate_model` right after training, so this CLI is for
 recalibrating an existing model dir.
 
-Knot validation (added 2026-10-30): ``np.interp`` assumes increasing ``xk`` and returns
-silently wrong values otherwise, so every :class:`Curve` is checked at construction and
-every curve of a loaded file is checked before any scoring. The fitter anchors its
-floor and ceiling knots so they cannot land inside the cutpoints.  One released file,
-``nemotron_88k/calib_bme.json`` (sha256 b89b7b78…), carries an inverted first knot on
-its ``agentic`` curve; :data:`KNOWN_INVERTED_KNOT_DIGESTS` lets exactly that file load
-with a warning, because its ``quality_bucket`` output is identical to the intended
-curve's for every raw score (only the calibrated ``score`` column differs), and a
-refit would change the recipe.
+Knot validation: ``np.interp`` assumes increasing ``xk`` and returns silently wrong
+values otherwise, so every :class:`Curve` is checked at construction and every curve
+of a loaded file is checked before any scoring, and the fitter anchors its floor and
+ceiling knots so they cannot land inside the cutpoints.
 """
 
 import argparse
-import contextvars
 import dataclasses
-import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -56,30 +49,20 @@ DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.p
 YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't drift
 ANCHOR_MARGIN = 1e-6
 
-# Released calibration files whose knots fail :func:`validate_knots` but whose bucket
-# output is proven identical to the intended monotone curve's.  Keyed by the file's
-# sha256; the value is the finding.  Loading one logs a warning instead of failing.
-KNOWN_INVERTED_KNOT_DIGESTS = {
-    "b89b7b782e606394fd341e7705d438521e96fcb553f769c6c1dd520331da5758": (
-        "nemotron_88k/calib_bme.json: curve 'agentic' has xk[0]=0.31556 above xk[1]=0.28216; "
-        "quality_bucket is identical to the sorted curve's for every raw score (both cross 0.2 at raw "
-        "0.31556 and 0.4 at 0.47738); only the calibrated score is distorted for raw in [0.28216, 0.47738]"
-    ),
-}
-
-# Set while :meth:`Calibration.from_json` loads a file listed in KNOWN_INVERTED_KNOT_DIGESTS.
-_KNOWN_DEFECT_ALLOWED: contextvars.ContextVar[str | None] = contextvars.ContextVar("known_defect_allowed", default=None)
-
 
 def validate_knots(xk, yk, name: str = "curve") -> None:
-    """A curve ``np.interp`` can be trusted with: at least two knots, as many ``yk`` as ``xk``,
-    ``xk`` strictly increasing and ``yk`` non-decreasing.  Names the curve and the knots otherwise."""
-    if len(xk) != len(yk) or len(xk) < 2:
-        raise ValueError(f"calibration curve {name!r}: need len(xk) == len(yk) >= 2, got {len(xk)} xk and {len(yk)} yk")
+    """A curve ``np.interp`` can be trusted with: one-dimensional, at least two knots, as many ``yk`` as
+    ``xk``, finite, ``xk`` strictly increasing and ``yk`` non-decreasing.  Names the curve and the knots otherwise."""
     x = np.asarray(xk, dtype=np.float64)
     y = np.asarray(yk, dtype=np.float64)
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError(
+            f"calibration curve {name!r}: xk and yk must be one-dimensional, got shapes {x.shape} and {y.shape}"
+        )
+    if len(x) != len(y) or len(x) < 2:
+        raise ValueError(f"calibration curve {name!r}: need len(xk) == len(yk) >= 2, got {len(x)} xk and {len(y)} yk")
     if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
-        raise ValueError(f"calibration curve {name!r}: knots must be finite, got xk={list(xk)} yk={list(yk)}")
+        raise ValueError(f"calibration curve {name!r}: knots must be finite, got xk={x.tolist()} yk={y.tolist()}")
     bad = np.flatnonzero(np.diff(x) <= 0)
     if bad.size:
         i = int(bad[0])
@@ -100,21 +83,14 @@ def validate_knots(xk, yk, name: str = "curve") -> None:
 class Curve:
     """A monotonic piecewise-linear remap of the raw score, applied with ``np.interp``.
 
-    Validated at construction (:func:`validate_knots`); a curve of a file listed in
-    :data:`KNOWN_INVERTED_KNOT_DIGESTS` is admitted with a warning while that file loads.
+    Validated at construction (:func:`validate_knots`).
     """
 
     xk: list[float]
     yk: list[float]
 
     def __post_init__(self) -> None:
-        try:
-            validate_knots(self.xk, self.yk)
-        except ValueError as error:
-            allowed = _KNOWN_DEFECT_ALLOWED.get()
-            if allowed is None:
-                raise
-            logger.warning("admitting a known-defective calibration curve (%s): %s", allowed, error)
+        validate_knots(self.xk, self.yk)
 
     def __call__(self, raw: np.ndarray) -> np.ndarray:
         return np.interp(raw, self.xk, self.yk)
@@ -133,23 +109,17 @@ class Calibration:
     types: dict[str, Curve] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, data: dict, *, digest: str | None = None) -> "Calibration":
+    def from_json(cls, data: dict) -> "Calibration":
         """Parse a calibration file: the global ``{xk, yk}`` or the per-type ``{default, types}`` layout.
 
-        Every curve is validated here, before any scoring, and a defect names its curve.  ``digest`` is the
-        file's sha256 when known; a digest in :data:`KNOWN_INVERTED_KNOT_DIGESTS` admits that file's known
-        defect with a warning (the finding is logged), anything else fails.
+        Every curve is validated here, before any scoring, and a defect names its curve.
         """
-        token = _KNOWN_DEFECT_ALLOWED.set(KNOWN_INVERTED_KNOT_DIGESTS.get(digest) if digest else None)
-        try:
-            if "types" not in data:
-                return cls(default=_curve(data, "default"))
-            return cls(
-                default=_curve(data["default"], "default"),
-                types={name: _curve(c, name) for name, c in data["types"].items()},
-            )
-        finally:
-            _KNOWN_DEFECT_ALLOWED.reset(token)
+        if "types" not in data:
+            return cls(default=_curve(data, "default"))
+        return cls(
+            default=_curve(data["default"], "default"),
+            types={name: _curve(c, name) for name, c in data["types"].items()},
+        )
 
     def to_json(self) -> dict:
         """The layout :meth:`from_json` reads; a global calibration writes the bare curve."""
@@ -183,9 +153,8 @@ def _curve(data: dict, name: str) -> Curve:
 
 def load_calibration(model_dir: str, calib_file: str = MODEL_CALIB) -> Calibration:
     """Read the calibration file under ``model_dir``; its curves are validated before it is returned."""
-    with (StoragePath(model_dir) / calib_file).open("rb") as fh:
-        raw = fh.read()
-    return Calibration.from_json(json.loads(raw), digest=hashlib.sha256(raw).hexdigest())
+    with (StoragePath(model_dir) / calib_file).open("r") as fh:
+        return Calibration.from_json(json.loads(fh.read()))
 
 
 def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float], list[float]]:
@@ -208,9 +177,8 @@ def anchored_knots(raw: np.ndarray, cuts: list[float]) -> list[float]:
 
     Anchoring to the raw extremes alone (the original rule) puts the floor *inside* the cutpoints whenever
     the scores being anchored do not reach below the first cutpoint -- the case when shared cutpoints are
-    anchored per content type on that type's own raw range, which is how ``nemotron_88k``'s ``agentic``
-    curve got xk[0] = 0.31556 > xk[1] = 0.28216.  Equal cutpoints (``np.maximum.accumulate`` ties) are
-    spread by ``ANCHOR_MARGIN`` so the knots stay strictly increasing.
+    anchored per content type on that type's own raw range.  Equal cutpoints (``np.maximum.accumulate``
+    ties) are spread by ``ANCHOR_MARGIN`` so the knots stay strictly increasing.
     """
     floor = min(float(raw.min()), cuts[0]) - ANCHOR_MARGIN
     ceiling = max(float(raw.max()), cuts[-1]) + ANCHOR_MARGIN
