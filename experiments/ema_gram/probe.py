@@ -6,6 +6,7 @@
 import argparse
 import json
 import time
+from dataclasses import asdict, dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
@@ -20,13 +21,45 @@ import optax
 from levanter.checkpoint import load_checkpoint
 from levanter.data.loader import DataLoader
 from levanter.main.train_lm import TrainLmConfig
-from levanter.optim.ema_gram import EmaGramConfig, EmaGramState, GramState, gram_direction, relative_gram_power
+from levanter.optim.ema_gram import (
+    NEWTON_SCHULZ,
+    SVD,
+    EmaGramConfig,
+    EmaGramState,
+    GramState,
+    gram_direction,
+    relative_gram_power,
+)
 from levanter.optim.muon import MuonConfig
 from levanter.optim.util import flatten_linear_layers, unflatten_linear_layers
 from levanter.trainer_state import TrainerState
 from levanter.utils.tree_utils import inference_mode
 
 from experiments.ema_gram.plan import ALPHAS, RIDGES
+
+
+@dataclass(frozen=True)
+class LossProbe:
+    alpha: float
+    ridge: float
+    step_size: float
+    baseline_losses: list[float]
+    losses: list[float]
+    delta_mean: float
+    delta_std: float
+    delta_sem: float
+
+
+@dataclass(frozen=True)
+class DecompositionDiagnostic:
+    category: str
+    path: str
+    shape: list[int]
+    seconds: dict[str, float]
+    alpha: float
+    ridge: float
+    cosine: float | None
+    relative_error: float | None
 
 
 def matrix_state(model, opt_state):
@@ -81,16 +114,16 @@ def loss_probes(state, loss_fn, batches, step_sizes: list[float], *, polar_steps
                 losses = np.array([float(loss_fn(candidate, batch)) for batch in batches])
                 delta = losses - baseline
                 rows.append(
-                    {
-                        "alpha": alpha,
-                        "ridge": ridge,
-                        "step_size": size,
-                        "baseline_losses": baseline.tolist(),
-                        "losses": losses.tolist(),
-                        "delta_mean": float(delta.mean()),
-                        "delta_std": float(delta.std(ddof=1)),
-                        "delta_sem": float(delta.std(ddof=1) / np.sqrt(len(delta))),
-                    }
+                    LossProbe(
+                        alpha=alpha,
+                        ridge=ridge,
+                        step_size=size,
+                        baseline_losses=baseline.tolist(),
+                        losses=losses.tolist(),
+                        delta_mean=float(delta.mean()),
+                        delta_std=float(delta.std(ddof=1)),
+                        delta_sem=float(delta.std(ddof=1) / np.sqrt(len(delta))),
+                    )
                 )
     return rows
 
@@ -112,7 +145,7 @@ def decomposition_diagnostics(model, opt_state, *, polar_steps: int):
             for ridge in ((RIDGES[0],) if alpha == 0 else RIDGES):
                 directions = {}
                 timings = {}
-                for method in ("newton_schulz", "svd"):
+                for method in (NEWTON_SCHULZ, SVD):
                     fn = jax.jit(
                         partial(gram_direction, alpha=alpha, ridge=ridge, polar_steps=polar_steps, polar_method=method)
                     )
@@ -120,7 +153,7 @@ def decomposition_diagnostics(model, opt_state, *, polar_steps: int):
                     start = time.perf_counter()
                     directions[method] = jax.block_until_ready(fn(s))
                     timings[method] = time.perf_counter() - start
-                approx, exact = (np.asarray(directions[k]) for k in ("newton_schulz", "svd"))
+                approx, exact = (np.asarray(directions[k]) for k in (NEWTON_SCHULZ, SVD))
                 denom = np.linalg.norm(approx) * np.linalg.norm(exact)
                 power = jax.jit(partial(relative_gram_power, alpha=alpha, ridge=ridge))
                 jax.block_until_ready((power(s.left), power(s.right)))
@@ -128,20 +161,20 @@ def decomposition_diagnostics(model, opt_state, *, polar_steps: int):
                 jax.block_until_ready((power(s.left), power(s.right)))
                 timings["gram_powers"] = time.perf_counter() - start
                 rows.append(
-                    {
-                        "category": category,
-                        "path": name,
-                        "shape": list(s.momentum.shape),
-                        "alpha": alpha,
-                        "ridge": ridge,
-                        "seconds": timings,
-                        "cosine": float(np.vdot(approx, exact) / denom) if denom else None,
-                        "relative_error": (
+                    DecompositionDiagnostic(
+                        category=category,
+                        path=name,
+                        shape=list(s.momentum.shape),
+                        alpha=alpha,
+                        ridge=ridge,
+                        seconds=timings,
+                        cosine=float(np.vdot(approx, exact) / denom) if denom else None,
+                        relative_error=(
                             float(np.linalg.norm(approx - exact) / np.linalg.norm(exact))
                             if np.linalg.norm(exact)
                             else None
                         ),
-                    }
+                    )
                 )
     return rows
 
@@ -190,10 +223,14 @@ def main():
             "dataset": args.dataset,
             "batch_offset": args.batch_offset,
             "batches": args.batches,
-            "loss_probes": loss_probes(state, loss_fn, batches, args.step_sizes, polar_steps=cfg.optimizer.polar_steps),
-            "decompositions": decomposition_diagnostics(
-                state.model, state.opt_state, polar_steps=cfg.optimizer.polar_steps
-            ),
+            "loss_probes": [
+                asdict(r)
+                for r in loss_probes(state, loss_fn, batches, args.step_sizes, polar_steps=cfg.optimizer.polar_steps)
+            ],
+            "decompositions": [
+                asdict(r)
+                for r in decomposition_diagnostics(state.model, state.opt_state, polar_steps=cfg.optimizer.polar_steps)
+            ],
             "device_memory_stats": [d.memory_stats() for d in jax.local_devices()],
         }
         args.output.write_text(json.dumps(report, indent=2) + "\n")

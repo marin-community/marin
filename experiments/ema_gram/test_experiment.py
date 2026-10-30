@@ -20,7 +20,7 @@ from marin.execution.lazy import materialized_config
 from experiments.ema_gram.plan import ALPHAS, SEEDS, Result, confirmations, expand, lock_settings, pilots
 from experiments.ema_gram.probe import loss_probes, norm_matched_direction
 from experiments.ema_gram.report import paired_differences, summarize_attempt
-from experiments.ema_gram.train import training_step
+from experiments.ema_gram.train import build_training_step
 
 
 def pilot_results(cells):
@@ -59,7 +59,7 @@ def test_failed_and_partial_pilots_cannot_win_selection():
     results = pilot_results(cells)
     results[0] = replace(results[0], status="failed", validation_loss=0)
     lock = lock_settings(cells, results, 2.1)
-    assert asdict(cells[0]) not in lock["selected"]
+    assert cells[0] not in lock.selected
     results[0] = replace(results[0], status="completed", completed_steps=12)
     with pytest.raises(ValueError, match="Incomplete"):
         lock_settings(cells, results, 2.1)
@@ -70,7 +70,7 @@ def test_delphi_configs_pair_initialization_data_and_all_controls():
     lock = lock_settings(cells, pilot_results(cells), 2.1)
     for phase in ("confirmation", "horizon", "scale"):
         configs = [
-            materialized_config(training_step(c, "test-dev"), "/tmp/ema-gram-test").train_config
+            materialized_config(build_training_step(c, "test-dev"), "/tmp/ema-gram-test").train_config
             for c in confirmations(lock, phase=phase)
         ]
         for seed in SEEDS:
@@ -118,10 +118,10 @@ def test_checkpoint_probes_match_each_matrix_and_keep_nonmatrices_fixed():
         return sum(jnp.sum((x - offset) ** 2) for x in jax.tree.leaves(m))
 
     rows = loss_probes(state, loss_fn, [0.0, 0.2], [0.001], polar_steps=5)
-    row = next(r for r in rows if r["alpha"] == 0.25 and r["ridge"] == 0.01)
+    row = next(r for r in rows if r.alpha == 0.25 and r.ridge == 0.01)
     actual = eqx.apply_updates(state.model, jax.tree.map(lambda x: -0.001 * x, candidate))
     expected = [float(loss_fn(actual, b) - loss_fn(state.model, b)) for b in (0.0, 0.2)]
-    np.testing.assert_allclose(np.subtract(row["losses"], row["baseline_losses"]), expected, atol=1e-5)
+    np.testing.assert_allclose(np.subtract(row.losses, row.baseline_losses), expected, atol=1e-5)
 
 
 def test_reporting_preserves_paired_curves_and_censors_restart_time():
@@ -135,10 +135,10 @@ def test_reporting_preserves_paired_curves_and_censors_restart_time():
     candidate = summarize_attempt(
         variant, better, expected_steps=3, tokens_per_step=32, run_state="finished", run_url="candidate", loss_target=3.9
     )
-    np.testing.assert_allclose([r["delta_loss"] for r in paired_differences([control, candidate])], -0.1)
-    assert control["time_to_target"] == 2
+    np.testing.assert_allclose([r.delta_loss for r in paired_differences([control, candidate])], -0.1)
+    assert control.time_to_target == 2
     restart = summarize_attempt(
         base, history[1:], expected_steps=3, tokens_per_step=32, run_state="finished", run_url="restart", loss_target=3.9
     )
-    assert restart["time_to_target"] is None
-    assert restart["tokens_to_target"] is None
+    assert restart.time_to_target is None
+    assert restart.tokens_to_target is None

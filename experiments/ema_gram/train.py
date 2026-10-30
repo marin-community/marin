@@ -20,7 +20,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.training.training import run_levanter_train_lm
 
-from experiments.ema_gram.plan import PILOT_TOKENS, Cell, confirmations
+from experiments.ema_gram.plan import HORIZON, PILOT, PILOT_TOKENS, SCALE, Cell, confirmations, read_lock
 from experiments.references import train_delphi_seeds as reference
 
 
@@ -52,14 +52,14 @@ def run_training(config):
         (log_dir / "memory.json").write_text(json.dumps(memory))
 
 
-def training_step(cell: Cell, version: str):
+def build_training_step(cell: Cell, version: str):
     """Preserve reference architecture, cache order, tokenizer, mesh, precision and schedule."""
     caches = reference.build(((cell.slug, 42),))[0].deps
     base = reference._training_step(cell.slug, cell.seed, caches)
     spec = reference.MODELS[cell.slug]
     steps = (
         math.ceil(PILOT_TOKENS / (spec.batch_size * reference.SEQUENCE_LENGTH))
-        if cell.phase == "pilot"
+        if cell.phase == PILOT
         else spec.num_train_steps
     )
 
@@ -133,17 +133,15 @@ def main():
     cells = [Cell(**c) for c in json.loads(args.plan.read_text())]
     if not cells or len({c.name for c in cells}) != len(cells):
         raise ValueError("Select nonempty unique cells")
-    for phase in {c.phase for c in cells} - {"pilot"}:
+    for phase in {c.phase for c in cells} - {PILOT}:
         if args.lock is None:
             raise ValueError("Confirmation requires --lock from completed pilots")
-        allowed = confirmations(json.loads(args.lock.read_text()), phase=phase)
+        allowed = confirmations(read_lock(args.lock), phase=phase)
         if any(c not in allowed for c in cells if c.phase == phase):
             raise ValueError("Plan differs from locked settings")
-        if phase in ("horizon", "scale") and (
-            args.reproducible_result is None or not args.reproducible_result.is_file()
-        ):
+        if phase in (HORIZON, SCALE) and (args.reproducible_result is None or not args.reproducible_result.is_file()):
             raise ValueError("Follow-ups require a reviewed --reproducible-result report")
-    steps = [training_step(c, args.version) for c in cells]
+    steps = [build_training_step(c, args.version) for c in cells]
     steps = [replace(s, override_path=s.path(args.prefix)) for s in steps]
     configs = [draccus.encode(materialized_config(s, args.prefix)) for s in steps]
     args.output.write_text(json.dumps(configs, indent=2) + "\n")

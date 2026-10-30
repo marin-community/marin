@@ -16,6 +16,10 @@ from levanter.optim.muon import MuonConfig
 from levanter.optim.util import flatten_linear_layers, unflatten_linear_layers, zeropower_via_newtonschulz5
 
 
+NEWTON_SCHULZ = "newton_schulz"
+SVD = "svd"
+
+
 class GramState(NamedTuple):
     momentum: jax.Array
     left: jax.Array
@@ -71,13 +75,9 @@ def exact_polar(matrix: jax.Array) -> jax.Array:
 
 @jax.named_call
 def gram_direction(
-    state: GramState, *, alpha: float, ridge: float, polar_steps: int, polar_method: str = "newton_schulz"
+    state: GramState, *, alpha: float, ridge: float, polar_steps: int, polar_method: str = NEWTON_SCHULZ
 ) -> jax.Array:
-    """Positive descent direction; the optimizer applies the minus learning rate.
-
-    Reuses the supplied buffers without advancing them. This is also the checkpoint
-    probe path, so all exponents can be compared from identical optimizer history.
-    """
+    """Return a positive descent direction without advancing the supplied EMA state."""
     m = state.momentum
     if alpha:
         left = relative_gram_power(state.left, alpha, ridge)
@@ -87,9 +87,9 @@ def gram_direction(
         )
     else:
         inner = m
-    if polar_method == "svd":
+    if polar_method == SVD:
         polar = exact_polar(inner)
-    elif polar_method == "newton_schulz":
+    elif polar_method == NEWTON_SCHULZ:
         flat = inner.reshape((-1, *inner.shape[-2:]))
         polar = jax.vmap(partial(zeropower_via_newtonschulz5, steps=polar_steps))(flat).reshape(inner.shape)
     else:
@@ -120,6 +120,7 @@ def scale_by_ema_gram(
         return EmaGramState(tuple(init_gram_state(p) for p in leaves))
 
     def update_fn(updates, state, params=None):
+        del params  # Optax permits callers to pass this keyword.
         leaves, treedef = jax.tree.flatten(flatten_linear_layers(updates))
         states = tuple(update_gram_state(g, s, beta1, beta2) for g, s in zip(leaves, state.matrices, strict=True))
         directions = [
