@@ -48,6 +48,8 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.model import AttentionFp32SavedOutput, GrugModelConfig
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -90,6 +92,25 @@ def validated_batch_axis_size(
     return batch_axes
 
 
+def _diagnostic_optimizer(
+    model: GrugModelConfig, *, schedule_steps: int, batch_size: int, lr_scale: float
+) -> GrugMoeMuonHConfig:
+    """The heuristic optimizer for ``batch_size`` sequences, with both learning rates times ``lr_scale``."""
+    if lr_scale <= 0:
+        raise ValueError(f"lr_scale must be positive, got {lr_scale}")
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=schedule_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    return dataclasses.replace(
+        optimizer,
+        learning_rate=optimizer.learning_rate * lr_scale,
+        adam_lr=optimizer.adam_lr * lr_scale,
+    )
+
+
 def build_diagnostic_run(
     *,
     run_id: str,
@@ -110,6 +131,9 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
+    optimizer_batch_size: int | None = None,
+    lr_scale: float = 1.0,
+    attention_fp32_saved_output: AttentionFp32SavedOutput = AttentionFp32SavedOutput.NONE,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -136,6 +160,8 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+    ``optimizer_batch_size`` sizes the heuristic from another global batch instead, so a one-rack run
+    can reuse the multi-rack hero's beta2 and epsilon, and ``lr_scale`` multiplies both learning rates.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -183,14 +209,15 @@ def build_diagnostic_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = dataclasses.replace(model, attention_fp32_saved_output=attention_fp32_saved_output)
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
-    optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=total_schedule_steps,
-        batch_size=batch_size,
-        hidden_dim=model.hidden_dim,
-        seq_len=model.max_seq_len,
+    optimizer = _diagnostic_optimizer(
+        model,
+        schedule_steps=total_schedule_steps,
+        batch_size=optimizer_batch_size if optimizer_batch_size is not None else batch_size,
+        lr_scale=lr_scale,
     )
     batch_axes = validated_batch_axis_size(
         device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
@@ -578,6 +605,26 @@ def build_diagnostic_run(
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--optimizer-batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Global batch that sizes the optimizer heuristic (LR, beta2, epsilon). Defaults to --batch-size.",
+)
+@click.option(
+    "--lr-scale",
+    type=click.FloatRange(min=0, min_open=True),
+    default=1.0,
+    show_default=True,
+    help="Multiply both the MuonH and the Adam learning rates.",
+)
+@click.option(
+    "--attention-fp32-saved-output",
+    type=click.Choice([mode.value for mode in AttentionFp32SavedOutput]),
+    default=AttentionFp32SavedOutput.NONE.value,
+    show_default=True,
+    help="Layers whose attention backward forms D = rowsum(dO * O) from the FP32 output.",
+)
 @build_options
 def main(
     run_id: str,
@@ -613,6 +660,9 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
+    optimizer_batch_size: int | None,
+    lr_scale: float,
+    attention_fp32_saved_output: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -633,6 +683,9 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
+        optimizer_batch_size=optimizer_batch_size,
+        lr_scale=lr_scale,
+        attention_fp32_saved_output=AttentionFp32SavedOutput(attention_fp32_saved_output),
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),
