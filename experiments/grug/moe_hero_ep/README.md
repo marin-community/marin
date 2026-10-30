@@ -274,7 +274,6 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
 | `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
-| `--max-grad-norm` | sets the train step's global gradient-norm clip (default: the hero's 1.0); 0 disables it |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes periodic and final checkpoints |

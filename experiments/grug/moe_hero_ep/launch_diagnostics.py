@@ -110,7 +110,6 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
-    max_grad_norm: float | None = HERO_MAX_GRAD_NORM,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -137,7 +136,6 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
-    ``max_grad_norm`` is the train step's global gradient-norm clip; ``None`` disables it.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -238,7 +236,7 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        max_grad_norm=max_grad_norm,
+        max_grad_norm=HERO_MAX_GRAD_NORM,
         gc_interval=gc_interval,
         master_param_mode=master_param_mode,
     )
@@ -580,13 +578,6 @@ def build_diagnostic_run(
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
-@click.option(
-    "--max-grad-norm",
-    type=click.FloatRange(min=0),
-    default=HERO_MAX_GRAD_NORM,
-    show_default=True,
-    help="Clip the global gradient norm to this value in the train step. 0 disables clipping.",
-)
 @build_options
 def main(
     run_id: str,
@@ -622,7 +613,6 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
-    max_grad_norm: float,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -643,7 +633,6 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
-        max_grad_norm=max_grad_norm or None,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),

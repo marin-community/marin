@@ -298,7 +298,6 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
-        # The narrow rungs keep the unclipped recipe they were trained with.
         max_grad_norm=HERO_MAX_GRAD_NORM if size == "d6144" else None,
         gc_interval=100,
     )
