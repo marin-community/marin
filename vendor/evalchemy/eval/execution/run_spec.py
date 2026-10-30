@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any
 
 from eval.passk import parse_pass_at_k
+from eval.graders.answer_equivalence import JudgeProtocol
 from eval.limits import parse_key_value_args
 from eval.robust_api import parse_generation_overrides
 from eval.execution.generation import canonical_generation_kwargs
@@ -28,6 +29,7 @@ class RunSpec:
     predict_only: bool = False
     confirm_run_unsafe_code: bool = False
     judge_model: str | None = None
+    judge_protocol: JudgeProtocol = JudgeProtocol.DEFAULT
     model_name: str | None = None
 
     @classmethod
@@ -41,6 +43,7 @@ class RunSpec:
         values["model_name"] = model_args.get("pretrained", model_args.get("model", values["model_name"]))
         if values["limit"] is not None and values["limit"] >= 1:
             values["limit"] = int(values["limit"])
+        values["judge_protocol"] = JudgeProtocol(values["judge_protocol"])
         annotator = getattr(args, "annotator_model", None)
         values["judge_model"] = None if annotator == "auto" else annotator
         if values["max_tokens"] is not None:

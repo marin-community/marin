@@ -28,10 +28,26 @@ the evaluated model at each request. It counts the rendered prompt with the serv
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
 The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Run
-`analysis/sotopia_length_control/rank.py` over the complete cohort to obtain the reportable
-length-controlled overall score. Goal achievement remains an explicit non-default dataset
-generation mode.
+dimensions. It also records the evaluated agent's emitted character count. Policy launches
+apply the length correction automatically using the 13 baseline archives in
+`sotopia-baselines.json` plus the evaluated model’s current run. A rerun of a baseline model
+replaces its previous source in the fit. The archive preserves raw rewards, the
+complete cohort fit, and each adjusted episode. Goal achievement remains an explicit
+non-default dataset generation mode.
+
+`finalization.yaml` also selects MiniMax for native FinanceBench and OlympiadBench grading.
+Each judged benchmark starts the pinned 262,144-token TP8 MiniMax service on eight H100s
+in the candidate's cluster before evaluation and releases it afterward. Evalchemy grades
+answers once and preserves judge verdicts with the samples. Judge requests use constrained
+labels and escalate empty final answers through 128, 512, and 2048 output tokens.
+
+These stages finish before the run is recorded as successful. Missing cohort evidence
+produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
+Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
+The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
+`record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
+accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
+absolute path to this YAML by default.
 
 Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
 concurrency slot. A transport attempt may use that full window; retrying does not extend it.

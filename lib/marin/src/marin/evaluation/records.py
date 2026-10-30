@@ -370,6 +370,8 @@ class EvalRef(BaseModel):
     tasks: tuple[EvalTaskRef, ...] = ()
     evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None
+    postprocessing: dict[str, str] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    """Named final-score protocols and their frozen JSON configurations."""
 
 
 class HardwareRef(BaseModel):
