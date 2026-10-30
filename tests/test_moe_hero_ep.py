@@ -1636,7 +1636,7 @@ def test_total_norm_clip_passes_small_gradients_through_bitwise():
 
 
 def test_total_norm_clip_rescales_the_whole_gradient_to_the_limit():
-    # The leaves have norms 5 and 12, total 13: one global scale, not a per-leaf or per-group clip.
+    # The leaves have norms 5 and 12; clipping their total norm of 13 scales both by 1/13.
     grads = {"a": jnp.array([3.0, 4.0]), "b": jnp.array([[12.0]])}
 
     clipped, norm, fired = train.clip_by_total_norm(grads, 1.0)
@@ -1683,12 +1683,10 @@ def test_clipped_train_step_updates_with_the_clipped_gradient_and_logs_the_raw_n
     np.testing.assert_allclose(state.params.weight, 1.9, rtol=1e-6)
     np.testing.assert_allclose(metrics[train.GRAD_NORM_METRIC], 4.0)
     assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
-    assert watch_stats is not None
     np.testing.assert_allclose(watch_stats["grad/norm/total"], 4.0)
 
 
 def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, monkeypatch):
-    """The clip lives in the train step, not the optimizer, so the saved optimizer state still matches."""
     cfg = _latent_config()
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     mp = jmp.get_policy("f32")
