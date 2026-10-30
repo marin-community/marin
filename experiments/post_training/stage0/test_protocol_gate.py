@@ -99,7 +99,3 @@ def test_prefilled_thinking_closes_but_native_eos_is_not_an_end_of_turn():
     assert ended["think_blocks"] == 1 and ended["think_closed"] and ended["turn_ended"]
     assert eos["think_closed"] and not eos["turn_ended"]
     assert not unclosed["think_closed"] and not unclosed["turn_ended"]
-
-
-
-
