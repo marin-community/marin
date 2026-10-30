@@ -10,7 +10,8 @@ from uuid import uuid4
 import numpy as np
 from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from verifyit.reasoning_markup import REASONING_DELIMITERS, ReasoningViolation, reasoning_span_violation
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -44,11 +45,15 @@ _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
+REASONING_VIOLATIONS_KEY = "reasoning_violations"
+
+
 class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    reasoning_violations: NotRequired[list[ReasoningViolation | None]]
 
 
 class ModelClient(Protocol):
@@ -114,6 +119,7 @@ class _ChatResult:
     generation_token_budget: int | None
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+    reasoning_violation: ReasoningViolation | None = None
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -139,6 +145,8 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
     )
+    if any(result.reasoning_violation is not None for result in results):
+        output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -392,6 +400,7 @@ class DirectModelClient:
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+            reasoning_violation = reasoning_span_violation(decoded, stop_reason)
             return _ChatResult(
                 prompt_ids,
                 response_ids,
@@ -404,6 +413,7 @@ class DirectModelClient:
                 token_budget,
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
+                reasoning_violation,
             )
 
         results = await asyncio.gather(

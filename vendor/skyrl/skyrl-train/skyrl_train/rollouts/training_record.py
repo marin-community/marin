@@ -1,12 +1,22 @@
 """SkyRL training signals projected from Marin's graded attempt records."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, RolloutFailure, TaskRolloutSpec
 from skyrl_gym.task_records import FOLDED_GRADE_HARNESSES, StepReward, fold_grades
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
+from verifyit.reasoning_markup import ReasoningViolation
+
+REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
+
+
+@dataclass(frozen=True)
+class TurnReasoningViolation:
+    conversation: int
+    turn: int
+    violation: ReasoningViolation
 
 
 @dataclass(frozen=True)
@@ -97,3 +107,34 @@ def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRo
         failure=rollout.failure,
         conversations=rollout.conversations,
     )
+
+
+def _reasoning_violations(rollout: TrainingRollout) -> list[TurnReasoningViolation]:
+    return [
+        TurnReasoningViolation(index, turn, step.turn.reasoning_violation)
+        for index, conversation in enumerate(rollout.conversations)
+        for turn, step in enumerate(conversation.steps)
+        if step.turn.reasoning_violation is not None
+    ]
+
+
+def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
+    """Grade a rollout with a malformed reasoning span in any turn as a reward-0 submission failure.
+
+    Step rewards are cleared so the zero grade is the whole reward.
+    """
+    violations = _reasoning_violations(rollout)
+    if not violations:
+        return rollout
+    grade = GradeResult(
+        Outcome.SUBMISSION_FAILURE,
+        0.0,
+        "Malformed reasoning span",
+        passed=False,
+        diagnostics={REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations]},
+    )
+    steps = tuple(
+        replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
+        for step in rollout.steps
+    )
+    return replace(rollout, grade=grade, steps=steps)

@@ -42,6 +42,7 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
+| `reasoning_markup` | `grade` (default) scores an attempt as usual. `reject` grades an attempt whose model reply has a malformed reasoning span (unclosed, repeated, or a stray closer) as a reward-0 `submission_failure`. Applied by the SkyRL rollout worker before grading results are grouped. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
 | `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |

@@ -13,6 +13,7 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import TaskSpec
 from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.reasoning_markup import ReasoningViolation
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
@@ -95,6 +96,8 @@ class ModelTurn:
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
+    reasoning_violation: ReasoningViolation | None = None
+    """The malformed reasoning span that the transport found in the reply, if any."""
 
     @property
     def request_tokens(self) -> int:
