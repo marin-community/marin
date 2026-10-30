@@ -3,59 +3,93 @@
 
 """Axolotl SFT on Iris from the pinned ``marin-community/axolotl`` fork.
 
-The fork pin, the transformers pin, and the supported architectures are explicit.
-The pod-side entrypoint clones the fork at the pinned revision, re-pins transformers
-(so the fork's dependency resolution cannot clobber it), writes one self-contained
-config — the shared chat template rides inline as ``chat_template_jinja`` — launches
-through ``torchrun`` with FSDP2 so a 30B MoE actually fits in 8 GPUs, verifies the
-saved tokenizer embeds the configured template (the fork's ``template_integrity``
-plugin, re-checked outside the save path), extracts the realized token counts, and
-uploads the output and the manifest to object storage. Nothing under the pod's
-scratch directory is treated as durable.
+The submitter side (this module, in Marin's environment) builds one self-contained
+JSON payload per run: the fork's training YAML with the shared chat template inline,
+the pins, and the object-storage locations of the CL12 data, the init checkpoint and
+the output. The job runs in the pinned Axolotl task image, where
+:mod:`experiments.post_training.axolotl_sft.pod_runner` (standard library only)
+clones the fork, stages the inputs, trains through ``torchrun`` with FSDP2 on one
+8-GPU node, checks the saved tokenizer embeds the template, and uploads the output.
+
+Launch one stage (``--dry-run`` prints the Iris command without submitting)::
+
+    python -m experiments.post_training.axolotl_sft.launcher submit \\
+        --base qwen3-30b-a3b-base --stage 1 --data-root s3://.../stage0-cl12/2026.10.22 \\
+        --output-root s3://.../stage0-axolotl --job-name opd-0b-qwen3-s1 [--max-steps 20]
 """
 
 from __future__ import annotations
 
 import argparse
-import glob
 import hashlib
 import json
-import logging
 import os
 import shlex
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
 from typing import Any
-
-import fsspec
-import yaml
-from fray.iris_backend import convert_resources, resolve_coscheduling, wrap_multiprocess
-from fray.types import ResourceConfig
-from iris.client.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec
-from iris.rpc import job_pb2
-from rigging.timing import Duration
-from transformers import AutoTokenizer
-
-logger = logging.getLogger(__name__)
 
 AXOLOTL_FORK_REPO = "https://github.com/marin-community/axolotl"
 # Fork main at the time of this launcher; MARIN_FORK.md records the fork point and
 # the ported features (template_integrity, expert_parallel, mfu, supabase_register).
 AXOLOTL_FORK_REVISION = "a208d55050da5794098c183f7ac474e89c3f6859"
 AXOLOTL_TRANSFORMERS_PIN = "5.12.1"
+# The fork's published task image (upstream axolotl-uv base plus the fork's recipe
+# layer, built by its build-marin-tinker-sft workflow at fork commit 79759fbe). The
+# pod runner overlays the fork's source at AXOLOTL_FORK_REVISION on top of it.
+AXOLOTL_TASK_IMAGE = (
+    "ghcr.io/marin-community/axolotl@sha256:810adf6a83dc6976a680affd994989782128d15ba524b84a188312c8fc5d95ed"
+)
 # Architectures the fork's transformers pin must ship for the Phase 0 bases.
 SUPPORTED_ARCHITECTURES = ("qwen3_moe", "qwen3_5_moe", "nemotron_h")
+# FSDP2 wraps each decoder block.
+DECODER_LAYER_CLASSES = {
+    "qwen3_moe": "Qwen3MoeDecoderLayer",
+    "qwen3_5_moe": "Qwen3_5MoeDecoderLayer",
+    "nemotron_h": "NemotronHBlock",
+}
 
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
-EXPERT_PARALLEL_PLUGIN = "axolotl.integrations.expert_parallel.ExpertParallelPlugin"
-# Architectures the expert-parallel plugin is verified against; Nemotron-H support
-# is unverified and must not be turned on by config accident.
-EXPERT_PARALLEL_VERIFIED_ARCHITECTURES = ("qwen3_moe", "qwen3_5_moe")
+# Shipped next to the pod runner; see fp32_master.py.
+FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# Shipped next to the pod runner; see router_aux_loss.py. Axolotl itself ignores
+# `output_router_logits`, so the aux loss trains only through this plugin.
+ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
+# Packed conversations isolated in attention; see packed_attention.py.
+PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
+# A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
+PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
+# The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
+CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
+# Per-architecture load-time checks shipped next to the pod runner (see nemotron_h_checks.py).
+ARCHITECTURE_PLUGINS: dict[str, tuple[str, ...]] = {
+    "qwen3_moe": (),
+    "qwen3_5_moe": (),
+    "nemotron_h": ("nemotron_h_checks.NemotronHChecksPlugin",),
+}
+GPUS_PER_NODE = 8
+POD_RUNNER = "experiments/post_training/axolotl_sft/pod_runner.py"
+PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
 
-# Pod-local scratch: checkpoints land here first and are uploaded after training.
-# Anything written only to the pod is lost with it.
-SCRATCH_ROOT = "/scratch/axolotl"
+
+class AttentionKernel(StrEnum):
+    """Attention backends a spec may train with.
+
+    Under sdpa, transformers isolates packed conversations with a materialized block-diagonal
+    mask, so every layer computes attention over the whole 32k pack. The flash kernels take
+    the packed segments as varlen sequences from the position-id resets instead.
+    """
+
+    SDPA = "sdpa"
+    FLASH_ATTN3 = "kernels-community/flash-attn3"
+    FLASH_ATTN2 = "kernels-community/flash-attn2"
+    FLEX = "flex_attention"
+
+
+class PromptStrategy(StrEnum):
+    CHAT_TEMPLATE = "chat_template"
+    GENERATION_MASK = "experiments.post_training.axolotl_sft.generation_mask"
 
 
 @dataclass(frozen=True)
@@ -66,6 +100,7 @@ class AxolotlOptimizer:
     weight_decay: float
     adam_beta1: float
     adam_beta2: float
+    adam_epsilon: float
     lr_scheduler: str
     warmup_steps: int
     max_grad_norm: float
@@ -94,36 +129,35 @@ class AxolotlBaseModel:
 
 @dataclass(frozen=True)
 class AxolotlSpec:
-    """One Axolotl SFT run: pinned base, data, shared template, optimizer, seed."""
+    """One Axolotl SFT run: pinned base, data, explicit template, optimizer, seed.
+
+    ``data_uri`` is one CL12 ``{source}.jsonl.gz`` in object storage; ``init_uri``,
+    when set, is a previous stage's uploaded export, which initializes the weights
+    instead of the pinned base (the base still proves tokenizer and template
+    provenance). Conversations pack into ``sequence_len``-token sequences, one packed
+    sequence per device micro-batch, as Snowball's stages pack.
+    """
 
     name: str
     base: AxolotlBaseModel
-    # Path (or glob) of the CL12 data manifest's jsonl files, readable from the pod.
-    data_manifest: str
+    data_uri: str
     optimizer: AxolotlOptimizer
-    # The shared chat template for this family, from
-    # chat_template.shared_template(FAMILY_TOKEN_MAPS[architecture]).
+    # The complete training template and its end-of-turn token.
     chat_template: str
     template_sha256: str
+    turn_close: str
     seed: int
     # The MoE router auxiliary loss: True trains the router through it (Qwen's
     # pretraining rule); False records a deviation in the manifest.
     output_router_logits: bool
-    sequence_len: int = 32768
-    per_device_batch_size: int = 1
-    gradient_accumulation_steps: int = 64
-    epochs: int = 1
-    # One conversation per sequence: the Stage 0 budget is matched in examples, and
-    # the #6839 masking canary is defined on unpacked sequences.
-    # Initialize weights from this checkpoint path (a previous curriculum stage's
-    # export) instead of the pinned base; the base still proves tokenizer and
-    # template provenance.
-    init_checkpoint: str | None = None
-    # One conversation per sequence: the Stage 0 budget is matched in examples, and
-    # the #6839 masking canary is defined on unpacked sequences.
-    sample_packing: bool = False
-    # The fork's expert-parallel plugin size (1 = off).
-    expert_parallel_size: int = 1
+    sequence_len: int
+    per_device_batch_size: int
+    gradient_accumulation_steps: int
+    epochs: int
+    nodes: int
+    init_uri: str | None = None
+    prompt_strategy: PromptStrategy = PromptStrategy.CHAT_TEMPLATE
+    attn_implementation: AttentionKernel = AttentionKernel.SDPA
 
     def __post_init__(self) -> None:
         if self.base.architecture not in SUPPORTED_ARCHITECTURES:
@@ -139,357 +173,290 @@ class AxolotlSpec:
             raise ValueError(f"seed must be a non-negative int32, got {self.seed}")
         if self.sequence_len <= 0 or self.gradient_accumulation_steps <= 0 or self.per_device_batch_size <= 0:
             raise ValueError("sequence_len, per_device_batch_size and gradient_accumulation_steps must be positive")
-        if self.expert_parallel_size > 1 and self.base.architecture not in EXPERT_PARALLEL_VERIFIED_ARCHITECTURES:
-            raise ValueError(
-                f"expert parallelism is not verified on {self.base.architecture!r}; verify the DeepEP "
-                "plugin against this architecture first, then add it to EXPERT_PARALLEL_VERIFIED_ARCHITECTURES"
-            )
+        if not self.base.revision:
+            raise ValueError("a base without a revision pin cannot be cited in the manifest")
+
+    @property
+    def global_batch(self) -> int:
+        return self.per_device_batch_size * self.nodes * GPUS_PER_NODE * self.gradient_accumulation_steps
 
 
-def axolotl_config(spec: AxolotlSpec, *, scratch_output_dir: str) -> dict[str, Any]:
-    """The fork's training YAML for ``spec``.
+def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[str, Any]:
+    """The fork's training YAML for ``spec``; the pod runner fills in local paths.
 
     The chat template rides inline (``chat_template: jinja`` +
-    ``chat_template_jinja``), so the submitter's disk never has to agree with the
-    pod's. ``template_integrity`` is enabled through ``plugins:`` —
-    ``tokenizer_save_jinja_files: false`` alone does not enable it — and the
-    saved checkpoint must embed the template. Qwen models train with their router
-    aux loss on (``output_router_logits``); NemotronH's correction bias is a frozen
-    buffer this config cannot update, and the manifest records that deviation.
-    FSDP2 shards parameters, gradients and optimizer state, which is what makes a
-    30B MoE with Adam state fit on 8 GPUs.
+    ``chat_template_jinja``). Only assistant turns train, through their end-of-turn
+    token. ``template_integrity`` makes the saved checkpoint embed the template, and
+    the fp32-master plugin keeps fp32 parameters and Adam state under bf16 compute.
+    FSDP2 shards parameters, gradients and optimizer state across the node.
     """
-    plugins = [TEMPLATE_INTEGRITY_PLUGIN]
-    if spec.expert_parallel_size > 1:
-        plugins.append(EXPERT_PARALLEL_PLUGIN)
-    if spec.init_checkpoint is None and not spec.base.revision:
-        raise ValueError("a base without a revision pin cannot be cited in the manifest")
     config: dict[str, Any] = {
-        # A chained stage initializes from the previous stage's checkpoint
-        # directory; the fork's base_model accepts a local path.
-        "base_model": spec.init_checkpoint if spec.init_checkpoint else spec.base.hf_id,
-        **({} if spec.init_checkpoint else {"revision_of_model": spec.base.revision}),
-        "sequence_len": spec.sequence_len,
-        "sample_packing": spec.sample_packing,
-        "plugins": plugins,
-        # template_integrity: the saved checkpoint embeds its chat template.
+        # A chained stage's pod runner replaces this with the staged previous export.
+        "base_model": spec.base.hf_id,
+        "revision_of_model": spec.base.revision,
+        "trust_remote_code": False,
+        "strict": False,
+        "plugins": [
+            TEMPLATE_INTEGRITY_PLUGIN,
+            FP32_MASTER_PLUGIN,
+            CUT_CROSS_ENTROPY_PLUGIN,
+            PACKED_ATTENTION_PLUGIN,
+            *ARCHITECTURE_PLUGINS[spec.base.architecture],
+            *([ROUTER_AUX_LOSS_PLUGIN] if spec.output_router_logits else []),
+        ],
         "tokenizer_save_jinja_files": False,
-        "tokenizer_use_fast": True,
+        "chat_template": "jinja",
+        "chat_template_jinja": spec.chat_template,
+        # Multimodal shells (Qwen3.5-MoE) also load and save a processor, whose chat_template.jinja
+        # transformers reads ahead of tokenizer_config.json; give it the same template.
+        "processor_kwargs": {"chat_template": spec.chat_template},
+        # The family's end-of-turn token ends generation, as it ends every trained turn.
+        "special_tokens": {"eos_token": spec.turn_close},
+        "datasets": [
+            {
+                "path": spec.data_uri,
+                "ds_type": "json",
+                "split": "train",
+                "type": spec.prompt_strategy.value,
+                "field_messages": "messages",
+                "roles_to_train": ["assistant"],
+                "train_on_eot": "turn",
+            }
+        ],
+        # Axolotl reads eot_tokens from the top level, not from the dataset entry.
+        "eot_tokens": [spec.turn_close],
         "train_on_inputs": False,
-        "datasets": [{"path": spec.data_manifest, "type": "chat_template"}],
-        "num_epochs": spec.epochs,
-        "per_device_train_batch_size": spec.per_device_batch_size,
+        "val_set_size": 0.0,
+        "shuffle_merged_datasets": False,
+        "dataset_processes": 32,
+        "sequence_len": spec.sequence_len,
+        # One packed epoch per stage, as Snowball trains: conversations pack into sequence_len
+        # tokens, isolated from each other by the packed-attention plugin.
+        "sample_packing": True,
+        "pad_to_sequence_len": True,
+        "micro_batch_size": spec.per_device_batch_size,
         "gradient_accumulation_steps": spec.gradient_accumulation_steps,
+        "num_epochs": spec.epochs,
         "optimizer": "adamw_torch_fused",
         "learning_rate": spec.optimizer.learning_rate,
         "adam_beta1": spec.optimizer.adam_beta1,
         "adam_beta2": spec.optimizer.adam_beta2,
+        "adam_epsilon": spec.optimizer.adam_epsilon,
         "weight_decay": spec.optimizer.weight_decay,
         "lr_scheduler": spec.optimizer.lr_scheduler,
         "warmup_steps": spec.optimizer.warmup_steps,
         "max_grad_norm": spec.optimizer.max_grad_norm,
         "seed": spec.seed,
+        "bf16": True,
+        "tf32": True,
+        "attn_implementation": spec.attn_implementation.value,
+        "experts_implementation": "grouped_mm",
+        # Reduce-scatter gradients after every micro-batch. Skipping the sync during accumulation
+        # keeps the whole model's unsharded bf16 gradients on every GPU (~61 GB for Qwen3-30B).
+        "accelerator_config": {"gradient_accumulation_kwargs": {"sync_each_batch": True}},
         "logging_steps": 1,
-        # Train-equals-serve: the shared template, inline.
-        "chat_template": "jinja",
-        "chat_template_jinja": spec.chat_template,
-        # The router aux loss is explicit on the spec: without it the router
-        # trains only through the LM loss.
-        **({"output_router_logits": spec.output_router_logits} if spec.output_router_logits else {}),
-        # FSDP2: parameters, gradients and optimizer state sharded across the node.
-        "fsdp_version": 2,
-        "fsdp": ["full_shard", "auto_wrap"],
+        "save_strategy": "steps",
+        "save_steps": 200,
+        "save_total_limit": 1,
         "fsdp_config": {
-            "fsdp_offload_params": False,
-            "fsdp_state_dict_type": "SHARDED_STATE_DICT",
-            "fsdp_auto_wrap_policy": "SIZE_BASED_WRAP",
-            "fsdp_sync_module_states": True,
+            "fsdp_version": 2,
+            "offload_params": False,
+            "cpu_ram_efficient_loading": True,
+            "auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+            "transformer_layer_cls_to_wrap": DECODER_LAYER_CLASSES[spec.base.architecture],
+            "state_dict_type": "FULL_STATE_DICT",
+            "reshard_after_forward": True,
+            # FSDP's own per-block checkpointing; transformers' gradient_checkpointing under
+            # FSDP2 adds an all-gather in backward and ran the Qwen3 smoke out of memory.
+            "activation_checkpointing": True,
         },
-        "output_dir": scratch_output_dir,
     }
-    if spec.expert_parallel_size > 1:
-        config["expert_parallel_size"] = spec.expert_parallel_size
+    if max_steps is not None:
+        config["max_steps"] = max_steps
+        # A smoke saves only the final model; Axolotl rejects save_steps without step saves.
+        config["save_strategy"] = "no"
+        del config["save_steps"], config["save_total_limit"]
     return config
 
 
-def training_command(config_path: str, *, nodes: int, gpus_per_node: int) -> list[str]:
-    """The exact pod-side training command; the printed form and the subprocess
-    call share this builder."""
-    return [
-        "torchrun",
-        f"--nnodes={nodes}",
-        f"--nproc-per-node={gpus_per_node}",
-        "-m",
-        "axolotl.cli.train",
-        config_path,
-    ]
-
-
-def axolotl_launch_command(
-    spec: AxolotlSpec,
-    *,
-    nodes: int = 1,
-    gpus_per_node: int = 8,
-    max_steps: int | None = None,
-) -> str:
-    """The exact shell command a launch runs; the 20-step smoke passes ``max_steps``."""
-    config = axolotl_config(spec, scratch_output_dir=f"{SCRATCH_ROOT}/{spec.name}")
-    if max_steps is not None:
-        config["max_steps"] = max_steps
-    config_path = f"{SCRATCH_ROOT}/{spec.name}/axolotl_config.yaml"
-    return " && ".join(
-        [
-            f"git clone {AXOLOTL_FORK_REPO} && git -C axolotl checkout {AXOLOTL_FORK_REVISION}",
-            shlex.join(training_command(config_path, nodes=nodes, gpus_per_node=gpus_per_node)),
-        ]
-    )
-
-
-@dataclass(frozen=True)
-class AxolotlLaunchPayload:
-    """Everything the pod-side entrypoint needs, JSON-serializable."""
-
-    config: dict[str, Any]
-    fork_revision: str
-    output_root: str
-    manifest: dict[str, Any]
-
-    def to_json(self) -> str:
-        return json.dumps(self.__dict__, sort_keys=True)
-
-
-def run_axolotl_training(payload_json: str) -> None:
-    """Pod-side entrypoint: clone the pinned fork, re-pin transformers, train.
-
-    The fork is cloned at the pinned revision and installed into the pod
-    environment; transformers is then re-pinned explicitly because the fork's
-    dependency resolution may otherwise upgrade it. Training runs through torchrun
-    with the config's FSDP2 settings. The saved tokenizer must embed the chat
-    template byte-for-byte, the realized token counts are read from the trainer
-    state, and output plus manifest are uploaded to ``output_root`` — the pod's
-    scratch directory does not survive the job.
-    """
-    payload = AxolotlLaunchPayload(**json.loads(payload_json))
-    workdir = os.environ.get("AXOLOTL_WORKDIR", os.getcwd())
-    fork_dir = os.path.join(workdir, "axolotl")
-    if not os.path.exists(os.path.join(fork_dir, ".git")):
-        subprocess.run(["git", "clone", AXOLOTL_FORK_REPO, fork_dir], check=True)
-    subprocess.run(["git", "checkout", payload.fork_revision], cwd=fork_dir, check=True)
-    subprocess.run(["uv", "pip", "install", "--system", "-e", "."], cwd=fork_dir, check=True)
-    # The fork's dependency resolution may upgrade transformers; put the pin back.
-    subprocess.run(
-        ["uv", "pip", "install", "--system", f"transformers=={AXOLOTL_TRANSFORMERS_PIN}"],
-        cwd=fork_dir,
-        check=True,
-    )
-
-    config_path = os.path.join(workdir, "axolotl_config.yaml")
-    with open(config_path, "w") as handle:
-        yaml.safe_dump(payload.config, handle, sort_keys=False)
-
-    command = training_command(
-        config_path,
-        nodes=int(os.environ.get("AXOLOTL_NODES", "1")),
-        gpus_per_node=int(os.environ.get("AXOLOTL_GPUS", "8")),
-    )
-    logger.info("running %s", shlex.join(command))
-    subprocess.run(command, check=True, cwd=workdir)
-
-    output_dir = payload.config["output_dir"]
-    _verify_template_integrity(payload, output_dir)
-    realized_tokens = _realized_token_counts(output_dir)
-
-    manifest = dict(payload.manifest)
-    manifest["realized_tokens"] = realized_tokens
-    manifest_path = os.path.join(workdir, "axolotl_run_manifest.json")
-    with open(manifest_path, "w") as handle:
-        json.dump(manifest, handle, indent=2, sort_keys=True)
-
-    _upload(output_dir, manifest_path, payload.output_root)
-    logger.info("uploaded output and manifest to %s", payload.output_root)
-
-
-def _verify_template_integrity(payload: AxolotlLaunchPayload, output_dir: str) -> None:
-    """The fork's template_integrity contract, re-checked outside the save path.
-
-    The comparison is unconditional: every Stage 0 run carries the shared template.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(output_dir)
-    embedded = getattr(tokenizer, "chat_template", None)
-    if embedded is None:
-        raise ValueError(
-            f"saved checkpoint at {output_dir} embeds no chat template; "
-            "the serving stack would fail (the template_integrity footgun)"
-        )
-    configured = payload.config["chat_template_jinja"]
-    if embedded != configured:
-        raise ValueError("the embedded chat template differs from the configured one")
-
-
-def _realized_token_counts(output_dir: str) -> dict[str, Any]:
-    """The run's realized token counts from the trainer state.
-
-    Axolotl logs token totals in ``trainer_state.json``'s ``log_history``; a run
-    whose state carries none fails here rather than shipping a manifest that
-    cannot be checked against the data budget.
-    """
-    state_paths = sorted(glob.glob(os.path.join(output_dir, "**", "trainer_state.json"), recursive=True))
-    if not state_paths:
-        raise ValueError(f"no trainer_state.json under {output_dir}; cannot record realized tokens")
-    with open(state_paths[-1]) as handle:
-        state = json.load(handle)
-    totals: dict[str, int] = {}
-    for entry in state.get("log_history", []):
-        for key, value in entry.items():
-            if "token" in key and isinstance(value, (int, float)) and key not in ("tokens_per_second_per_gpu",):
-                totals[key] = max(totals.get(key, 0), int(value))
-    if not totals:
-        raise ValueError(
-            f"trainer_state.json at {state_paths[-1]} carries no token counts; "
-            "the manifest cannot be checked against the data budget"
-        )
-    return {"source": state_paths[-1], "counts": totals, "global_step": state.get("global_step")}
-
-
-def _upload(output_dir: str, manifest_path: str, output_root: str) -> None:
-    """Upload the checkpoint, the trainer state and the manifest to ``output_root``."""
-    filesystem = fsspec.filesystem("s3")
-    target = f"{output_root.rstrip('/')}/{os.path.basename(output_dir)}"
-    filesystem.put(output_dir, target, recursive=True)
-    filesystem.put(manifest_path, f"{target}/axolotl_run_manifest.json")
-
-
-def launch_axolotl(
-    spec: AxolotlSpec,
-    *,
-    endpoint_url: str,
-    output_root: str,
-    nodes: int = 1,
-    gpus_per_node: int = 8,
-    max_steps: int | None = None,
-    priority_band: int = job_pb2.PRIORITY_BAND_INHERIT,
-) -> str:
-    """Submit one Axolotl SFT job to Iris and return the job id."""
-    scratch_output_dir = f"{SCRATCH_ROOT}/{spec.name}"
-    config = axolotl_config(spec, scratch_output_dir=scratch_output_dir)
-    if max_steps is not None:
-        config["max_steps"] = max_steps
-    manifest = {
+def run_manifest(spec: AxolotlSpec, *, max_steps: int | None) -> dict[str, Any]:
+    """The provenance record uploaded beside the run's output."""
+    return {
         "spec_name": spec.name,
         "base": {"hf_id": spec.base.hf_id, "revision": spec.base.revision, "arch": spec.base.architecture},
-        "data_manifest": spec.data_manifest,
+        "data_uri": spec.data_uri,
+        "init_uri": spec.init_uri,
         "fork_revision": AXOLOTL_FORK_REVISION,
         "transformers_pin": AXOLOTL_TRANSFORMERS_PIN,
-        "optimizer": {
-            "learning_rate": spec.optimizer.learning_rate,
-            "weight_decay": spec.optimizer.weight_decay,
-            "adam_beta1": spec.optimizer.adam_beta1,
-            "adam_beta2": spec.optimizer.adam_beta2,
-            "lr_scheduler": spec.optimizer.lr_scheduler,
-            "warmup_steps": spec.optimizer.warmup_steps,
-        },
+        "task_image": AXOLOTL_TASK_IMAGE,
+        "optimizer": asdict(spec.optimizer),
         "sequence_len": spec.sequence_len,
         "batch": {
             "per_device": spec.per_device_batch_size,
             "gradient_accumulation": spec.gradient_accumulation_steps,
-            "nodes": nodes,
-            "gpus_per_node": gpus_per_node,
-            "expert_parallel_size": spec.expert_parallel_size,
+            "gpus_per_node": GPUS_PER_NODE,
+            "nodes": spec.nodes,
+            "global": spec.global_batch,
         },
         "seed": spec.seed,
         "epochs": spec.epochs,
-        "sample_packing": spec.sample_packing,
+        "max_steps": max_steps,
         "template_sha256": spec.template_sha256,
+        "prompt_strategy": spec.prompt_strategy.value,
+        "attn_implementation": spec.attn_implementation.value,
+        "master_weights": "fp32 (bf16 compute)",
         "router_rules": (
-            {"output_router_logits": spec.output_router_logits}
+            {"output_router_logits": True}
             if spec.output_router_logits
             else {
                 "deviation": (
                     "NemotronH's correction bias is a frozen buffer; Axolotl does not update it "
-                    "during training. Recorded here per the review; a bias-update callback in the "
-                    "fork is the follow-up if the Stage 0 routing-shift measurement demands it."
+                    "during training. A bias-update callback in the fork is the follow-up if the "
+                    "Stage 0 routing-shift measurement demands it."
                 )
             }
         ),
-        "chat_template_sha_source": "chat_template.template_sha256",
-        "output_root": output_root,
-        "scratch_output_dir": scratch_output_dir,
     }
-    payload = AxolotlLaunchPayload(
-        config=config,
-        fork_revision=AXOLOTL_FORK_REVISION,
-        output_root=output_root,
-        manifest=manifest,
+
+
+def launch_payload(spec: AxolotlSpec, *, output_uri: str, max_steps: int | None = None) -> dict[str, Any]:
+    """Everything the pod runner needs, JSON-serializable."""
+    return {
+        "config": axolotl_config(spec, max_steps=max_steps),
+        "fork_revision": AXOLOTL_FORK_REVISION,
+        "transformers_pin": AXOLOTL_TRANSFORMERS_PIN,
+        "data_uri": spec.data_uri,
+        "init_uri": spec.init_uri,
+        "output_uri": output_uri,
+        "gpus": GPUS_PER_NODE,
+        "nodes": spec.nodes,
+        "manifest": run_manifest(spec, max_steps=max_steps),
+    }
+
+
+def iris_command(
+    payload: dict[str, Any], *, job_name: str, cluster: str, timeout_hours: int, preprocess_only: bool = False
+) -> list[str]:
+    """The ``iris job run`` argv for one run: a gang of 8-GPU nodes in the Axolotl image.
+
+    ``preprocess_only`` runs Axolotl's config validation and tokenization on a CPU node instead.
+    """
+    if preprocess_only:
+        hardware = ["--cpu", "32", "--memory", "256GB", "--disk", "1000GB"]
+    else:
+        hardware = [
+            "--gpu",
+            f"H100x{GPUS_PER_NODE}",
+            "--replicas",
+            str(payload["nodes"]),
+            "--cpu",
+            "96",
+            "--memory",
+            "1200GB",
+            "--disk",
+            "2000GB",
+        ]
+    return [
+        "uv",
+        "run",
+        "iris",
+        "--config",
+        "lib/iris/config/marin.yaml",
+        "job",
+        "run",
+        "--no-wait",
+        "--enable-extra-resources",
+        "--target-cluster",
+        cluster,
+        "--priority",
+        "interactive",
+        *hardware,
+        "--timeout",
+        str(timeout_hours * 3600),
+        "--no-sync",
+        "--task-image",
+        AXOLOTL_TASK_IMAGE,
+        "--job-name",
+        job_name,
+        "-e",
+        PAYLOAD_ENV,
+        json.dumps(payload, sort_keys=True),
+        "-e",
+        "HF_TOKEN",
+        os.environ.get("HF_TOKEN", ""),
+        *(["-e", "AXOLOTL_PREPROCESS_ONLY", "1"] if preprocess_only else []),
+        "--",
+        "python",
+        POD_RUNNER,
+    ]
+
+
+def main() -> None:
+    # Imported here: the stage chain imports this module for its dataclasses.
+    from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415
+        QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT,
+        qwen_native_curriculum_specs,
+        qwen_native_s3_spec,
+        stage_output,
+        stage_specs,
     )
 
-    resources = ResourceConfig.with_gpu(
-        "H100",
-        count=gpus_per_node,
-        cpu=_GPU_HOST_CPU_PER_DEVICE * gpus_per_node,
-        ram=f"{_GPU_HOST_RAM_GB_PER_DEVICE * gpus_per_node}g",
-        disk=f"{_GPU_HOST_DISK_GB_PER_DEVICE * gpus_per_node}g",
-        replicas=nodes,
-    )
-    native_resources = convert_resources(resources)
-    command = Entrypoint(
-        command=["python", "-m", "experiments.post_training.axolotl_sft.launcher", "--payload", "launch-payload.json"],
-        workdir_files={"launch-payload.json": payload.to_json().encode()},
-    )
-    marin_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    environment = EnvironmentSpec(
-        env_vars={
-            "GIT_COMMIT": marin_commit,
-            "AXOLOTL_WORKDIR": scratch_output_dir,
-            "AXOLOTL_NODES": str(nodes),
-            "AXOLOTL_GPUS": str(gpus_per_node),
-        },
-        extras=["gpu"],
-    )
-    converted = convert_resources(resources)
-    with IrisClient.remote(endpoint_url) as client:
-        job = client.submit(
-            wrap_multiprocess(command, native_resources, processes_per_task=1),
-            name=f"axolotl-{spec.name}",
-            resources=native_resources,
-            replicas=nodes,
-            environment=environment,
-            coscheduling=resolve_coscheduling(resources, nodes),
-            scheduling_timeout=Duration.from_hours(24),
-            timeout=Duration.from_hours(72),
-            max_retries_failure=0,
-            priority_band=priority_band,
-            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_ERROR,
-        )
-    logger.info("submitted axolotl run %s as job %s", spec.name, job)
-    del converted
-    return str(job)
-
-
-_GPU_HOST_CPU_PER_DEVICE = 16
-_GPU_HOST_RAM_GB_PER_DEVICE = 220
-_GPU_HOST_DISK_GB_PER_DEVICE = 512
-
-
-def __main__() -> None:  # pragma: no cover - entrypoint
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Submit one Axolotl Stage 0 stage to Iris.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    smoke = subparsers.add_parser("smoke", help="submit a 20-step smoke run of one spec")
-    smoke.add_argument("--endpoint", required=True)
-    smoke.add_argument("--output-root", required=True)
-    smoke.add_argument("--spec-json", required=True, help="AxolotlSpec as JSON")
-    run = subparsers.add_parser("run-payload", help="pod-side entrypoint")
-    run.add_argument("--payload", required=True)
+    submit = subparsers.add_parser("submit")
+    submit.add_argument("--base", required=True)
+    submit.add_argument("--stage", type=int, choices=(1, 2, 3), required=True)
+    submit.add_argument(
+        "--recipe",
+        choices=("shared-curriculum", "qwen-native-s3", "qwen-native-curriculum"),
+        default="shared-curriculum",
+    )
+    submit.add_argument("--data-root", required=True, help="the CL12 artifact directory")
+    submit.add_argument("--output-root", required=True)
+    submit.add_argument("--job-name", required=True)
+    submit.add_argument("--max-steps", type=int, default=None, help="a smoke run's step cap")
+    submit.add_argument("--cluster", default="cw-rno2a")
+    submit.add_argument("--timeout-hours", type=int, default=96)
+    submit.add_argument("--dry-run", action="store_true")
+    submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
+    submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
+    submit.add_argument("--init-uri", default=None, help="override the stage's init checkpoint (reload tests)")
     args = parser.parse_args()
-    if args.command == "smoke":
-        spec = AxolotlSpec(**json.loads(args.spec_json))
-        job = launch_axolotl(spec, endpoint_url=args.endpoint, output_root=args.output_root, max_steps=20)
-        print(job)
-    elif args.command == "run-payload":
-        with open(args.payload) as handle:
-            run_axolotl_training(handle.read())
+
+    if args.recipe == "qwen-native-s3":
+        if args.stage != 3 or args.init_uri is not None:
+            parser.error("qwen-native-s3 requires stage 3 initialized from the pinned base")
+        spec = qwen_native_s3_spec(args.base, data_root=args.data_root)
+    elif args.recipe == "qwen-native-curriculum":
+        if args.output_root != QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT:
+            parser.error(f"qwen-native-curriculum chains its stages under {QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT}")
+        spec = qwen_native_curriculum_specs(args.base, data_root=args.data_root)[args.stage - 1]
+    else:
+        spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
+    if args.init_uri is not None:
+        spec = replace(spec, init_uri=args.init_uri)
+    output_uri = stage_output(spec, output_root=args.output_root)
+    if args.max_steps is not None:
+        output_uri = f"{output_uri}-smoke{args.max_steps}"
+    payload = launch_payload(spec, output_uri=output_uri, max_steps=args.max_steps)
+    if args.probe_precision:
+        payload["config"]["plugins"].append(PRECISION_PROBE_PLUGIN)
+    command = iris_command(
+        payload,
+        job_name=args.job_name,
+        cluster=args.cluster,
+        timeout_hours=args.timeout_hours,
+        preprocess_only=args.preprocess_only,
+    )
+    if args.dry_run:
+        redacted = [
+            ("<HF_TOKEN>" if previous == "HF_TOKEN" else part)
+            for previous, part in zip(["", *command[:-1]], command, strict=True)
+        ]
+        print(shlex.join(redacted))
+        return
+    subprocess.run(command, check=True)
 
 
 if __name__ == "__main__":
-    __main__()
+    main()
