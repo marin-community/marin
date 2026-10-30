@@ -1,7 +1,7 @@
 {
   "source_base": "8577d258214dd0dcb992c04458ee4eb10496d4e5",
   "eval_source_commit": "2a174c5fff27ecbcf2db4a300441e247ea18ebbd",
-  "reference_base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+  "reference_base": "671c7bcf78",
   "files": [
     {
       "original": "artifacts/scripts/audit_initializer_shapes.py",
@@ -1350,58 +1350,58 @@
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source.gz",
       "sha256": "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de",
       "bytes": 4427,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005-current/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005-current/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source.gz",
       "sha256": "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de",
       "bytes": 4427,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source.gz",
       "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
       "bytes": 4423,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-2048/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-2048/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source.gz",
       "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
       "bytes": 4423,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-222/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-222/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source.gz",
       "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
       "bytes": 4423,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-471/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-471/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source.gz",
       "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
       "bytes": 4423,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja",
       "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja",
-      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja.source",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja.source.gz",
       "sha256": "414d8559d363292c811e624fe2db04d52647ca5bd89acc53e98bd4c4f371302a",
       "bytes": 5112,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/reports/confound-audit-20261030/tokenizer_compare.py",
@@ -1542,10 +1542,10 @@
     {
       "original": "artifacts/audits/resume256-source.patch",
       "restore_path": "artifacts/audits/resume256-source.patch",
-      "snapshot": "artifacts/audits/resume256-source.patch.source",
+      "snapshot": "artifacts/audits/resume256-source.patch.source.gz",
       "sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242",
       "bytes": 26753,
-      "encoding": "utf-8"
+      "encoding": "gzip"
     },
     {
       "original": "artifacts/sources/original-special_token_lr.py",
