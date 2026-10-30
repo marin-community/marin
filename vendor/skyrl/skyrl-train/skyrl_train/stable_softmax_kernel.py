@@ -1,0 +1,199 @@
+# Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# See LICENSE for license information.
+# SPDX-License-Identifier: Apache-2.0
+# Kernel structure from TransformerEngine v2.19 common/triton/cross_entropy.py.
+
+import torch
+import triton
+import triton.language as tl
+from triton.language.extra.cuda import libdevice
+
+MAX_BLOCK_SIZE = 32768
+LARGE_BLOCK_WARPS = 32
+SMALL_BLOCK_WARPS = 4
+
+
+def _launch_dimensions(vocab: int) -> tuple[int, int]:
+    block = min(MAX_BLOCK_SIZE, triton.next_power_of_2(vocab))
+    return block, LARGE_BLOCK_WARPS if block >= MAX_BLOCK_SIZE else SMALL_BLOCK_WARPS
+
+
+@triton.jit(do_not_specialize=["X_BATCH_STRIDE", "X_SEQ_STRIDE", "X_VOCAB_STRIDE", "SEQ", "ROWS", "VOCAB_START"])
+def _softmax_forward(
+    X,
+    Y,
+    Output,
+    Stats,
+    X_BATCH_STRIDE,
+    X_SEQ_STRIDE,
+    X_VOCAB_STRIDE,
+    SEQ,
+    VOCAB: tl.constexpr,
+    ROWS,
+    VOCAB_START,
+    ENTROPY: tl.constexpr,
+    SAVE_STATS: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0).to(tl.int64)
+    x_row = X + (row // SEQ) * X_BATCH_STRIDE + (row % SEQ) * X_SEQ_STRIDE
+    m = float("-inf")
+    s = 0.0
+    t = 0.0
+    for start in range(0, VOCAB, BLOCK):
+        offsets = start + tl.arange(0, BLOCK)
+        x = tl.load(x_row + offsets * X_VOCAB_STRIDE, offsets < VOCAB, float("-inf")).to(tl.float32)
+        b, index = tl.max(x, 0, return_indices=True)
+        a = x - b
+        e = tl.exp(a)
+        others = tl.where((tl.arange(0, BLOCK) != index) & (offsets < VOCAB), e, 0.0)
+        sb = tl.sum(others, 0)
+        if ENTROPY:
+            tb = tl.sum(others * tl.where(others == 0, 0.0, a), 0)
+        next_m = tl.maximum(m, b)
+        d_old = tl.where(start == 0, 0.0, m - next_m)
+        d_block = b - next_m
+        old_scale = tl.where(start == 0, 0.0, tl.exp(d_old))
+        block_scale = tl.exp(d_block)
+        old_mass = old_scale * (s + 1.0)
+        block_mass = block_scale * (sb + 1.0)
+        if ENTROPY:
+            t_up = old_scale * t + d_old * old_mass + tb
+            t_down = t + block_scale * tb + d_block * block_mass
+            t = tl.where(b > m, t_up, t_down)
+        s = tl.where(b > m, old_mass + sb, s + block_mass)
+        m = next_m
+    if ENTROPY:
+        output = libdevice.log1p(s) - t / (1.0 + s)
+    else:
+        y = tl.load(Y + row) - VOCAB_START
+        selected = tl.load(x_row + y * X_VOCAB_STRIDE).to(tl.float32)
+        output = (selected - m) - libdevice.log1p(s)
+    tl.store(Output + row, output)
+    if SAVE_STATS:
+        tl.store(Stats + row, m)
+        tl.store(Stats + ROWS + row, s)
+        if ENTROPY:
+            tl.store(Stats + 2 * ROWS + row, t)
+
+
+@triton.jit(
+    do_not_specialize=[
+        "X_BATCH_STRIDE",
+        "X_SEQ_STRIDE",
+        "X_VOCAB_STRIDE",
+        "G_BATCH_STRIDE",
+        "G_SEQ_STRIDE",
+        "G_VOCAB_STRIDE",
+        "SEQ",
+        "ROWS",
+        "VOCAB_START",
+    ]
+)
+def _softmax_backward(
+    X,
+    Y,
+    Stats,
+    Upstream,
+    Gradient,
+    X_BATCH_STRIDE,
+    X_SEQ_STRIDE,
+    X_VOCAB_STRIDE,
+    G_BATCH_STRIDE,
+    G_SEQ_STRIDE,
+    G_VOCAB_STRIDE,
+    SEQ,
+    VOCAB: tl.constexpr,
+    ROWS,
+    VOCAB_START,
+    ENTROPY: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0).to(tl.int64)
+    x_row = X + (row // SEQ) * X_BATCH_STRIDE + (row % SEQ) * X_SEQ_STRIDE
+    grad_row = Gradient + (row // SEQ) * G_BATCH_STRIDE + (row % SEQ) * G_SEQ_STRIDE
+    m = tl.load(Stats + row)
+    s = tl.load(Stats + ROWS + row)
+    weight = tl.load(Upstream + row).to(tl.float32)
+    if ENTROPY:
+        expected_margin = tl.div_rn(tl.load(Stats + 2 * ROWS + row), 1.0 + s)
+    else:
+        y = tl.load(Y + row) - VOCAB_START
+    for start in range(0, VOCAB, BLOCK):
+        offsets = start + tl.arange(0, BLOCK)
+        mask = offsets < VOCAB
+        x = tl.load(x_row + offsets * X_VOCAB_STRIDE, mask, float("-inf")).to(tl.float32)
+        a = x - m
+        q = tl.exp(a) / (1.0 + s)
+        if ENTROPY:
+            gradient = -q * (tl.where(q == 0.0, 0.0, a) - expected_margin)
+        else:
+            target_gradient = tl.where(a == 0.0, s / (1.0 + s), 1.0 - q)
+            gradient = tl.where(offsets == y, target_gradient, -q)
+        tl.store(grad_row + offsets * G_VOCAB_STRIDE, gradient * weight, mask)
+
+
+def softmax_forward(
+    logits: torch.Tensor, targets: torch.Tensor | None, vocab_start: int, save_stats: bool
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Return fp32 token values and optional maximum, tail mass and entropy-moment row statistics."""
+    entropy = targets is None
+    output = torch.empty(logits.shape[:-1], dtype=torch.float32, device=logits.device)
+    rows = output.numel()
+    stats = (
+        torch.empty((3 if entropy else 2, *output.shape), dtype=torch.float32, device=logits.device)
+        if save_stats
+        else None
+    )
+    block, warps = _launch_dimensions(logits.shape[-1])
+    _softmax_forward[(rows,)](
+        logits,
+        logits if targets is None else targets.contiguous(),
+        output,
+        output if stats is None else stats,
+        logits.stride(0) if logits.ndim == 3 else 0,
+        logits.stride(-2),
+        logits.stride(-1),
+        logits.shape[-2],
+        logits.shape[-1],
+        rows,
+        vocab_start,
+        entropy,
+        save_stats,
+        block,
+        num_warps=warps,
+    )
+    return output, stats
+
+
+def softmax_backward(
+    logits: torch.Tensor,
+    targets: torch.Tensor | None,
+    stats: torch.Tensor,
+    grad_output: torch.Tensor,
+    vocab_start: int,
+) -> torch.Tensor:
+    gradient = torch.empty_like(logits)
+    block, warps = _launch_dimensions(logits.shape[-1])
+    _softmax_backward[(grad_output.numel(),)](
+        logits,
+        logits if targets is None else targets.contiguous(),
+        stats,
+        grad_output.contiguous(),
+        gradient,
+        logits.stride(0) if logits.ndim == 3 else 0,
+        logits.stride(-2),
+        logits.stride(-1),
+        gradient.stride(0) if gradient.ndim == 3 else 0,
+        gradient.stride(-2),
+        gradient.stride(-1),
+        logits.shape[-2],
+        logits.shape[-1],
+        grad_output.numel(),
+        vocab_start,
+        targets is None,
+        block,
+        num_warps=warps,
+    )
+    return gradient
