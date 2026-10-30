@@ -1,0 +1,43 @@
+"""Inventory exact SFT cache metadata and check existing S3 mirrors without payload reads."""
+
+import concurrent.futures
+import json
+import re
+import subprocess
+from pathlib import Path
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+
+
+def audit(item):
+    name, record = item
+    source = record["cache_path"] + "/train"
+    destination = source.replace("gs://marin-us-central2/", "s3://marin-us-east-02a/marin/")
+    result = {"name": name, "source": source, "destination": destination,
+              "packed_sequences": record["packed_sequences"]}
+    for label, path in (("gcs", source), ("s3", destination)):
+        process = subprocess.run(["uv", "run", "--frozen", "fsutil", "du", path],
+                                 capture_output=True, text=True)
+        if process.returncode:
+            result[label] = {"error": process.stderr.splitlines()[-1]}
+        else:
+            match = re.search(r"\((\d+) bytes, (\d+) objects\)", process.stdout)
+            assert match is not None, process.stdout
+            result[label] = {"bytes": int(match[1]), "objects": int(match[2])}
+    return result
+
+
+if __name__ == "__main__":
+    records = json.loads((ROOT / "sources/full-ab-packed-2026.09.29.json").read_text())
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for result in pool.map(audit, records.items()):
+            results.append(result)
+            if len(results) % 20 == 0:
+                print(f"Inventoried {len(results)}/{len(records)} SFT sources", flush=True)
+    output = ROOT / "audits/sft-inputs-20261024.json"
+    output.write_text(json.dumps(results, indent=2) + "\n")
+    print(json.dumps({"sources": len(results),
+                      "gcs_bytes": sum(r["gcs"].get("bytes", 0) for r in results),
+                      "gcs_errors": sum("error" in r["gcs"] for r in results),
+                      "existing_s3": sum("error" not in r["s3"] for r in results)}))

@@ -1,0 +1,42 @@
+"""Compare full special-token and anchor rows against the selected native checkpoint."""
+
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import numpy as np
+import tensorstore as ts
+from fsspec.asyn import sync
+from levanter.compat.fsspec_safetensor import _read_metadata_async
+from levanter.tensorstore_serialization import _create_ocdbt_spec
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+ROOT = Path(__file__).resolve().parents[1]
+os.environ["AWS_ACCESS_KEY_ID"] = os.environ["CW_KEY_ID"]
+os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["CW_KEY_SECRET"]
+os.environ["AWS_DEFAULT_REGION"] = "auto"
+configure_coreweave_s3()
+destination = "s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/snowball-sft-export-step471-20261025/hf"
+fs, path = filesystem_for(destination)
+index = json.loads(fs.cat(path + "/model.safetensors.index.json"))
+pins = json.loads((ROOT / "audits/export-step471-pins-20261025.json").read_text())
+ids = [128006, 128007, 128002, 128003, 128005, 128011, 128009, 3560, 1984, 1781, 4320, 5507, 842, 128001]
+checks = []
+for name, native_name, transpose in [("lm_head.weight", "output_proj", True), ("model.embed_tokens.weight", "token_embed", False)]:
+    records = sync(fs.loop, _read_metadata_async, fs, path + "/" + index["weight_map"][name])
+    record = records[name]
+    bank = ts.open(_create_ocdbt_spec(pins["checkpoint"], "params/" + native_name), open=True).result()
+    for token in ids:
+        native = np.asarray((bank[:, token] if transpose else bank[token, :]).read().result())
+        start = record.byte_start + token * record.shape[1] * record.dtype.itemsize
+        payload = fs.cat_file(record.file_path, start=start, end=start + record.shape[1] * record.dtype.itemsize)
+        exported = np.frombuffer(payload, dtype=record.dtype)
+        assert np.array_equal(native, exported), (name, token)
+        assert np.isfinite(exported).all() and np.any(exported != 0)
+        checks.append(dict(tensor=name, token_id=token, values=len(exported)))
+report = dict(verified_at=datetime.now(UTC).isoformat(), checkpoint=pins["checkpoint"], checks=checks,
+              scope="Full14 selected rows of embedding and LM head, 71680values; no claim of full-weight or runtime-logit equivalence")
+(ROOT / "audits/export-step471-special-token-verification-20261025.json").write_text(json.dumps(report, indent=2) + "\n")
+print("Verified all28 embedding/head rows against native checkpoint")

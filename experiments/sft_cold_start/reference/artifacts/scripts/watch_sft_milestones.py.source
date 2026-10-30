@@ -1,0 +1,129 @@
+"""Queue verified milestone exports and bounded health alerts for one SFT run."""
+import argparse
+import fcntl
+import hashlib
+import json
+import logging
+import os
+import math
+import requests
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+import time
+
+from rigging.filesystem.buckets import filesystem_for
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write(path, value):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value, indent=2) + '\n')
+    temporary.replace(path)
+
+
+def checkpoint(root, step):
+    uri = f'{root}/step-{step}'
+    fs, key = filesystem_for(uri)
+    fs.invalidate_cache(key)
+    try:
+        with fs.open(key + '/metadata.json', 'rb') as stream:
+            raw = stream.read()
+    except FileNotFoundError:
+        return None
+    metadata = json.loads(raw)
+    if metadata['step'] != step or metadata['is_temporary']:
+        raise ValueError(f'Invalid permanent checkpoint: {uri}')
+    for filename in ['manifest.json', 'manifest.ocdbt']:
+        if fs.info(key + '/' + filename)['size'] <= 0:
+            raise ValueError(f'Missing payload manifest: {uri}/{filename}')
+    return {'checkpoint': uri, 'step': step, 'metadata': metadata,
+            'metadata_digest': hashlib.sha256(json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+            'detected_at': now()}
+
+
+def queue(config, message, receipt):
+    result = subprocess.run([config['codex'], 'queue', '--thread', config['thread_id'], '--message', message],
+                            cwd=config['worktree'], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError('Queue delivery failed: ' + result.stderr)
+    write(receipt, {'queued_at': now(), 'receipt': result.stdout.strip()})
+
+
+def export_message(config, event, folder):
+    return f'''SFT MILESTONE EXPORT TRIGGER — user-authorized recurring follow-up.
+The user requested resume of sft-pipe-repro from step471 on256H100 and HF exports every ~512steps.
+Committed permanent checkpoint: {event['checkpoint']}
+Step: {event['step']}
+Canonical metadata SHA256: {event['metadata_digest']}
+Evidence: {folder}/fired.json
+Campaign: {config['campaign']}
+Training coordinator: {config['job']} on cw-rno2a.
+
+Independently confirm the exact checkpoint's digest, step, committed metadata and payload, then export this checkpoint using the tested BF16 frozen-router path in artifacts/scripts/export_step471_20261025.py. Create new immutable config/pins and adapt its exact-step/temporary-metadata guard to this permanent checkpoint. Never apply pending router updates. Preserve the original SFT tokenizer.
+Publish a separate open-athena model repository following the Step471 naming convention, with manual external gating, organization-member gating disabled, OpenMDW1.1 full license and required research warning, model card and provenance. Verify all shard hashes/sizes,502tensor mappings, native expert/router/special-token samples, tokenizer, license and gate. Record HF revision and evidence. Use the existing verify/publish scripts as templates.
+Training now uses the full256GPU budget: perform export on CPU with JAX_PLATFORMS=cpu and sufficient host RAM (start with512GB) using the shared exporter, or wait for training to release GPUs. Do not allocate additional GPUs above256 or interrupt training for export. Do not start a second export for the same checkpoint if one is already active.
+Write {folder}/acknowledged.json when beginning and {folder}/completed.json only after verified HFpublication. Update STATE.md, TRACKER.md and compact ACTIVE.md. Repair failed exports without cancelling training. THIS IS NOT THE OLD >460 STOP TRIGGER: DO NOT CANCEL THE TRAINING JOB AFTER EXPORT. Continue to4750; final4750export also required. No quality-parity claim is authorized.
+Follow POLICY.md; source /Users/benfeuer/Documents/secrets.env without printing secrets.'''
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--probe-only', action='store_true')
+    args = parser.parse_args()
+    config = json.loads(args.config.read_text())
+    state = Path(config['state_dir']);state.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    with (state/'watchdog.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        last_health = 0
+        while True:
+            try:
+                for step in config['milestones']:
+                    folder = state/f'step-{step}';folder.mkdir(exist_ok=True)
+                    if (folder/'queued.json').exists():continue
+                    event = checkpoint(config['checkpoint_root'], step)
+                    if event is None:continue
+                    write(folder/'fired.json', event)
+                    message = export_message(config, event, folder)
+                    (folder/'wake-message.txt').write_text(message)
+                    if not args.probe_only:queue(config, message, folder/'queued.json')
+                write(state/'heartbeat.json', {'observed_at':now(),'pid':os.getpid(),'status':'watching',
+                    'milestones':config['milestones'],'queued':[s for s in config['milestones'] if (state/f'step-{s}/queued.json').exists()]})
+                if args.probe_only:return
+                if time.monotonic()-last_health >= config['health_seconds']:
+                    result = subprocess.run([config['iris'],'--cluster','cw-rno2a','job','list','--prefix',config['job']],
+                        cwd=config['worktree'],capture_output=True,text=True,timeout=90)
+                    write(state/'health.json',{'observed_at':now(),'returncode':result.returncode,'status':result.stdout,'errors':result.stderr})
+                    failed = any(word in result.stdout.lower() for word in ['failed','killed'])
+                    terminal = failed or ('succeeded' in result.stdout.lower() and 'running' not in result.stdout.lower())
+                    if (result.returncode or terminal) and not (state/'health-alert-queued.json').exists():
+                        queue(config,f'SFT RUN HEALTH ALERT: inspect {config["job"]} on cw-rno2a. Evidence {state}/health.json. User authorized256GPU resume from471 and periodicHFexports. Confirm actual job state, recover only authorized recoverable failures, never restart cluster or unrelated jobs. For successful completion verify final4750checkpoint/export and stop this watchdog. Preserve queued milestone exports.',state/'health-alert-queued.json')
+                    response = requests.post('https://api.wandb.ai/graphql', auth=('api', os.environ['WANDB_API_KEY']),
+                        json={'query': 'query { project(name: "sft-pipe-repro", entityName: "nyu-dice-lab") { run(name: "snowball-sft-production-256h100-20261027b") { name displayName state summaryMetrics } } }'}, timeout=45)
+                    response.raise_for_status()
+                    payload=response.json()
+                    if payload.get('errors'):raise RuntimeError('W&B health query failed')
+                    run=payload['data']['project']['run']
+                    if run:
+                        summary=json.loads(run['summaryMetrics']);run['summaryMetrics']=summary
+                        write(state/'wandb-health.json', {'observed_at':now(), 'run':run})
+                        stale=time.time()-summary.get('_timestamp',time.time())>1800
+                        bad_loss=any(isinstance(v,(int,float)) and not math.isfinite(v) for k,v in summary.items() if 'loss' in k)
+                        if (stale or bad_loss) and not (state/'progress-alert-queued.json').exists():
+                            queue(config,f'SFT PROGRESS ALERT for {config["job"]}: stale W&B={stale}, nonfinite loss={bad_loss}. Inspect {state}/wandb-health.json and live logs. Do not restart the cluster or cancel unrelated jobs.',state/'progress-alert-queued.json')
+                    last_health=time.monotonic()
+                if all((state/f'step-{s}/completed.json').exists() for s in config['milestones']):
+                    write(state/'completed.json',{'completed_at':now(),'all_exports_verified':True});return
+            except Exception:
+                logging.exception('Observation or delivery failed; will retry without changing training')
+                write(state/'last-error.json',{'observed_at':now(),'status':'observation_or_delivery_failed'})
+            time.sleep(config['poll_seconds'])
+
+
+if __name__ == '__main__':
+    main()

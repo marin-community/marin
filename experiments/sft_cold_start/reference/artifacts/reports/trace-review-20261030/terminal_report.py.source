@@ -1,0 +1,108 @@
+import json,collections
+from pathlib import Path
+R=Path(__file__).parent; D=json.loads((R/'terminal-sample-traces.json').read_text());I=json.loads((R/'terminal-index.json').read_text())
+notes={
+'acl-permissions-inheritance':[
+'222, steps 2–5: executes pwd, then mkdir -p /srv/shared && ls /srv/. Step 4 says “fully implemented all requirements”; step 5 claims ownership, 2770, ACLs and getfacl verification. The recorded commands never perform these actions. This is unsupported completion after minimal setup.',
+'2048, steps 2–7: inspects users/groups, executes chown/chmod/setfacl, observes malformed ACL options, revisits configuration and passes. Some explanations remain inaccurate, but actual execution is substantially better.',
+'10-05, steps 2–5: executes the ACL setup, observes an invalid default-other option, fixes it at step 3, verifies with getfacl before completion.'],
+'broken-python':[
+'222, steps 2–3: first recorded agent step says “I have successfully resolved” the problem and diagnoses PEP 668. Its only bash command echoes generic advice and a claim that pip_solutions.md exists. It never diagnoses or repairs pip in the recorded trajectory.',
+'2048, steps 2–13: correctly sees No module named pip, then repeatedly misreads the state, tries unsupported ensurepip flags and pip commands that depend on the missing module. At step 11 it symlinks pip to /usr/bin/python3, despite that path being absent earlier. Steps 14–15 become linguistically incoherent and mark complete while pip remains broken.',
+'10-05, steps 2–17: also makes failed installation attempts, but examines the actual pip metadata and Python paths; step 14 runs python3.13 -m ensurepip --upgrade and step 15 verifies pip and a package installation. This supports better recovery and grounding, not flawless initial reasoning.'],
+'log-summary':[
+'222, steps 5–11: eventually reads actual logs. Step 8 claims a summary file exists, but cat returns No such file. It then writes counts 2/3/4, despite the observed ERROR lines already totaling four. It finishes with wrong counts.',
+'2048, steps 2–4: starts by claiming a prior truncation and creates a new web_service.log of invented sample data. This changes the input being summarized. After a context handoff it writes counts 8/6/12 and finishes. The requested operation was to summarize supplied logs, not add logs.',
+'10-05, steps 2–13: preserves input files, but repeatedly writes incorrect counts due to awk field selection and extracting digits from filenames. Step 11 finally uses awk -F: with $2; verifies 4/3/8 and passes. Persistent errors also occur in the release model, with eventual recovery.'],
+'okhttp-trailers-crash':[
+'222, steps 2–15: begins with a claim of prior truncation; by step 4 says “For the 106th time” despite only three recorded agent steps. It emits repeated failure summaries, damages line ranges, then produces nonsensical commands at step 15 and times out. Numeric claims about previous attempts are model text, not measured tool executions.',
+'2048, steps 2–6: sed leaves two adjacent trailers declarations and an unmatched body. It runs gradlew from the wrong directory; ed is unavailable. Repeated test commands pipe missing-gradlew errors to tee and report exit=0. Actual compiler/test success is absent. Final command text includes “Mark the task as complete.” as a shell command; bash rejects it.',
+'10-05, steps 2–85: also corrupts the edit and spends many turns in an unfinished shell input. It recovers with Ctrl-C at step 49, re-finds the file after a misleading handoff, writes the correct declaration at step 77, and at step 81 gets BUILD SUCCESSFUL after reducing Gradle parallelism. This case directly contradicts a claim that loops or bad handoffs are absent in the release.'],
+'iris-dataset-classification':[
+'222, steps 2–31: repeated reports of corrupted terminal/token limits, repeated context handoffs, malformed script construction and missing files. The final handoff claims success; steps 30–31 accept it and mark complete without new output verification. Reward is zero.',
+'2048, steps 2–20: also suffers truncation/handoff confusion, then writes and executes the script at steps 15–16 and verifies the three CSV outputs at steps 17–18. Reward is one. This is a useful intermediate-checkpoint success control.',
+'10-05, steps 2–6: reads schema, writes and executes a decision-tree script, verifies all three CSVs and passes with much less detour.'],
+'network-log-normalization':[
+'222, steps 2–28: repeated corruption narratives and handoffs; creates invented ontology and logs, then ends on a timeout. Despite this, recorded reward is one.',
+'2048, steps 11–18: sees empty inputs, eventually writes [] to normalized.json and passes.',
+'10-05, steps 2–10: sees empty input.txt, ontology.json and expected.json, then writes invented example records and passes. All three verifier logs explicitly say “Matched 0/0 expected items (recall=1.00); score=1.0”. This is a vacuous grading control, not evidence of normalization ability.'],
+'git-leak-recovery':[
+'222, steps 2–10: starts by asserting the secret was recovered, then prunes history. Step 7 finds no /app/secret.txt. It nevertheless announces recovery and completion; step 10 even echoes “Secret recovered - NOT FOUND”. Wrong ordering destroys the recovery opportunity.',
+'2048, steps 2–24: searches reachable commits, fails to find the secret, writes an empty secret.txt (step 8), repeatedly issues malformed JSON or shell pipelines, and times out. This is partly a git-recovery strategy failure and partly an interaction failure.',
+'10-05, steps 2–17: accesses reflog, recovers the removed content to /app/secret.txt before pruning, then verifies it. Some later explanations falsely describe branch corruption, but the required artifact and cleanup survive.'],
+'modernize-scientific-stack':[
+'222, steps 2–8: only lists and reads paths; the output repeatedly says the requested script does not exist. It explains this as lost filesystem state and asserts all requirements were verified before marking complete. There is no recorded script-writing command.',
+'2048, steps 2–10: initially imagines the script already exists, then writes it at step 7 and requirements at step 8. It never reads the original code or CSV and never runs its newly written script. The verifier fails because it invented sample_data/climate/data.csv rather than sample_data/climate_data.csv.',
+'10-05, steps 2–5: reads legacy code, CSV and config before writing the replacement, runs it, sees both required station means, verifies files and finishes.'],
+'portfolio-optimization':[
+'222, steps 2–9: after listing files says the terminal reset and lost changes; overwrites the supplied Python baseline, then claims all C/wrapper files were created. It tries to run nonexistent run_final_test.py and times out. This changes a reference artifact and never delivers the intended implementation in the recorded commands.',
+'2048, steps 2–8: writes C code with the wrong PyInit name for the extension configured by setup.py, builds it, but does not fix the Python wrapper. After a handoff it prints a “90% complete” report and marks complete, explicitly leaving benchmark execution unfinished.',
+'10-05, steps 2–17: reads baseline, benchmark, C skeleton, wrapper and build configuration; writes both required implementations; builds and runs benchmark.py to ALL TESTS PASSED, including >1.2x speedup. One malformed JSON response is corrected.'],
+'prove-plus-comm':[
+'222, steps 2–11: begins with a stuck-terminal narrative, runs nonexistent ./coqc, then corrupts the file with malformed sed. Compilation returns exit 1; later output claims completion. The recorded path does not establish a valid proof.',
+'2048, steps 2–8: reads the skeleton and writes a mixture of Coq and Lean-like syntax (have ... := by, ring_nf, -- comments). It never executes coqc in the recorded trajectory, but step 5 asserts successful earlier compilation; after a handoff it echoes a completion report and finishes.',
+'10-05, steps 2–33: repeatedly fails to construct an induction proof and makes an unfinished quoted shell input. It eventually uses Nat.add_comm at step 27, verifies compilation, briefly regresses, then restores and fresh-compiles at step 32. This is a passing checked artifact, but limited evidence for constructing the requested induction proof.'],
+'configure-git-webserver':[
+'222, steps 2–25: missing tools and failed service starts are real; it then enters repeated malformed JSON cycles, steps 18–25 in particular. Messages include apparent user/parser dialogue inside model text. It times out without a working setup.',
+'2048, steps 2–54: repeated malformed JSON spans much of steps 17–37. It eventually installs dependencies and starts a webserver. Reward is one despite AgentTimeoutError; the selected trajectory still has severe protocol problems. This is a counterexample to equating timeout with zero reward or an absence of pathology in wins.',
+'10-05, steps 2–16: also encounters missing git/python and interactive tzdata. It answers the prompts, creates the bare repo and hook, exercises clone/commit/push, fixes the hook, checks curl and finishes.'],
+'cancel-async-tasks':[
+'222, steps 2–4: writes a compact semaphore/gather implementation and passes. It claims tests passed without a recorded test command, so passing reward does not validate that particular claim. This is a control showing Step222 can perform useful tool work.',
+'2048, steps 2–23: repeatedly rewrites syntactically broken Python, deletes its own file before an import attempt (step 8), misattributes errors to Python version/bytecode, enters interactive Python with malformed input, and times out. The later checkpoint is worse on this matched sample.',
+'10-05, steps 2–12: writes the module, corrects several faulty smoke tests, exercises concurrency and cancellation, verifies the module and passes.']}
+head='''# Terminal trace review: Step222, Step2048 and the original 10-05 release
+
+The exploratory sample shows a recurrent failure to keep claims of progress tied to executed commands. Earlier reproduction checkpoints assert that files were written or tests passed when the recorded terminal says otherwise, or abandon execution for completion reports. Malformed response loops, invented terminal-history narratives and failed recovery also occur. The original 10-05 release usually gets to verified artifacts on these selected tasks, but it still exhibits long loops, bad edits and misleading handoffs. The evidence supports differences in completion and recovery, not a clean disappearance of every pathology.
+
+The comparison is against `open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`, a separate original training run. It is not a Step2338 evaluation and does not identify the causal effect of training beyond Step2048.
+
+## Method and comparability
+
+Read 36 ATIF trajectories: six matched tasks from OT-TBLite and six from TB2, with one selected scored attempt per model per task. Tasks were selected from original-release wins and early failures, plus controls with early wins. Original attempts are the lexicographically first reward-one attempt; early attempts are the lexicographically first scored attempt except the named controls (iris classification, network normalization, configure-git-webserver and cancel-async-tasks), where an available win is preferred. ACL Step2048 happens to be a win under the first-scored rule. This is outcome-selected exploratory evidence, not a random estimate of pathology prevalence. Attempt suffixes are independent draws, not paired seeds. All 12 task checksums match across the three selected models.
+
+Read trajectory steps, tool arguments and feedback; long traces were inspected through bounded excerpts and targeted full steps. Summarization/handoff text in the main trajectory was read, but subsidiary summarizer trajectories and raw inference responses were not fetched. References to “106 attempts”, nonexistent earlier work or corruption are model statements, not proof of preceding tool activity. ATIF may omit discarded generation text; claims here concern recorded commands and observed artifacts.
+
+All runs use terminus-2, three attempts per task and an 1800-second agent timeout. OT-TBLite v2.0 uses 32768 input / 8192 output; TB2 uses 65536 input / 16384 output; output max_tokens agrees. Serving max_model_len is 73728. Policy digests match within benchmark: OT `03a82e0eb65dc9b833000fd6c7663e8efb8b363a73e1f8465db4285d05797f07`; TB `6b9bcd51169183664e99f86ccca6cf082e32ca3181f108af3ce77caf55965ddf` (both sha256). Original Harbor revision is `2203bacd03d82e9d4f2a9422f0b3f7e9bb7952cc`; repro uses vendored upstream `9d099696a567f489a111dc7e3c61183c98f007f0` with different source hashes. Container/package versions also differ in logs. Shared task/policy hashes therefore do not establish an identical runtime.
+
+## Scoring denominator
+
+| Benchmark | Model | Attempted | Scored | Full wins | Mean reward |
+|---|---|---:|---:|---:|---:|
+| OT-TBLite | Step222 | 300 | 296 | 4 | .0135135 |
+| OT-TBLite | Step2048 | 300 | 289 | 9 | .0320069 |
+| OT-TBLite | Original10-05 | 300 | 272 | 58 | .2560524 |
+| TB2 | Step222 | 267 | 265 | 2 | .0075472 |
+| TB2 | Step2048 | 267 | 246 | 2 | .0081301 |
+| TB2 | Original10-05 | 267 | 251 | 31 | .1235060 |
+
+Original scores come from frozen seals, not stale job-level result.json. OT rewards may be fractional, so full wins/scored does not equal mean reward. Original TB includes two explicit QEMU setup exclusions. Step2048 TB excludes 18 EnvironmentStartTimeoutError and three VerifierRuntimeError attempts. These exclusions matter to the aggregate comparison but do not explain the concrete model-generated failures below; sampled attempts all have scored payloads. AgentTimeoutError can coexist with reward one, as the controls demonstrate.
+
+## Patterns supported by this sample
+
+1. Unsupported completion: ACL222, broken-python222, modernize222, prove2048 and portfolio2048 provide short, direct examples. Modernize2048 improves from no artifact to an artifact with an invented path, but still skips execution.
+2. Invented prior state: multiple early trajectories begin with claims of previous truncation or completion despite a fresh initial terminal. Later turns call missing artifacts a filesystem regression. This is consistent with a model losing the distinction between described and executed work; raw-generation/parser inspection is needed before attributing its origin to model training alone.
+3. Protocol and recovery failures: generated text sometimes contains fake user/parser turns; actual feedback then reports invalid JSON. In these 12 trajectories per model, actual observation text containing “Previous response had parsing errors:” occurs in 5/12 Step222 traces (23 steps), 5/12 Step2048 (36 steps), and 4/12 original traces (6 steps). These counts exclude warning-only extra text and are not population rates.
+4. Context handoffs are common in early selected failures: 8/12 Step222 traces have 18 summarization markers; 9/12 Step2048 have 15; 1/12 original has one. Handoffs sometimes propagate unsupported success. This association does not establish that summarization caused failure; long or malformed responses can induce summarization.
+5. Positive and negative controls reject a simple monotonic account. ACL and iris improve by2048; cancel-async-tasks passes222 and fails2048. Original okhttp and Coq still have prolonged unproductive loops before recovery.
+
+Network-log-normalization is a grading warning: all three audited verifier logs award one for “Matched 0/0 expected items”. Neither empty output nor invented sample records establishes the requested normalization ability. Do not use that task's wins as an agentic competence control without repairing its empty fixture/expected-data condition.
+
+## Matched case notes
+
+Step numbers below are ATIF step_id values, including user/system steps. Reward and exception are listed independently.
+'''
+parts=[head];evidence=[]
+for i in range(0,len(D),3):
+ rows=D[i:i+3];task=rows[0]['task'];short=task.split('/')[-1];parts.append('\n### '+task+'\n')
+ for r,n in zip(rows,notes[short]):
+  label='Original10-05' if r['model']=='1005' else 'Step'+r['model'];parts.append(f"\n- {label}: reward {r['reward']['reward']}; exception {r['exception'] or 'none'}; trial `{r['trial']}`. [Trace]({r['trace_uri']}). {n}\n")
+  evidence.append({k:r.get(k) for k in ['task','benchmark','model','trial','trace_uri','result_uri','checksum','reward','exception']}|{'finding':n,'steps':len(r['trajectory']['steps'])})
+parts.append('''
+## Follow-up tests suggested by the evidence
+
+Inspect raw first-turn outputs and the JSON parser on ACL222 and modernize222 to distinguish generated fictitious continuation text from parser selection effects. Replay those prompts with a constrained JSON response and an explicit execution-state reminder while preserving the model and sampling settings. Separately replay modernize2048 with actual input inspection plus a required run-before-complete check; this tests the narrower grounding/verification hypothesis. Audit the empty network-normalization fixtures and verifier before interpreting its aggregate contribution. Use a random matched-task sample and all three attempts before estimating prevalence.
+
+Sources and local evidence: `terminal-sources.json` preserves benchmark roots; `terminal-index.json` contains sanitized run configs, all trial summaries and frozen seals; `terminal-sample-traces.json` contains the36 downloaded main trajectories; `terminal-verifiers.json` contains four targeted verifier logs. `terminal-evidence.json` is the compact task/trial index. No new evaluations were run.
+''')
+(R/'terminal.md').write_text(''.join(parts));(R/'terminal-evidence.json').write_text(json.dumps({'review_date':'2026-10-30','selection':'outcome-selected; six matched tasks per benchmark; one attempt per model; see terminal.md','cases':evidence},indent=2))
+print('wrote',len(evidence),'cases',len(''.join(parts)),'characters')

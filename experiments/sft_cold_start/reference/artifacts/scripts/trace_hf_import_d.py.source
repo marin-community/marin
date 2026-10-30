@@ -1,0 +1,20 @@
+import json,logging
+import draccus
+import numpy as np
+import levanter.tensorstore_serialization as serialization
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from experiments.grug.snowball_sft.import_hf import ImportConfig,convert
+original=serialization._transfer_shard_to_pageable_host
+async def trace_stage(shard,local_slice=None):
+ result=await original(shard,local_slice)
+ if result.nbytes>1024**3:
+  flat=result.reshape(-1)
+  sample=flat[::max(1,flat.size//32)].astype('float32').tolist()
+  print('EXPERT_HOST_SNAPSHOT '+json.dumps(dict(shape=list(result.shape),index=str(shard.index),sample=sample)),flush=True)
+ return result
+serialization._transfer_shard_to_pageable_host=trace_stage
+configure_coreweave_s3()
+logging.basicConfig(level=logging.INFO)
+with open('experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024d/config.yaml') as stream:
+ config=draccus.load(ImportConfig,stream)
+convert(config)

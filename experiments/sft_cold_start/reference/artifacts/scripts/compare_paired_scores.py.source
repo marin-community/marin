@@ -1,0 +1,80 @@
+"""Compute the predeclared task-paired quality gate from audited per-trial scores.
+
+Inputs use the reference-paired-scores JSON schema. Repeated trial IDs need not
+match across models; each benchmark's task/doc_id groups must match exactly.
+This computes statistical evidence only. Protocol, coverage, and trace audits
+remain separate requirements before claiming reproduction success.
+"""
+
+import argparse
+import json
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+from scipy.stats import bootstrap
+
+PANEL = {"math500": (500, 1), "humanevalplus": (164, 1), "ifbench": (300, 1),
+         "bfcl": (123, 1), "tblite": (100, 3)}
+METRICS = {"math500": "accuracy", "humanevalplus": "accuracy",
+           "ifbench": "strict_prompt_accuracy", "bfcl": "reward", "tblite": "reward"}
+
+
+def task_means(benchmark, name):
+    if benchmark["metric"] != METRICS[name]:
+        raise ValueError(f"Wrong metric for {name}: {benchmark['metric']}")
+    groups = defaultdict(list)
+    for row in benchmark["scores"]:
+        value = float(row["score"])
+        if not np.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"Invalid score for {name}")
+        groups[(row["task"], row["doc_id"])].append(value)
+    tasks, trials = PANEL[name]
+    if len(groups) != tasks or any(len(scores) != trials for scores in groups.values()):
+        raise ValueError(f"Incomplete or duplicated {name}: expected {tasks} tasks x {trials} trials")
+    return {key: float(np.mean(values)) for key, values in groups.items()}
+
+
+def compare(reference, candidate, *, resamples=100000, seed=10197):
+    rng = np.random.default_rng(seed)
+    distributions = []
+    benchmarks = {}
+    for name in PANEL:
+        baseline = task_means(reference["benchmarks"][name], name)
+        trained = task_means(candidate["benchmarks"][name], name)
+        if baseline.keys() != trained.keys():
+            raise ValueError(f"Mismatched task identities for {name}")
+        keys = sorted(baseline)
+        differences = np.array([trained[key] - baseline[key] for key in keys])
+        result = bootstrap((differences,), np.mean, method="percentile", confidence_level=0.90,
+                           n_resamples=resamples, batch=1000, rng=rng)
+        # A two-sided90% percentile interval has the same lower endpoint as one-sided95%.
+        lower = float(result.confidence_interval.low)
+        distributions.append(result.bootstrap_distribution)
+        benchmarks[name] = dict(tasks=len(keys), reference=float(np.mean(list(baseline.values()))),
+                                candidate=float(np.mean(list(trained.values()))),
+                                delta=float(np.mean(differences)), lower_95=lower,
+                                noninferiority_supported=lower > -0.05)
+    panel_samples = np.mean(distributions, axis=0)
+    lower = float(np.quantile(panel_samples, 0.05))
+    supported = lower > -0.03 and all(row["noninferiority_supported"] for row in benchmarks.values())
+    return dict(benchmarks=benchmarks,
+                panel=dict(delta=float(np.mean([row["delta"] for row in benchmarks.values()])),
+                           lower_95=lower, noninferiority_supported=lower > -0.03),
+                statistical_gate_supported=supported, resamples=resamples, seed=seed,
+                scope="Statistics only; protocol, coverage and trace audits required separately")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("reference", type=Path)
+    parser.add_argument("candidate", type=Path)
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args()
+    result = compare(json.loads(args.reference.read_text()), json.loads(args.candidate.read_text()))
+    with args.output.open("x") as stream:
+        stream.write(json.dumps(result, indent=2) + "\n")
+
+
+if __name__ == "__main__":
+    main()

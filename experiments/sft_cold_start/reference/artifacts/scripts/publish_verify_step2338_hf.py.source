@@ -1,0 +1,64 @@
+"""Verify every uploaded shard before publishing the gated intermediate model."""
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+from huggingface_hub import HfApi, get_token, hf_hub_url
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL = ROOT / 'hf/step2338-20261029'
+REPO = 'open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2338-2026.10.29'
+api = HfApi()
+info = api.model_info(REPO, files_metadata=True)
+manifest = json.loads((LOCAL / 'export-manifest.json').read_text())
+files = {item.rfilename: item for item in info.siblings}
+shards = manifest['shards']
+assert len(shards) == 39
+expected_files = {p.name for p in LOCAL.iterdir() if p.is_file()} | {item['filename'] for item in shards} | {'.gitattributes'}
+assert set(files) == expected_files, (set(files) - expected_files, expected_files - set(files))
+for item in shards:
+    actual = files[item['filename']]
+    assert actual.size == item['bytes'], item['filename']
+    assert actual.lfs.sha256 == item['sha256'], item['filename']
+index = json.loads((LOCAL / 'model.safetensors.index.json').read_text())
+assert len(index['weight_map']) == 502
+assert set(index['weight_map'].values()) == {item['filename'] for item in shards}
+small_hashes = {}
+headers = {'Authorization': 'Bearer ' + get_token()}
+for path in sorted(LOCAL.iterdir()):
+    if not path.is_file():
+        continue
+    response = requests.get(hf_hub_url(REPO, path.name, revision=info.sha), headers=headers, timeout=60)
+    response.raise_for_status()
+    assert response.content == path.read_bytes(), path.name
+    small_hashes[path.name] = hashlib.sha256(response.content).hexdigest()
+readme = (LOCAL / 'README.md').read_text()
+assert 'license: openmdw-1.1' in readme
+assert 'Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. Use at your own risk in production settings.' in readme
+assert (LOCAL / 'LICENSE').read_text().startswith('OpenMDW License Agreement, version 1.1')
+assert info.gated == 'manual'
+settings_response = requests.put('https://huggingface.co/api/models/' + REPO + '/settings', headers=headers, json={'gated': 'manual', 'orgMembersGated': False}, timeout=30)
+settings_response.raise_for_status()
+settings = settings_response.json()
+assert settings['gated'] == 'manual' and settings['orgMembersGated'] is False
+api.update_repo_settings(REPO, private=False)
+public_info = api.model_info(REPO, token=False)
+assert public_info.private is False and public_info.gated == 'manual'
+anonymous = requests.get(hf_hub_url(REPO, 'config.json'), timeout=30)
+assert anonymous.status_code in (401, 403)
+assert anonymous.headers.get('X-Error-Code') == 'GatedRepo'
+report = {
+    'verified_at': datetime.now(timezone.utc).isoformat(),
+    'repo': REPO, 'revision': info.sha, 'step': 2338,
+    'export_id': manifest['export_id'], 'shards': len(shards), 'tensor_count': 502,
+    'weight_bytes': sum(item['bytes'] for item in shards),
+    'all_shard_sizes_and_sha256_match': True, 'small_file_sha256': small_hashes,
+    'private': False, 'gated': 'manual', 'anonymous_config_status': anonymous.status_code,
+    'anonymous_error_code': anonymous.headers.get('X-Error-Code'),
+    'org_members_gated': settings['orgMembersGated'],
+    'org_members': 'Explicitly disabled organization-member gating; verified API response',
+}
+(ROOT / 'audits/hf-step2338-publication-verification-20261029.json').write_text(json.dumps(report, indent=2) + '\n')
+print(json.dumps(report))

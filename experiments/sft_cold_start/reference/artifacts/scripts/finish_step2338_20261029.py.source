@@ -1,0 +1,65 @@
+"""Finish the pinned step2338 export after its completion manifest appears."""
+
+import concurrent.futures
+import json
+import subprocess
+import time
+from pathlib import Path
+
+from huggingface_hub import HfApi
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+LOCAL = ROOT / "hf/step2338-20261029"
+DEST = "s3://marin-us-east-02a/marin/users/benfeuer/sft-pipe-repro/snowball-sft-export-step2338-20261029/hf/"
+REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2338-2026.10.29"
+
+
+def verify(script):
+    with (ROOT / "logs" / (script + ".log")).open("w") as log:
+        subprocess.run([".venv/bin/python", str(SCRIPTS / script)], stdout=log, stderr=subprocess.STDOUT, check=True)
+    print("Verified", script, flush=True)
+
+
+def upload(start, end):
+    with (ROOT / "logs" / f"hf-step2338-upload-{start}-{end}.log").open("w") as log:
+        subprocess.run(
+            ["uv", "run", "fsutil", "cp", "--remote", *[DEST + f"model-{n:05d}-of-00039.safetensors" for n in range(start, end + 1)], "hf://" + REPO + "/"],
+            stdout=log, stderr=subprocess.STDOUT, check=True,
+        )
+    print("Uploaded shards", start, end, flush=True)
+
+
+fs, path = filesystem_for(DEST)
+deadline = time.monotonic() + 21600
+while not fs.exists(path + "/export-manifest.json"):
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Export completion manifest not available after six hours")
+    time.sleep(30)
+print("Export completion manifest present", flush=True)
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    checks = [pool.submit(verify, name) for name in ["verify_export_step2338.py", "verify_export_step2338_payload.py", "verify_export_step2338_special_tokens.py"]]
+    uploads = []
+    for start, end in [(1, 8), (9, 16), (17, 24), (25, 32), (33, 39)]:
+        uploads.append(pool.submit(upload, start, end))
+        time.sleep(4)
+    checks[0].result()
+    for name in ["config.json", "export-manifest.json", "export-request.json", "model.safetensors.index.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja"]:
+        subprocess.run([".venv/bin/fsutil", "cp", DEST + name, str(LOCAL / name)], check=True)
+    for name in ["README.md", "LICENSE", "training-provenance.json"]:
+        subprocess.run([".venv/bin/fsutil", "cp", str(LOCAL / name), DEST + name], check=True)
+    result = HfApi().upload_folder(repo_id=REPO, folder_path=LOCAL, commit_message="Add tokenizer, license and pinned checkpoint provenance")
+    print("Uploaded small files", result.oid, flush=True)
+    failures = []
+    for task in checks + uploads:
+        try:
+            task.result()
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        raise ExceptionGroup("Verification or upload failed; repository remains private", failures)
+
+verify("publish_verify_step2338_hf.py")
+print("Publication verified", flush=True)

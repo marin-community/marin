@@ -1,0 +1,59 @@
+"""Verify the 22 replacement caches and publish a new immutable mixture catalog."""
+
+import hashlib
+import json
+from pathlib import Path
+
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT = Path(__file__).resolve().parents[1]
+repair = json.loads((ROOT / "audits/replay-pack-repair-pins-20261024.json").read_text())
+catalog = json.loads((ROOT / "audits/full-mixture-cache-catalog-20261024.json").read_text())
+replacements = {}
+checks = []
+errors = []
+for change in repair["changes"]:
+    url = change["new"]
+    try:
+        fs, path = filesystem_for(url + "/shard_ledger.json")
+        ledger = json.loads(fs.cat(path))
+        fs, path = filesystem_for(url.rsplit("/", 1)[0] + "/selection.json")
+        selection = json.loads(fs.cat(path))
+        tokens = ledger["field_counts"]["input_ids"]
+        assert ledger["is_finished"] and tokens >= 262144
+        assert tokens == sum(row["long_tokens"] for row in selection)
+        assert ledger["total_num_rows"] == sum(row["long_rows"] for row in selection)
+        assert sum(row["short_tokens"] for row in selection) == 0
+        replacements[change["old"]] = {"cache_dir": url, "ledger": ledger}
+        checks.append(dict(cache_dir=url, tokens=tokens, rows=ledger["total_num_rows"]))
+    except Exception as exc:
+        errors.append(dict(cache_dir=url, error=f"{type(exc).__name__}: {exc}"))
+
+report = dict(checked=checks, errors=errors)
+(ROOT / "audits/replay-pack-repair-readiness-20261024.json").write_text(json.dumps(report, indent=2) + "\n")
+print(f"Verified {len(checks)}/22 repaired caches; {len(errors)} failures")
+if errors:
+    raise SystemExit(1)
+
+changed = 0
+for split in catalog["splits"].values():
+    for name, entry in split.items():
+        if entry["cache_dir"] in replacements:
+            split[name] = replacements[entry["cache_dir"]]
+            changed += 1
+assert changed == 176
+blob = json.dumps(catalog, separators=(",", ":")).encode()
+digest = hashlib.sha256(blob).hexdigest()
+local = ROOT / "audits/full-mixture-cache-catalog-repaired-20261024.json"
+local.write_bytes(blob)
+url = "s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24.2/cache_catalog.json"
+fs, path = filesystem_for(url)
+if fs.exists(path):
+    assert fs.cat(path) == blob, "Published catalog must remain immutable"
+else:
+    fs.pipe(path, blob)
+assert hashlib.sha256(fs.cat(path)).hexdigest() == digest
+report.update(catalog_uri=url, catalog_sha256=digest, changed_branches=changed,
+              added_tokens=sum(c["tokens"] for c in checks) - sum(c["old_tokens"] for c in repair["changes"]))
+(ROOT / "audits/replay-pack-repair-completion-20261024.json").write_text(json.dumps(report, indent=2) + "\n")
+print(json.dumps({k: v for k, v in report.items() if k not in ("checked", "errors")}))

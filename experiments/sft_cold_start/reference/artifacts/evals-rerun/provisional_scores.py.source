@@ -1,0 +1,18 @@
+import json,collections,concurrent.futures
+from datetime import datetime,timezone
+from pathlib import Path
+from finestore.reader import ReadView
+from rigging.filesystem.buckets import filesystem_for
+ROOT=Path(__file__).resolve().parent
+PREFIX='s3://marin-us-east-02a/marin/evals/sft-thinking-eos-20261030'
+fs,key=filesystem_for(PREFIX)
+paths=[x for x in fs.ls(key) if 'smoke' not in x and ('swebench-verified' in x or 'ot-tblite-recovery' in x)]
+def one(path):
+ uri='s3://'+path+'/results';r=ReadView(uri);samples=list(r.iter_rows('samples'));bytrial={s['trial_id']:s for s in samples};scores=[];errors=collections.Counter();unscored=0
+ for s in bytrial.values():
+  g=s['grading'];d=json.loads(g['detail']);error=d.get('error')
+  if error:errors[str(error)]+=1
+  if d.get('scored') and g['score'] is not None:scores.append(g['score'])
+  else:unscored+=1
+ return {'run_id':path.split('/')[-1],'source':uri,'observed_at':datetime.now(timezone.utc).isoformat(),'mean_reward':sum(scores)/len(scores) if scores else None,'reward_sum':sum(scores),'scored':len(scores),'persisted_unique_trials':len(bytrial),'unscored':unscored,'expected':500 if 'swebench' in path else 300,'errors':dict(errors),'raw_rows':len(samples),'provisional':True,'verifier_audited':False}
+rows=list(concurrent.futures.ThreadPoolExecutor(max_workers=8).map(one,paths));out={'observed_at':datetime.now(timezone.utc).isoformat(),'qualification':'Provisional native Harbor scored rows; verifier execution not yet audited. Missing/unscored excluded, valid scored failures retained. No tracker update.','rows':rows};f=ROOT/'provisional-scores-20261030-1601.json';f.write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2))

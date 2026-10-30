@@ -1,0 +1,573 @@
+diff --git a/docs/reports/grug-archive.md b/docs/reports/grug-archive.md
+index 01f40372f6..d786eab68d 100644
+--- a/docs/reports/grug-archive.md
++++ b/docs/reports/grug-archive.md
+@@ -28,6 +28,13 @@ goes stale on the next commit.
+
+ ## Experiments
+
++### snowball-sft
++- Path: `experiments/grug/snowball_sft/`
++- Origin: `moe_hero_ep` at `2cae063c877172844fe6ff90e94354cc08a273fa`
++- Status: active
++- Purpose: reproduce the October 5 Snowball SFT update rules on GPUs with weights-only initialization.
++- Diff: campaign artifact `sft-pipe-repro/artifacts/reports/snowball-sft-diff/index.html`
++
+ ### grug-base-template
+ - Path: `experiments/grug/base/`
+ - Origin: base
+diff --git a/experiments/grug/moe_hero_ep/ops/export_vllm.py b/experiments/grug/moe_hero_ep/ops/export_vllm.py
+index b850a56403..1799386c2e 100644
+--- a/experiments/grug/moe_hero_ep/ops/export_vllm.py
++++ b/experiments/grug/moe_hero_ep/ops/export_vllm.py
+@@ -1,11 +1,12 @@
+ # Copyright The Marin Authors
+ # SPDX-License-Identifier: Apache-2.0
+
+-"""Export one pinned native Hero checkpoint as BF16 split-expert HF weights."""
++"""Export one pinned native Hero checkpoint as BF16 stacked-expert HF weights."""
+
+ import gc
+ import logging
+ import re
++from collections.abc import Callable
+ from dataclasses import asdict, dataclass
+ from datetime import UTC, datetime
+
+@@ -21,15 +22,14 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
+ from rigging.filesystem.storage_path import StoragePath
+ from rigging.log_setup import configure_logging
+
+-from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
++from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, grugmoe_inference_state_dict
+ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+ from experiments.grug.moe_hero_ep.weights import restore_weights
+
+ MANIFEST_FILENAME = "export-manifest.json"
+ REQUEST_FILENAME = "export-request.json"
+ INDEX_FILENAME = "model.safetensors.index.json"
+-EXPORT_VERSION = 2
+-EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
++EXPORT_VERSION = 4
+
+
+ @dataclass(frozen=True)
+@@ -43,14 +43,17 @@ class ExportConfig:
+     replica_axis_size: int = 1
+
+
+-def _split_names(name: str, num_experts: int) -> list[str]:
+-    match = EXPERT_BANK.fullmatch(name)
+-    if match is None:
+-        return [name]
+-    return [f"{match[1]}.{i}.{match[2]}.weight" for i in range(num_experts)]
++def export(config: ExportConfig) -> None:
++    """Export authoritative Hero weights after applying their pending QB update."""
++    export_weights(config, restore_weights, weights_kind="hero_pending_qb")
+
+
+-def export(config: ExportConfig) -> None:
++def export_weights(
++    config: ExportConfig,
++    restore: Callable[[str, str, GrugModelConfig, jax.sharding.Mesh], Transformer],
++    *,
++    weights_kind: str,
++) -> None:
+     """Write or resume an export; refuse any destination with a completion manifest.
+
+     All JAX processes call this with the same config after distributed initialization.
+@@ -60,7 +63,12 @@ def export(config: ExportConfig) -> None:
+         raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
+     root = StoragePath(config.destination)
+     hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
+-    request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}
++    request = {
++        "export_version": EXPORT_VERSION,
++        "weights_kind": weights_kind,
++        "config": draccus.encode(config),
++        "hf_config": hf_config,
++    }
+     export_id = digest(request)
+
+     def prepare():
+@@ -73,14 +81,12 @@ def export(config: ExportConfig) -> None:
+     run_on_export_writer(prepare)
+     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
+     with jax.set_mesh(mesh):
+-        model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
+-        # restore_weights already applied the pending QB update to authoritative weights.
++        model = restore(config.checkpoint, config.metadata_digest, config.model, mesh)
+         model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
+         jax.block_until_ready(model)
+         gc.collect()
+         state_dict = grugmoe_inference_state_dict(model)
+         shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
+-        tensor_names = {name: tuple(_split_names(name, config.model.num_experts)) for name in state_dict}
+         records = save_hf_shards(
+             shards,
+             lambda keys: {name: state_dict[name] for name in keys},
+@@ -89,7 +95,6 @@ def export(config: ExportConfig) -> None:
+             export_host_budget_bytes=1,
+             max_concurrent_shards=1,
+             resume=HFShardResume(root, export_id),
+-            tensor_names=tensor_names,
+         )
+         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
+         weight_map = {name: record.filename for record in records for name in record.tensor_names}
+diff --git a/experiments/grug/moe_hero_ep/ops/test_export_vllm.py b/experiments/grug/moe_hero_ep/ops/test_export_vllm.py
+index 77344ff663..29877d9268 100644
+--- a/experiments/grug/moe_hero_ep/ops/test_export_vllm.py
++++ b/experiments/grug/moe_hero_ep/ops/test_export_vllm.py
+@@ -97,9 +97,7 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
+         bank = model.stacked_blocks.stacked.mlp.expert_mlp
+         for projection, values in [("gate_proj", bank.w_gate), ("up_proj", bank.w_up), ("down_proj", bank.w_down)]:
+             for layer in range(2):
+-                expected.pop(f"model.layers.{layer}.mlp.experts.{projection}.weight")
+-                for expert in range(4):
+-                    expected[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"] = values[layer, expert].T
++                expected[f"model.layers.{layer}.mlp.experts.{projection}.weight"] = values[layer].swapaxes(-1, -2)
+         assert tensors.keys() == expected.keys()
+         for name, value in expected.items():
+             wanted = np.asarray(jax.sharding.reshard(value.astype(jnp.bfloat16), P()))
+diff --git a/lib/levanter/src/levanter/data/mixture.py b/lib/levanter/src/levanter/data/mixture.py
+index 6341ccd653..a0437b0206 100644
+--- a/lib/levanter/src/levanter/data/mixture.py
++++ b/lib/levanter/src/levanter/data/mixture.py
+@@ -19,6 +19,7 @@ from levanter.schedule import BatchSchedule
+ from levanter.utils.thread_utils import blocking_wait, future_from_value
+
+ logger = logging.getLogger(__name__)
++_INTEGER_ALLOCATION_TOLERANCE = 1e-9
+
+
+ T = TypeVar("T")
+@@ -153,9 +154,15 @@ class MixtureDataset(AsyncDataset[T]):
+         return counts_per_block_per_stage, counts_after_stage, unpermuted_ids_per_stage
+
+     def _compute_expected_counts_per_block(self, weights: dict[str, float], block_size: int):
+-        _expected_values_per_block = np.zeros(len(self.datasets), dtype=np.int32)
+-        for i, dsname in enumerate(self.dataset_index):
+-            _expected_values_per_block[i] = weights.get(dsname, 0) * block_size
++        expected = np.array([weights.get(name, 0) * block_size for name in self.dataset_index])
++        # Normalizing integer allocations can put an exact count just below its
++        # integer (e.g. 1001 / 64000 * 64000). Preserve those allocations before
++        # truncating genuinely fractional counts and assigning the remainder.
++        nearest = np.rint(expected)
++        expected = np.where(
++            np.isclose(expected, nearest, rtol=0, atol=_INTEGER_ALLOCATION_TOLERANCE), nearest, expected
++        )
++        _expected_values_per_block = expected.astype(np.int32)
+
+         # handle remainder by adding to the largest dataset
+         largest_dataset = np.argmax(_expected_values_per_block)
+diff --git a/lib/levanter/src/levanter/grug/attention/_fa4_cute.py b/lib/levanter/src/levanter/grug/attention/_fa4_cute.py
+index cdfe7aeb29..0f48a2dbda 100644
+--- a/lib/levanter/src/levanter/grug/attention/_fa4_cute.py
++++ b/lib/levanter/src/levanter/grug/attention/_fa4_cute.py
+@@ -50,6 +50,11 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
+
+ def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
+     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
++    # A singleton batch cannot be physically partitioned. Remove its unit-mesh
++    # labels before slicing: JAX drops them on [1, 1] slices but retains them on
++    # [1, S] slices, otherwise making adjacent-position concatenation ill-typed.
++    if x.shape[0] == 1:
++        return _replicate_metadata(x)
+     spec = partition_spec_of(x)
+     if spec is None or len(spec) < 2 or spec[1] is None:
+         return x
+diff --git a/lib/levanter/src/levanter/store/cache.py b/lib/levanter/src/levanter/store/cache.py
+index 75fb5c84d2..8c7da8dba8 100644
+--- a/lib/levanter/src/levanter/store/cache.py
++++ b/lib/levanter/src/levanter/store/cache.py
+@@ -1006,6 +1006,7 @@ def write_levanter_cache(
+     *,
+     metadata: dict[str, Any],
+     batch_size: int = _LEVANTER_BATCH_SIZE,
++    max_pending_batches: int = 128,
+ ) -> dict:
+     """Write tokenized records to Levanter cache format.
+
+@@ -1014,6 +1015,7 @@ def write_levanter_cache(
+         output_path: Path to output cache directory
+         metadata: Metadata for the cache
+         batch_size: Number of records to accumulate before flushing to disk.
++        max_pending_batches: Maximum queued batches awaiting the background writer.
+
+     Returns:
+         ``{"path", "count", "exemplar"}`` where ``exemplar`` is the first record
+@@ -1022,6 +1024,8 @@ def write_levanter_cache(
+     """
+     if batch_size < 1:
+         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
++    if max_pending_batches < 1:
++        raise ValueError(f"max_pending_batches must be >= 1, got {max_pending_batches}")
+
+     ensure_parent_dir(output_path)
+     record_iter = iter(records)
+@@ -1041,7 +1045,7 @@ def write_levanter_cache(
+                 for batch in batches:
+                     writer.write_batch(batch)
+
+-            with ThreadedBatchWriter(_drain_batches) as threaded:
++            with ThreadedBatchWriter(_drain_batches, maxsize=max_pending_batches) as threaded:
+                 threaded.submit([exemplar])
+                 count += 1
+                 zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)
+diff --git a/lib/levanter/src/levanter/tensorstore_serialization.py b/lib/levanter/src/levanter/tensorstore_serialization.py
+index 25db0cc53c..97945f4566 100644
+--- a/lib/levanter/src/levanter/tensorstore_serialization.py
++++ b/lib/levanter/src/levanter/tensorstore_serialization.py
+@@ -727,7 +727,9 @@ def _serialize_arrays(
+             try:
+                 store = future.result()
+                 target = store if region is None else store[region.index]
+-                write = target.write(data, can_reference_source_data_indefinitely=True)
++                # TensorStore's referenced-source fast path can commit only fill values
++                # for large bfloat16 chunks. Let it copy the staged snapshot instead.
++                write = target.write(data)
+                 write.commit.add_done_callback(write_finished)
+                 write.commit.force()
+             except BaseException as error:
+diff --git a/lib/levanter/src/levanter/tokenizers.py b/lib/levanter/src/levanter/tokenizers.py
+index df91905fa5..f8f04fc499 100644
+--- a/lib/levanter/src/levanter/tokenizers.py
++++ b/lib/levanter/src/levanter/tokenizers.py
+@@ -32,6 +32,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
+ import jinja2
+ import jinja2.ext
+ import jinja2.sandbox
++from filelock import FileLock
+ from huggingface_hub import __version__ as _hf_hub_version
+ from huggingface_hub import hf_hub_download, snapshot_download
+ from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+@@ -896,14 +897,9 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
+         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
+
+
+-# Serializes tokenizer staging across threads. ``lru_cache`` deduplicates
+-# *repeat* calls but does not serialize concurrent *first* calls for the same
+-# key, so without this lock N threads (e.g. one per dataset component in
+-# ``build_caches``) race to write the same staging directory. That race
+-# corrupts the tokenizer.json a sibling is mid-read of and forces a fatal HF
+-# fall-through for mirror-only refs. A single process-wide lock is sufficient:
+-# staging is I/O-bound and an app rarely fetches more than one tokenizer, so
+-# serializing all staging costs nothing in practice.
++# lru_cache does not serialize concurrent first calls. Threads and local GPU
++# processes share the staging directory; both locks are needed to keep a
++# downloader from truncating files while another loader reads them.
+ _STAGE_LOCK = threading.Lock()
+
+
+@@ -925,8 +921,8 @@ def _stage_tokenizer(name_or_path: str) -> str:
+     Once staged, downstream loaders operate purely on local files — no
+     HF Hub network calls (HEAD revalidation, etc.) are made.
+
+-    Safe to call concurrently for the same ref: staging is serialized so only
+-    one thread downloads while the others reuse the staged files.
++    Safe across threads and processes sharing the local directory: one caller
++    stages all files while the others wait and reuse them.
+
+     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
+     """
+@@ -938,7 +934,7 @@ def _stage_tokenizer(name_or_path: str) -> str:
+     )
+     os.makedirs(local_dir, exist_ok=True)
+
+-    with _STAGE_LOCK:
++    with _STAGE_LOCK, FileLock(local_dir + ".lock"):
+         # 1. Local cache hit (also the double-checked fast path for threads that
+         #    waited on the lock while another thread staged this same ref).
+         if _try_load_tokenizer_from_dir(local_dir):
+diff --git a/lib/levanter/tests/grug/test_fa4_cute_attention.py b/lib/levanter/tests/grug/test_fa4_cute_attention.py
+index e2fc867f9e..319a442d4a 100644
+--- a/lib/levanter/tests/grug/test_fa4_cute_attention.py
++++ b/lib/levanter/tests/grug/test_fa4_cute_attention.py
+@@ -44,6 +44,32 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int =
+     return q, k, v
+
+
++def test_packed_bounds_with_singleton_batch_mesh_axes():
++    run_on_cpu_devices(
++        """
++        import jax
++        import jax.numpy as jnp
++        import numpy as np
++        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
++        from levanter.grug.attention import AttentionMask
++        from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
++
++        mesh = Mesh(np.asarray(jax.devices()).reshape(1,1,2,1,1),
++                    ('replica_dcn','data','context','expert','model'), axis_types=(AxisType.Explicit,)*5)
++        with jax.set_mesh(mesh):
++            ids = jax.device_put(jnp.array([[0,0,0,1,1,1,-1,-1]], dtype=jnp.int32),
++                                NamedSharding(mesh, P(('replica_dcn','data','expert'),None)))
++            lower, valid = jax.jit(lambda ids: fa4_cute_segment_bounds(
++                AttentionMask.causal().with_segment_ids(ids), batch_size=1, seq_len=8,
++                sliding_window=None,
++            ))(ids)
++            np.testing.assert_array_equal(np.asarray(lower)[0,:6], [0,0,0,3,3,3])
++            np.testing.assert_array_equal(valid, [[True,True,True,True,True,True,False,False]])
++        """,
++        device_count=2,
++    )
++
++
+ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
+     segment_ids = jnp.zeros((1, 8), dtype=jnp.int32)
+     lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
+diff --git a/lib/levanter/tests/test_mixture.py b/lib/levanter/tests/test_mixture.py
+index 9f53ee2933..f4fb38a1ef 100644
+--- a/lib/levanter/tests/test_mixture.py
++++ b/lib/levanter/tests/test_mixture.py
+@@ -33,6 +33,25 @@ def key():
+     return jax.random.PRNGKey(42)
+
+
++@pytest.mark.asyncio
++async def test_integer_allocation_does_not_repeat_or_omit_examples():
++    block_size = 64_000
++    split = 1001
++    sources = {
++        "small": ListAsyncDataset(list(range(split))),
++        "large": ListAsyncDataset(list(range(split, block_size))),
++    }
++    mixture = MixtureDataset(
++        sources,
++        {"small": split / block_size, "large": (block_size - split) / block_size},
++        block_size,
++        key=key(),
++        randomize_blocks=False,
++    )
++    samples = await mixture.get_batch(list(range(block_size)))
++    assert sorted(samples) == list(range(block_size))
++
++
+ class InfiniteCounterDataset(AsyncDataset[int]):
+     async def async_len(self) -> int:
+         raise ValueError("Infinite dataset has no length")
+diff --git a/lib/levanter/tests/test_new_cache.py b/lib/levanter/tests/test_new_cache.py
+index cd2ab6b717..ecfd4fef55 100644
+--- a/lib/levanter/tests/test_new_cache.py
++++ b/lib/levanter/tests/test_new_cache.py
+@@ -560,13 +560,16 @@ def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
+     return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
+
+
+-def test_write_levanter_cache_end_to_end():
++@pytest.mark.parametrize("max_pending_batches", [1, 128])
++def test_write_levanter_cache_end_to_end(max_pending_batches):
+     """Write records and verify they can be read back."""
+     with tempfile.TemporaryDirectory() as tmpdir:
+         output_path = str(Path(tmpdir) / "cache")
+         records = _make_levanter_records(8)
+
+-        result = write_levanter_cache(iter(records), output_path, metadata={})
++        result = write_levanter_cache(
++            iter(records), output_path, metadata={}, batch_size=2, max_pending_batches=max_pending_batches
++        )
+
+         assert result["path"] == output_path
+         assert result["count"] == len(records)
+diff --git a/lib/levanter/tests/test_tensorstore_serialization.py b/lib/levanter/tests/test_tensorstore_serialization.py
+index e4dd5b34f3..a0c11eb3a1 100644
+--- a/lib/levanter/tests/test_tensorstore_serialization.py
++++ b/lib/levanter/tests/test_tensorstore_serialization.py
+@@ -374,7 +374,7 @@ def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monke
+     write_started = threading.Event()
+
+     class FakeStore:
+-        def write(self, data, *, can_reference_source_data_indefinitely):
++        def write(self, data):
+             writes.append(np.array(data, copy=True))
+             write_started.set()
+             return SimpleNamespace(commit=commit_future)
+@@ -451,8 +451,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
+             self.future.force()
+
+     class FakeStore:
+-        def write(self, data, *, can_reference_source_data_indefinitely):
+-            assert can_reference_source_data_indefinitely
++        def write(self, data):
+             writes.append(np.array(data, copy=True))
+             return SimpleNamespace(commit=commit_future)
+
+@@ -596,6 +595,17 @@ def test_host_arrays_without_a_sharding_roundtrip():
+     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
++def test_large_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
++    # This size reproduces the referenced-source write path silently saving fill values.
++    shape = (26, 256, 64, 64)
++    source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
++
++    tree_serialize_leaves_tensorstore(str(tmp_path), source)
++    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), {"expert": jnp.zeros(shape, dtype=jnp.bfloat16)})
++
++    np.testing.assert_array_equal(np.asarray(restored["expert"]), source["expert"])
++
++
+ def test_arrays_with_a_zero_length_axis_roundtrip():
+     """An empty array still needs a positive chunk grid, which zarr3 enforces on creation."""
+     with use_test_mesh():
+diff --git a/lib/levanter/tests/test_tokenizers.py b/lib/levanter/tests/test_tokenizers.py
+index c79eb7aa3e..25f98e5698 100644
+--- a/lib/levanter/tests/test_tokenizers.py
++++ b/lib/levanter/tests/test_tokenizers.py
+@@ -13,6 +13,8 @@ import os
+ import pathlib
+ import re
+ import shutil
++import subprocess
++import sys
+ from typing import cast
+ from unittest.mock import patch
+
+@@ -36,7 +38,6 @@ from levanter.tokenizers import (
+     load_tokenizer,
+ )
+
+-
+ MODEL_NAME = "meta-llama/Llama-3.1-8B"
+
+
+@@ -1353,6 +1354,46 @@ def test_stage_tokenizer_file_url_excludes_checkpoint_weights(fake_tokenizer_dir
+     assert not os.path.exists(os.path.join(staged_dir, "model.safetensors"))
+
+
++def test_load_tokenizer_concurrent_processes_share_complete_files(fake_tokenizer_dir):
++    # Local GPU ranks share /tmp; overlapping downloads must not truncate a
++    # tokenizer that a sibling process is reading during startup.
++    tokenizer_path = fake_tokenizer_dir / "tokenizer.json"
++    tokenizer_path.write_text(tokenizer_path.read_text() + " " * (16 * 1024 * 1024))
++    script = """
++import json
++import sys
++from levanter.tokenizers import load_tokenizer
++print("ready", flush=True)
++sys.stdin.readline()
++print(json.dumps(load_tokenizer(sys.argv[1]).get_vocab()), flush=True)
++"""
++    processes = [
++        subprocess.Popen(
++            [sys.executable, "-c", script, f"file://{fake_tokenizer_dir}"],
++            stdin=subprocess.PIPE,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            text=True,
++        )
++        for _ in range(4)
++    ]
++    try:
++        for process in processes:
++            assert process.stdout.readline().strip() == "ready"
++        for process in processes:
++            process.stdin.write("go\n")
++            process.stdin.flush()
++        for process in processes:
++            output, error = process.communicate(timeout=30)
++            assert process.returncode == 0, error
++            assert json.loads(output) == {}
++    finally:
++        for process in processes:
++            if process.poll() is None:
++                process.kill()
++            process.wait(timeout=5)
++
++
+ def test_as_hf_tokenizer_loads_object_storage_path(fake_tokenizer_dir, clear_stage_cache):
+     url = f"file://{fake_tokenizer_dir}"
+     tokenizer = load_tokenizer(url)
+diff --git a/lib/rigging/src/rigging/fsutil/verified_copy.py b/lib/rigging/src/rigging/fsutil/verified_copy.py
+index bb68b5cab9..cd85c54ff8 100644
+--- a/lib/rigging/src/rigging/fsutil/verified_copy.py
++++ b/lib/rigging/src/rigging/fsutil/verified_copy.py
+@@ -10,7 +10,7 @@ import json
+ import logging
+ import os
+ from concurrent.futures import ThreadPoolExecutor, as_completed
+-from dataclasses import asdict, dataclass
++from dataclasses import asdict, dataclass, replace
+ from enum import StrEnum
+ from typing import Any, cast
+
+@@ -417,9 +417,21 @@ def _promote(
+         size=int((info := filesystem.info(destination_path)).get("size") or 0),
+         identity=_destination_identity(info),
+     )
+-    if promoted.size != verified.size or not _destination_matches_marker(filesystem, destination_path, promoted, marker):
++    if promoted.size != verified.size:
+         filesystem.rm(destination_path)
+         raise VerifiedCopyError(f"promoted object does not match verified staging object: {verified.path}")
++    if not _destination_matches_marker(filesystem, destination_path, promoted, marker):
++        # CoreWeave may change a multipart ETag during server-side copy even with
++        # preserve_etag=True. Verify the published bytes against the original stream
++        # hash, then retain its new identity so retry never rereads the GCS source.
++        identity = _verify_destination(
++            filesystem,
++            destination_path,
++            expected_size=verified.size,
++            expected_sha256=verified.sha256,
++            expected_etag=None,
++        )
++        _write_json_atomic(status_fs, marker_path, asdict(replace(marker, staging_identity=identity)))
+     filesystem.rm(staging_path)
+
+
+diff --git a/lib/rigging/tests/test_fsutil.py b/lib/rigging/tests/test_fsutil.py
+index 2c15c9d746..6d9027643c 100644
+--- a/lib/rigging/tests/test_fsutil.py
++++ b/lib/rigging/tests/test_fsutil.py
+@@ -346,6 +346,52 @@ def test_verified_copy_interrupted_promotion_resumes_from_staging(tmp_path, monk
+     assert not staging.exists()
+
+
++@pytest.mark.parametrize("corrupt_copy", [False, True])
++def test_verified_copy_changed_promotion_etag_verifies_content(tmp_path, monkeypatch, corrupt_copy):
++    source = tmp_path / "source"
++    destination = tmp_path / "destination"
++    source.mkdir()
++    (source / "weights.bin").write_bytes(b"correct bytes")
++    original_route = verified_copy_module.filesystem_for
++    local_fs, _ = original_route(str(destination))
++
++    class ChangedCopyIdentity:
++        def __getattr__(self, name):
++            return getattr(local_fs, name)
++
++        def info(self, path, **kwargs):
++            return {**local_fs.info(path, **kwargs), "ETag": str(path)}
++
++        def find(self, path, *, detail):
++            assert detail
++            return {name: {**info, "ETag": name} for name, info in local_fs.find(path, detail=True).items()}
++
++        def cp_file(self, path1, path2, **kwargs):
++            local_fs.cp_file(path1, path2, **kwargs)
++            if corrupt_copy:
++                Path(path2).write_bytes(b"corrupt bytes")
++
++    changed_fs = ChangedCopyIdentity()
++
++    def route(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
++        fs, path = original_route(url, s3_upload_policy=s3_upload_policy)
++        return (changed_fs if str(url).startswith(str(destination)) else fs), path
++
++    monkeypatch.setattr(verified_copy_module, "filesystem_for", route)
++    if corrupt_copy:
++        with pytest.raises(VerifiedCopyError, match="destination hash mismatch"):
++            verified_copy_prefix(str(source), str(destination), workers=1)
++        assert not (destination / COMPLETION_MANIFEST).exists()
++        assert (Path(str(destination) + STAGING_SUFFIX) / "weights.bin").read_bytes() == b"correct bytes"
++    else:
++        verified_copy_prefix(str(source), str(destination), workers=1)
++        assert (destination / "weights.bin").read_bytes() == b"correct bytes"
++        (destination / COMPLETION_MANIFEST).unlink()
++        result = verified_copy_prefix(str(source), str(destination), workers=1)
++        assert result.copied_files == 0
++        assert result.resumed_files == 1
++
++
+ def test_verified_copy_does_not_reuse_status_from_another_source(tmp_path):
+     first_source = tmp_path / "first-source"
+     second_source = tmp_path / "second-source"

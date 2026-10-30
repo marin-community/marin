@@ -1,0 +1,36 @@
+"""Summarize sanitized archived evaluation launch records without inferring unset defaults."""
+import json,hashlib
+from pathlib import Path
+from collections import defaultdict
+OUT=Path(__file__).resolve().parent
+
+def flat(x,prefix=''):
+ if isinstance(x,dict):
+  for k,v in x.items():yield from flat(v,prefix+'.'+k if prefix else k)
+ else:yield prefix,x
+
+def main():
+ rows=[];bybench=defaultdict(list)
+ for path in sorted(OUT.glob('eval-[012345]-*.json')):
+  x=json.loads(path.read_text());records=[(k,v)for k,v in x['files'].items()if k=='record'or k.startswith('generation_record')]
+  for key,v in records:
+   d=v['data'];cfg=d['model']['config'];ev=d['eval'];jobs=[f['data']for k,f in x['files'].items()if '_job'in k]
+   row={'cell':path.stem,'label':x['row']['label'],'position':x['row']['position'],'benchmark':x['row']['benchmark'],'record_key':key,'record_url':v['url'],'record_sha256':v['sha256'],'model':cfg,'eval':ev,'judge':d['judge'],'coverage':d['coverage'],'runtime':d['provenance'],'serving':d['serving'],'hardware':d['hardware'],'job_configs':jobs,'status':d['status'],'score':x['row']['score'],'regraded_or_sealed':'displayed_result'in x['files']}
+   rows.append(row);bybench[row['benchmark']].append(row)
+ (OUT/'eval-comparison-records.json').write_text(json.dumps(rows,indent=2)+'\n')
+ diffs=[]
+ for benchmark,rs in sorted(bybench.items()):
+  fields=defaultdict(dict)
+  for r in rs:
+   spec={'serve':r['model']['serve'],'generation':r['model']['generation'],'tokenizer':r['model']['tokenizer'],'tokenizer_revision':r['model']['tokenizer_revision'],'apply_chat_template':r['model']['apply_chat_template'],'agent':r['model']['agent'],'evalchemy':r['eval']['evalchemy'],'harbor':r['eval']['harbor'],'tasks':[{k:v for k,v in t.items()if k!='benchmark'}for t in r['eval']['tasks']],'judge':r['judge']}
+   for k,v in flat(spec):fields[k][r['position']+':'+r['record_key']]=v
+  for field,values in fields.items():
+   if len({json.dumps(v,sort_keys=True)for v in values.values()})>1:diffs.append({'benchmark':benchmark,'field':field,'values':values})
+ (OUT/'eval-config-differences.json').write_text(json.dumps(diffs,indent=2)+'\n')
+ coverage={}
+ for pos in sorted({r['position']for r in rows}):
+  rr=[r for r in rows if r['position']==pos];coverage[pos]={'label':rr[0]['label'],'cells':len({r['cell']for r in rr}),'records':len(rr),'revisions':sorted({r['model']['revision']for r in rr}),'tokenizer_overrides':sorted({str(r['model']['tokenizer'])for r in rr}),'stop_eos_generation_config_overrides':[(r['benchmark'],k,v)for r in rr for k,v in flat({'model':r['model'],'eval':r['eval']})if any(z in k.lower() for z in ['stop_token','eos_token','generation_config'])]}
+ (OUT/'eval-coverage.json').write_text(json.dumps(coverage,indent=2)+'\n')
+ print('records',len(rows),'cells',sum(v['cells']for v in coverage.values()),'differences',len(diffs))
+ print('diff_fields',sorted({d['field']for d in diffs}))
+if __name__=='__main__':main()

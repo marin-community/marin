@@ -1,0 +1,42 @@
+"""Read replay completion ledgers and record a bounded, secret-free inventory."""
+import concurrent.futures
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+STORE = "s3://marin-us-east-02a/marin/datakit/store_4d2e363d"
+OUTPUT = ROOT / "audits/replay-ledgers-20261024.json"
+
+def audit_bucket(pair):
+    cluster, quality = pair
+    uri = f"{STORE}/cluster={cluster}/quality={quality}"
+    result = subprocess.run(["uv", "run", "--frozen", "fsutil", "cat", "--raw", uri + "/shard_ledger.json"], capture_output=True, text=True)
+    if result.returncode:
+        return {"uri": uri, "error": result.stderr.splitlines()[-1]}
+    raw = result.stdout
+    ledger = json.loads(raw)
+    shards = ledger["shard_rows"]
+    fields = ledger["field_counts_by_shard"]
+    return {
+        "uri": uri, "cluster": cluster, "quality": quality,
+        "ledger_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+        "finished": ledger["is_finished"],
+        "layout": ledger["layout"],
+        "rows": ledger["total_num_rows"],
+        "tokens": ledger["field_counts"]["input_ids"],
+        "rows_sum_matches": sum(shards.values()) == ledger["total_num_rows"],
+        "tokens_sum_matches": sum(v["input_ids"] for v in fields.values()) == ledger["field_counts"]["input_ids"],
+        "finished_shards_match": set(ledger["finished_shards"]) == set(shards),
+        "shards": [{"name": name, "rows": count, "tokens": fields[name]["input_ids"]} for name, count in sorted(shards.items())],
+    }
+
+if __name__ == "__main__":
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        buckets = list(pool.map(audit_bucket, [(c, q) for c in range(40) for q in range(5)]))
+    result = {"store": STORE, "buckets": buckets}
+    OUTPUT.write_text(json.dumps(result, indent=2) + "\n")
+    errors = [b for b in buckets if "error" in b or not all(b[k] for k in ("finished", "rows_sum_matches", "tokens_sum_matches", "finished_shards_match"))]
+    print(json.dumps({"buckets": len(buckets), "failed": len(errors), "tokens": sum(b.get("tokens", 0) for b in buckets), "output": str(OUTPUT), "failures": errors}))
+    raise SystemExit(bool(errors))

@@ -1,0 +1,164 @@
+run: sft-thinking-eos-222-smoke-swe-20261030
+marin_commit: 2a174c5fff27ecbcf2db4a300441e247ea18ebbd
+command:
+- uv
+- run
+- python
+- -m
+- experiments.evaluation.cli
+- launch
+- --model-config
+- experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-222-20261030.yaml
+- --federated_cluster
+- cw-rno2a
+- --priority
+- production
+- --version
+- sft-thinking-eos-20261030-smoke
+- --run-id
+- sft-thinking-eos-222-smoke-swe-20261030
+- --limit
+- '1'
+- --harbor-config
+- experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/swebench-verified.yaml
+- --records-prefix
+- s3://marin-us-east-02a/marin/evals/sft-thinking-eos-20261030
+canonical_configs:
+  ? experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-222-20261030.yaml
+  : name: sft-thinking-eos-222-20261030
+    location: open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25
+    revision: 4e42bfabca646c9cad64b163d9639c542c5aec5b
+    apply_chat_template: true
+    resource_hint:
+      gpu:
+        H100: 8
+      memory: 512g
+    serve:
+      tensor_parallel_size: 1
+      data_parallel_size: 8
+      max_model_len: 131072
+      max_num_batched_tokens: 7168
+      max_num_seqs: 32
+      tool_call_parser: hermes
+      auto_overrides: false
+      vllm_extra_args:
+      - --enable-expert-parallel
+      - --model-loader-extra-config
+      - '{"distributed":true}'
+      - --override-generation-config
+      - '{"eos_token_id":[128001,128009],"bos_token_id":128000}'
+      chat_template: "{%- set enable_thinking = true -%}\n{{ bos_token }}\n{%- if\
+        \ enable_thinking is defined -%}\n  {%- if enable_thinking is sameas true\
+        \ -%}\n    {%- set _reasoning_mode = \"/think\" -%}\n  {%- elif enable_thinking\
+        \ is sameas false -%}\n    {%- set _reasoning_mode = \"/nothink\" -%}\n  {%-\
+        \ else -%}\n    {%- set _reasoning_mode = enable_thinking -%}\n  {%- endif\
+        \ -%}\n{%- else -%}\n  {%- set _reasoning_mode = \"/think\" -%}\n{%- endif\
+        \ -%}\n{%- set _custom_instructions = custom_instructions | default(None,\
+        \ true) -%}\n{%- set _xml_tools_list = xml_tools | default([], true) -%}\n\
+        {%- if tools is defined and tools -%}\n  {%- set _xml_tools_list = tools -%}\n\
+        {%- endif -%}\n{%- set _python_tools = python_tools | default([], true) -%}\n\
+        {%- set _has_aux_header = (_reasoning_mode is not none) or _custom_instructions\
+        \ or (_xml_tools_list) or (_python_tools) -%}\n{%- if _has_aux_header -%}\n\
+        <|start_header_id|>system<|end_header_id|>\n{%- if _reasoning_mode is not\
+        \ none -%}\nReasoning: {{ _reasoning_mode }}\n{%- endif %}\n{%- if _custom_instructions\
+        \ %}\n{{ _custom_instructions | trim }}\n{%- endif %}\n{% if _xml_tools_list\
+        \ or _python_tools %}\n{{ \"\n### Tools\n\" }}\nYou may call one or more functions\
+        \ to assist with the user query.\n{% if _xml_tools_list %}\nYou are provided\
+        \ with function signatures within <tools> </tools> tags:\n\n<tools>\n{% for\
+        \ tool in _xml_tools_list %}\n{{ tool if tool is string else tool | tojson\
+        \ }}{{ \"\n\" }}\n{% endfor %}\n</tools>\n\nFor each function call, pass a\
+        \ json object with function name and arguments within <tool_call> </tool_call>\
+        \ tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n\
+        </tool_call>\n\n{% endif %}\n{% if _python_tools %}\nWhen you send a message\
+        \ containing Python code between <|python_tag|> and <|eom_id|> tags, it will\
+        \ be executed in a stateful Jupyter notebook environment, and you will then\
+        \ be given the output.\n\nYou can use the following tools in your python code\
+        \ like regular functions:\n<tools>\n{% for tool in _python_tools %}\n{{ tool\
+        \ if tool is string else tool | tojson }}{{ \"\n\" }}\n{% endfor %}\n</tools>\n\
+        {% endif %}\n{% endif %}\n<|eot_id|>\n{%- endif -%}\n{%- macro text(content)\
+        \ -%}\n  {%- if content is string -%}\n    {{- content -}}\n  {%- elif content\
+        \ is mapping -%}\n    {{- content.get('text', '') -}}\n  {%- elif content\
+        \ is iterable -%}\n    {%- for chunk in content if chunk.get('type') == 'text'\
+        \ -%}\n      {{- chunk.text -}}\n    {%- endfor -%}\n  {%- endif -%}\n{%-\
+        \ endmacro -%}\n\n{%- set tool_names = namespace(by_id={}) -%}\n{%- macro\
+        \ tool_calls(calls) -%}\n  {%- for call in calls -%}\n    {%- set function\
+        \ = call.function -%}\n    {%- if call.get('id') -%}\n      {%- set tool_names.by_id\
+        \ = dict(tool_names.by_id, **{call.id: function.name}) -%}\n    {%- endif\
+        \ -%}\n    {{- '<tool_call>\n{\"name\": ' -}}\n    {{- function.name | tojson\
+        \ -}}\n    {{- ', \"arguments\": ' -}}\n    {{- function.arguments if function.arguments\
+        \ is string else function.arguments | tojson -}}\n    {{- '}\n</tool_call>'\
+        \ -}}\n  {%- endfor -%}\n{%- endmacro -%}\n\n{%- for message in messages -%}\n\
+        \  {%- set content = message.get('content') -%}\n  {%- set text_content =\
+        \ content is string\n      or (content is mapping and content.get('text')\
+        \ is string)\n      or (content is sequence and content is not string and\
+        \ content is not mapping\n          and content | selectattr('type', 'equalto',\
+        \ 'text') | list | length == content | length) -%}\n  {{- '<|start_header_id|>'\
+        \ ~ message.role ~ '<|end_header_id|>\n' -}}\n  {%- if message.role == 'assistant'\
+        \ -%}\n    {% generation %}\n    {%- if message.get('reasoning_content') -%}\n\
+        \      {{- '<|start_think|>' ~ message.reasoning_content ~ '<|end_think|>'\
+        \ -}}\n    {%- endif -%}\n    {{- text(content) | trim -}}\n    {{- tool_calls(message.get('tool_calls')\
+        \ or []) -}}\n    {{- '<|eot_id|>' -}}\n    {% endgeneration %}\n  {%- elif\
+        \ message.role == 'tool' -%}\n    {{- '<tool_response' -}}\n    {%- set name\
+        \ = message.get('name') or tool_names.by_id.get(message.get('tool_call_id'))\
+        \ -%}\n    {%- if name -%}{{- ' name=\"' ~ name ~ '\"' -}}{%- endif -%}\n\
+        \    {{- '>' -}}\n    {{- text(content) if text_content else content | tojson\
+        \ if content is not none else '' -}}\n    {{- '</tool_response><|eot_id|>\n\
+        ' -}}\n  {%- elif message.role == 'ipython' -%}\n    {{- {\"output\": text(content)\
+        \ if text_content else content} | tojson -}}\n    {{- '<|eot_id|>\n' -}}\n\
+        \  {%- else -%}\n    {{- (text(content) | trim) ~ '<|eot_id|>\n' -}}\n  {%-\
+        \ endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n  {{- '<|start_header_id|>assistant<|end_header_id|>\n\
+        ' -}}\n{%- endif -%}"
+      vllm_source: marin_fork
+    agent:
+      agent_kwargs:
+        thinking_format: chat-template
+    generation:
+      max_gen_toks: 16384
+  experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/swebench-verified.yaml:
+    n_concurrent_trials: 16
+    n_attempts: 1
+    release_trial_payloads_in_memory: true
+    retry:
+      max_retries: 10
+      include_exceptions:
+      - InternalServerError
+      - APIConnectionError
+      - APITimeoutError
+      - ArtifactUploadTimeoutError
+      - ArtifactWriterBacklogError
+      - CancelledError
+      - ContextManagementInfrastructureError
+      - LLMRequestTimeoutError
+      - SandboxBuildFailedError
+      - ContainerRegistryThrottledError
+      - AgentSetupTimeoutError
+      - DaytonaSandboxStopError
+      - DaytonaProcessError
+      - TrialTimeoutError
+      - ArtifactWriteTimeoutError
+      - Tau3RuntimeInfrastructureError
+      - Tau3TargetInfrastructureError
+      - VerifierTimeoutError
+      - VerifierRuntimeError
+      wait_multiplier: 2.0
+      min_wait_sec: 1.0
+      max_wait_sec: 60.0
+      exclude_exceptions: []
+    environment:
+      type: daytona
+    agents:
+    - name: mini-swe-agent
+      override_timeout_sec: 1800.0
+      override_setup_timeout_sec: 360.0
+      kwargs:
+        thinking_format: chat-template
+        model_info:
+          max_input_tokens: 131072
+          max_output_tokens: 16384
+        version: 2.1.0
+    datasets:
+    - name: swebench-verified
+      version: '1.0'
+      registry_url: https://raw.githubusercontent.com/marin-community/harbor/9d099696a567f489a111dc7e3c61183c98f007f0/registry.json
+    verifier:
+      override_timeout_sec: 300

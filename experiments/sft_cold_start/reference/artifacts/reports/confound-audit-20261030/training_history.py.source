@@ -1,0 +1,14 @@
+"""Read only step, learning rate and loss histories for the training audit."""
+import json
+from pathlib import Path
+import wandb
+OUT=Path(__file__).resolve().parent
+api=wandb.Api(timeout=60)
+for name,path in {
+'original':'marin-community/marin_moe_sft/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped',
+'repro128':'nyu-dice-lab/sft-pipe-repro/snowball-sft-production-128h100-20261024b',
+'repro256':'nyu-dice-lab/sft-pipe-repro/snowball-sft-production-256h100-20261027c'}.items():
+ run=api.run(path)
+ rows=list(run.scan_history(keys=['global_step','optim/learning_rate','train/loss'],page_size=1000,min_step=157000 if name=='original' else 0))
+ (OUT/f'training-history-{name}.json').write_text(json.dumps({'path':path,'rows':rows},indent=2)+'\n')
+ print(name,'rows',len(rows),'first',rows[:1],'last',rows[-1:])

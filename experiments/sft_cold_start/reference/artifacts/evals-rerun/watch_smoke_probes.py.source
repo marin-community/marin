@@ -1,0 +1,43 @@
+"""Wait for the two approved OpenAI endpoints and collect bounded live proofs."""
+import fcntl
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT=Path(__file__).resolve().parent
+JOBS={'tools':'/benfeuer/eval-sft-thinking-eos-222-smoke-tools-20261030-8812483c','swe':'/benfeuer/eval-sft-thinking-eos-222-smoke-swe-20261030-f5b121fb'}
+PARENT='01a16e8e-0a38-7f50-8a42-ab2d5e4ce139'
+with (ROOT/'smoke-probe-watcher.lock').open('w') as lock:
+ fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ failures={}
+ while True:
+  done=[]
+  for label,job in JOBS.items():
+   if (ROOT/f'live-endpoint-{label}.json').exists():done.append(label);continue
+   result=subprocess.run(['uv','run','iris','--cluster=marin','endpoints','list','/serve/','--task-id',job+'/0'],capture_output=True,text=True,timeout=60)
+   if result.returncode:
+    failures[label]=failures.get(label,0)+1
+    (ROOT/f'smoke-probe-{label}-discovery-error.json').write_text(json.dumps({'returncode':result.returncode,'stderr':result.stderr[-3000:],'consecutive_errors':failures[label]},indent=2)+'\n')
+    if failures[label]==3:
+     subprocess.run(['/opt/homebrew/bin/codex','queue','--thread',PARENT,'--message',f'SFT smoke endpoint discovery failed three times for {label}; inspect {ROOT}/smoke-probe-{label}-discovery-error.json. Watcher continues read-only retries; full suite remains unapproved.'],capture_output=True,text=True,timeout=60,check=True)
+    continue
+   failures[label]=0
+   endpoints=[line.split()[0] for line in result.stdout.splitlines() if line.startswith('/serve/')]
+   if not endpoints:continue
+   assert len(endpoints)==1,endpoints
+   with (ROOT/f'live-endpoint-{label}-probe.log').open('a') as log:
+    probe=subprocess.run([sys.executable,str(ROOT/'probe_live_endpoint.py'),endpoints[0],label],stdout=log,stderr=log,timeout=600)
+   if probe.returncode:
+    message=f'SFT EVAL SMOKE PROBE NEEDS REVIEW: {label} live endpoint probe exited{probe.returncode}. Inspect {ROOT}/live-endpoint-{label}-probe.log. Full suite has not launched and remains unapproved. Do not launch or cancel automatically; inspect routing/model evidence first.'
+    subprocess.run(['/opt/homebrew/bin/codex','queue','--thread',PARENT,'--message',message],capture_output=True,text=True,timeout=60,check=True)
+    raise RuntimeError(f'{label} probe failed; parent notified')
+  (ROOT/'smoke-probe-watcher-heartbeat.json').write_text(json.dumps({'observed_at':datetime.now(timezone.utc).isoformat(),'completed':done},indent=2)+'\n')
+  if len(done)==2:
+   message=f'SFT EVAL SMOKE LIVE PROBES READY: {ROOT}/live-endpoint-tools.json and live-endpoint-swe.json contain served model, live tokenization/rendered /think evidence and forced EOS128001/128009 stop responses. Configcommit2a174c5fff27ecbcf2db4a300441e247ea18ebbd. Independently review with actual harness results under {ROOT}/actual-scores.json and records. Full suite has NOT launched and still needs explicit parent approval after harness review.'
+   queued=subprocess.run(['/opt/homebrew/bin/codex','queue','--thread',PARENT,'--message',message],capture_output=True,text=True,timeout=60,check=True)
+   (ROOT/'smoke-probes-parent-notified.json').write_text(json.dumps({'receipt':queued.stdout.strip()},indent=2)+'\n')
+   break
+  time.sleep(45)

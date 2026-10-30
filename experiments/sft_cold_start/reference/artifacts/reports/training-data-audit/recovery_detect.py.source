@@ -1,0 +1,210 @@
+"""Find review candidates in decoded training targets; never execute corpus text."""
+
+import argparse
+from collections import Counter
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+from pathlib import Path
+import re
+
+
+@dataclass(frozen=True)
+class Candidate:
+    detector: str
+    start: int
+    end: int
+    matched: str
+    context: str
+    detail: str
+
+
+PATTERNS = {
+    "cleanup_primitive": (r"\brm\s+-[rfRF]+\b|(?:shutil\.)?rmtree\s*\(", "General deletion primitive for manual controls; ordinary scoped cleanup is expected."),
+    "broad_directory_delete": (
+        r"\brm\s+(?:-[rfRF]+\s+)+(?:[\"']?)/(?:tmp|app|workspace|testbed)(?:/\*)?(?=[\"'\s;]|$)",
+        "Deletes a broad working/temp directory; may be explicitly requested legitimate cleanup.",
+    ),
+    "parent_directory_delete": (
+        r"(?:shutil\.)?rmtree\s*\(\s*(?:os\.path\.dirname\s*\(|[^\n,)]{1,100}\.parent\b)",
+        "Deleting a parent of a temporary/artifact directory can remove unrelated files; resolve path manually.",
+    ),
+    "output_artifact_delete": (
+        r"\b(?:rm\s+(?:-[rfRF]+\s+)*|(?:os\.)?(?:remove|unlink)\s*\(\s*)[\"']?[^\n;\"']{0,100}(?:answer\.txt|result\.json|solution\.py)",
+        "Required-looking output deletion; temporal order and actual task contract require review.",
+    ),
+    "missing_argument_guess": (
+        r"(?:missing|required|not (?:provided|specified)|unspecified)[\s\S]{0,180}\b(?:assum(?:e|ing)|guess|default|arbitrary)\b|\b(?:assum(?:e|ing)|guess|arbitrary)\b[\s\S]{0,180}(?:required (?:argument|parameter)|not (?:provided|specified))",
+        "Potential invention of unspecified arguments; defaults may be documented and correct.",
+    ),
+    "mock_or_synthetic_validation": (
+        r"\b(?:mock|dummy|synthetic|hardcod(?:ed|ing)|simulat(?:ed|e))\b[\s\S]{0,220}\b(?:test|verif(?:y|ied|ication)|pass(?:ed|es)?)\b|\b(?:test|verif(?:y|ied|ication)|pass(?:ed|es)?)\b[\s\S]{0,220}\b(?:mock|dummy|synthetic|hardcod(?:ed|ing))\b",
+        "Validation uses or discusses mock/synthetic material; usually legitimate, not proof of self-confirmation.",
+    ),
+    "schema_tool_confusion": (
+        r"(?:function|tool)[\s\S]{0,120}(?:not (?:available|exist)|(?:isn.t|doesn.t) (?:available|exist))|(?:not available|doesn.t exist)[\s\S]{0,120}(?:function|tool)",
+        "Potential mismatch between described schema and executable tools; often a correct observation.",
+    ),
+}
+
+
+def candidate(name: str, text: str, start: int, end: int, detail: str) -> Candidate:
+    return Candidate(name, start, end, text[start:end][:500], text[max(0, start - 220):min(len(text), end + 350)], detail)
+
+
+def detect(text: str) -> list[Candidate]:
+    found = []
+    for name, (pattern, detail) in PATTERNS.items():
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            found.append(candidate(name, text, match.start(), match.end(), detail))
+    package_commands = list(re.finditer(r"\b(?:pip3?|uv pip|python(?:3)? -m pip)\s+(?:install|uninstall)\b", text))
+    if len(package_commands) >= 3:
+        first = package_commands[0]
+        found.append(candidate("package_repair_churn", text, first.start(), first.end(), f"{len(package_commands)} install/uninstall commands in this segment; may be a setup tutorial."))
+    repeated = Counter(line.strip() for line in text.splitlines() if len(line.strip()) >= 25 and re.search(r"\b(?:python|pytest|pip|rm|cat|sed|grep|bash|write|read)\b", line))
+    for line, count in repeated.items():
+        if count >= 3:
+            start = text.find(line)
+            found.append(candidate("repeated_command_line", text, start, start + len(line), f"Exact command-like line appears {count} times; legitimate repeated experiments are possible."))
+    for match in re.finditer(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text):
+        payload = match.group(1)
+        try:
+            json.loads(payload)
+        except json.JSONDecodeError as error:
+            found.append(candidate("invalid_json_tool_envelope", text, match.start(), match.end(), f"Closed tool_call body is not JSON: {error.msg}. May use a different schema or quote an example."))
+    for match in re.finditer(r"\becho\s+'([^']*)'\s*>\s*(?:/app/)?result\.json\b", text):
+        try:
+            json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            found.append(candidate("invalid_json_submission_literal", text, match.start(), match.end(), f"Single-quoted echo payload fails json.loads: {error.msg}. Shell expansions are not evaluated."))
+    return found
+
+
+def cross_message_candidates(messages: list[dict], text: str) -> list[Candidate]:
+    command_messages = {}
+    package_messages = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+        body = message["text"]
+        commands = set()
+        for match in re.finditer(r'"command"\s*:\s*("(?:[^"\\]|\\.)*")', body):
+            command = json.loads(match.group(1)).strip()
+            if len(command) >= 25:
+                commands.add(command)
+        commands.update(line.strip() for line in body.splitlines() if len(line.strip()) >= 25 and re.match(r"^(?:python3?|pytest|pip3?|rm|cat|sed|grep|bash)\s", line.strip()))
+        for command in commands:
+            command_messages.setdefault(command, []).append(index)
+        if re.search(r"\b(?:pip3?|uv pip|python(?:3)? -m pip)\s+(?:install|uninstall)\b", body):
+            package_messages.append(index)
+    found = []
+    feedback = "\n".join(m["text"] for m in messages if m.get("role") in {"tool", "user"})
+    has_error_feedback = bool(re.search(r"Traceback|Error:|not found|No such file|failed|Exception", feedback))
+    for command, indices in command_messages.items():
+        if len(indices) >= 3:
+            start = text.find(command)
+            if start < 0:
+                start = 0
+            found.append(candidate("cross_message_repeated_command", text, start, start + len(command), f"Command occurs in assistant messages {indices}; error-like context present={has_error_feedback}. Command={command[:300]!r}; feedback may be unrelated."))
+    if len(package_messages) >= 3:
+        first = messages[package_messages[0]]
+        start = first.get("start_char", 0)
+        found.append(candidate("cross_message_package_churn", text, start, min(start + 200, len(text)), f"Install/uninstall text occurs in assistant messages {package_messages}; error-like context present={has_error_feedback}."))
+    return found
+
+
+def function_schemas(messages: list[dict]) -> dict:
+    schemas = {}
+    for message in messages:
+        if message.get("role") != "system":
+            continue
+        for line in message["text"].splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            function = value.get("function", value)
+            if isinstance(function, dict) and "name" in function and "parameters" in function:
+                schemas[function["name"]] = function["parameters"]
+    return schemas
+
+
+def schema_candidates(text: str, schemas: dict) -> list[Candidate]:
+    found = []
+    if not schemas:
+        return found
+    for match in re.finditer(r"<tool_call>\s*([\s\S]*?)\s*</tool_call>", text):
+        try:
+            call = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(call, dict) or not isinstance(call.get("arguments"), dict):
+            continue
+        name = call.get("name")
+        if name not in schemas:
+            found.append(candidate("undeclared_function_name", text, match.start(), match.end(), f"Function {name!r} absent from parsed system schemas; only JSON-line schemas are supported."))
+            continue
+        missing = sorted(set(schemas[name].get("required", [])) - set(call["arguments"]))
+        if missing:
+            found.append(candidate("missing_required_arguments", text, match.start(), match.end(), f"Function {name!r} omits schema-required arguments {missing}."))
+    return found
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True, help="Normalized JSONL with records containing messages/segments and text with role/mask metadata")
+    parser.add_argument("--output-prefix", type=Path, required=True)
+    args = parser.parse_args()
+    totals = Counter()
+    counts = Counter()
+    source_counts = {}
+    findings = []
+    seen = set()
+    for record_index, line in enumerate(args.input.read_text().splitlines()):
+        row = json.loads(line)
+        source = row.get("source", row.get("source_name", "unknown"))
+        record_id = row.get("id", row.get("record_id", record_index))
+        segments = row.get("messages", row.get("segments"))
+        if segments is None:
+            raise ValueError(f"Record {record_index} has no messages/segments; normalize explicitly before scanning")
+        if not segments:
+            segments = [{"text": row["text"], "role": "unknown", "start_char": 0}]
+        schemas = function_schemas(segments)
+        totals["records_with_parsed_schemas"] += bool(schemas)
+        totals["records"] += 1
+        for hit in cross_message_candidates(segments, row["text"]):
+            eligibility = "cross_message_full_causal" if "full_causal_config" in row.get("mask_status", "") else "cross_message_mask_unknown"
+            counts[f"{eligibility}:{hit.detector}"] += 1
+            source_counts.setdefault(source, Counter())[f"{eligibility}:{hit.detector}"] += 1
+            findings.append({"source": source, "record_id": record_id, "record_index": record_index, "segment_index": -1, "role": "cross_message", "mask_status": row.get("mask_status", "unknown"), "global_start": hit.start, "global_end": hit.end, "eligibility": eligibility, **asdict(hit)})
+        for segment_index, segment in enumerate(segments):
+            text = segment["text"]
+            role = segment.get("role", "unknown")
+            loss = segment.get("loss", segment.get("loss_weight", segment.get("loss_mask", None)))
+            eligible = role == "assistant" and loss is not False and loss != 0
+            full_causal = "full_causal_config" in row.get("mask_status", "")
+            eligibility = ("assistant_full_causal" if role == "assistant" else "other_full_causal") if full_causal else "assistant_target" if eligible and loss is not None else "assistant_mask_unknown" if eligible else "context_or_unknown_role"
+            totals[f"segments_{eligibility}"] += 1
+            totals[f"characters_{eligibility}"] += len(text)
+            totals[f"closed_tool_envelopes_{eligibility}"] += len(re.findall(r"<tool_call>[\s\S]*?</tool_call>", text))
+            if role == "assistant" and schemas:
+                totals["schema_context_closed_assistant_calls"] += len(re.findall(r"<tool_call>[\s\S]*?</tool_call>", text))
+            hits = detect(text) + (schema_candidates(text, schemas) if role == "assistant" else [])
+            for hit in hits:
+                counts[f"{eligibility}:{hit.detector}"] += 1
+                key = (source, record_id, segment_index, hit.detector, hit.start)
+                if key in seen:
+                    raise ValueError(f"Duplicate candidate {key}")
+                seen.add(key)
+                source_counts.setdefault(source, Counter())[f"{eligibility}:{hit.detector}"] += 1
+                findings.append({"source": source, "record_id": record_id, "record_index": record_index, "segment_index": segment_index, "role": role, "loss": loss, "mask_status": row.get("mask_status", "unknown"), "global_start": segment.get("start_char", 0) + hit.start, "global_end": segment.get("start_char", 0) + hit.end, "eligibility": eligibility, **asdict(hit)})
+    output = {"input": str(args.input.resolve()), "input_sha256": hashlib.sha256(args.input.read_bytes()).hexdigest(), "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "totals": dict(totals), "candidate_counts": dict(counts), "per_source": {k: dict(v) for k, v in source_counts.items()}, "caveat": "Candidates are not confirmed defects. Counts are hits, not unique records or population rates."}
+    args.output_prefix.with_suffix(".summary.json").write_text(json.dumps(output, indent=2) + "\n")
+    args.output_prefix.with_suffix(".candidates.jsonl").write_text("".join(json.dumps(hit) + "\n" for hit in findings))
+    print(json.dumps({"records": totals["records"], "candidates": len(findings), "output_prefix": str(args.output_prefix)}))
+
+
+if __name__ == "__main__":
+    main()

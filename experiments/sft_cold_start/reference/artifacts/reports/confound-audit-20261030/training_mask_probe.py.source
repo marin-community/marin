@@ -1,0 +1,19 @@
+"""Run actual optimizer partition functions on checkpoint shape metadata, without weights."""
+import argparse
+import hashlib
+import importlib
+import json
+from pathlib import Path
+import jax
+import jax.numpy as jnp
+
+p=argparse.ArgumentParser();p.add_argument('variant',choices=['original','repro']);args=p.parse_args()
+root=Path(__file__).resolve().parents[2]
+module=importlib.import_module('experiments.june_tpu_67b_a2b.moe.optimizer' if args.variant=='original' else 'experiments.grug.moe.optimizer')
+config=module.GrugMoeMuonHConfig(**({'rmsnorm_to_adam':True} if args.variant=='original' else {}))
+manifest=json.loads((root/'sources/base-native-manifest.json').read_text())
+shapes={a['path'].removeprefix('params/').replace('/','.'):jax.ShapeDtypeStruct(a['shape'],jnp.bfloat16) for a in manifest['arrays'] if a['path'].startswith('params/')}
+labels=config.create_mask(shapes)
+result={'variant':args.variant,'module':module.__name__,'module_path':module.__file__,'module_sha256':hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest(),'rows':[{'path':k,'shape':list(shapes[k].shape),'group':v} for k,v in labels.items()]}
+Path(__file__).with_name(f'training-mask-{args.variant}.json').write_text(json.dumps(result,indent=2)+'\n')
+print(args.variant,[(r['path'],r['group']) for r in result['rows'] if 'expert_mlp' in r['path'] or 'rms_' in r['path']])

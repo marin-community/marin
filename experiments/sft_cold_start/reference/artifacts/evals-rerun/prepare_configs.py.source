@@ -1,0 +1,52 @@
+"""Materialize diagnostic configs from the archived effective evaluations."""
+import copy
+import json
+from pathlib import Path
+import yaml
+
+ROOT=Path(__file__).resolve().parents[2]
+WORK=ROOT/'artifacts/worktrees/evals-rerun'
+OUT=WORK/'experiments/evaluation/campaigns/sft-thinking-eos-20261030'
+OLD=Path('/Users/benfeuer/Documents/experiments/complete/eval-policy-09-25/artifacts/transient/marin-repro-sft-steps-20261026/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled')
+AUDIT=ROOT/'artifacts/reports/confound-audit-20261030'
+RECEIPT=json.loads((ROOT/'artifacts/evals-rerun/hf-generation-config-receipt.json').read_text())
+BENCHES=['swebench-verified','ot-tblite-recovery','tb2-recovery','ds-1000-local','bixbench-pi','bfclparity-pi']
+for part in ['model-configs','model-configs/swebench-verified','harbor-configs','judge-model-configs']:
+ (OUT/part).mkdir(parents=True,exist_ok=True)
+models={}
+for i,tag in enumerate(['base','222','471','1024','2048','1005']):
+ record=json.loads((AUDIT/f'eval-{i}-tb2-recovery.json').read_text())['files']['record']['data']
+ oldname=record['model']['config']['name']
+ doc=yaml.safe_load((OLD/'model-configs'/f'{oldname}.yaml').read_text())
+ doc['name']=f'sft-thinking-eos-{tag}-20261030'
+ if tag in RECEIPT['models']:doc['revision']=RECEIPT['models'][tag]['revision']
+ if tag=='base':template=(OLD/'chat-templates'/f'{oldname}.jinja').read_text()
+ else:template=(AUDIT/'tokenizer-hf-1005/chat_template.jinja').read_text()
+ doc['serve']['chat_template']='{%- set enable_thinking = true -%}\n'+template
+ doc['serve']['vllm_source']='marin_fork'
+ doc['serve']['vllm_extra_args'] += ['--override-generation-config','{"eos_token_id":[128001,128009],"bos_token_id":128000}']
+ doc['agent']['agent_kwargs']={'thinking_format':'chat-template'}
+ # Thinking is enforced in the server template for all harnesses, including mini-SWE.
+ # Terminus and Pi additionally have recognized explicit request settings below.
+ (OUT/'model-configs'/f'{doc["name"]}.yaml').write_text(yaml.safe_dump(doc,sort_keys=False,width=110))
+ swe=copy.deepcopy(doc);swe['serve']['max_model_len']=131072;swe['generation']={'max_gen_toks':16384}
+ (OUT/'model-configs/swebench-verified'/f'{doc["name"]}.yaml').write_text(yaml.safe_dump(swe,sort_keys=False,width=110))
+ models[tag]={'name':doc['name'],'repo':doc['location'],'revision':doc['revision'],'original_name':oldname}
+for bench in BENCHES:
+ archived=json.loads((AUDIT/f'eval-4-{bench}.json').read_text())['files']['harbor_job0']['data']
+ doc=yaml.safe_load((OLD/'harbor-configs'/f'{bench}.yaml').read_text())
+ doc['n_attempts']=archived['n_attempts']
+ agent=archived['agents'][0]
+ doc['agents']=[{k:agent[k] for k in ['name','override_timeout_sec','override_setup_timeout_sec']}]
+ kwargs=copy.deepcopy(agent['kwargs']);kwargs.pop('api_base',None)
+ kwargs['model_info']={k:v for k,v in kwargs['model_info'].items() if not k.endswith('cost_per_token')}
+ if agent['name']=='terminus-2':kwargs['extra_body']={'chat_template_kwargs':{'enable_thinking':True}}
+ if agent['name']=='pi':kwargs['thinking']='high';kwargs['collect_rollout_details']=True
+ doc['agents'][0]['kwargs']=kwargs
+ doc['datasets']=[{k:v for k,v in d.items() if v is not None and k in ['name','version','ref','registry_url','task_names','exclude_task_names','n_tasks']} for d in archived['datasets']]
+ if bench=='ot-tblite-recovery':doc['datasets'][0]['registry_url']='https://raw.githubusercontent.com/marin-community/harbor/9d099696a567f489a111dc7e3c61183c98f007f0/registry.json'
+ (OUT/'harbor-configs'/f'{bench}.yaml').write_text(yaml.safe_dump(doc,sort_keys=False,width=110))
+judge=WORK/'experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/judge-model-configs/MiniMaxAI-MiniMax-M3-MXFP8.yaml'
+(OUT/'judge-model-configs'/judge.name).write_bytes(judge.read_bytes())
+(ROOT/'artifacts/evals-rerun/models.json').write_text(json.dumps(models,indent=2)+'\n')
+print(OUT)

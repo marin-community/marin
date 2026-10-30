@@ -1,0 +1,37 @@
+"""Submit only the immutable full plan after an explicit parent approval receipt."""
+import hashlib
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT=Path(__file__).resolve().parent
+WORK=ROOT.parent/'worktrees/evals-rerun'
+PLAN=ROOT/'launch-plan.json'
+COMMIT='2a174c5fff27ecbcf2db4a300441e247ea18ebbd'
+
+approval=json.loads((ROOT/'parent-full-approval.json').read_text())
+assert approval['approved'] is True and approval['scope']=='full-24-cell-cohort'
+assert approval['config_commit']==COMMIT
+assert approval['plan_sha256']==hashlib.sha256(PLAN.read_bytes()).hexdigest()
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=WORK,text=True).strip()==COMMIT
+assert not subprocess.check_output(['git','status','--porcelain'],cwd=WORK,text=True).strip()
+plans=json.loads(PLAN.read_text())
+assert len(plans)==8 and all(p['returncode']==0 for p in plans)
+assert {p['tag'] for p in plans}=={'222','471','1024','2048'}
+assert sum(16 if p['arm']=='agentic' else 8 for p in plans)==96
+receipt=ROOT/'full-launch-results.json'
+assert not receipt.exists(),'A full launch receipt already exists; review it instead of duplicating submissions'
+records=[]
+for plan in plans:
+    cmd=plan['command']+['--no-wait']
+    started=datetime.now(timezone.utc).isoformat()
+    log_path=ROOT/f'full-launch-{plan["tag"]}-{plan["arm"]}.log'
+    with log_path.open('w') as log:
+        result=subprocess.run(cmd,cwd=WORK,stdout=log,stderr=subprocess.STDOUT)
+    records.append({'tag':plan['tag'],'arm':plan['arm'],'command':cmd,'returncode':result.returncode,'started':started,'log':str(log_path)})
+    receipt.write_text(json.dumps(records,indent=2)+'\n')
+    print(plan['tag'],plan['arm'],result.returncode,flush=True)
+    if result.returncode:
+        raise RuntimeError('Submission returned nonzero; inspect the saved receipt and live state before retrying')
+print('All eight full-cohort roots submitted; monitoring and score collection still required.')

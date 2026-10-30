@@ -1,0 +1,37 @@
+"""Pin and compare the replay and Snowball tokenization definitions."""
+import hashlib
+import json
+import urllib.request
+from pathlib import Path
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+REPOS = ("marin-community/marin-tokenizer", "open-athena/snowball-67b-a2b-base-262k-qk175-skew8")
+
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return response.read()
+
+results = []
+for repo in REPOS:
+    info = json.loads(fetch("https://huggingface.co/api/models/" + repo))
+    revision = info["sha"]
+    raw = fetch(f"https://huggingface.co/{repo}/resolve/{revision}/tokenizer.json")
+    payload = json.loads(raw)
+    destination = ROOT / "sources" / (repo.replace("/", "--") + "--tokenizer.json")
+    destination.write_bytes(raw)
+    results.append((repo, revision, hashlib.sha256(raw).hexdigest(), payload))
+
+a, b = [result[3] for result in results]
+summary = {
+    "sources": [{"repo": r, "revision": rev, "sha256": digest} for r, rev, digest, _ in results],
+    "vocab_equal": a["model"]["vocab"] == b["model"]["vocab"],
+    "merges_equal": a["model"]["merges"] == b["model"]["merges"],
+    "pre_tokenizer_equal": a["pre_tokenizer"] == b["pre_tokenizer"],
+    "normalizer_equal": a["normalizer"] == b["normalizer"],
+    "post_processor_equal": a["post_processor"] == b["post_processor"],
+    "decoder_equal": a["decoder"] == b["decoder"],
+}
+ta, tb = [{t["id"]: t for t in d["added_tokens"]} for d in (a, b)]
+summary["added_token_differences"] = [{"id": i, "replay": ta.get(i), "base": tb.get(i)} for i in sorted(ta.keys() | tb.keys()) if ta.get(i) != tb.get(i)]
+(ROOT / "audits/tokenizer-comparison-20261024.json").write_text(json.dumps(summary, indent=2) + "\n")
+print(json.dumps(summary, indent=2))

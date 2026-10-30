@@ -1,0 +1,37 @@
+"""Compare pinned HF inference artifacts without loading model weights."""
+import difflib
+import hashlib
+import json
+from pathlib import Path
+from transformers import AutoTokenizer
+
+OUT=Path(__file__).resolve().parent
+TAGS=['base','222','471','1024','2048','1005']
+def read(tag,name):return json.loads((OUT/f'tokenizer-hf-{tag}'/name).read_text())
+
+def differences(a,b):
+    return {k:{'original':a.get(k),'reproduction':b.get(k),'original_present':k in a,'reproduction_present':k in b} for k in sorted(set(a)|set(b)) if a.get(k)!=b.get(k) or (k in a)!=(k in b)}
+
+result={'config_differences':differences(read('1005','config.json'),read('2048','config.json')),
+        'tokenizer_config_differences':differences(read('1005','tokenizer_config.json'),read('2048','tokenizer_config.json')),
+        'token_ids':{},'renders':{}}
+# Preserve template diff separately rather than embedding redundant template bodies.
+result['tokenizer_config_differences'].pop('chat_template',None)
+messages=[{'role':'system','content':'You are a coding assistant.'},{'role':'user','content':'Inspect the working directory.'}]
+tools=[{'type':'function','function':{'name':'bash','description':'Run a shell command.','parameters':{'type':'object','properties':{'command':{'type':'string'}},'required':['command']}}}]
+for tag in TAGS:
+    tokenizer=AutoTokenizer.from_pretrained(OUT/f'tokenizer-hf-{tag}',local_files_only=True)
+    result['token_ids'][tag]={'bos':tokenizer.bos_token_id,'eos':tokenizer.eos_token_id,'eot':tokenizer.convert_tokens_to_ids('<|eot_id|>'),'model_max_length':tokenizer.model_max_length,'class':type(tokenizer).__name__}
+    for mode in ['omitted','true','false']:
+        kwargs={} if mode=='omitted' else {'enable_thinking':mode=='true'}
+        for with_tools in [False,True]:
+            variant=mode+('-tools' if with_tools else '-plain')
+            rendered=tokenizer.apply_chat_template(messages,tools=tools if with_tools else None,tokenize=False,add_generation_prompt=True,**kwargs)
+            ids=tokenizer.encode(rendered,add_special_tokens=False)
+            result['renders'].setdefault(variant,{})[tag]={'text':rendered,'token_count':len(ids),'token_sha256':hashlib.sha256(json.dumps(ids).encode()).hexdigest(),'token_ids':ids}
+for variant,rows in result['renders'].items():
+    rows['same_original_vs_2048']=rows['1005']['token_ids']==rows['2048']['token_ids']
+(OUT/'tokenizer-comparison.json').write_text(json.dumps(result,indent=2)+'\n')
+a=(OUT/'tokenizer-hf-1005/chat_template.jinja').read_text();b=(OUT/'tokenizer-hf-2048/chat_template.jinja').read_text()
+(OUT/'tokenizer-template.diff').write_text(''.join(difflib.unified_diff(a.splitlines(True),b.splitlines(True),fromfile='original1005',tofile='reproduction')))
+print(result['token_ids']);print({v:r['same_original_vs_2048'] for v,r in result['renders'].items()})

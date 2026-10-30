@@ -1,0 +1,43 @@
+"""Check grounding rules on previously audited DS-1000 traces, separate from training data."""
+
+import json
+from pathlib import Path
+
+from grounding_scan import scan
+
+
+ROOT = Path(__file__).resolve().parent
+TRACE_ROOT = ROOT.parent / "trace-review-20261030" / "data-tools-traces"
+
+
+def converted_trace(path):
+    trajectory = json.loads(path.read_text())
+    messages = []
+    for step in trajectory["steps"]:
+        if step["source"] == "agent":
+            commands = [call["arguments"] for call in step.get("tool_calls", [])
+                        if call["function_name"] == "bash_command"]
+            messages.append({"role": "assistant", "text": json.dumps({"analysis": step["message"], "commands": commands})})
+            observations = step.get("observation", {}).get("results", [])
+            if observations:
+                messages.append({"role": "user", "text": "New Terminal Output:\n" + "\n".join(x.get("content", "") for x in observations)})
+        else:
+            messages.append({"role": "user", "text": step.get("message", "")})
+    return {"id": path.name, "source": str(path), "messages": messages, "mask_status": "evaluation_only_not_training"}
+
+
+def main():
+    results = []
+    for model in ["222", "2048", "1005"]:
+        path = TRACE_ROOT / f"{model}_ds-1000-local_127_attempts_000_agent_trajectory.json"
+        summary, candidates, _ = scan([converted_trace(path)])
+        candidates = [x for x in candidates if x["kind"].startswith("claim_")]
+        results.append({"model": model, "source": str(path), "sequence_candidates": candidates})
+    (ROOT / "grounding-calibration.json").write_text(json.dumps({
+        "scope": "Previously audited evaluation traces reserialized from ATIF into equivalent Terminus command/observation messages. Not training-data results or a recall estimate.",
+        "results": results}, indent=2) + "\n")
+    print([(x["model"], len(x["sequence_candidates"])) for x in results])
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,166 @@
+"""Find grounding-risk candidates in decoded training data; never label hits as defects."""
+
+import argparse
+from collections import Counter, defaultdict
+import hashlib
+import json
+from pathlib import Path
+import re
+
+
+PATTERNS = {
+    "completed_work_claim": re.compile(r"\b(?:I(?:['’]ve| have)|we(?:['’]ve| have)|the (?:file|solution|task|implementation|fix|script|code)(?: has been| is))\s+(?:successfully\s+)?(?:created|written|implemented|completed|fixed|verified|tested|resolved)\b|\ball (?:requirements|tasks) (?:have been|are) (?:met|completed|implemented)\b", re.I),
+    "test_success_claim": re.compile(r"\b(?:all (?:\d+ )?tests (?:pass(?:ed)?|are passing)|tests? (?:have |has )?passed|(?:verified|confirmed|tested) (?:that |the )?[^\n]{0,80}(?:correct|work|pass))\b", re.I),
+    "prior_history_or_truncation": re.compile(r"\b(?:previous (?:conversation|session|context|response)|earlier (?:conversation|session)|context (?:was |has been )?(?:truncated|lost|reset|compacted)|(?:previous|earlier) (?:work|progress)|(?:after|due to) (?:the )?(?:truncation|compaction)|for the \d+(?:st|nd|rd|th) time|continue from where (?:we|you|I) left off)\b", re.I),
+    "synthetic_input_cue": re.compile(r"\b(?:np|numpy)\.random\.(?:normal|lognormal|randn|randint|uniform|choice)|\b(?:synthetic|dummy|mock|fabricated|simulated) (?:data|dataset|values|measurements|counts)|replace (?:this|these|it|them) with (?:the )?(?:actual|real) (?:data|values)|\bassum(?:e|ed|ing) (?:the )?(?:data|values|measurements|counts)\b", re.I),
+    "placeholder_submission": re.compile(r"#\s*(?:Write your solution here|put (?:your )?solution here)|\b(?:TODO|IMPLEMENT ME)\b"),
+    "completion_signal": re.compile(r'"task_complete"\s*:\s*true|\bmark_task_complete\b|\bsubmit(?:_solution)?\s*\(', re.I),
+}
+
+
+def excerpt(text, start, end, radius=240):
+    return text[max(0, start-radius):min(len(text), end+radius)]
+
+
+
+def parsed_calls(text):
+    calls = []
+    for block in re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.S):
+        try:
+            value = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("name"), str):
+            calls.append(value)
+    # Terminus represents executed command requests as JSON in assistant content,
+    # and its returned terminal observations as user messages.
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{\s*\"(?:analysis|plan|commands|task_complete)\"\s*:", text):
+        try:
+            value, _ = decoder.raw_decode(text[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("commands"), list):
+            for command in value["commands"]:
+                if isinstance(command, dict) and isinstance(command.get("keystrokes"), str):
+                    calls.append({"name": "bash", "arguments": {"command": command["keystrokes"].strip()}})
+            break
+    return calls
+
+
+def only_inspection(call):
+    name = call["name"].lower()
+    if name in {"read", "read_file", "list_files", "ls", "find", "search", "grep"}:
+        return True
+    arguments = call.get("arguments", {})
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return False
+    if not isinstance(arguments, dict):
+        return False
+    command = arguments.get("command", arguments.get("cmd", ""))
+    # Strictly single, plain inspection command. Anything more complex stays unknown.
+    return isinstance(command, str) and bool(re.fullmatch(r"\s*(?:pwd|ls|cat|head|tail|wc|find|grep|rg)\b[^;&|>\n]*\s*", command))
+
+
+
+def claim_text(text):
+    """Exclude executed code strings and tool-call arguments from completion assertions."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{\s*\"(?:analysis|plan|commands|task_complete)\"\s*:", text):
+        try:
+            value, _ = decoder.raw_decode(text[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and "commands" in value:
+            return "\n".join(str(value.get(key, "")) for key in ("analysis", "plan"))
+    text = re.sub(r"<tool_call(?::[^>]*)?>.*?</tool_call(?::[^>]*)?>", "", text, flags=re.S)
+    return re.sub(r"```.*?```", "", text, flags=re.S)
+
+def sequence_flags(segments, segment_index):
+    prior = segments[:segment_index]
+    calls = [call for message in prior if message.get("role") == "assistant" for call in parsed_calls(message["text"])]
+    observations = sum(m.get("role") in {"tool", "ipython", "observation"} or (m.get("role") == "user" and "New Terminal Output:" in m["text"]) for m in prior)
+    tool_prompt = any(re.search(r"(?:/app/|/workspace/|/testbed|file|terminal|execute|tool|repository|repo\b)", m["text"], re.I) for m in prior if m.get("role") == "user")
+    return {"parsed_prior_calls": len(calls), "prior_tool_observations": observations,
+            "prior_calls_only_inspection": bool(calls) and all(only_inspection(c) for c in calls),
+            "prompt_has_tool_task_cue": tool_prompt}
+
+def scan(records):
+    """Scan normalized segments while retaining source/mask evidence and lexical controls."""
+    counts = Counter()
+    sources = defaultdict(Counter)
+    candidates = []
+    controls = []
+    for row_index, record in enumerate(records):
+        source = record.get("source", "unknown")
+        if isinstance(source, dict):
+            source = json.dumps(source, sort_keys=True)
+        identity = record.get("id", record.get("sample_id", str(row_index)))
+        counts["records"] += 1
+        segments = record.get("segments", record.get("messages", []))
+        if not segments:
+            segments = [{"role": "unknown", "text": record["text"]}]
+        for segment_index, segment in enumerate(segments):
+            text = segment["text"]
+            role = segment.get("role", "unknown")
+            trained = segment.get("trained", True if "full_causal_config" in record.get("mask_status", "") else None)
+            population = "trained" if trained is True else "masked" if trained is False else "unknown_mask"
+            counts["segments"] += 1
+            counts[f"segments:{population}"] += 1
+            counts[f"segments_role:{role}"] += 1
+            sources[source][f"segments:{population}"] += 1
+            matched = False
+            flags = sequence_flags(segments, segment_index)
+            if role == "assistant" and flags["prompt_has_tool_task_cue"] and (PATTERNS["completed_work_claim"].search(claim_text(text)) or PATTERNS["test_success_claim"].search(claim_text(text))):
+                sequence_kind = "claim_without_prior_parsed_calls_or_observations" if not flags["parsed_prior_calls"] and not flags["prior_tool_observations"] else "claim_after_only_inspection_calls" if flags["prior_calls_only_inspection"] else None
+                if sequence_kind:
+                    counts[f"sequence_candidates:{sequence_kind}"] += 1
+                    sources[source][f"sequence_candidates:{sequence_kind}"] += 1
+                    candidates.append({"record_id":identity,"row_index":row_index,"source":source,"segment_index":segment_index,"role":role,"trained":trained,"mask_status":record.get("mask_status","unknown"),"kind":sequence_kind,"excerpt":text[:1200],"flags":flags})
+            for kind, pattern in PATTERNS.items():
+                matches = list(pattern.finditer(text))
+                if not matches:
+                    continue
+                matched = True
+                counts[f"candidate_segments:{kind}:{population}"] += 1
+                sources[source][f"candidate_segments:{kind}:{population}"] += 1
+                for match in matches[:8]:
+                    candidates.append({"record_id":identity,"row_index":row_index,"source":source,
+                        "segment_index":segment_index,"role":role,"trained":trained,
+                        "mask_status":record.get("mask_status","unknown"),
+                        "prior_tool_messages":sum(m.get("role") in {"tool","ipython","observation"} for m in segments[:segment_index]),
+                        "prior_write_cue":bool(re.search(r"(?:write_text|write_file|\.write\(|cat\s*>|tee\s+|\"name\"\s*:\s*\"(?:write|edit)|apply_patch|sed -i)","\n".join(m["text"] for m in segments[:segment_index] if m.get("role")=="assistant"))),
+                        "prompt_requests_synthetic":bool(re.search(r"(?:generat|creat|simulat)[^\n]{0,60}(?:sample|synthetic|random|dummy|example)[^\n]{0,30}(?:data|value)","\n".join(m["text"] for m in segments[:segment_index] if m.get("role")=="user"),re.I)),
+                        "kind":kind,"char_start":match.start(),"char_end":match.end(),
+                        "matched_text":match.group(),"excerpt":excerpt(text,match.start(),match.end()),
+                        "segment_sha256":hashlib.sha256(text.encode()).hexdigest()})
+            if not matched and len(text)>100 and len([c for c in controls if c['population']==population])<12:
+                controls.append({"record_id":identity,"row_index":row_index,"source":source,
+                    "segment_index":segment_index,"role":role,"population":population,
+                    "excerpt":text[:700],"segment_sha256":hashlib.sha256(text.encode()).hexdigest()})
+    return {"counts":dict(counts),"per_source":{k:dict(v) for k,v in sources.items()},
+        "candidate_hits":len(candidates),"limitations":["Lexical candidates are not confirmed defects.",
+        "Mask truth is inherited from corpus preparation; unknown masks are not treated as targets.",
+        "Missing writes, wrong output paths, fabricated results and premature submission need full task and execution context.",
+        "Up to eight lexical occurrences per detector per segment are retained; counts are segment counts."]}, candidates, controls
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input",type=Path)
+    parser.add_argument("--output-prefix",type=Path,required=True)
+    args=parser.parse_args()
+    records=[json.loads(line) for line in args.input.read_text().splitlines() if line.strip()]
+    summary,candidates,controls=scan(records)
+    summary.update(input=str(args.input),input_sha256=hashlib.sha256(args.input.read_bytes()).hexdigest(),
+                   script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    for suffix,content in [("summary.json",summary),("candidates.json",candidates),("controls.json",controls)]:
+        args.output_prefix.with_name(args.output_prefix.name+'-'+suffix).write_text(json.dumps(content,indent=2)+'\n')
+    print(json.dumps(summary['counts'],sort_keys=True))
+
+
+if __name__=='__main__':
+    main()

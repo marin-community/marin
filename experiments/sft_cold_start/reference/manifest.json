@@ -1,0 +1,2656 @@
+{
+  "source_base": "8577d258214dd0dcb992c04458ee4eb10496d4e5",
+  "eval_source_commit": "2a174c5fff27ecbcf2db4a300441e247ea18ebbd",
+  "reference_base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+  "files": [
+    {
+      "original": "artifacts/scripts/audit_initializer_shapes.py",
+      "restore_path": "artifacts/scripts/audit_initializer_shapes.py",
+      "snapshot": "artifacts/scripts/audit_initializer_shapes.py.source",
+      "sha256": "03674e5651b7d6cd330ca751c8b88c21d7b48da6ff9675ebf91be11f2d4e7315",
+      "bytes": 2136,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/audit_replay_lengths.py",
+      "restore_path": "artifacts/scripts/audit_replay_lengths.py",
+      "snapshot": "artifacts/scripts/audit_replay_lengths.py.source",
+      "sha256": "7c462992c64ef18ad473f8867a43b9c4169c846ae5ec388305e6f78101a194f6",
+      "bytes": 3199,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/audit_replay_metadata.py",
+      "restore_path": "artifacts/scripts/audit_replay_metadata.py",
+      "snapshot": "artifacts/scripts/audit_replay_metadata.py.source",
+      "sha256": "5f51748e6017087c10bfc2c63b665a04c55bd0aa4e69dfd45ba914e58db53ad4",
+      "bytes": 2243,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/audit_sft_inputs.py",
+      "restore_path": "artifacts/scripts/audit_sft_inputs.py",
+      "snapshot": "artifacts/scripts/audit_sft_inputs.py.source",
+      "sha256": "12ab1df07e7f8e5b50c6fa17f03e4a4f7544a51be009fca5e9282eb2bbb2c5d2",
+      "bytes": 1981,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/audit_tokenizers.py",
+      "restore_path": "artifacts/scripts/audit_tokenizers.py",
+      "snapshot": "artifacts/scripts/audit_tokenizers.py.source",
+      "sha256": "6e01b5d1bb57ed3fbcd3b3ae4b6ac07e844b50181c6889037e0d8d091662c178",
+      "bytes": 1779,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/build_full_catalog.py",
+      "restore_path": "artifacts/scripts/build_full_catalog.py",
+      "snapshot": "artifacts/scripts/build_full_catalog.py.source",
+      "sha256": "1a02bce19fa71d59a4e3fb4192a77faa26f3d5542bbf8fabf209f754442fbc87",
+      "bytes": 4203,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/build_full_mixture.py",
+      "restore_path": "artifacts/scripts/build_full_mixture.py",
+      "snapshot": "artifacts/scripts/build_full_mixture.py.source",
+      "sha256": "4ebebfc059509d3c58ed350febfd117be9e4baf12ba556a9ad121f35c37deb3c",
+      "bytes": 3417,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/build_repaired_catalog.py",
+      "restore_path": "artifacts/scripts/build_repaired_catalog.py",
+      "snapshot": "artifacts/scripts/build_repaired_catalog.py.source",
+      "sha256": "97ff1f28960753a8ab216612653d511a0e502b96f65452e242999ab1e44a1b6d",
+      "bytes": 2777,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/check_smoke_data.py",
+      "restore_path": "artifacts/scripts/check_smoke_data.py",
+      "snapshot": "artifacts/scripts/check_smoke_data.py.source",
+      "sha256": "601dd1fd3d4dc27061facfb0fe2e8aa49431519c4eecf5cca96852d7730028c7",
+      "bytes": 2171,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/compare_paired_scores.py",
+      "restore_path": "artifacts/scripts/compare_paired_scores.py",
+      "snapshot": "artifacts/scripts/compare_paired_scores.py.source",
+      "sha256": "c5775e136a9b035aa020e15ad3815a1a1a313f42d38d65833b3297e47f1195ef",
+      "bytes": 3878,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step1024_20261028.py",
+      "restore_path": "artifacts/scripts/export_step1024_20261028.py",
+      "snapshot": "artifacts/scripts/export_step1024_20261028.py.source",
+      "sha256": "f2e7aeb1fdec16b98371f2df6304c765482ae07dcbf4c5e5578f9db426d3428e",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step1536_20261028.py",
+      "restore_path": "artifacts/scripts/export_step1536_20261028.py",
+      "snapshot": "artifacts/scripts/export_step1536_20261028.py.source",
+      "sha256": "8e54d9a4eaed848b7a8c187500a29b6dfc18f8c2ae46799ec98c820d1041256b",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step2048_20261029.py",
+      "restore_path": "artifacts/scripts/export_step2048_20261029.py",
+      "snapshot": "artifacts/scripts/export_step2048_20261029.py.source",
+      "sha256": "a62ca2bffeddbbf113ed86e32c457e173ce30531bf7a520552db20abdc4d1011",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step222_20261025.py",
+      "restore_path": "artifacts/scripts/export_step222_20261025.py",
+      "snapshot": "artifacts/scripts/export_step222_20261025.py.source",
+      "sha256": "b186ba56fa89dfe3ae687e1fc0c2f10f50b39c9b37cd39e0fe63916f72f3f72c",
+      "bytes": 2068,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step2338_20261029.py",
+      "restore_path": "artifacts/scripts/export_step2338_20261029.py",
+      "snapshot": "artifacts/scripts/export_step2338_20261029.py.source",
+      "sha256": "3fb7de57d2c9b52734b797da91b4d748a11c339e996e020181e363e57f563f1a",
+      "bytes": 2070,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/export_step471_20261025.py",
+      "restore_path": "artifacts/scripts/export_step471_20261025.py",
+      "snapshot": "artifacts/scripts/export_step471_20261025.py.source",
+      "sha256": "30b9e34002aded31db1832d6d3bf3747dbcfcd70c5fff07ca5a9c3bff52db897",
+      "bytes": 2068,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/finish_step2048_20261029.py",
+      "restore_path": "artifacts/scripts/finish_step2048_20261029.py",
+      "snapshot": "artifacts/scripts/finish_step2048_20261029.py.source",
+      "sha256": "68fb2731d4102d1c0149f8b600431ed41b5d537848e5ffc6e08d1e8098847379",
+      "bytes": 2962,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/finish_step2338_20261029.py",
+      "restore_path": "artifacts/scripts/finish_step2338_20261029.py",
+      "snapshot": "artifacts/scripts/finish_step2338_20261029.py.source",
+      "sha256": "ebe66c78a1ee0508696f8cbf1da58f686070583314742dd97da3fb1289846d63",
+      "bytes": 2962,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step1024_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step1024_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step1024_hf.py.source",
+      "sha256": "eb42fa880b3600fb6faaa9aae042a35d6a366cec14392cdcb82b2b352939e940",
+      "bytes": 3499,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step1536_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step1536_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step1536_hf.py.source",
+      "sha256": "b77544e3237e6a645ef188ee677ce0eca50b4ef2fabb59ce0773b021df27a1f1",
+      "bytes": 3499,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step2048_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step2048_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step2048_hf.py.source",
+      "sha256": "d2516b6c6e11652e103dc886b914e6295d8f95cf0a30dceba48fa78eeb06a86c",
+      "bytes": 3499,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step222_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step222_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step222_hf.py.source",
+      "sha256": "31306d5d52739b1a4593647f5626a0eb10f86b15c5b2c4f7b18fd78e60dc01c1",
+      "bytes": 2895,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step2338_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step2338_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step2338_hf.py.source",
+      "sha256": "4a05157323ff7d39ad583fa50652bf5f8696fbc943bd8076409f0950fa8562cd",
+      "bytes": 3499,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/publish_verify_step471_hf.py",
+      "restore_path": "artifacts/scripts/publish_verify_step471_hf.py",
+      "snapshot": "artifacts/scripts/publish_verify_step471_hf.py.source",
+      "sha256": "3fc11776f0456f050abb96e1f65b70f3b5ad955e5217de71cacf8ebe3f9c6e3f",
+      "bytes": 2895,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/trace_hf_import_d.py",
+      "restore_path": "artifacts/scripts/trace_hf_import_d.py",
+      "snapshot": "artifacts/scripts/trace_hf_import_d.py.source",
+      "sha256": "95839f7bf3a35b2dacbb27772583c282d86fbe9ae6af69dd25cec1b0f0b6065e",
+      "bytes": 941,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/transfer_sft_inputs.py",
+      "restore_path": "artifacts/scripts/transfer_sft_inputs.py",
+      "snapshot": "artifacts/scripts/transfer_sft_inputs.py.source",
+      "sha256": "73b3fd6996e4071ff4b77dbcd7d93a5c357248aa7b6c89a6c351bb3a29589d28",
+      "bytes": 1471,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1024.py",
+      "restore_path": "artifacts/scripts/verify_export_step1024.py",
+      "snapshot": "artifacts/scripts/verify_export_step1024.py.source",
+      "sha256": "caf58e53c8fce2850fe737cd0b3d01ca0d2f76152cace05e7a4ecc7779682c15",
+      "bytes": 2974,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1024_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step1024_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step1024_payload.py.source",
+      "sha256": "5a4896c151fd6336299cc7579a2a5e12dae406d73d2082c23d5ff2c355c28a20",
+      "bytes": 4400,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1024_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step1024_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step1024_special_tokens.py.source",
+      "sha256": "5bec13ec6b68085d6fa7b9254025c70e0197f6cfd37dfe4caf88999b2ef7fe21",
+      "bytes": 2533,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1536.py",
+      "restore_path": "artifacts/scripts/verify_export_step1536.py",
+      "snapshot": "artifacts/scripts/verify_export_step1536.py.source",
+      "sha256": "8480ecaab7467da2637ef1ba70eda1d88899e8ad83a5c7a1ef9a867bafcd63ad",
+      "bytes": 2974,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1536_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step1536_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step1536_payload.py.source",
+      "sha256": "174353acf0793b9e8114c1e028bbc59a1c1a8775756b4a342db7aa81bd456af0",
+      "bytes": 4400,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step1536_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step1536_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step1536_special_tokens.py.source",
+      "sha256": "191ac7e333b4548f2d9191e5ce20efa45d616af9c728ecaef26fed81f519282f",
+      "bytes": 2533,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2048.py",
+      "restore_path": "artifacts/scripts/verify_export_step2048.py",
+      "snapshot": "artifacts/scripts/verify_export_step2048.py.source",
+      "sha256": "2f4e3e78ac518a819490b2aa9700010343f1faa41cdceed43fe7eb8504fcdf3b",
+      "bytes": 2974,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2048_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step2048_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step2048_payload.py.source",
+      "sha256": "731d4483c6db95f4cc74abb28439f04d2bf91ed00982cff10a9a3490fb9a19f3",
+      "bytes": 4400,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2048_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step2048_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step2048_special_tokens.py.source",
+      "sha256": "ffa63d4473d445553d6644be9ae32126e51edc47c052e3f63f27fd184942fe2e",
+      "bytes": 2533,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step222.py",
+      "restore_path": "artifacts/scripts/verify_export_step222.py",
+      "snapshot": "artifacts/scripts/verify_export_step222.py.source",
+      "sha256": "6c839eb3f218f03117131d47ccb4daae2a1e800fa0ea8f59228550560acaa278",
+      "bytes": 2969,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step222_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step222_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step222_payload.py.source",
+      "sha256": "1b5c125221d962b43fceac9a6c79538bda49bb164f69767a1513612f9917fcc6",
+      "bytes": 3961,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step222_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step222_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step222_special_tokens.py.source",
+      "sha256": "58ba53fda8a8f5ecb09b052e94c3669d0d8ea39dcc8eca30d2b21002bd79427d",
+      "bytes": 2524,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2338.py",
+      "restore_path": "artifacts/scripts/verify_export_step2338.py",
+      "snapshot": "artifacts/scripts/verify_export_step2338.py.source",
+      "sha256": "ad954eac2b87ef2fbcffbd1fc310ff6a7905e77fc26fc98a908efa3c1b158a63",
+      "bytes": 2990,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2338_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step2338_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step2338_payload.py.source",
+      "sha256": "5a0dd84f3634190ccb9eb6be4379fc903a647cc7d87aab42c8b007436f5d3ea8",
+      "bytes": 4400,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step2338_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step2338_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step2338_special_tokens.py.source",
+      "sha256": "63d3c1237f22803fa3ddd6aa8a82676107383ce001af8427350137681519849e",
+      "bytes": 2533,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step471.py",
+      "restore_path": "artifacts/scripts/verify_export_step471.py",
+      "snapshot": "artifacts/scripts/verify_export_step471.py.source",
+      "sha256": "425da50f245fb41989d237f757ece45b7186d60bc41962084ac22467d46a27ef",
+      "bytes": 2969,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step471_payload.py",
+      "restore_path": "artifacts/scripts/verify_export_step471_payload.py",
+      "snapshot": "artifacts/scripts/verify_export_step471_payload.py.source",
+      "sha256": "f751849949d33656f9ea336a1bccca0c6f0df89fc1e953da7f5ea4e6fedb759e",
+      "bytes": 3961,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_export_step471_special_tokens.py",
+      "restore_path": "artifacts/scripts/verify_export_step471_special_tokens.py",
+      "snapshot": "artifacts/scripts/verify_export_step471_special_tokens.py.source",
+      "sha256": "1154cdf6744c1a79f6c1b4e05fa3a1988cb48cd2554380016b9eb344640db936",
+      "bytes": 2524,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_smoke_export.py",
+      "restore_path": "artifacts/scripts/verify_smoke_export.py",
+      "snapshot": "artifacts/scripts/verify_smoke_export.py.source",
+      "sha256": "bd754af73dd6dc595becd58a28ec5f4034bc75acf9d2f9c2cbacaf1270390151",
+      "bytes": 2566,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_special_token_export.py",
+      "restore_path": "artifacts/scripts/verify_special_token_export.py",
+      "snapshot": "artifacts/scripts/verify_special_token_export.py.source",
+      "sha256": "f21c85c5af4d716d6817cb3d4123807b38a9c7cb9c1c5f12a4de0efd4e64854b",
+      "bytes": 2518,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_stacked_export.py",
+      "restore_path": "artifacts/scripts/verify_stacked_export.py",
+      "snapshot": "artifacts/scripts/verify_stacked_export.py.source",
+      "sha256": "91a1b8a6d1a874b59bd2b887079ee2dc91f6c951fffc91baa39cf63ac5472d7a",
+      "bytes": 2798,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_valid_export.py",
+      "restore_path": "artifacts/scripts/verify_valid_export.py",
+      "snapshot": "artifacts/scripts/verify_valid_export.py.source",
+      "sha256": "cb84884613258064d0ae3710d55602a002cb4e757e64b166f3c8a9a5bde0ebbc",
+      "bytes": 2966,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/verify_valid_export_payload.py",
+      "restore_path": "artifacts/scripts/verify_valid_export_payload.py",
+      "snapshot": "artifacts/scripts/verify_valid_export_payload.py.source",
+      "sha256": "18cdc95906989a5de9b338178604dc8d1dc4f961ade2672ab61ba821661dd3f1",
+      "bytes": 3955,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/watch_checkpoint_gt460.py",
+      "restore_path": "artifacts/scripts/watch_checkpoint_gt460.py",
+      "snapshot": "artifacts/scripts/watch_checkpoint_gt460.py.source",
+      "sha256": "4987f80af75c3196cb7ab20bb5d388139fa891f7622f5301aedd39234ca4a2a4",
+      "bytes": 8295,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/watch_sft_milestones.py",
+      "restore_path": "artifacts/scripts/watch_sft_milestones.py",
+      "snapshot": "artifacts/scripts/watch_sft_milestones.py.source",
+      "sha256": "838111d32105dcb1a25ab700ba8539eebebe6f0417bf19615a0d079123c4919d",
+      "bytes": 8638,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/scripts/watch_sft_milestones_20261027c.py",
+      "restore_path": "artifacts/scripts/watch_sft_milestones_20261027c.py",
+      "snapshot": "artifacts/scripts/watch_sft_milestones_20261027c.py.source",
+      "sha256": "f07309fad9bafec725eb30f5f85f34485123ee275acb0fe7968009c40985fc01",
+      "bytes": 8638,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-1005-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-1005-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-1005-agentic-20261030/launch.yaml.source",
+      "sha256": "82330e35f2ef33ac3b029f121ad09e6b2083fc36f6413296d70dfe3da021d253",
+      "bytes": 16397,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-1005-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-1005-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-1005-swe-20261030/launch.yaml.source",
+      "sha256": "a798291d9f69b1ceb530e9979a25c59185f0303e326892db911d22362035c6c8",
+      "bytes": 8489,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-1024-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-1024-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-1024-agentic-20261030/launch.yaml.source",
+      "sha256": "c3a53c8634ca1a4b1b6914be6a8e3d6bcdb8c74310476e996e91a6b7586b131f",
+      "bytes": 16381,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-1024-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-1024-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-1024-swe-20261030/launch.yaml.source",
+      "sha256": "593149462497c65fa484df3da71e496f8a4ce511d8589a8afb6c569a3eddb0a5",
+      "bytes": 8473,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-2048-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-2048-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-2048-agentic-20261030/launch.yaml.source",
+      "sha256": "9087832671b84b35460845930220b8b991b4a5045c29000a7426c659ac114922",
+      "bytes": 16381,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-2048-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-2048-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-2048-swe-20261030/launch.yaml.source",
+      "sha256": "b5fb5180b54482ce1b333f62a52062234ddef367b7c519f1674f8f1271b423a1",
+      "bytes": 8473,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-222-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-222-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-222-agentic-20261030/launch.yaml.source",
+      "sha256": "a2c91e70d9d2faf816d322a5d26ff04666e93095108c7722771cce9e692f6f4d",
+      "bytes": 16375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-222-smoke-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-222-smoke-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-222-smoke-swe-20261030/launch.yaml.source",
+      "sha256": "add8e4b073cf94aa94b66ce5880bbb291b89c2fe4b63d4dcfdad68793fffa4d4",
+      "bytes": 8501,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-222-smoke-tools-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-222-smoke-tools-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-222-smoke-tools-20261030/launch.yaml.source",
+      "sha256": "23f06d9811ab267474f5bb8b9cf2097151e5ced8e09849a20c7ecd47e6e0da30",
+      "bytes": 10236,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-222-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-222-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-222-swe-20261030/launch.yaml.source",
+      "sha256": "9e1c4df2625cec2674e4153edc52788cc6d917bea3b4c7483f4b15ec3406798f",
+      "bytes": 8467,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-471-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-471-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-471-agentic-20261030/launch.yaml.source",
+      "sha256": "70075801b31b43cc3218f058d689e135e1dfee39167d515f2d9ea7ad30e4c98a",
+      "bytes": 16375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-471-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-471-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-471-swe-20261030/launch.yaml.source",
+      "sha256": "56402ad92dc73206eb75668328f1a33e39e534425a53913c7026ae39a5786aa4",
+      "bytes": 8467,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-base-agentic-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-base-agentic-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-base-agentic-20261030/launch.yaml.source",
+      "sha256": "4d57182328a7fb2889e11a8df72e0e4c2e96250399a51a0baf3a99f237d61bab",
+      "bytes": 17215,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/sft-thinking-eos-base-swe-20261030/launch.yaml",
+      "restore_path": "artifacts/configs/sft-thinking-eos-base-swe-20261030/launch.yaml",
+      "snapshot": "artifacts/configs/sft-thinking-eos-base-swe-20261030/launch.yaml.source",
+      "sha256": "a956a50d2b3ed2bd873191d2558239b11d572f25e1f5d5a683acafa8b32e1005",
+      "bytes": 9307,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-full-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-full-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-full-20261024a/config.yaml.source.gz",
+      "sha256": "916de1e156f876813b686c39d787651bfc894aba20c1bfb6bfff65faf5dac317",
+      "bytes": 5092408,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-full-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-full-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-full-20261024b/config.yaml.source.gz",
+      "sha256": "f640dc60fc7df672b3feb15e2a21f1765602fdf5e20dcf526bce8554caaa8e04",
+      "bytes": 5092410,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-pack-repair-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-pack-repair-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-pack-repair-20261024/config.yaml.source.gz",
+      "sha256": "668e731ba51eb6778a1a962992361e875a71078d6c8c30a3a9fcb9ef33d0792b",
+      "bytes": 553177,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-05-09-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-05-09-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-05-09-20261024/config.yaml.source.gz",
+      "sha256": "91ab3150a7703aafb10d35e29dd6345166b4d10e977fcc886541e33776073d48",
+      "bytes": 636621,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-10-19-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-10-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-10-19-20261024/config.yaml.source.gz",
+      "sha256": "98b0514c355d71bfe53182cfd486ffa9a956dd56edcbd81ba287ff759eba0246",
+      "bytes": 1273273,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-15-19-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-15-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-15-19-20261024/config.yaml.source.gz",
+      "sha256": "419b326a151130a7cec28dbc823779afe1a07577165320a043d304f5df366ac8",
+      "bytes": 636721,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-20-29-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-20-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-20-29-20261024/config.yaml.source.gz",
+      "sha256": "c6a0cb55c63b5a71eaaf72bfc336189466ae74153c54bcd81050fc0f1683328c",
+      "bytes": 1273256,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-25-29-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-25-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-25-29-20261024/config.yaml.source.gz",
+      "sha256": "4fa46d22516ae966015fd5d8301d9fa925939b69ebac18a55646f8452a5ff94d",
+      "bytes": 636716,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-30-39-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-30-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-30-39-20261024/config.yaml.source.gz",
+      "sha256": "66181465f047f284dd6539966d5d77b88aba6d386d8d5539001e7c62344e71cf",
+      "bytes": 1273272,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-range-35-39-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-range-35-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-35-39-20261024/config.yaml.source.gz",
+      "sha256": "7c3e54abfe99274d77edc413fdd4374e3390728b0ed7f90c6915af2c44f23ae9",
+      "bytes": 636729,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-smoke-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024a/config.yaml.source",
+      "sha256": "b919d1f4e8535cfef1d45c239400dffae3c037c4bd76570eeae4141913fc0dac",
+      "bytes": 868,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-smoke-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024b/config.yaml.source",
+      "sha256": "f545a41cc8071a36891a182553450d7be4b7e9746bcddc8db79832901c277c60",
+      "bytes": 869,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-smoke-20261024c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024c/config.yaml.source",
+      "sha256": "62ff78a87c44329a0238db88d27356c858590f933de0195bdc4963eea886b894",
+      "bytes": 871,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-09-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-09-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-09-20261024/config.yaml.source",
+      "sha256": "cae2b5616b1e924730a3f33016f51ede1bac2e3402f8cb58b3a4e7e95e75c0c6",
+      "bytes": 127454,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-14-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-14-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-14-20261024/config.yaml.source",
+      "sha256": "4c75a916fe4431cc8624986a746466530e57edda5374eca898f7d1bf1751ccd4",
+      "bytes": 127486,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-19-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-19-20261024/config.yaml.source",
+      "sha256": "42938a74fff401bd225e8b05ee184dc4414036c0d7c929f55476003ae6c86097",
+      "bytes": 127472,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-29-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-29-20261024/config.yaml.source",
+      "sha256": "ecfa747f706e32910cfb79fd8fdc090a5b730ef5d364fbd1c018a326662d6d3a",
+      "bytes": 127485,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-34-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-34-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-34-20261024/config.yaml.source",
+      "sha256": "0ed8b7a693bfe36065e12bcd4f0a0efc63243e3e82f212c4d4b9eb63d8b56c37",
+      "bytes": 127469,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-replay-tail-39-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-replay-tail-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-39-20261024/config.yaml.source",
+      "sha256": "acb7abe4afe23ec602f1ee13b3ae0dad5ff0d73c610d637c9c7bfe85c4dbfab5",
+      "bytes": 127481,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-256diag-replica2-20261027/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-256diag-replica2-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-replica2-20261027/config.yaml.source.gz",
+      "sha256": "20bea53f69a144aa6172b9054df08d9001c3ba767760583604e06de6e50194fb",
+      "bytes": 1068553,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-256diag-synthetic-20261027/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-256diag-synthetic-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-synthetic-20261027/config.yaml.source.gz",
+      "sha256": "731bdf9eda08c33dfd17e4498cc744ad7d4f78499ee2d76dacb9354008b0a2fd",
+      "bytes": 1068558,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml.source.gz",
+      "sha256": "104c49a0af32f54eb8e7a271b6e9f77c6ee8c149634435a19c2c7d428d5415ca",
+      "bytes": 1068563,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-base-eval-full-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-base-eval-full-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-base-eval-full-20261024/config.yaml.source",
+      "sha256": "6a3d73ae8806d15bf0c0f9c528422b76c173d8447ac6fbc9dc25d73633821df0",
+      "bytes": 603,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-base-eval-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-base-eval-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-base-eval-smoke-20261024/config.yaml.source",
+      "sha256": "5a4dd3ca592ddc3a8e8c3eb942611e7a3677754fb604a71296587c25e92f7b83",
+      "bytes": 604,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-best-smoke-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-best-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-best-smoke-20261024a/config.yaml.source",
+      "sha256": "a4980cc8e58076fd622b140979a0f0bb8c2fa8a25c99c09b0e6d6cf082b4257f",
+      "bytes": 7761,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-best-smoke-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-best-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-best-smoke-20261024b/config.yaml.source",
+      "sha256": "b116e156232fef940f857ab774e8adf79dcd4c1edad632643611fe95d5c970b2",
+      "bytes": 7761,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024a/config.yaml.source",
+      "sha256": "faf578e0b21e0e5530ad3211bd845bbbb7f2f6dd98b2f1a2c23228addbdc1fea",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024b/config.yaml.source",
+      "sha256": "5e6f4ac1faffb56cda558cc5dbbaccca11a6dd991d0cc5ce9c8e5983d625172d",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024c/config.yaml.source",
+      "sha256": "019a5233817fef245bf934dbb85a4b4a8a6c7bdaf8aabce3cbe4d20c3b7f1833",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024d/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024d/config.yaml.source",
+      "sha256": "53def4824e367ffb8dbf837bd4469b527466848f5dd7f5435543432cb5735b75",
+      "bytes": 7836,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024e/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024e/config.yaml.source",
+      "sha256": "2dfb3586db0fa9f6bb446ae300c35991699d280a9f19061765d9371a08d127a2",
+      "bytes": 7787,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-128h100-20261024f/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-128h100-20261024f/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024f/config.yaml.source",
+      "sha256": "7dd7e2a71d39cff8d426a4e3731d6cc4d449fae5e7a73af68fda398c85daf90c",
+      "bytes": 7787,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-16h100-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-16h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-16h100-20261024a/config.yaml.source",
+      "sha256": "0de23b2cdbdae22a4745e8e3b5048dfff12f27d262174ee9770b4b298a0f4202",
+      "bytes": 7671,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-capacity-16h100-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-capacity-16h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-16h100-20261024b/config.yaml.source",
+      "sha256": "ea3058ca6c1081b895a156e3a339bcd8b9e8707bb1361efe6b4e4d21b9f7b0b7",
+      "bytes": 7704,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-data-preflight-full-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-data-preflight-full-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-full-20261024/config.yaml.source.gz",
+      "sha256": "329a6768b10448536d83a220be9deea36c1e841db96aaf1063d3f31f6990b9c6",
+      "bytes": 1075749,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml.source.gz",
+      "sha256": "a1cfdceb4c0df43b11de377158f28a38f6d547f83aa4e896468a95ee210f91c7",
+      "bytes": 1075755,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml.source",
+      "sha256": "948f9cb522787d19e6d704da7149c6f7d9ed53faa47be2bf7bbfd5268da24c4f",
+      "bytes": 1550,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-smoke-20261024/config.yaml.source",
+      "sha256": "b6c1cbc38a71d0c4ff756af7e682adc4612f3e2f2cd42288b59dd61dbc8f1a79",
+      "bytes": 1370,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-smoke-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-smoke-20261024b/config.yaml.source",
+      "sha256": "53770067ea41aa3b567eab0b3f04980c0f8bf54ee9821a39d10946b1e890f789",
+      "bytes": 1371,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-stacked-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-stacked-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-stacked-20261024/config.yaml.source",
+      "sha256": "65604459a914a74adc89ddfdccbc350efee641bd318cb34e3141bc72d83f85da",
+      "bytes": 1372,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step1024-20261028/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step1024-20261028/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step1024-20261028/config.yaml.source",
+      "sha256": "b3434aebeae6152c5b98a58a36f5363b0ff2e96ca5b099c76b030689efd7846f",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step1536-20261028/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step1536-20261028/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step1536-20261028/config.yaml.source",
+      "sha256": "7d5186df18ed859228208e16a2f4da3b3bd6ddbacc22b383d89de6a97200abfd",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step2048-20261029/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step2048-20261029/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step2048-20261029/config.yaml.source",
+      "sha256": "05aa0ef8af112fa5a8da0001e80808e65c72a8479317d554bcf8481bb15fbee9",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step222-20261025/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step222-20261025/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step222-20261025/config.yaml.source",
+      "sha256": "ba52a66de53e7126f567c786e4c926164675ed8da1d5fb0743931055897b1d9d",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step2338-20261029/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step2338-20261029/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step2338-20261029/config.yaml.source",
+      "sha256": "3fb3cb1bc811078ecef3314f3b412a8cbce54ba13e9ae29d516b86965227cd17",
+      "bytes": 1395,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-export-step471-20261025/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-export-step471-20261025/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step471-20261025/config.yaml.source",
+      "sha256": "6d556ce6731dfb31961b8356586ab069f540200d126ebee0864b8588d09ee242",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml.source.gz",
+      "sha256": "b5762112649c2ebed8a2edcc72018ff539fb95282c3af964b52397768ae1132c",
+      "bytes": 1068988,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml.source.gz",
+      "sha256": "1e90270544b49f22130b79c29eddcdb02cbabb108e9759ff2110515dd4ec7752",
+      "bytes": 1068944,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml.source.gz",
+      "sha256": "0516a7ae54f2c03e834f35da32dc3cf0bae16a3fbc98947604f4af79c50fa7fd",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml.source.gz",
+      "sha256": "84fed53405d26b7777836000af9e5e8eac7273398fb3742d354babe103f18f92",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml.source.gz",
+      "sha256": "0b1fb7318af7193f5587ed7264b5015815e384966e8cbd6a804c41b70d24123f",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml.source.gz",
+      "sha256": "7489b8e4d70dd3ce305342552ec56c8ed62bfbef9757b6192c6cb5f4a14b5a8f",
+      "bytes": 1068947,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml.source.gz",
+      "sha256": "158ba4d13a4e2ae098edcb39bbaf7b084955e6c79d697912f810ec96c4dd373a",
+      "bytes": 1068983,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml.source.gz",
+      "sha256": "0a88953f0671c6f46bc08b43fc247cb85fbcd5466487baa6356468f45880311c",
+      "bytes": 1068983,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-hf-import-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-hf-import-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024/config.yaml.source",
+      "sha256": "faaf272cd0c23c5b6c3dd7953215fc4215f81b29e93ce205872e00e9ca4f56e1",
+      "bytes": 1160,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-hf-import-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-hf-import-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024b/config.yaml.source",
+      "sha256": "a7de4fe393dc79d5d50a9ee1b2f6c448dec69ec91ec1acaa54fc071936262cc7",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-hf-import-20261024c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-hf-import-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024c/config.yaml.source",
+      "sha256": "9b1568f579ce074e9bd5908d3a4c4e3ca3c8469c87900dcc9fbd2416efb3e829",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-hf-import-20261024d/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-hf-import-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024d/config.yaml.source",
+      "sha256": "276aad14dc8233b6e535fd6e0119ec85881528735d5ca41dc64ad59a1266cb12",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-hf-import-20261024e/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-hf-import-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024e/config.yaml.source",
+      "sha256": "14ee18a7f914c4f7e79a621ec82fb90bb65fe812f6fabd5d6186c65995f31dd8",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-128h100-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-128h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-128h100-20261024a/config.yaml.source.gz",
+      "sha256": "a4c8125a4cd777f0f8d60be53b0f058d7bd91178eedc4739e93902fdcd189dfe",
+      "bytes": 1069246,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-128h100-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-128h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-128h100-20261024b/config.yaml.source.gz",
+      "sha256": "d46bdf0df59cf7153bde3ab729836e119d6144ed2f26c83be6b45feb6f0e4d8f",
+      "bytes": 1069243,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-256h100-20261027/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-256h100-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027/config.yaml.source.gz",
+      "sha256": "d170f8a1857349d46152d154b7e0341018eaf7fedf0fa66577963684611e9ee2",
+      "bytes": 1069495,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-256h100-20261027b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-256h100-20261027b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027b/config.yaml.source.gz",
+      "sha256": "8a062bf67ff5dd6eb431350141714838df428fe0e6fe954a58be3ff9809f19ff",
+      "bytes": 1069503,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-256h100-20261027c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-256h100-20261027c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027c/config.yaml.source.gz",
+      "sha256": "0abce298e480f1555a43d82131e1e37c226636be0da335c14a3f5d28eeeceb05",
+      "bytes": 1069504,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml.source.gz",
+      "sha256": "2536abede94bca829c751b67917f6a633140613170a663aef93dd299c7cfb129",
+      "bytes": 1069281,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml.source.gz",
+      "sha256": "d27d47fa96c6abaa581a9b3df540778030cb62a2072c03265abf720253519625",
+      "bytes": 1069249,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-eval-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-eval-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-eval-20261024/config.yaml.source",
+      "sha256": "247e4d77ff51e0788ebc2e36e04d4297170935dfd02e174dbdb825fe42bc7f13",
+      "bytes": 605,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry-singles-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry-singles-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry-singles-20261024/config.yaml.source",
+      "sha256": "019f59d103092d00c0669da41b60a7523af8dac35e3e893a538f62b8daad5b3b",
+      "bytes": 1341,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry-triple-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry-triple-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry-triple-20261024/config.yaml.source",
+      "sha256": "160df403ccb235d238193617658e6c7e7ddbbada8c87bfafec0cded5031a3a72",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry2-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry2-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry2-20261024/config.yaml.source",
+      "sha256": "89f814d3a5c3b0d65ae8abb66cb8bfd31edfaa494d8961d5d598b3fca502e44f",
+      "bytes": 1089,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry4-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry4-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-reference-infra-retry5-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-reference-infra-retry5-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-selected-eval-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-selected-eval-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-selected-eval-smoke-20261024/config.yaml.source",
+      "sha256": "1219b18d05cbc4d8ebaad250c8da5f7f42993b13394d37e9ccdbaed03b1998da",
+      "bytes": 598,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-smoke-16h100-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-smoke-16h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-16h100-20261024a/config.yaml.source",
+      "sha256": "8fdefa8927de33bae74cad1ceadd92645ffaa8a927598c85f577fd8fc147280d",
+      "bytes": 7655,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-smoke-262k-20261024a/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-smoke-262k-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-262k-20261024a/config.yaml.source",
+      "sha256": "a80d00c07c04e514db5e669b762217f45ef28a57431ed5dd311b28b541629a55",
+      "bytes": 7645,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-smoke-262k-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-smoke-262k-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-262k-20261024b/config.yaml.source",
+      "sha256": "c57806482a7e8725d54f8dd45ddcb1c993b33e30cea822f337e1feb47266beb2",
+      "bytes": 7645,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-stacked-eval-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-stacked-eval-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-stacked-eval-smoke-20261024/config.yaml.source",
+      "sha256": "cf56ad7ce9eba8a1b2ac0a64154a0a5a142360868ee2386efaaefe3136f1f675",
+      "bytes": 598,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml.source",
+      "sha256": "1d7c000a1ac1279f52110a5f90b395de77edfe834319ceaccc8e55bf0c427ed2",
+      "bytes": 7785,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-valid-base-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-valid-base-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024/config.yaml.source",
+      "sha256": "400bdcea376eb9ecf4d8dd328f89cc6ece13b98d1ac1cd035692cafbaf56b90e",
+      "bytes": 7742,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml.source",
+      "sha256": "d63c170e521c8f3347026a9eac292ba598ffc8adf8d563ad0ea50071342e0729",
+      "bytes": 7748,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml.source",
+      "sha256": "774a81c5db4d7e9a61b6b603b8012855b06e8ed64eea005d32cd0c0b465c6f47",
+      "bytes": 7748,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-valid-eval-smoke-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-valid-eval-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-eval-smoke-20261024/config.yaml.source",
+      "sha256": "b722f836c3a85578e7df833f24561863d62fa9717481c63ced9b46412ad1b1d9",
+      "bytes": 594,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/configs/snowball-sft-valid-export-20261024/config.yaml",
+      "restore_path": "artifacts/configs/snowball-sft-valid-export-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-export-20261024/config.yaml.source",
+      "sha256": "31e7df3f245b3e221b993b4a9e9f9252ee9a60aa5b98a742992e09f1cb4a8119",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/audit_configs.py",
+      "restore_path": "artifacts/evals-rerun/audit_configs.py",
+      "snapshot": "artifacts/evals-rerun/audit_configs.py.source",
+      "sha256": "c56983dab3b79a8239222e8ad7424ef2566f66d3a2a3bd300f935da9d1864af1",
+      "bytes": 2645,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/bix-llm-judge.py",
+      "restore_path": "artifacts/evals-rerun/bix-llm-judge.py",
+      "snapshot": "artifacts/evals-rerun/bix-llm-judge.py.source",
+      "sha256": "8a4e72933cb4e531146e477614e7c0915158eed81d832eb1dc99ae35a270e26b",
+      "bytes": 2410,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/bix-task.toml",
+      "restore_path": "artifacts/evals-rerun/bix-task.toml",
+      "snapshot": "artifacts/evals-rerun/bix-task.toml.source",
+      "sha256": "c47ced3b2b1a29c70e3839b1d6cfa8cf97a43bbd1feaaf6753ec2c060c5b3fe3",
+      "bytes": 877,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/bix-tests-test.sh",
+      "restore_path": "artifacts/evals-rerun/bix-tests-test.sh",
+      "snapshot": "artifacts/evals-rerun/bix-tests-test.sh.source",
+      "sha256": "f116da16398ed12cd1f0dd3f8460a807aa04057e9121d46d69956f2448a7acda",
+      "bytes": 87,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/compare_smoke_batches.py",
+      "restore_path": "artifacts/evals-rerun/compare_smoke_batches.py",
+      "snapshot": "artifacts/evals-rerun/compare_smoke_batches.py.source",
+      "sha256": "d6c3bde9e5163c27448d0ccfc97262050f27f8c86652bbe92a0d8fe1f661e4ab",
+      "bytes": 2406,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/dry_run_all.py",
+      "restore_path": "artifacts/evals-rerun/dry_run_all.py",
+      "snapshot": "artifacts/evals-rerun/dry_run_all.py.source",
+      "sha256": "73c329a4feb1118f0449fdb75abc9de8740503c14951106780f0d63ca2cc585e",
+      "bytes": 1598,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/fix_generation_configs.py",
+      "restore_path": "artifacts/evals-rerun/fix_generation_configs.py",
+      "snapshot": "artifacts/evals-rerun/fix_generation_configs.py.source",
+      "sha256": "26c0c31bc1a767a98dac4a73a653b7ed651a791106666528a79f6d6f0946edee",
+      "bytes": 4287,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/launch_approved_full.py",
+      "restore_path": "artifacts/evals-rerun/launch_approved_full.py",
+      "snapshot": "artifacts/evals-rerun/launch_approved_full.py.source",
+      "sha256": "3516b4fe35f2ec31d2e0d402712561dad440bf9a21f3ff2a58ba6a2c47cb1b7e",
+      "bytes": 1989,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/parent_audit_configs.py",
+      "restore_path": "artifacts/evals-rerun/parent_audit_configs.py",
+      "snapshot": "artifacts/evals-rerun/parent_audit_configs.py.source",
+      "sha256": "1e086af1d78b16a3b73ebab41e461655fb6bc2db80f2790e779c4a82c3705d4d",
+      "bytes": 2513,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/parent_audit_hf.py",
+      "restore_path": "artifacts/evals-rerun/parent_audit_hf.py",
+      "snapshot": "artifacts/evals-rerun/parent_audit_hf.py.source",
+      "sha256": "63a388b6d6451bbca418fab966a047b25c8f6b37a15c400e05e58aa3d22b95a9",
+      "bytes": 3663,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/prepare_configs.py",
+      "restore_path": "artifacts/evals-rerun/prepare_configs.py",
+      "snapshot": "artifacts/evals-rerun/prepare_configs.py.source",
+      "sha256": "212b208b52258168c8201af18e9d34916b342e28a0ad5e56ee9128fb73a7087e",
+      "bytes": 3909,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/probe_live_endpoint.py",
+      "restore_path": "artifacts/evals-rerun/probe_live_endpoint.py",
+      "snapshot": "artifacts/evals-rerun/probe_live_endpoint.py.source",
+      "sha256": "94bdd2c19b857bb72f809315f783b3527efbd02991fecbb783db7acfdd5cab07",
+      "bytes": 2723,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/provisional_scores.py",
+      "restore_path": "artifacts/evals-rerun/provisional_scores.py",
+      "snapshot": "artifacts/evals-rerun/provisional_scores.py.source",
+      "sha256": "251fa77c96daa6cb0669ed40446c373c56da0af95177e2849313c560b0cde09e",
+      "bytes": 1702,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/watch_scores.py",
+      "restore_path": "artifacts/evals-rerun/watch_scores.py",
+      "snapshot": "artifacts/evals-rerun/watch_scores.py.source",
+      "sha256": "291610d194615488cfc3b44517eb883713f81bc5eb67938ad8373b778ef48e36",
+      "bytes": 5680,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/evals-rerun/watch_smoke_probes.py",
+      "restore_path": "artifacts/evals-rerun/watch_smoke_probes.py",
+      "snapshot": "artifacts/evals-rerun/watch_smoke_probes.py.source",
+      "sha256": "38ffb034361d74774a830d5f554d60114e56024389b7153900877c3ed6eef1df",
+      "bytes": 3321,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/eval_compare.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/eval_compare.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/eval_compare.py.source",
+      "sha256": "0e0de47e7f8b10d4ab002902868b024698a35e5c4a3afe34b4fed14365573c3f",
+      "bytes": 2944,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/eval_fetch.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/eval_fetch.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/eval_fetch.py.source",
+      "sha256": "0688e254bcdd93a97e573dac19f940df79f4c6d98db337796c8c1848b571f1a4",
+      "bytes": 2249,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/eval_follow_sources.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/eval_follow_sources.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/eval_follow_sources.py.source",
+      "sha256": "d737895847be3028455100ad380a5d910ef0d418796e446d6c6840cc2eeb2514",
+      "bytes": 1891,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source",
+      "sha256": "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de",
+      "bytes": 4427,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005-current/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005-current/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1005/chat_template.jinja.source",
+      "sha256": "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de",
+      "bytes": 4427,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
+      "bytes": 4423,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-2048/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-2048/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
+      "bytes": 4423,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-222/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-222/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
+      "bytes": 4423,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-471/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-471/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-1024/chat_template.jinja.source",
+      "sha256": "6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930",
+      "bytes": 4423,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer-hf-base/chat_template.jinja.source",
+      "sha256": "414d8559d363292c811e624fe2db04d52647ca5bd89acc53e98bd4c4f371302a",
+      "bytes": 5112,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer_compare.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer_compare.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer_compare.py.source",
+      "sha256": "3101b82f419ab2cb9085a39cfa4c3ad96be67c9e2ce9868da5ea0c2835143037",
+      "bytes": 2838,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer_fetch.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer_fetch.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer_fetch.py.source",
+      "sha256": "018f08cafbc7aad88edef398ffe6a4e4f6418b34131485f300057077d97c1535",
+      "bytes": 2023,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/tokenizer_stop_resolution.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/tokenizer_stop_resolution.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/tokenizer_stop_resolution.py.source",
+      "sha256": "c1c7f97e74070d326328358254575a20dad0e7510aaf5d5783506c54dc5a3bdb",
+      "bytes": 2156,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/training-original-optimizer.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/training-original-optimizer.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training-original-optimizer.py.source",
+      "sha256": "f4e09ca5d771679c3b8a4b6e2730bd2f9307f8313d318b5b2c3df8bdced42668",
+      "bytes": 13745,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/training-pinned-repro-train.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/training-pinned-repro-train.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training-pinned-repro-train.py.source",
+      "sha256": "b94da9cff1a7df92467eaf51b4c8c8bba42168742ffd3e4ee525445901617584",
+      "bytes": 78431,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/training_fetch.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/training_fetch.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training_fetch.py.source",
+      "sha256": "372c8787e8c09bab5c2fb25df9ea1677be643dee7639f58f90d9c350b6c4b7c2",
+      "bytes": 1677,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/training_history.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/training_history.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training_history.py.source",
+      "sha256": "f0f055d44e1e1fa0db57924c5871943c19e29d88abfdc8023bec80848f4eb5c4",
+      "bytes": 821,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/confound-audit-20261030/training_mask_probe.py",
+      "restore_path": "artifacts/reports/confound-audit-20261030/training_mask_probe.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training_mask_probe.py.source",
+      "sha256": "4d5d53900371387c3b7dd9c7f1d6ba2f6b20d42f0c8bd9e439c0e0bffa6f61c1",
+      "bytes": 1361,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/trace-review-20261030/terminal_fetch.py",
+      "restore_path": "artifacts/reports/trace-review-20261030/terminal_fetch.py",
+      "snapshot": "artifacts/reports/trace-review-20261030/terminal_fetch.py.source",
+      "sha256": "037606fb980f8fc9cc208a75fa8487771d0c31c4ab949a32a6024d81186f4859",
+      "bytes": 2105,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/trace-review-20261030/terminal_read.py",
+      "restore_path": "artifacts/reports/trace-review-20261030/terminal_read.py",
+      "snapshot": "artifacts/reports/trace-review-20261030/terminal_read.py.source",
+      "sha256": "bb19f82b17b02a5c7c312f71fd37b48b888ae5c82360e1d3965590f3251db846",
+      "bytes": 1925,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/trace-review-20261030/terminal_report.py",
+      "restore_path": "artifacts/reports/trace-review-20261030/terminal_report.py",
+      "snapshot": "artifacts/reports/trace-review-20261030/terminal_report.py.source",
+      "sha256": "eb21294d0fafe793c8810c651b2527f7a90ab2a242c9fcf89135c0efcbf51551",
+      "bytes": 18167,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/audit_provenance.py",
+      "restore_path": "artifacts/reports/training-data-audit/audit_provenance.py",
+      "snapshot": "artifacts/reports/training-data-audit/audit_provenance.py.source",
+      "sha256": "41e0f274e38f2620ea1ee5694adc8d5bca03d1dbc76ff2f1606a3c1bdf7abe53",
+      "bytes": 3475,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/grounding_calibrate.py",
+      "restore_path": "artifacts/reports/training-data-audit/grounding_calibrate.py",
+      "snapshot": "artifacts/reports/training-data-audit/grounding_calibrate.py.source",
+      "sha256": "773a1181bf254186327044588107076724e93840101bf008f2b71f781ba102df",
+      "bytes": 1990,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/grounding_scan.py",
+      "restore_path": "artifacts/reports/training-data-audit/grounding_scan.py",
+      "snapshot": "artifacts/reports/training-data-audit/grounding_scan.py.source",
+      "sha256": "4edb5b22d8780f08e231ff8fe3cb87cafd0867b11fd53912f6005fe0d91f4f08",
+      "bytes": 10772,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/protocol_sample.py",
+      "restore_path": "artifacts/reports/training-data-audit/protocol_sample.py",
+      "snapshot": "artifacts/reports/training-data-audit/protocol_sample.py.source",
+      "sha256": "35cfb081db31ae966847196c61eb2ba4950fdeda53de3b71a9e36b73db72f301",
+      "bytes": 6140,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/protocol_scan.py",
+      "restore_path": "artifacts/reports/training-data-audit/protocol_scan.py",
+      "snapshot": "artifacts/reports/training-data-audit/protocol_scan.py.source",
+      "sha256": "d4e3224658f024c5b8a8afbbe4331b24400e613daa99f3fefee5a97dab08646f",
+      "bytes": 4723,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/reports/training-data-audit/recovery_detect.py",
+      "restore_path": "artifacts/reports/training-data-audit/recovery_detect.py",
+      "snapshot": "artifacts/reports/training-data-audit/recovery_detect.py.source",
+      "sha256": "78657babb8d68d56be4112dd4f03d03085ef73cb44b33d47c131ecb413e8eeb8",
+      "bytes": 12665,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/audits/resume256-source.patch",
+      "restore_path": "artifacts/audits/resume256-source.patch",
+      "snapshot": "artifacts/audits/resume256-source.patch.source",
+      "sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242",
+      "bytes": 26753,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/sources/original-special_token_lr.py",
+      "restore_path": "artifacts/sources/original-special_token_lr.py",
+      "snapshot": "artifacts/sources/original-special_token_lr.py.source",
+      "sha256": "6e72a1b4186b78cbb23e3f65091a0de52c8ac901c0b2cca4b06a6296faec65ed",
+      "bytes": 18484,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/sources/original-special_token_train.py",
+      "restore_path": "artifacts/sources/original-special_token_train.py",
+      "snapshot": "artifacts/sources/original-special_token_train.py.source",
+      "sha256": "c7af2f1cebbeaf7cc2e8bfa4ff0f8d2f6ed37fe5855cf93b11117eebe25b4bd9",
+      "bytes": 37704,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/sources/snowball_262k_h100.py",
+      "restore_path": "artifacts/sources/snowball_262k_h100.py",
+      "snapshot": "artifacts/sources/snowball_262k_h100.py.source",
+      "sha256": "736bd01bc1d0b00d01e58068bb0dc937de1814d0c1cd7ab6026cfa9e52f5d8a7",
+      "bytes": 11900,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/sources/snowball_hf_import.py",
+      "restore_path": "artifacts/sources/snowball_hf_import.py",
+      "snapshot": "artifacts/sources/snowball_hf_import.py.source",
+      "sha256": "8324a153e843af3921732363b3af6ca4a41723070721ca95968220cc9446f9b5",
+      "bytes": 8641,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/sources/vllm-grugmoe-current.py",
+      "restore_path": "artifacts/sources/vllm-grugmoe-current.py",
+      "snapshot": "artifacts/sources/vllm-grugmoe-current.py.source",
+      "sha256": "ce919b5292ee636699c2145e4ff588696925dfb99a74a8c7c8f96748fbae92b9",
+      "bytes": 54474,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/moe_hero_ep/ops/export_vllm.py",
+      "restore_path": "training-worktree/experiments/grug/moe_hero_ep/ops/export_vllm.py",
+      "snapshot": "training-worktree/experiments/grug/moe_hero_ep/ops/export_vllm.py.source",
+      "sha256": "afd1e7b1bb4e1b316cd909dc35e142741f8af08d7e4ca96886ece1cd9debf94d",
+      "bytes": 5076,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/moe_hero_ep/ops/test_export_vllm.py",
+      "restore_path": "training-worktree/experiments/grug/moe_hero_ep/ops/test_export_vllm.py",
+      "snapshot": "training-worktree/experiments/grug/moe_hero_ep/ops/test_export_vllm.py.source",
+      "sha256": "4f92fc1712fe23f86bf5157642b1f67f28746988ef351375f926cac116001855",
+      "bytes": 6913,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/src/levanter/data/mixture.py",
+      "restore_path": "training-worktree/lib/levanter/src/levanter/data/mixture.py",
+      "snapshot": "training-worktree/lib/levanter/src/levanter/data/mixture.py.source",
+      "sha256": "17e47af7c0d0bba477ed7be5938ca8eafec2285687198a0ceb36336bea735b21",
+      "bytes": 25064,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
+      "restore_path": "training-worktree/lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
+      "snapshot": "training-worktree/lib/levanter/src/levanter/grug/attention/_fa4_cute.py.source",
+      "sha256": "81ad21238ee0bc44456d5917c02d3747a7289e324ed66522955a4ff891bc39b6",
+      "bytes": 20086,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/src/levanter/store/cache.py",
+      "restore_path": "training-worktree/lib/levanter/src/levanter/store/cache.py",
+      "snapshot": "training-worktree/lib/levanter/src/levanter/store/cache.py.source",
+      "sha256": "7770a48670fd09320296d27f08659e1bb1b3de436c2e99a40a28907cd13bb8e6",
+      "bytes": 60560,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/src/levanter/tensorstore_serialization.py",
+      "restore_path": "training-worktree/lib/levanter/src/levanter/tensorstore_serialization.py",
+      "snapshot": "training-worktree/lib/levanter/src/levanter/tensorstore_serialization.py.source",
+      "sha256": "413facf6ef296d916fb72ecbf4ddc7d6c2ed5e3fd10e71b55a5fba213054ef66",
+      "bytes": 52906,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/src/levanter/tokenizers.py",
+      "restore_path": "training-worktree/lib/levanter/src/levanter/tokenizers.py",
+      "snapshot": "training-worktree/lib/levanter/src/levanter/tokenizers.py.source",
+      "sha256": "405fb5ca98ae53b86c2eee75870f8a8527afccfa93d2507d8acaeb33ed3c99da",
+      "bytes": 40379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/tests/grug/test_fa4_cute_attention.py",
+      "restore_path": "training-worktree/lib/levanter/tests/grug/test_fa4_cute_attention.py",
+      "snapshot": "training-worktree/lib/levanter/tests/grug/test_fa4_cute_attention.py.source",
+      "sha256": "69bfe0e124e4b4e14944b5304923965007694669f26121c3f886a92d42dc0734",
+      "bytes": 40032,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/tests/test_mixture.py",
+      "restore_path": "training-worktree/lib/levanter/tests/test_mixture.py",
+      "snapshot": "training-worktree/lib/levanter/tests/test_mixture.py.source",
+      "sha256": "0767e57ba5416d8bac1a3085bfb4379c477166d5ce6d90a9a7d2e0a39d2e1adf",
+      "bytes": 12489,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/tests/test_new_cache.py",
+      "restore_path": "training-worktree/lib/levanter/tests/test_new_cache.py",
+      "snapshot": "training-worktree/lib/levanter/tests/test_new_cache.py.source",
+      "sha256": "a5cba0318dde92f1cb6426cf1d66d3e9b58cb47a8706fc1dec19c5cb4ba2a875",
+      "bytes": 30539,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/tests/test_tensorstore_serialization.py",
+      "restore_path": "training-worktree/lib/levanter/tests/test_tensorstore_serialization.py",
+      "snapshot": "training-worktree/lib/levanter/tests/test_tensorstore_serialization.py.source",
+      "sha256": "612ce21fda44b164491fce877f738a9e64e7ffebd0be19d1ac4ac4b423cff1fa",
+      "bytes": 26333,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/levanter/tests/test_tokenizers.py",
+      "restore_path": "training-worktree/lib/levanter/tests/test_tokenizers.py",
+      "snapshot": "training-worktree/lib/levanter/tests/test_tokenizers.py.source",
+      "sha256": "8c2f35c96766a824eb484a9e55a3917404a5afca3f9eb5bb49e433ede1d9c81f",
+      "bytes": 54416,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/rigging/src/rigging/fsutil/verified_copy.py",
+      "restore_path": "training-worktree/lib/rigging/src/rigging/fsutil/verified_copy.py",
+      "snapshot": "training-worktree/lib/rigging/src/rigging/fsutil/verified_copy.py.source",
+      "sha256": "5a9b6ca52c88b56cf3e8263edc278889f6d5a1dd9c68593c00f75264232607e8",
+      "bytes": 25856,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/lib/rigging/tests/test_fsutil.py",
+      "restore_path": "training-worktree/lib/rigging/tests/test_fsutil.py",
+      "snapshot": "training-worktree/lib/rigging/tests/test_fsutil.py.source",
+      "sha256": "56d343ec2ed707f9495755b642ea7b029bb14939ccc7853b6ca958b0e2770c03",
+      "bytes": 57782,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/__init__.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/__init__.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/__init__.py.source",
+      "sha256": "057f07d472a73c03b998d62d1ed1aa37ae897cfaab405b2de734388e20ef4a6f",
+      "bytes": 196,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-full-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-full-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-full-20261024a/config.yaml.source.gz",
+      "sha256": "916de1e156f876813b686c39d787651bfc894aba20c1bfb6bfff65faf5dac317",
+      "bytes": 5092408,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-full-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-full-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-full-20261024b/config.yaml.source.gz",
+      "sha256": "f640dc60fc7df672b3feb15e2a21f1765602fdf5e20dcf526bce8554caaa8e04",
+      "bytes": 5092410,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-pack-repair-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-pack-repair-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-pack-repair-20261024/config.yaml.source.gz",
+      "sha256": "668e731ba51eb6778a1a962992361e875a71078d6c8c30a3a9fcb9ef33d0792b",
+      "bytes": 553177,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-05-09-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-05-09-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-05-09-20261024/config.yaml.source.gz",
+      "sha256": "91ab3150a7703aafb10d35e29dd6345166b4d10e977fcc886541e33776073d48",
+      "bytes": 636621,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-10-19-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-10-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-10-19-20261024/config.yaml.source.gz",
+      "sha256": "98b0514c355d71bfe53182cfd486ffa9a956dd56edcbd81ba287ff759eba0246",
+      "bytes": 1273273,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-15-19-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-15-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-15-19-20261024/config.yaml.source.gz",
+      "sha256": "419b326a151130a7cec28dbc823779afe1a07577165320a043d304f5df366ac8",
+      "bytes": 636721,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-20-29-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-20-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-20-29-20261024/config.yaml.source.gz",
+      "sha256": "c6a0cb55c63b5a71eaaf72bfc336189466ae74153c54bcd81050fc0f1683328c",
+      "bytes": 1273256,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-25-29-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-25-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-25-29-20261024/config.yaml.source.gz",
+      "sha256": "4fa46d22516ae966015fd5d8301d9fa925939b69ebac18a55646f8452a5ff94d",
+      "bytes": 636716,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-30-39-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-30-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-30-39-20261024/config.yaml.source.gz",
+      "sha256": "66181465f047f284dd6539966d5d77b88aba6d386d8d5539001e7c62344e71cf",
+      "bytes": 1273272,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-range-35-39-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-range-35-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-range-35-39-20261024/config.yaml.source.gz",
+      "sha256": "7c3e54abfe99274d77edc413fdd4374e3390728b0ed7f90c6915af2c44f23ae9",
+      "bytes": 636729,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024a/config.yaml.source",
+      "sha256": "b919d1f4e8535cfef1d45c239400dffae3c037c4bd76570eeae4141913fc0dac",
+      "bytes": 868,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024b/config.yaml.source",
+      "sha256": "f545a41cc8071a36891a182553450d7be4b7e9746bcddc8db79832901c277c60",
+      "bytes": 869,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-smoke-20261024c/config.yaml.source",
+      "sha256": "62ff78a87c44329a0238db88d27356c858590f933de0195bdc4963eea886b894",
+      "bytes": 871,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-09-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-09-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-09-20261024/config.yaml.source",
+      "sha256": "cae2b5616b1e924730a3f33016f51ede1bac2e3402f8cb58b3a4e7e95e75c0c6",
+      "bytes": 127454,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-14-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-14-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-14-20261024/config.yaml.source",
+      "sha256": "4c75a916fe4431cc8624986a746466530e57edda5374eca898f7d1bf1751ccd4",
+      "bytes": 127486,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-19-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-19-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-19-20261024/config.yaml.source",
+      "sha256": "42938a74fff401bd225e8b05ee184dc4414036c0d7c929f55476003ae6c86097",
+      "bytes": 127472,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-29-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-29-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-29-20261024/config.yaml.source",
+      "sha256": "ecfa747f706e32910cfb79fd8fdc090a5b730ef5d364fbd1c018a326662d6d3a",
+      "bytes": 127485,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-34-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-34-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-34-20261024/config.yaml.source",
+      "sha256": "0ed8b7a693bfe36065e12bcd4f0a0efc63243e3e82f212c4d4b9eb63d8b56c37",
+      "bytes": 127469,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-replay-tail-39-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-replay-tail-39-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-replay-tail-39-20261024/config.yaml.source",
+      "sha256": "acb7abe4afe23ec602f1ee13b3ae0dad5ff0d73c610d637c9c7bfe85c4dbfab5",
+      "bytes": 127481,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-256diag-replica2-20261027/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-256diag-replica2-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-replica2-20261027/config.yaml.source.gz",
+      "sha256": "20bea53f69a144aa6172b9054df08d9001c3ba767760583604e06de6e50194fb",
+      "bytes": 1068553,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-256diag-synthetic-20261027/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-256diag-synthetic-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-synthetic-20261027/config.yaml.source.gz",
+      "sha256": "731bdf9eda08c33dfd17e4498cc744ad7d4f78499ee2d76dacb9354008b0a2fd",
+      "bytes": 1068558,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-256diag-synthetic-20261027b/config.yaml.source.gz",
+      "sha256": "104c49a0af32f54eb8e7a271b6e9f77c6ee8c149634435a19c2c7d428d5415ca",
+      "bytes": 1068563,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-best-smoke-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-best-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-best-smoke-20261024a/config.yaml.source",
+      "sha256": "a4980cc8e58076fd622b140979a0f0bb8c2fa8a25c99c09b0e6d6cf082b4257f",
+      "bytes": 7761,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-best-smoke-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-best-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-best-smoke-20261024b/config.yaml.source",
+      "sha256": "b116e156232fef940f857ab774e8adf79dcd4c1edad632643611fe95d5c970b2",
+      "bytes": 7761,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024a/config.yaml.source",
+      "sha256": "faf578e0b21e0e5530ad3211bd845bbbb7f2f6dd98b2f1a2c23228addbdc1fea",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024b/config.yaml.source",
+      "sha256": "5e6f4ac1faffb56cda558cc5dbbaccca11a6dd991d0cc5ce9c8e5983d625172d",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024c/config.yaml.source",
+      "sha256": "019a5233817fef245bf934dbb85a4b4a8a6c7bdaf8aabce3cbe4d20c3b7f1833",
+      "bytes": 7712,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024d/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024d/config.yaml.source",
+      "sha256": "53def4824e367ffb8dbf837bd4469b527466848f5dd7f5435543432cb5735b75",
+      "bytes": 7836,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024e/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024e/config.yaml.source",
+      "sha256": "2dfb3586db0fa9f6bb446ae300c35991699d280a9f19061765d9371a08d127a2",
+      "bytes": 7787,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024f/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-128h100-20261024f/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-128h100-20261024f/config.yaml.source",
+      "sha256": "7dd7e2a71d39cff8d426a4e3731d6cc4d449fae5e7a73af68fda398c85daf90c",
+      "bytes": 7787,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-16h100-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-16h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-16h100-20261024a/config.yaml.source",
+      "sha256": "0de23b2cdbdae22a4745e8e3b5048dfff12f27d262174ee9770b4b298a0f4202",
+      "bytes": 7671,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-capacity-16h100-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-capacity-16h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-capacity-16h100-20261024b/config.yaml.source",
+      "sha256": "ea3058ca6c1081b895a156e3a339bcd8b9e8707bb1361efe6b4e4d21b9f7b0b7",
+      "bytes": 7704,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-full-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-full-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-full-20261024/config.yaml.source.gz",
+      "sha256": "329a6768b10448536d83a220be9deea36c1e841db96aaf1063d3f31f6990b9c6",
+      "bytes": 1075749,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-repaired-20261024/config.yaml.source.gz",
+      "sha256": "a1cfdceb4c0df43b11de377158f28a38f6d547f83aa4e896468a95ee210f91c7",
+      "bytes": 1075755,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-data-preflight-smoke-20261024/config.yaml.source",
+      "sha256": "948f9cb522787d19e6d704da7149c6f7d9ed53faa47be2bf7bbfd5268da24c4f",
+      "bytes": 1550,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-smoke-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-smoke-20261024/config.yaml.source",
+      "sha256": "b6c1cbc38a71d0c4ff756af7e682adc4612f3e2f2cd42288b59dd61dbc8f1a79",
+      "bytes": 1370,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-smoke-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-smoke-20261024b/config.yaml.source",
+      "sha256": "53770067ea41aa3b567eab0b3f04980c0f8bf54ee9821a39d10946b1e890f789",
+      "bytes": 1371,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-stacked-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-stacked-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-stacked-20261024/config.yaml.source",
+      "sha256": "65604459a914a74adc89ddfdccbc350efee641bd318cb34e3141bc72d83f85da",
+      "bytes": 1372,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step1024-20261028/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step1024-20261028/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step1024-20261028/config.yaml.source",
+      "sha256": "b3434aebeae6152c5b98a58a36f5363b0ff2e96ca5b099c76b030689efd7846f",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step1536-20261028/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step1536-20261028/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step1536-20261028/config.yaml.source",
+      "sha256": "7d5186df18ed859228208e16a2f4da3b3bd6ddbacc22b383d89de6a97200abfd",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step2048-20261029/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step2048-20261029/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step2048-20261029/config.yaml.source",
+      "sha256": "05aa0ef8af112fa5a8da0001e80808e65c72a8479317d554bcf8481bb15fbee9",
+      "bytes": 1379,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step222-20261025/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step222-20261025/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step222-20261025/config.yaml.source",
+      "sha256": "ba52a66de53e7126f567c786e4c926164675ed8da1d5fb0743931055897b1d9d",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step2338-20261029/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step2338-20261029/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step2338-20261029/config.yaml.source",
+      "sha256": "3fb3cb1bc811078ecef3314f3b412a8cbce54ba13e9ae29d516b86965227cd17",
+      "bytes": 1395,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-export-step471-20261025/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-export-step471-20261025/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-export-step471-20261025/config.yaml.source",
+      "sha256": "6d556ce6731dfb31961b8356586ab069f540200d126ebee0864b8588d09ee242",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024/config.yaml.source.gz",
+      "sha256": "b5762112649c2ebed8a2edcc72018ff539fb95282c3af964b52397768ae1132c",
+      "bytes": 1068988,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024b/config.yaml.source.gz",
+      "sha256": "1e90270544b49f22130b79c29eddcdb02cbabb108e9759ff2110515dd4ec7752",
+      "bytes": 1068944,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024c/config.yaml.source.gz",
+      "sha256": "0516a7ae54f2c03e834f35da32dc3cf0bae16a3fbc98947604f4af79c50fa7fd",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024d/config.yaml.source.gz",
+      "sha256": "84fed53405d26b7777836000af9e5e8eac7273398fb3742d354babe103f18f92",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024e/config.yaml.source.gz",
+      "sha256": "0b1fb7318af7193f5587ed7264b5015815e384966e8cbd6a804c41b70d24123f",
+      "bytes": 1068945,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024f/config.yaml.source.gz",
+      "sha256": "7489b8e4d70dd3ce305342552ec56c8ed62bfbef9757b6192c6cb5f4a14b5a8f",
+      "bytes": 1068947,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024g/config.yaml.source.gz",
+      "sha256": "158ba4d13a4e2ae098edcb39bbaf7b084955e6c79d697912f810ec96c4dd373a",
+      "bytes": 1068983,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-full-mixture-smoke-20261024h/config.yaml.source.gz",
+      "sha256": "0a88953f0671c6f46bc08b43fc247cb85fbcd5466487baa6356468f45880311c",
+      "bytes": 1068983,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024/config.yaml.source",
+      "sha256": "faaf272cd0c23c5b6c3dd7953215fc4215f81b29e93ce205872e00e9ca4f56e1",
+      "bytes": 1160,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024b/config.yaml.source",
+      "sha256": "a7de4fe393dc79d5d50a9ee1b2f6c448dec69ec91ec1acaa54fc071936262cc7",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024c/config.yaml.source",
+      "sha256": "9b1568f579ce074e9bd5908d3a4c4e3ca3c8469c87900dcc9fbd2416efb3e829",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024d/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024d/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024d/config.yaml.source",
+      "sha256": "276aad14dc8233b6e535fd6e0119ec85881528735d5ca41dc64ad59a1266cb12",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024e/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-hf-import-20261024e/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-hf-import-20261024e/config.yaml.source",
+      "sha256": "14ee18a7f914c4f7e79a621ec82fb90bb65fe812f6fabd5d6186c65995f31dd8",
+      "bytes": 1161,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-128h100-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-128h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-128h100-20261024a/config.yaml.source.gz",
+      "sha256": "a4c8125a4cd777f0f8d60be53b0f058d7bd91178eedc4739e93902fdcd189dfe",
+      "bytes": 1069246,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-128h100-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-128h100-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-128h100-20261024b/config.yaml.source.gz",
+      "sha256": "d46bdf0df59cf7153bde3ab729836e119d6144ed2f26c83be6b45feb6f0e4d8f",
+      "bytes": 1069243,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027/config.yaml.source.gz",
+      "sha256": "d170f8a1857349d46152d154b7e0341018eaf7fedf0fa66577963684611e9ee2",
+      "bytes": 1069495,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027b/config.yaml.source.gz",
+      "sha256": "8a062bf67ff5dd6eb431350141714838df428fe0e6fe954a58be3ff9809f19ff",
+      "bytes": 1069503,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-256h100-20261027c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-256h100-20261027c/config.yaml.source.gz",
+      "sha256": "0abce298e480f1555a43d82131e1e37c226636be0da335c14a3f5d28eeeceb05",
+      "bytes": 1069504,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-accum8-smoke-20261024a/config.yaml.source.gz",
+      "sha256": "2536abede94bca829c751b67917f6a633140613170a663aef93dd299c7cfb129",
+      "bytes": 1069281,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-production-gc-smoke-20261024a/config.yaml.source.gz",
+      "sha256": "d27d47fa96c6abaa581a9b3df540778030cb62a2072c03265abf720253519625",
+      "bytes": 1069249,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-smoke-16h100-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-smoke-16h100-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-16h100-20261024a/config.yaml.source",
+      "sha256": "8fdefa8927de33bae74cad1ceadd92645ffaa8a927598c85f577fd8fc147280d",
+      "bytes": 7655,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-smoke-262k-20261024a/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-smoke-262k-20261024a/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-262k-20261024a/config.yaml.source",
+      "sha256": "a80d00c07c04e514db5e669b762217f45ef28a57431ed5dd311b28b541629a55",
+      "bytes": 7645,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-smoke-262k-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-smoke-262k-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-smoke-262k-20261024b/config.yaml.source",
+      "sha256": "c57806482a7e8725d54f8dd45ddcb1c993b33e30cea822f337e1feb47266beb2",
+      "bytes": 7645,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-tokenizer-smoke-20261024/config.yaml.source",
+      "sha256": "1d7c000a1ac1279f52110a5f90b395de77edfe834319ceaccc8e55bf0c427ed2",
+      "bytes": 7785,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024/config.yaml.source",
+      "sha256": "400bdcea376eb9ecf4d8dd328f89cc6ece13b98d1ac1cd035692cafbaf56b90e",
+      "bytes": 7742,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024b/config.yaml.source",
+      "sha256": "d63c170e521c8f3347026a9eac292ba598ffc8adf8d563ad0ea50071342e0729",
+      "bytes": 7748,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-base-smoke-20261024c/config.yaml.source",
+      "sha256": "774a81c5db4d7e9a61b6b603b8012855b06e8ed64eea005d32cd0c0b465c6f47",
+      "bytes": 7748,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/configs/snowball-sft-valid-export-20261024/config.yaml",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/configs/snowball-sft-valid-export-20261024/config.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-valid-export-20261024/config.yaml.source",
+      "sha256": "31e7df3f245b3e221b993b4a9e9f9252ee9a60aa5b98a742992e09f1cb4a8119",
+      "bytes": 1375,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/export.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/export.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/export.py.source",
+      "sha256": "06f880a7ad26237f1d19bf5f6c201ae9d10de0db8d17cced585cba7024ceda7e",
+      "bytes": 2155,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/export_step1024_20261028.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/export_step1024_20261028.py",
+      "snapshot": "artifacts/scripts/export_step1024_20261028.py.source",
+      "sha256": "f2e7aeb1fdec16b98371f2df6304c765482ae07dcbf4c5e5578f9db426d3428e",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/export_step1536_20261028.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/export_step1536_20261028.py",
+      "snapshot": "artifacts/scripts/export_step1536_20261028.py.source",
+      "sha256": "8e54d9a4eaed848b7a8c187500a29b6dfc18f8c2ae46799ec98c820d1041256b",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/export_step2048_20261029.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/export_step2048_20261029.py",
+      "snapshot": "artifacts/scripts/export_step2048_20261029.py.source",
+      "sha256": "a62ca2bffeddbbf113ed86e32c457e173ce30531bf7a520552db20abdc4d1011",
+      "bytes": 2071,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/export_step2338_20261029.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/export_step2338_20261029.py",
+      "snapshot": "artifacts/scripts/export_step2338_20261029.py.source",
+      "sha256": "3fb7de57d2c9b52734b797da91b4d748a11c339e996e020181e363e57f563f1a",
+      "bytes": 2070,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/import_hf.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/import_hf.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/import_hf.py.source",
+      "sha256": "3fe5dcc765c02fcecdbb8e889aed5be61951b7cb45ade06ff4958840fefaeede",
+      "bytes": 8586,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/launch.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/launch.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/launch.py.source",
+      "sha256": "9895bc8d36d34dc8940a8793c6475c55e0037d450a12f0435621f3f8687190dd",
+      "bytes": 455,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/mixture.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/mixture.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/mixture.py.source",
+      "sha256": "05fef8503bb109e5f0b65531f45a4ec3af803b879c3246be0a96d44ef545bdd2",
+      "bytes": 6073,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/model.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/model.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/model.py.source",
+      "sha256": "f7ad69a6ba508ff4ec7ec06f265d41fc6f8758e519673c3216c7bb3aa1fcdd8c",
+      "bytes": 80552,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/preflight.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/preflight.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/preflight.py.source",
+      "sha256": "7c46b6548379136686903a4db3bf2489bd4fbfe5701944fb9ce255306acb49bc",
+      "bytes": 6720,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/prepare_replay.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/prepare_replay.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/prepare_replay.py.source",
+      "sha256": "f24396994f7f52e4dad6452ee1dff2bd5a4733095fcf806f3350ffc19ee17f1b",
+      "bytes": 2255,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/replay_subset.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/replay_subset.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/replay_subset.py.source",
+      "sha256": "320aa12e91b5d09a83a5d0a1b6c6df72d2e1014423608556a23d666d1ac527c3",
+      "bytes": 5265,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_export.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_export.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_export.py.source",
+      "sha256": "feae92afcc829d9e5d2dd818d6e15496059ba130a47bac6a8b81875ce40ac394",
+      "bytes": 3189,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_gradient_accumulation.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_gradient_accumulation.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_gradient_accumulation.py.source",
+      "sha256": "372a221554d00ae929b42a3d9c6fd8fb0d4fe9d17576db2b985718028865cd2d",
+      "bytes": 3726,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_import_hf.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_import_hf.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_import_hf.py.source",
+      "sha256": "ebde9093b3bc03a39d67d20f761cc27829fb71738bf9a852f8b231a3548a34ef",
+      "bytes": 3923,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_mixture.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_mixture.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_mixture.py.source",
+      "sha256": "82241310024c0bd01a1cfbe31211f4e2d667f12410edba9766fa0a1ca0b38fd2",
+      "bytes": 1655,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_replay_subset.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_replay_subset.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_replay_subset.py.source",
+      "sha256": "702d9009a699a34ba95a598e2938cf010c9322ba4acd93af3545fcafee642681",
+      "bytes": 1518,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_sft_updates.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_sft_updates.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_sft_updates.py.source",
+      "sha256": "adc67f969c549fe1fc2e587ad0a9104a0b7a2293b434e44fc599061cf5ab58c0",
+      "bytes": 5798,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/test_validation_checkpoint.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/test_validation_checkpoint.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/test_validation_checkpoint.py.source",
+      "sha256": "8069870c54778cede87db5c8e3788a95725394cf82cae51bf70eb971a54cd49f",
+      "bytes": 2493,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/train.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/train.py",
+      "snapshot": "artifacts/reports/confound-audit-20261030/training-pinned-repro-train.py.source",
+      "sha256": "b94da9cff1a7df92467eaf51b4c8c8bba42168742ffd3e4ee525445901617584",
+      "bytes": 78431,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/grug/snowball_sft/validation_checkpoint.py",
+      "restore_path": "training-worktree/experiments/grug/snowball_sft/validation_checkpoint.py",
+      "snapshot": "training-worktree/experiments/grug/snowball_sft/validation_checkpoint.py.source",
+      "sha256": "b5ecf796ddefc381b1bed17c61b9aabe7dc13b880098e157d4a440620cbbe077",
+      "bytes": 4932,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry-singles-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry-singles-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry-singles-20261024/config.yaml.source",
+      "sha256": "019f59d103092d00c0669da41b60a7523af8dac35e3e893a538f62b8daad5b3b",
+      "bytes": 1341,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry-triple-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry-triple-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry-triple-20261024/config.yaml.source",
+      "sha256": "160df403ccb235d238193617658e6c7e7ddbbada8c87bfafec0cded5031a3a72",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry2-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry2-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry2-20261024/config.yaml.source",
+      "sha256": "89f814d3a5c3b0d65ae8abb66cb8bfd31edfaa494d8961d5d598b3fca502e44f",
+      "bytes": 1089,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry3-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry3-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry4-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry4-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/marin/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry5-20261024.yaml",
+      "restore_path": "training-worktree/experiments/evaluation/campaigns/sft-pipe-repro-retries/snowball-sft-reference-infra-retry5-20261024.yaml",
+      "snapshot": "artifacts/configs/snowball-sft-reference-infra-retry3-20261024/config.yaml.source",
+      "sha256": "4092dd5cd378876027c58f9b25b3a0c03f0a1c8563496d3b19b8520a2d6e6fca",
+      "bytes": 1056,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bfclparity-pi.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bfclparity-pi.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bfclparity-pi.yaml.source",
+      "sha256": "82b5effa200f667082b5a431db734e271e1dd28d7e4c158b3ef8be09f3a558e2",
+      "bytes": 1294,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bixbench-pi.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bixbench-pi.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/bixbench-pi.yaml.source",
+      "sha256": "77c61e35a7fcf05047f8f73bc3c47e719681f3fa5c6398cb0f5048ee6ea9ca96",
+      "bytes": 1378,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ds-1000-local.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ds-1000-local.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ds-1000-local.yaml.source",
+      "sha256": "48f1d15fd88f9ff3f7777fa3c1ab6105d883db7d2fe19cb47af7fef05c9eff33",
+      "bytes": 1337,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ot-tblite-recovery.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ot-tblite-recovery.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/ot-tblite-recovery.yaml.source",
+      "sha256": "27463c1e31f510b0810642b3fbe8d0fd1f03661daf8e1d85c0ab5bb3650cdaec",
+      "bytes": 1326,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/swebench-verified.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/swebench-verified.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/swebench-verified.yaml.source",
+      "sha256": "1a7c53ecc0194ea5d5db26ddcf07d6807c2969460fe95efdc4d45a8c40b56ecc",
+      "bytes": 1231,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/tb2-recovery.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/tb2-recovery.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/harbor-configs/tb2-recovery.yaml.source",
+      "sha256": "ccbc570e74fb10549dd4998b1be466829dcde81272196223f8eeb5d53a5bdbc2",
+      "bytes": 1329,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/judge-model-configs/MiniMaxAI-MiniMax-M3-MXFP8.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/judge-model-configs/MiniMaxAI-MiniMax-M3-MXFP8.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/judge-model-configs/MiniMaxAI-MiniMax-M3-MXFP8.yaml.source",
+      "sha256": "7249c43ea7ffc1f85f74f9f1a1e4821a750122e30c943e44c6a126175d1b80a5",
+      "bytes": 514,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1005-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1005-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1005-20261030.yaml.source",
+      "sha256": "a04ce3ef9ec3e28e1893b8323d0675fc4a6a61586978f3fe17e5fd80673c7852",
+      "bytes": 5637,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1024-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1024-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-1024-20261030.yaml.source",
+      "sha256": "4c206155dafd04aaaeec14d873b8b96239e231a2a6bfd872a31f1fe684f8817a",
+      "bytes": 5625,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-2048-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-2048-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-2048-20261030.yaml.source",
+      "sha256": "717b283cf6623ea387403b7fcba873bb956912d771b11d35b72958f7dcf37bd1",
+      "bytes": 5625,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-222-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-222-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-222-20261030.yaml.source",
+      "sha256": "20fb2160c85a8b49b8781bc7eb66205bf93c94548adee2fabe25ec996e102e28",
+      "bytes": 5623,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-471-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-471-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-471-20261030.yaml.source",
+      "sha256": "c7479f544b1e91920d3a9bd568775ed5f95e739874f8676fa09b11f7a7ece6e6",
+      "bytes": 5623,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-base-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-base-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/sft-thinking-eos-base-20261030.yaml.source",
+      "sha256": "e8bd438918be2ca28d3fb9131eeb2b1e9f233286c101295f2e97f3f6d6994662",
+      "bytes": 6410,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1005-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1005-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1005-20261030.yaml.source",
+      "sha256": "47a0233712396b88047c473c94627099e2fba158dd6ac20caafba43c6a3befaf",
+      "bytes": 5672,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1024-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1024-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-1024-20261030.yaml.source",
+      "sha256": "0e5f75de8cddb35579660e85a8f141c27600c09a6482db3c8ef42b50c984acd0",
+      "bytes": 5660,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-2048-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-2048-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-2048-20261030.yaml.source",
+      "sha256": "852fac68f080dfd3303d95ae735a2b987eefd713b39379b5eb105a50efde607a",
+      "bytes": 5660,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-222-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-222-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-222-20261030.yaml.source",
+      "sha256": "8e28dd0970c04a106e77fe18fefc20ac9227061f203bbe27bf6204927851ac69",
+      "bytes": 5658,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-471-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-471-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-471-20261030.yaml.source",
+      "sha256": "65db9c541c7cabb9c1bcc2b636faa36766da2bd66ca281a41a9bf39fa9157121",
+      "bytes": 5658,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-base-20261030.yaml",
+      "restore_path": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-base-20261030.yaml",
+      "snapshot": "eval-worktree/experiments/evaluation/campaigns/sft-thinking-eos-20261030/model-configs/swebench-verified/sft-thinking-eos-base-20261030.yaml.source",
+      "sha256": "27291b2666a9fd079e65a093c23a41307d51eb9cb81076dd8cf1be03fbee7638",
+      "bytes": 6445,
+      "encoding": "utf-8"
+    }
+  ],
+  "training_patch_sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242"
+}

@@ -1,0 +1,84 @@
+"""Flag protocol-format candidates in the shared decoded source-document sample."""
+import argparse
+from collections import Counter, defaultdict
+import hashlib
+import json
+from pathlib import Path
+import re
+
+TOOL = re.compile(r'<tool_call>(.*?)</tool_call>', re.S)
+ROLE_TEXT = re.compile(r'<tool_response>|<\|(?:eot_id|start_header_id|end_header_id|im_start|im_end)\|>')
+
+
+def inspect(record):
+    candidates = []
+    maxima = {'tool_tags': 0, 'terminal_commands': 0}
+    stats = Counter()
+    for index, message in enumerate(record['messages']):
+        if message['role'] != 'assistant':
+            continue
+        stats['assistant_messages'] += 1
+        body = re.sub(r'(?:<\|(?:eot_id|end_of_text)\|>\s*)+$', '', message['text']).rstrip()
+        calls = TOOL.findall(body)
+        maxima['tool_tags'] = max(maxima['tool_tags'], len(calls))
+        stats['tool_messages'] += bool(calls)
+        stats['tool_calls'] += len(calls)
+        reasons = []
+        if len(calls) > 1:
+            reasons.append('multiple_tool_calls')
+        normalized = []
+        for call in calls:
+            try:
+                normalized.append(json.dumps(json.loads(call),sort_keys=True))
+            except json.JSONDecodeError:
+                reasons.append('invalid_tool_json_candidate')
+        if len(normalized) != len(set(normalized)):
+            reasons.append('duplicate_calls_within_response')
+        if body.count('<tool_call>') != body.count('</tool_call>'):
+            reasons.append('unbalanced_tool_tags_candidate')
+        markers = [match.group() for match in ROLE_TEXT.finditer(body)]
+        if markers:
+            reasons.append('embedded_protocol_marker_candidate')
+        if message.get('end_marker') is None:
+            reasons.append('missing_end_marker_candidate')
+        # Parse only a complete outer JSON value; do not miscount prompt examples or nested arrays.
+        terminal = body.strip()
+        if terminal.startswith('```json') and terminal.endswith('```'):
+            terminal = terminal[7:-3].strip()
+        try:
+            value = json.loads(terminal)
+        except json.JSONDecodeError:
+            value = None
+        commands = value.get('commands') if isinstance(value,dict) else None
+        command_count = len(commands) if isinstance(commands,list) else 0
+        if isinstance(commands,list):
+            stats['terminal_json_messages'] += 1
+            stats['terminal_commands'] += command_count
+        maxima['terminal_commands'] = max(maxima['terminal_commands'],command_count)
+        if command_count >= 5:
+            reasons.append('terminal_commands_ge5_candidate')
+        if reasons:
+            candidates.append({'id':record['id'],'source':record['source'],'message_index':index,
+                               'reasons': sorted(set(reasons)), 'tool_calls':len(calls),'terminal_commands':command_count,
+                               'markers':dict(Counter(markers)), 'start_char':message['start_char'],
+                               'end_char':message['end_char'],'excerpt':body[:800]})
+    return candidates,stats,maxima
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('corpus',type=Path);parser.add_argument('--out',type=Path,default=Path(__file__).resolve().parent);args=parser.parse_args()
+    stats=Counter();reasons=Counter();documents=defaultdict(set);sources=defaultdict(Counter);candidates=[];maxima=[];distributions=defaultdict(Counter)
+    for line in args.corpus.open():
+        record=json.loads(line);hits,counts,maximum=inspect(record);stats.update(counts);stats['documents']+=1;stats['tokens']+=record['token_count'];candidates.extend(hits)
+        maxima.append({'id':record['id'],'source':record['source'],**maximum})
+        for hit in hits:
+            for reason in hit['reasons']:
+                reasons[reason]+=1;documents[reason].add(record['id']);sources[record['source']][reason]+=1
+        for message in record['messages']:
+            if message['role']=='assistant':distributions['tool_tags_per_assistant'][len(TOOL.findall(message['text']))]+=1
+    result={'corpus_sha256':hashlib.sha256(args.corpus.read_bytes()).hexdigest(),'denominators':dict(stats),'candidate_messages_by_rule':dict(reasons),'candidate_documents_by_rule':{k:len(v) for k,v in documents.items()},'by_source':dict(sources),'distributions':dict(distributions),'document_maxima':maxima}
+    (args.out/'protocol-results.json').write_text(json.dumps(result,indent=2)+'\n')
+    (args.out/'protocol-candidates.jsonl').write_text(''.join(json.dumps(x,ensure_ascii=False)+'\n' for x in candidates))
+    print(json.dumps({k:v for k,v in result.items() if k not in ['by_source','document_maxima']},indent=2))
+
+if __name__=='__main__':main()

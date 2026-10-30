@@ -1,0 +1,29 @@
+"""CPU-check a locally available vLLM stop-set method; not a live-server test."""
+import ast
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+OUT=Path(__file__).resolve().parent
+SOURCE=Path('/Users/benfeuer/Documents/experiments/complete/012-opd-identity-patch/artifacts/worktrees/vllm/vllm/sampling_params.py')
+tree=ast.parse(SOURCE.read_text())
+method=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='update_from_generation_config')
+module=ast.Module(body=[method],type_ignores=[])
+namespace={'Any':Any}
+exec(compile(module,str(SOURCE),'exec'),namespace)
+rows={}
+for tag in ['base','222','471','1024','2048','1005']:
+    p=OUT/f'tokenizer-hf-{tag}'/'generation_config.json'
+    generation=json.loads(p.read_text()) if p.exists() else {}
+    tokenizer=json.loads((OUT/f'tokenizer-hf-{tag}'/'tokenizer.json').read_text())
+    config=json.loads((OUT/f'tokenizer-hf-{tag}'/'tokenizer_config.json').read_text())
+    eos=config['eos_token']; eos=eos.get('content') if isinstance(eos,dict) else eos
+    eos_id=next(x['id'] for x in tokenizer['added_tokens'] if x['content']==eos)
+    state=SimpleNamespace(ignore_eos=False,_eos_token_id=None,_all_stop_token_ids=set(),stop_token_ids=[])
+    namespace['update_from_generation_config'](state,generation,eos_id)
+    rows[tag]={'generation_config_present':p.exists(),'tokenizer_primary_eos':eos_id,'generation_eos':generation.get('eos_token_id'),'resolved_primary_eos':state._eos_token_id,'resolved_extra_stop_ids':sorted(state.stop_token_ids),'all_stop_token_ids':sorted(state._all_stop_token_ids)}
+result={'scope':'Conditional CPU execution of one extracted locally available vLLM method. Assumes supplied HF generation config, tokenizer primary EOS, ignore_eos=False, no request stops/overrides. Not live eval engine introspection; source checkout is not asserted identical to deployed image.', 'source':str(SOURCE),'source_sha256':hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'method_start_line':method.lineno,'rows':rows}
+(OUT/'tokenizer-stop-resolution.json').write_text(json.dumps(result,indent=2)+'\n')
+print(rows)

@@ -1,0 +1,27 @@
+import hashlib,json,sys
+from collections import Counter
+from pathlib import Path
+from finestore.reader import ReadView
+ROOT=Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT))
+from watch_scores import redact
+
+
+def counts(document):
+    steps=[s for s in document['steps'] if s['source']=='agent']
+    sizes=[len(s.get('tool_calls') or []) for s in steps]
+    return {'assistant_turns':len(steps),'total_entries':sum(sizes),'max_entries':max(sizes,default=0),'histogram':dict(sorted(Counter(sizes).items())),'oversized_turns_ge10':sum(n>=10 for n in sizes),'max_examples':[{'step_id':s['step_id'],'timestamp':s.get('timestamp'),'tool_calls':s.get('tool_calls')} for s in steps if len(s.get('tool_calls') or [])==max(sizes,default=0)][:2]}
+
+report={'corrected':{},'historical_same_task':{},'limitations':['EOS and thinking changed together; not an isolated EOS experiment.','Only Step222 smoke was run; no corrected Step2048 or BixBench evidence.','Terminus entries are parsed terminal actions, whereas mini-SWE entries are native tool calls.','Pi BFCL irrelevance trial has no archived trajectory blob; its verifier confirms one wrong function prediction but cannot establish general batch distribution.']}
+for path in sorted(ROOT.glob('smoke-trajectory-*.json')):
+    x=json.loads(path.read_text());report['corrected'][path.name]=counts(x)
+for benchmark,task in [('swebench-verified','django__django-15098'),('tb2-recovery','write-compressor')]:
+    archived=json.loads((ROOT.parent/'reports/confound-audit-20261030'/f'eval-1-{benchmark}.json').read_text())
+    uri=archived['row']['result_uri'];reader=ReadView(uri)
+    names=[r['name'] for r in reader.iter_rows('blobs',columns=['name']) if task in r['name'] and r['name'].endswith('trajectory.json')]
+    report['historical_same_task'][benchmark]={'source':uri,'matching_blobs':names,'traces':{}}
+    for name in names:
+        raw=reader.read_blob(name);x=json.loads(raw);path=ROOT/f'historical222-{name.split("/")[0]}-trajectory.json';path.write_text(json.dumps(redact(x),indent=2)+'\n')
+        report['historical_same_task'][benchmark]['traces'][name]={'sha256':hashlib.sha256(raw).hexdigest(),**counts(x)}
+    (ROOT/'smoke-batch-comparison.json').write_text(json.dumps(report,indent=2)+'\n')
+    print(benchmark,[(n,v['max_entries'],v['assistant_turns']) for n,v in report['historical_same_task'][benchmark]['traces'].items()],flush=True)

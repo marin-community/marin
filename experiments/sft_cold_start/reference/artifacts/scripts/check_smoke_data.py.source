@@ -1,0 +1,50 @@
+"""Read actual SFT/replay train and holdout samples from the frozen smoke config."""
+import asyncio
+import json
+import os
+from pathlib import Path
+
+import draccus
+import jax
+import numpy as np
+from haliax import Axis
+from levanter.models.lm_model import LmExample
+from levanter.data.text.examples import grug_lm_example_from_named
+from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+
+from experiments.grug.snowball_sft.launch import GrugRunConfig
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+configure_coreweave_s3()
+credentials = s3_credentials(StoreType.COREWEAVE)
+assert credentials is not None
+os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = credentials
+region = data_buckets()["marin-us-east-02a"].signing_region
+assert region is not None
+os.environ["AWS_DEFAULT_REGION"] = region
+os.environ["AWS_REGION"] = region
+config = draccus.parse(GrugRunConfig, config_path=str(ROOT / "configs/snowball-sft-smoke-262k-20261024a/config.yaml"), args=[])
+position = Axis("position", config.model.max_seq_len)
+datasets = {"train": config.data.train_sets(position, key=jax.random.key(0)),
+            "validation": config.data.validation_sets(position)}
+
+
+async def check():
+    results = []
+    for split, components in datasets.items():
+        for name, dataset in components.items():
+            count = await dataset.async_len()
+            example = (await dataset.get_batch([0]))[0]
+            if isinstance(example, LmExample):
+                example = grug_lm_example_from_named(example)
+            tokens = example.tokens
+            weights = example.loss_weight
+            results.append({"split": split, "component": name, "sequences": count,
+                            "shape": list(tokens.shape), "min_token": int(np.min(tokens)),
+                            "max_token": int(np.max(tokens)), "loss_positions": float(np.sum(weights))})
+            print(results[-1], flush=True)
+    (ROOT / "audits/smoke-data-20261024.json").write_text(json.dumps(results, indent=2) + "\n")
+
+
+asyncio.run(check())

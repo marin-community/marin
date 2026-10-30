@@ -1,0 +1,21 @@
+import concurrent.futures,json
+from pathlib import Path
+from rigging.filesystem.buckets import filesystem_for
+ROOT=Path(__file__).parent
+src=json.loads((ROOT/'terminal-sources.json').read_text()); out={}
+def read_trial(u):
+ f,p=filesystem_for(u)
+ if not f.exists(p+'/result.json'): return {'task':u.rsplit('/',1)[-1].split('__')[0],'trial':u.rsplit('/',1)[-1],'missing_result':True,'uri':u}
+ r=json.loads(f.cat(p+'/result.json')); a=r.get('agent_result') or {}; m=a.get('metadata') or {}; exc=r.get('exception_info') or {}
+ return {'task':r['task_name'],'trial':r['trial_name'],'uri':r.get('trial_uri',u),'result_uri':u+'/result.json','checksum':r.get('task_checksum'),'reward':(r.get('verifier_result') or {}).get('rewards'),'exception':exc.get('exception_type'),'exception_message':exc.get('exception_message'),'episodes':m.get('n_episodes'),'stop':m.get('stop_reason'),'input_tokens':a.get('n_input_tokens'),'output_tokens':a.get('n_output_tokens')}
+for model,bs in src.items():
+ label='222' if 'Step222' in model else '2048' if 'Step2048' in model else '1005'; out[label]={}
+ for b,u in bs.items():
+  f,p=filesystem_for(u); job=f.ls(p+'/harbor_jobs',detail=False)[0]; cfg=json.loads(f.cat(job+'/config.json')); ag=cfg['agents'][0]; kwargs=ag['kwargs']; ident=json.loads(f.cat(p+'/harbor_resume_identity.json')); small={'agent':ag['name'],'timeout':ag['override_timeout_sec'],'model_info':kwargs.get('model_info'),'llm_call_kwargs':kwargs.get('llm_call_kwargs'),'datasets':cfg['datasets'],'n_attempts':cfg['n_attempts'],'runtime':ident['runtime'],'policy_digest':ident['policy_digest']}
+  trials=['s3://'+x['name'] for x in f.ls(job,detail=True) if x['type']=='directory']
+  with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex: rows=list(ex.map(read_trial,trials))
+  seals={}
+  if f.exists(p+'/frozen-seals'):
+   for s in f.ls(p+'/frozen-seals',detail=False): seals['s3://'+s]=json.loads(f.cat(s))
+  out[label][b]={'root':u,'job':'s3://'+job,'config':small,'trials':rows,'seals':seals}; print(label,b,len(rows),flush=True)
+(ROOT/'terminal-index.json').write_text(json.dumps(out,indent=2))

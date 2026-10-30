@@ -1,0 +1,46 @@
+hf_id: open-athena/snowball-67b-a2b-base-262k-qk175-skew8
+hf_revision: 058ecaf27b9e4f37219df221a51e7d490d58ec3d
+model:
+  vocab_size: 128256
+  hidden_dim: 2560
+  intermediate_dim: 1280
+  shared_expert_intermediate_dim: 2560
+  num_shared_experts: 1
+  num_experts: 256
+  num_experts_per_token: 4
+  latent_dim: null
+  qb_estimator: topk
+  qb_hist_bins: 1000
+  num_layers: 26
+  num_heads: 20
+  num_kv_heads: 5
+  local_kv_heads: null
+  global_kv_heads: null
+  head_dim: 128
+  max_seq_len: 262144
+  sliding_window: 2048
+  global_every: 4
+  capacity_factor: 1.0
+  layer_norm_eps: 1.0e-05
+  initializer_std: 0.009882117688026186
+  qk_mult: 1.75
+  qk_mult_long_scale: 1.0
+  sconv: false
+  sconv_kernel: 4
+  sconv_sites:
+  - k
+  - attn
+  - mlp
+  attention_implementation: gpu_fa4_cute
+  moe_implementation: sonic
+  expert_chunks: 1
+  pooled_transport_capacity_factor: null
+  num_expert_waves: 1
+  report_capacity_overflow: false
+  remat_mode: recompute_all
+  rope:
+    theta: 10000.0
+    scaling_factor: null
+  rope_fused: false
+  ce_grad_in_forward_token_block_size: null
+destination: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/snowball-sft-hf-import-20261024b

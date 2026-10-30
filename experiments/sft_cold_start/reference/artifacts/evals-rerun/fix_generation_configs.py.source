@@ -1,0 +1,67 @@
+"""Copy the original inference defaults while proving all other Hub blobs unchanged."""
+import dataclasses
+import hashlib
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+from huggingface_hub import HfApi, hf_hub_download, get_token
+
+OUT = Path(__file__).resolve().parent
+TOKEN = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN') or get_token()
+API = HfApi(token=TOKEN)
+ORIGINAL = 'open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05'
+ORIGINAL_REV = '8c76b22afc38f5e95360c83ca88008f00b5ae1e0'
+WARNING = 'Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. Use at your own risk in production settings.'
+TARGETS = {222:'2026.10.25',471:'2026.10.25',1024:'2026.10.28',1536:'2026.10.28',2048:'2026.10.29',2338:'2026.10.29'}
+
+def manifest(info):
+    return {f.rfilename: {'size':f.size,'blob_id':f.blob_id,'lfs':dataclasses.asdict(f.lfs) if f.lfs else None} for f in info.siblings}
+
+def fetch(repo, name, revision):
+    return Path(hf_hub_download(repo,name,revision=revision,token=TOKEN)).read_bytes()
+
+payload=fetch(ORIGINAL,'generation_config.json',ORIGINAL_REV)
+assert json.loads(payload)=={'eos_token_id':[128001,128009],'bos_token_id':128000}
+(OUT/'generation_config.json').write_bytes(payload)
+receipt={'original_repo':ORIGINAL,'original_revision':ORIGINAL_REV,'payload_sha256':hashlib.sha256(payload).hexdigest(),'models':{}}
+receipt_path=OUT/'hf-generation-config-receipt.json'
+if receipt_path.exists():
+    receipt=json.loads(receipt_path.read_text())
+for step,date in TARGETS.items():
+    if str(step) in receipt['models']:
+        continue
+    repo=f'open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step{step}-{date}'
+    before=API.model_info(repo,files_metadata=True)
+    before_files=manifest(before)
+    existing = 'generation_config.json' in before_files
+    saved_before = OUT/f'hf-step{step}-before.json'
+    if existing:
+        assert saved_before.exists() and fetch(repo,'generation_config.json',before.sha)==payload
+        prior=json.loads(saved_before.read_text())
+        before_files=prior['before']
+    assert before.gated=='manual' and not before.private
+    record={'repo':repo,'parent_revision':prior['parent_revision'] if existing else before.sha,'before':before_files}
+    (OUT/f'hf-step{step}-before.json').write_text(json.dumps(record,indent=2)+'\n')
+    commit=None if existing else API.upload_file(path_or_fileobj=payload,path_in_repo='generation_config.json',repo_id=repo,parent_commit=before.sha,commit_message='Restore original SFT generation token defaults')
+    after=API.model_info(repo,revision=before.sha if existing else commit.oid,files_metadata=True)
+    after_files=manifest(after)
+    assert set(after_files)==set(before_files)|{'generation_config.json'}
+    assert {k:v for k,v in after_files.items() if k!='generation_config.json'}==before_files
+    assert fetch(repo,'generation_config.json',after.sha)==payload
+    readme=fetch(repo,'README.md',after.sha).decode()
+    license_bytes=fetch(repo,'LICENSE',after.sha)
+    assert WARNING in readme and 'license: openmdw-1.1' in readme
+    assert license_bytes.startswith(b'OpenMDW License Agreement, version 1.1') and license_bytes==(OUT.parent/f'hf/step{step}-{date.replace(".","")}'/'LICENSE').read_bytes()
+    assert after.gated==before.gated and after.private==before.private
+    headers={'Authorization':f'Bearer {TOKEN}'} if TOKEN else {}
+    response=requests.put(f'https://huggingface.co/api/models/{repo}/settings',headers=headers,json={'gated':'manual','orgMembersGated':False},timeout=60)
+    response.raise_for_status()
+    settings=response.json()
+    assert settings['gated']=='manual' and settings['orgMembersGated'] is False
+    record.update(revision=after.sha,after=after_files,unchanged_other_files=True,weight_shards=sum(k.endswith('.safetensors') for k in after_files),gated=after.gated,org_members_gated=settings['orgMembersGated'],private=after.private,license_sha256=hashlib.sha256(license_bytes).hexdigest(),verified_at=datetime.now(timezone.utc).isoformat())
+    receipt['models'][str(step)]=record
+    receipt_path.write_text(json.dumps(receipt,indent=2)+'\n')
+    print(step,after.sha,flush=True)

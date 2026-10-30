@@ -1,0 +1,77 @@
+"""Audit all mixture inputs and publish the catalog only when every cache is ready."""
+
+import argparse
+import json
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import draccus
+from levanter.data.text.datasets import ConcatDatasetComponent, LmDataConfig
+from levanter.store.cache import CacheCatalog, CacheCatalogEntry, CacheLedger
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+parser.add_argument("--publish", action="store_true")
+args = parser.parse_args()
+data = draccus.decode(LmDataConfig, json.loads((ROOT / "audits/full-mixture-data-20261024.json").read_text()))
+budget = json.loads((ROOT / "audits/replay-budget-plan-20261024.json").read_text())["cells"]
+validation_cells = {row["cell"] for row in sorted(budget, key=lambda row: (-row["weight"], row["cell"]))[:4]}
+paths = {"train": {}, "validation": {}}
+for name, component in data.components.items():
+    children = component.children if isinstance(component, ConcatDatasetComponent) else {None: component}
+    for child_name, child in children.items():
+        key = name if child_name is None else f"{name}/{child_name}"
+        assert child.cache_dir is not None
+        paths["train"][key] = child.cache_dir
+        if name.startswith("pretrain/") and child_name.split("/")[0] in validation_cells:
+            validation_path = child.cache_dir.replace("-train/", "-validation/")
+            assert validation_path != child.cache_dir
+            paths["validation"][key] = validation_path
+
+
+def load(path):
+    try:
+        if "/grug-sft/sft-pipe-repro/replay/" not in path:
+            fs, marker = filesystem_for(path + "/.verified-copy-manifest.json")
+            if not fs.exists(marker):
+                return path, None, "verified transfer manifest not committed"
+        fs, ledger_path = filesystem_for(path + "/shard_ledger.json")
+        with fs.open(ledger_path) as source:
+            ledger = CacheLedger.from_json(source.read())
+        if not ledger.is_finished:
+            return path, None, "unfinished ledger"
+        if ledger.total_num_rows <= 0 or ledger.field_counts["input_ids"] <= 0:
+            return path, None, "empty cache"
+        if "/grug-sft/sft-pipe-repro/replay/" in path:
+            fs, selection = filesystem_for(path.rsplit("/", 1)[0] + "/selection.json")
+            with fs.open(selection) as source:
+                rows = json.load(source)
+            key = "short" if path.endswith("/lte_64k") else "long"
+            if ledger.total_num_rows != sum(row[key + "_rows"] for row in rows):
+                return path, None, "selection/ledger row count mismatch"
+            if ledger.field_counts["input_ids"] != sum(row[key + "_tokens"] for row in rows):
+                return path, None, "selection/ledger token count mismatch"
+        return path, ledger, None
+    except Exception as exc:
+        return path, None, f"{type(exc).__name__}: {exc}"
+
+
+unique = sorted({path for split in paths.values() for path in split.values()})
+with ThreadPoolExecutor(max_workers=8) as pool:
+    results = list(pool.map(load, unique))
+ledgers = {path: ledger for path, ledger, error in results if error is None}
+missing = {path: error for path, ledger, error in results if error is not None}
+report = dict(required_unique_caches=len(unique),ready_unique_caches=len(ledgers),not_ready=missing,validation_cells=sorted(validation_cells))
+(ROOT / "audits/full-mixture-readiness-20261024.json").write_text(json.dumps(report, indent=2) + "\n")
+print(json.dumps({key: value for key, value in report.items() if key != "not_ready"}))
+if missing:
+    print(f"Catalog not published: {len(missing)} cache issues recorded in the readiness report")
+    raise SystemExit(1)
+catalog = CacheCatalog(splits={split: {name: CacheCatalogEntry(path, ledgers[path]) for name,path in entries.items()} for split,entries in paths.items()})
+local = ROOT / "audits/full-mixture-cache-catalog-20261024.json"
+local.write_text(catalog.to_json())
+if args.publish:
+    subprocess.run(["uv", "run", "fsutil", "cp", str(local), data.cache_catalog], check=True)
+    print("Published complete cache catalog")

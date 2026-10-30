@@ -1,0 +1,69 @@
+"""Compare archived supervised source allocations with the reproduction configuration."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+
+def leaf_components(components):
+    for name, component in components.items():
+        if component.get('children'):
+            yield from leaf_components(component['children'])
+        elif component.get('cache_dir'):
+            yield name, component
+
+
+def audit(artifacts):
+    inputs = {
+        'catalog': artifacts / 'sources/full-ab-packed-2026.09.29.json',
+        'original_plan': artifacts / 'sources/original-full-ab-mix.json',
+        'reproduction_config': artifacts / 'audits/full-mixture-data-20261024.json',
+        'reproduction_counts': artifacts / 'audits/full-mixture-counts-20261024.json',
+    }
+    data = {key: json.loads(path.read_text()) for key, path in inputs.items()}
+    catalog, plan, config, counts = (data[k] for k in inputs)
+    leaves = {c['cache_dir']: (name, c) for name, c in leaf_components(config['components'])}
+    rows = []
+    for name, source in sorted(catalog.items()):
+        mirror = source['cache_path'].replace('gs://marin-us-central2/', 's3://marin-us-east-02a/marin/') + '/train'
+        match = leaves.get(mirror)
+        rows.append({
+            'source': name,
+            'archived_original_cache': source['cache_path'],
+            'reproduction_cache': mirror,
+            'original_allocated_positions': plan['allocations_tokens'][name],
+            'catalog_packed_sequences': source['packed_sequences'],
+            'allocation_matches_packed_sequences': plan['allocations_tokens'][name] == source['packed_sequences'] * plan['context_length'],
+            'present_in_reproduction_config': match is not None,
+            'component_leaf': match[0] if match else None,
+        })
+    assert all(r['allocation_matches_packed_sequences'] and r['present_in_reproduction_config'] for r in rows)
+    original_positions = sum(r['original_allocated_positions'] for r in rows)
+    return {
+        'scope': 'Local archived metadata comparison; no remote payload or byte-identity validation and no reconstruction of examples consumed by step2048.',
+        'input_hashes': {key: {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()} for key, path in inputs.items()},
+        'supervised_source_count': len(rows),
+        'original_scheduled_supervised_positions': original_positions,
+        'reproduction_scheduled_supervised_positions': counts['sft_training_positions'],
+        'heldout_sequences': sum(counts['holdouts'].values()),
+        'removed_positions': original_positions - counts['sft_training_positions'],
+        'full_schedule_steps': counts['steps'],
+        'full_schedule_positions': counts['total_positions'],
+        'replay_positions': counts['replay_positions'],
+        'replay_fraction': counts['replay_positions'] / counts['total_positions'],
+        'rows': rows,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--artifacts', type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--output', type=Path, default=Path(__file__).with_name('provenance.json'))
+    args = parser.parse_args()
+    result = audit(args.artifacts)
+    args.output.write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({k: v for k, v in result.items() if k not in ('input_hashes', 'rows')}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

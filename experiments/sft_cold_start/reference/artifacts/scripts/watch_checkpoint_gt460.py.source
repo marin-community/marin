@@ -1,0 +1,136 @@
+"""Latch a committed checkpoint and queue its exact identity to the owning Codex thread."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+from datetime import datetime, timezone
+
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write_json(path, value):
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(json.dumps(value, indent=2) + '\n')
+    temporary.replace(path)
+
+
+def committed_checkpoints(root, threshold):
+    candidates = []
+    for category in ('temporary-checkpoints', 'checkpoints', 'best'):
+        directory = root.rstrip('/') + '/' + category
+        fs, key = filesystem_for(directory)
+        fs.invalidate_cache(key)
+        try:
+            children = fs.ls(key, detail=False)
+        except FileNotFoundError:
+            continue
+        for child in children:
+            name = child.rstrip('/').rsplit('/', 1)[-1]
+            match = re.fullmatch(r'step-(\d+)(?:-score-[0-9a-f]+)?', name)
+            if match is None or int(match[1]) <= threshold:
+                continue
+            uri = directory + '/' + name
+            metadata_key = child.rstrip('/') + '/metadata.json'
+            try:
+                with fs.open(metadata_key, 'rb') as stream:
+                    payload = stream.read()
+                info = fs.info(metadata_key)
+            except FileNotFoundError:
+                continue  # The global commit marker is not present yet.
+            metadata = json.loads(payload)
+            if metadata['step'] != int(match[1]):
+                raise ValueError('Checkpoint path and committed metadata step disagree: ' + uri)
+            datetime.fromisoformat(metadata['timestamp'])
+            canonical = json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode()
+            candidates.append({
+                'checkpoint': uri, 'step': metadata['step'], 'metadata': metadata,
+                'metadata_digest': hashlib.sha256(canonical).hexdigest(),
+                'metadata_bytes_sha256': hashlib.sha256(payload).hexdigest(),
+                'metadata_size': info['size'], 'metadata_etag': info.get('ETag'),
+            })
+    return sorted(candidates, key=lambda item: (item['step'], item['metadata']['timestamp'], item['checkpoint']))
+
+
+def wake_message(config, event, fired_path):
+    return f'''CHECKPOINT WATCHDOG FIRED — user-authorized follow-up.
+A fully committed checkpoint above step {config['threshold']} was detected at {event['detected_at']}.
+Checkpoint: {event['checkpoint']}
+Step: {event['step']}
+Canonical metadata SHA-256: {event['metadata_digest']}
+Durable evidence: {fired_path}
+
+The user's explicit instruction was: "When that watchdog fires, I want you to confirm the result, export that checkpoint in the same fashion as you are doing for this one, and then cancel the job."
+Do these actions in order:
+1. Independently re-read the exact checkpoint metadata, verify its digest and step >460, and confirm committed payload availability. Pin this checkpoint; do not silently substitute a newer one. Rolling retention is two checkpoints, so load/export it promptly.
+2. Export its BF16 model parameters preserving stored router biases, using the same tested path as step222. The reusable campaign artifact is artifacts/scripts/export_step222_20261025.py; replace its step-specific metadata guard and create a new immutable config/pins. Do not use the generic Hero exporter that applies pending router updates.
+3. Publish and VERIFY the complete checkpoint in a new open-athena Hugging Face repository with manual external access gating and organization-member gating disabled, with tokenizer, model card, OpenMDW 1.1 license, and provenance, as for open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25. Verify exported payload, HF files/hashes, and gate settings. Record the repo revision and evidence.
+4. Only AFTER the HF export is complete and verified, cancel exactly {config['training_job']} on cw-rno2a, confirm its child workers terminate/release GPUs, and update ACTIVE.md, STATE.md, and TRACKER.md. Never restart the cluster or cancel unrelated jobs. If export fails, leave training running and repair the export first.
+
+Campaign directory: {config['campaign']}. Follow its POLICY.md; secrets are sourced from /Users/benfeuer/Documents/secrets.env without echoing them. Authorized GPU budget is 256 H100; existing training uses128. The earlier broad goal was paused; this message implements only the user's explicit watchdog/export/cancel request. Do not resume training toward4750 or claim quality parity.
+After independently acknowledging this trigger, write {config['state_dir']}/acknowledged.json with checkpoint, timestamp, and intended follow-up. After verified publication and cancellation, write completed.json there. The watchdog itself has not exported or cancelled anything.'''
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--probe-only', action='store_true')
+    args = parser.parse_args()
+    config = json.loads(args.config.read_text())
+    state_dir = Path(config['state_dir'])
+    state_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    os.environ['AWS_ACCESS_KEY_ID'] = os.environ['CW_KEY_ID']
+    os.environ['AWS_SECRET_ACCESS_KEY'] = os.environ['CW_KEY_SECRET']
+    os.environ['AWS_DEFAULT_REGION'] = 'auto'
+    configure_coreweave_s3()
+    if args.probe_only:
+        print(json.dumps(committed_checkpoints(config['checkpoint_root'], config['threshold'])))
+        return
+    with (state_dir / 'watchdog.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fired_path = state_dir / 'fired.json'
+        queued_path = state_dir / 'queued.json'
+        if queued_path.exists():
+            return
+        while True:
+            try:
+                if fired_path.exists():
+                    event = json.loads(fired_path.read_text())
+                else:
+                    candidates = committed_checkpoints(config['checkpoint_root'], config['threshold'])
+                    write_json(state_dir / 'heartbeat.json', {'observed_at': now(), 'pid': os.getpid(), 'status': 'watching', 'threshold': config['threshold'], 'qualifying_checkpoints': len(candidates)})
+                    if not candidates:
+                        time.sleep(config['poll_seconds'])
+                        continue
+                    event = {**candidates[0], 'detected_at': now(), 'threshold': config['threshold'], 'thread_id': config['thread_id']}
+                    write_json(fired_path, event)
+                    logging.info('Committed checkpoint trigger: step %s, %s', event['step'], event['checkpoint'])
+                prompt = wake_message(config, event, fired_path)
+                (state_dir / 'wake-message.txt').write_text(prompt + '\n')
+                result = subprocess.run([config['codex'], 'queue', '--thread', config['thread_id'], '--message', prompt], capture_output=True, text=True, timeout=60, cwd=config['worktree'])
+                write_json(state_dir / 'last-queue-attempt.json', {'attempted_at': now(), 'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+                if result.returncode != 0:
+                    raise RuntimeError('codex queue returned nonzero; see last-queue-attempt.json')
+                write_json(queued_path, {'queued_at': now(), 'checkpoint': event['checkpoint'], 'step': event['step'], 'thread_id': config['thread_id'], 'receipt': result.stdout.strip()})
+                logging.info('Checkpoint alert queued to owning Codex thread; watchdog complete')
+                return
+            except Exception:
+                logging.exception('Watchdog observation or alert failed; retrying without changing training')
+                write_json(state_dir / 'last-error.json', {'observed_at': now(), 'status': 'retrying'})
+                time.sleep(config['poll_seconds'])
+
+
+if __name__ == '__main__':
+    main()

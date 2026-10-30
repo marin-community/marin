@@ -1,0 +1,39 @@
+import concurrent.futures,csv,hashlib,json,re
+from pathlib import Path
+from rigging.filesystem.buckets import filesystem_for
+ROOT=Path(__file__).resolve().parents[2]
+OUT=Path(__file__).resolve().parent
+SENSITIVE={'api_base','api_key','authorization','access_token','hf_token','token','password','secret','secret_key','credentials','env','environment_variables'}
+def redact(x):
+ if isinstance(x,dict):return {k:('[REDACTED]' if k.lower() in SENSITIVE else redact(v)) for k,v in x.items()}
+ if isinstance(x,list):return [redact(v) for v in x]
+ if isinstance(x,str):
+  x=re.sub(r'https?://[^\s"\\]*proxy[^\s"\\]*','[REDACTED_PROXY_URL]',x)
+  x=re.sub(r'(?:hf_|wandb_v1_)[A-Za-z0-9_\-]{20,}','[REDACTED_TOKEN]',x)
+ return x
+
+def fetch(url):
+ fs,p=filesystem_for(url)
+ raw=fs.cat(p)
+ return {'url':url,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'data':redact(json.loads(raw))}
+def one(row):
+ ident=row['position']+'-'+row['benchmark']
+ existing=OUT/f'eval-{ident}.json'
+ if existing.exists():
+  cached=json.loads(existing.read_text());return {'id':ident,'available':list(cached['files']),'errors':cached['errors']}
+ result={'row':row,'files':{},'errors':[]}
+ base=row['result_uri']
+ urls={'record':base.rsplit('/',1)[0]+'/record.json'} if not base.endswith('.json') else {'displayed_result':base}
+ if not base.endswith('.json'):
+  urls['identity']=base+'/harbor_resume_identity.json'
+ for kind,url in urls.items():
+  try:result['files'][kind]=fetch(url)
+  except (FileNotFoundError,OSError,ValueError) as e:result['errors'].append({'kind':kind,'url':url,'type':type(e).__name__})
+ (OUT/f'eval-{ident}.json').write_text(json.dumps(result,indent=2)+'\n')
+ return {'id':ident,'available':list(result['files']),'errors':result['errors']}
+def main():
+ rows=[x for x in csv.DictReader((ROOT/'figures/scores.csv').open())]
+ with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool: results=list(pool.map(one,rows))
+ (OUT/'eval-index.json').write_text(json.dumps(results,indent=2)+'\n')
+ print('rows',len(results),'records',sum('record'in x['available'] for x in results),'identities',sum('identity'in x['available'] for x in results),'displayed',sum('displayed_result'in x['available'] for x in results))
+if __name__=='__main__':main()

@@ -1,0 +1,33 @@
+import dataclasses
+import hashlib
+import json
+import tomllib
+from pathlib import Path
+import yaml
+from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor, preflight_harbor_configs
+
+OUT=Path(__file__).resolve().parent
+WORK=OUT.parent/'worktrees/evals-rerun'
+ROOT=WORK/'experiments/evaluation/campaigns/sft-thinking-eos-20261030'
+AUDIT=OUT.parent/'reports/confound-audit-20261030'
+benches=sorted((ROOT/'harbor-configs').glob('*.yaml'))
+records=[]
+for path in benches:
+ doc=yaml.safe_load(path.read_text()); old=json.loads((AUDIT/f'eval-4-{path.stem}.json').read_text())['files']['harbor_job0']['data']
+ old_kwargs=old['agents'][0]['kwargs'];new_kwargs=doc['agents'][0]['kwargs']
+ for name in ['max_input_tokens','max_output_tokens']:
+  assert old_kwargs['model_info'][name]==new_kwargs['model_info'][name]
+ assert old['n_attempts']==doc['n_attempts']
+ assert old['agents'][0]['override_timeout_sec']==doc['agents'][0]['override_timeout_sec']
+ assert old_kwargs.get('compaction_reserve_tokens')==new_kwargs.get('compaction_reserve_tokens')
+ differences={k:{'old':old_kwargs.get(k),'new':new_kwargs.get(k)} for k in set(old_kwargs)|set(new_kwargs) if old_kwargs.get(k)!=new_kwargs.get(k) and k!='api_base'}
+ records.append({'benchmark':path.stem,'agent_kwargs_changes':differences,'historical_dataset':old['datasets'],'rerun_dataset':doc['datasets'],'request_budgets_preserved':True,'compaction_reserve_preserved':True,'attempts':doc['n_attempts']})
+(OUT/'historical-semantic-diff.json').write_text(json.dumps(records,indent=2)+'\n')
+validated=preflight_harbor_configs([(p,{'thinking_format':'chat-template'}) for p in benches])
+preflight=[]
+for p,v in zip(benches,validated,strict=True):
+ preflight.append({'benchmark':p.stem,'dataset_selector':v.dataset_selector,'dataset_revision':v.dataset_revision,'policy_digest':v.digest,'max_input_tokens':v.max_input_tokens,'max_output_tokens':v.max_output_tokens,'trials_per_task':v.trials_per_task,'benchmark_metadata':v.benchmark.model_dump(mode='json') if hasattr(v.benchmark,'model_dump') else dataclasses.asdict(v.benchmark)})
+(OUT/'benchmark-preflight.json').write_text(json.dumps(preflight,indent=2)+'\n')
+pins={'marin_base_revision':'a16537859e11b68b7a1d4776421937fb8162ffc8','harbor_runtime':harbor_runtime_descriptor(),'vllm':tomllib.loads((WORK/'config/external/vllm/gpu.toml').read_text()),'files':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(ROOT.rglob('*')) if p.is_file()}}
+(OUT/'runtime-config-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+print('All benchmark preflights and semantic comparisons passed')

@@ -1,0 +1,21 @@
+name: grug-sft/sft-pipe-repro/replay-smoke
+version: 20261024a
+tokenizer: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+cells:
+- name: c00q0-train
+  source: s3://marin-us-east-02a/marin/datakit/store_4d2e363d/cluster=0/quality=0
+  source_ledger_sha256: 46cddd2e700cb6380f39ef394f9aad3108492c4453194eac7fa65137b157b325
+  shards:
+  - part-00292-of-00384-attempt-aad839850b9a482e8aa64fb8a0748f1b
+  - part-00270-of-00384-attempt-b192fcf707264ee38163cc533c1802d0
+  short_tokens: 1000000
+  long_tokens: 1000000
+- name: c00q0-validation
+  source: s3://marin-us-east-02a/marin/datakit/store_4d2e363d/cluster=0/quality=0
+  source_ledger_sha256: 46cddd2e700cb6380f39ef394f9aad3108492c4453194eac7fa65137b157b325
+  shards:
+  - part-00207-of-00384-attempt-7c34206e624747c4b57f13f9cffe08e1
+  short_tokens: 1000000
+  long_tokens: 1000000
+max_concurrent: 2
+dry_run: false

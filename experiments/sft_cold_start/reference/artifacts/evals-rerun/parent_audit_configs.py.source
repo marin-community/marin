@@ -1,0 +1,39 @@
+import json
+from pathlib import Path
+import yaml
+from transformers.utils.chat_template_utils import _compile_jinja_template
+R = Path(__file__).resolve().parent
+C = R.parent/'worktrees/evals-rerun/experiments/evaluation/campaigns/sft-thinking-eos-20261030'
+A = R.parent/'reports/confound-audit-20261030'
+models = json.loads((R/'models.json').read_text())
+checks = []
+for tag, model in models.items():
+    for arm in ['', 'swebench-verified']:
+        p = C/'model-configs'/arm/(model['name']+'.yaml')
+        d = yaml.safe_load(p.read_text())
+        assert (d['location'], d['revision']) == (model['repo'], model['revision'])
+        serve = d['serve']
+        assert serve['max_model_len'] == (131072 if arm else 73728)
+        assert serve['tensor_parallel_size'] == 1 and serve['data_parallel_size'] == 8
+        args = serve['vllm_extra_args']
+        assert json.loads(args[args.index('--override-generation-config')+1]) == {'eos_token_id':[128001,128009], 'bos_token_id':128000}
+        template = _compile_jinja_template(serve['chat_template'])
+        for value in [None, True, False]:
+            kw = {} if value is None else {'enable_thinking':value}
+            rendered = template.render(messages=[{'role':'user','content':'Say hello.'}], bos_token='<|begin_of_text|>', add_generation_prompt=True, **kw)
+            assert 'Reasoning: /think' in rendered and '/nothink' not in rendered
+        checks.append({'model':tag,'arm':arm or 'agentic','pin_context_eos_thinking':'pass'})
+for p in sorted((C/'harbor-configs').glob('*.yaml')):
+    d = yaml.safe_load(p.read_text())
+    old = json.loads((A/f'eval-4-{p.stem}.json').read_text())['files']['harbor_job0']['data']
+    agent, prior = d['agents'][0], old['agents'][0]
+    assert agent['name'] == prior['name']
+    for key in ['override_timeout_sec','override_setup_timeout_sec']:
+        assert agent[key] == prior[key]
+    for key in ['max_input_tokens','max_output_tokens']:
+        assert agent['kwargs']['model_info'][key] == prior['kwargs']['model_info'][key]
+    assert d.get('n_attempts',1) == old.get('n_attempts',1)
+    changes = {key: {'before':prior['kwargs'].get(key), 'after':val} for key,val in agent['kwargs'].items() if key not in ['api_base','model_info'] and prior['kwargs'].get(key) != val}
+    checks.append({'benchmark':p.stem,'budgets_attempts_harness':'pass','intentional_agent_changes':changes})
+(R/'parent-config-audit.json').write_text(json.dumps(checks,indent=2)+'\n')
+print(f'Passed {len(checks)} model/benchmark checks')

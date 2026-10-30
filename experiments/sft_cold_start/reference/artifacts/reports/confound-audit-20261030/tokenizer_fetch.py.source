@@ -1,0 +1,29 @@
+"""Fetch only small inference artifacts at evaluation-pinned model revisions."""
+import hashlib
+import json
+import os
+from pathlib import Path
+from huggingface_hub import HfApi, hf_hub_download
+
+OUT=Path(__file__).resolve().parent
+MODELS={
+ 'base':('open-athena/snowball-67b-a2b-base-262k-qk175-skew8','3bbf729f0555965c8667600ee91c3c109ac21b19'),
+ '471':('open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step471-2026.10.25','8c4cbe2dfab119bcb290b3aadb080d853c95c890'),
+ '1024':('open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28','f8445fc21bc30eb088245074fd3bf5de72b0a0c0'),
+ '222':('open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25','8eb867050d211719c11406b07aedf6642dd37941'),
+ '2048':('open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29','e756eb218452af3d822f36fb1a0543f8e1bd61f5'),
+ '1005':('open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05','8c76b22afc38f5e95360c83ca88008f00b5ae1e0')}
+FILES=['config.json','generation_config.json','tokenizer.json','tokenizer_config.json','special_tokens_map.json','chat_template.jinja','model.safetensors.index.json']
+token=os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+api=HfApi(token=token); records={}
+for tag,(repo,rev) in MODELS.items():
+ info=api.model_info(repo,revision=rev,files_metadata=True)
+ current=api.model_info(repo)
+ names={s.rfilename:s for s in info.siblings};files={}
+ for name in FILES:
+  if name not in names:files[name]={'exists':False};continue
+  path=Path(hf_hub_download(repo,name,revision=rev,token=token,local_dir=OUT/f'tokenizer-hf-{tag}'))
+  files[name]={'exists':True,'bytes':path.stat().st_size,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+ records[tag]={'repo':repo,'eval_revision':rev,'resolved_revision':info.sha,'current_revision':current.sha,'files':files}
+ print(tag,info.sha,{k:v.get('sha256','missing') for k,v in files.items()})
+(OUT/'tokenizer-hf-manifest.json').write_text(json.dumps(records,indent=2)+'\n')

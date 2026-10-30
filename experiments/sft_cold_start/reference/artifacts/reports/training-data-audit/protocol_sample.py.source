@@ -1,0 +1,110 @@
+"""Read deterministic bounded documents from the existing S3 SFT mirror."""
+import argparse
+import concurrent.futures
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+
+import numpy as np
+from tokenizers import Tokenizer
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+from levanter.store.tree_store import TreeStore
+
+HEADER = re.compile(r'<\|start_header_id\|>(.*?)<\|end_header_id\|>', re.S)
+END = re.compile(r'<\|(?:eot_id|end_of_text|finetune_right_pad_id)\|>')
+ROOT = Path(__file__).resolve().parents[2]
+OUT = Path(__file__).resolve().parent
+
+
+def messages(text):
+    matches = list(HEADER.finditer(text))
+    result = []
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[match.end():end]
+        stops = list(END.finditer(body))
+        content_end = match.end() + stops[-1].start() if stops else end
+        result.append({'role': match.group(1).strip(), 'text': text[match.end():content_end],
+                       'start_char': match.end(), 'end_char': content_end,
+                       'end_marker': stops[-1].group() if stops else None,
+                       'serialized_tail': text[content_end:end]})
+    return result
+
+
+def read_json(url):
+    fs, path = filesystem_for(url)
+    with fs.open(path, 'rb') as f:
+        return json.load(f)
+
+
+def sample_source(item, tokenizer):
+    name, source = item
+    base = source['cache_path'].replace('gs://marin-us-central2/', 's3://marin-us-east-02a/marin/') + '/train'
+    ledger = read_json(base + '/shard_ledger.json')
+    shards = sorted(ledger['shard_rows'])
+    shard = shards[int(hashlib.sha256(name.encode()).hexdigest()[:8], 16) % len(shards)]
+    path = base + '/' + shard.rsplit('/', 1)[-1] if ledger.get('layout') == 'sharded' else base
+    n = ledger['shard_rows'][shard]
+    deep = any(k in name for k in ['agenttrove', 'agentic_', 'opencode_', 'kernelgym'])
+    count = min(n, 24 if deep else 3)
+    indices = sorted(set(int((i + 1) * n / (count + 1)) for i in range(count)))
+    store = TreeStore.open({'input_ids': np.zeros(0, dtype=np.int32)}, path, mode='r')
+    rows = []
+    for index in indices:
+        tokens = np.asarray(store[index]['input_ids'], dtype=np.int32)
+        text = tokenizer.decode(tokens.tolist(), skip_special_tokens=False)
+        rows.append({'id': name + ':' + shard.rsplit('/', 1)[-1] + ':' + str(index),
+                     'source': name, 'path': path, 'row_index': index, 'token_count': len(tokens),
+                     'sha256': hashlib.sha256(tokens.astype('<i4').tobytes()).hexdigest(),
+                     'text': text, 'messages': messages(text), 'truncated': False,
+                     'mask_status': 'input_ids_only; full_causal_config; role_not_mask',
+                     'membership': 'source_document; packed_holdout_and_step_exposure_not_reconstructed'})
+    return rows, {'source': name, 'path': path, 'shard_rows': n, 'total_rows': ledger['total_num_rows'],
+                  'selected_rows': indices, 'targeted_deeper_sample': deep, 'tokens': sum(r['token_count'] for r in rows)}
+
+
+def main():
+    parser = argparse.ArgumentParser(); parser.add_argument('--workers', type=int, default=4); args=parser.parse_args()
+    configure_coreweave_s3()
+    os.environ['AWS_ACCESS_KEY_ID'], os.environ['AWS_SECRET_ACCESS_KEY'] = s3_credentials(StoreType.COREWEAVE)
+    os.environ['AWS_REGION'] = os.environ['AWS_DEFAULT_REGION'] = data_buckets()['marin-us-east-02a'].signing_region
+    catalog = ROOT / 'sources/full-ab-packed-2026.09.29.json'
+    tokenizer_path = ROOT / 'sources/original-sft-tokenizer.json'
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    sources = json.loads(catalog.read_text())
+    items = sorted(sources.items(), key=lambda x: (not any(k in x[0] for k in ['agenttrove','agentic_','opencode_','kernelgym']), x[0]))
+    manifest = {'catalog_sha256': hashlib.sha256(catalog.read_bytes()).hexdigest(),
+                'tokenizer_sha256': hashlib.sha256(tokenizer_path.read_bytes()).hexdigest(),
+                'selection': 'SHA256(source) modulo shard count; equally spaced interior source-document rows; 24 targeted / 3 other rows',
+                'sources': [], 'errors': []}
+    with (OUT / 'shared-corpus.jsonl').open('w') as output, concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(sample_source, item, tokenizer): item[0] for item in items}
+        for future in concurrent.futures.as_completed(futures):
+            name = futures[future]
+            try:
+                rows, details = future.result()
+            except Exception as error:
+                manifest['errors'].append({'source': name, 'error_type': type(error).__name__, 'message': str(error)[:500]})
+                print('FAILED', name, type(error).__name__, flush=True)
+                continue
+            for row in rows:
+                output.write(json.dumps(row, ensure_ascii=False) + '\n')
+            output.flush()
+            manifest['sources'].append(details)
+            (OUT / 'shared-corpus-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+            print('READ', name, len(rows), details['tokens'], flush=True)
+    rows = sorted((json.loads(line) for line in (OUT / 'shared-corpus.jsonl').open()), key=lambda row: row['id'])
+    (OUT / 'shared-corpus.jsonl').write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows))
+    manifest['sources'] = sorted(manifest['sources'], key=lambda row: row['source'])
+    manifest['role_parsing'] = 'Heuristic decoded Llama header markers; quoted/control-like text may look like boundaries. Raw token SHA retained; no message masks available.'
+    manifest['complete'] = True
+    manifest['corpus_sha256'] = hashlib.sha256((OUT/'shared-corpus.jsonl').read_bytes()).hexdigest()
+    (OUT / 'shared-corpus-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+
+
+if __name__ == '__main__':
+    main()

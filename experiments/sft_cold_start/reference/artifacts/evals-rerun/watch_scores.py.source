@@ -1,0 +1,79 @@
+"""Collect exact approved eval records and notify the owner; never operate jobs."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT=Path(__file__).resolve().parent
+TERMINAL={'succeeded','failed','artifact_failed','infra_failed'}
+
+def write(path,document):
+    temporary=path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(document,indent=2)+'\n')
+    temporary.replace(path)
+
+def redact(value):
+    if isinstance(value,dict):
+        return {k:('[REDACTED]' if k in {'api_base','api_key','env','secret_env','capability_url'} else redact(v)) for k,v in value.items()}
+    if isinstance(value,list):return [redact(v) for v in value]
+    if isinstance(value,str):return re.sub(r'https?://[^\s"\']*/proxy/t/[^\s"\']+','[CAPABILITY URL REDACTED]',value)
+    return value
+
+def collect(config):
+    fs,key=filesystem_for(config['records_prefix'])
+    fs.invalidate_cache(key)
+    rows=[]
+    records=ROOT/'records';records.mkdir(exist_ok=True)
+    for filename in fs.glob(key+'/*/record.json'):
+        with fs.open(filename,'rb') as stream:raw=stream.read()
+        record=json.loads(raw)
+        if record['group_id'] not in config['groups']:continue
+        write(records/(record['run_id']+'.json'),redact(record))
+        rows.append({'run_id':record['run_id'],'group_id':record['group_id'],'model':record['model']['location'],'revision':record['model']['config']['revision'],'benchmark':record['eval']['name'],'status':record['status'],'metrics':record.get('metrics',{}),'canonical_metrics':record.get('canonical_metrics',{}),'results_path':record.get('results_path'),'jobs':record.get('jobs',{}),'coverage':record.get('coverage',{}),'error':redact(record.get('error')),'record_uri':'s3://'+filename,'record_sha256':hashlib.sha256(raw).hexdigest(),'artifacts':redact(record.get('artifacts',{}))})
+    write(ROOT/'actual-scores.json',rows)
+    return rows
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--once',action='store_true');args=parser.parse_args()
+    with (ROOT/'score-watcher.lock').open('w') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        consecutive_errors=0
+        while True:
+            config=json.loads((ROOT/'score-watcher-config.json').read_text())
+            try:
+                rows=collect(config)
+            except (OSError,ValueError) as error:
+                consecutive_errors+=1
+                write(ROOT/'score-watcher-read-error.json',{'type':type(error).__name__,'consecutive_errors':consecutive_errors,'observed_at':datetime.now(timezone.utc).isoformat()})
+                if consecutive_errors==3 and not args.once:
+                    subprocess.run([config['codex'],'queue','--thread',config['parent_thread'],'--message',f'SFT score watcher had three consecutive read errors; inspect {ROOT}/score-watcher-read-error.json. Watcher continues read-only retries. Do not launch or cancel jobs based on this alert.'],capture_output=True,text=True,timeout=60,check=True)
+                if args.once:raise
+                time.sleep(120)
+                continue
+            consecutive_errors=0
+            observed=datetime.now(timezone.utc).isoformat()
+            write(ROOT/'score-watcher-heartbeat.json',{'pid':os.getpid(),'observed_at':observed,'phase':config['phase'],'expected_cells':config['expected_cells'],'records_seen':len(rows)})
+            terminal_ids=sorted(r['run_id'] for r in rows if r['status'] in TERMINAL)
+            progress_path=ROOT/f'score-watcher-{config["phase"]}-progress-notified.json'
+            prior=json.loads(progress_path.read_text())['run_ids'] if progress_path.exists() else []
+            if config['phase']=='full' and set(terminal_ids)-set(prior) and not args.once:
+                message=f'SFT RERUN OPERATOR FOLLOW-UP: {len(terminal_ids)}/24 terminal cells available in {ROOT}/actual-scores.json. Audit actual verifier execution and coverage before accepting scores; invalid bootstrap zeros must be excluded. Continue authorized24-cell cohort monitoring, bounded policy recovery and manual tracker updates only after verified results. Do not duplicate launches. Exact new cells: {sorted(set(terminal_ids)-set(prior))}.'
+                subprocess.run([config['codex'],'queue','--thread',config['operator_thread'],'--message',message],capture_output=True,text=True,timeout=60,check=True)
+                write(progress_path,{'observed_at':observed,'run_ids':terminal_ids})
+            complete=len(rows)==config['expected_cells'] and all(r['status'] in TERMINAL for r in rows)
+            receipt=ROOT/f'score-watcher-{config["phase"]}-notified.json'
+            if complete and not receipt.exists() and not args.once:
+                message=f'SFT EVAL {config["phase"]} RESULTS READY. Read-only watcher collected {len(rows)} terminal records. Actual metrics, coverage, errors, exact revisions, artifact URIs and source hashes: {ROOT}/actual-scores.json; sanitized records: {ROOT}/records. Independently review before conclusions. Full-suite approval is NOT granted by this notification; do not launch, cancel, or change jobs automatically. Parent thread owns any further authorization.'
+                queued=subprocess.run([config['codex'],'queue','--thread',config['parent_thread'],'--message',message],capture_output=True,text=True,timeout=60,check=True)
+                write(receipt,{'observed_at':observed,'records':len(rows),'receipt':queued.stdout.strip()})
+            if args.once:return
+            time.sleep(120)
+
+if __name__=='__main__':main()

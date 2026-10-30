@@ -1,0 +1,31 @@
+"""Read and redact W&B training metadata for the confound audit."""
+import hashlib
+import json
+from pathlib import Path
+import re
+import wandb
+
+OUT=Path(__file__).resolve().parent
+RUNS={
+ 'original':'marin-community/marin_moe_sft/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped',
+ 'repro128':'nyu-dice-lab/sft-pipe-repro/snowball-sft-production-128h100-20261024b',
+ 'repro256':'nyu-dice-lab/sft-pipe-repro/snowball-sft-production-256h100-20261027c',
+}
+
+def clean(x):
+ if isinstance(x,dict):return {k:('[REDACTED]' if re.search(r'api_key|api_base|authorization|password|secret|access_token',k,re.I) else clean(v)) for k,v in x.items()}
+ if isinstance(x,list):return [clean(v) for v in x]
+ if isinstance(x,str):return re.sub(r'https?://[^\s"<>]*\?[^\s"<>]+','[REDACTED_QUERY_URL]',x)
+ return x
+
+api=wandb.Api(timeout=60)
+for name,path in RUNS.items():
+ try:
+  run=api.run(path)
+  result={'path':path,'url':run.url,'state':run.state,'created_at':run.created_at,'config':clean(dict(run.config)),'summary':clean(dict(run.summary)),'history_keys':clean(run.history_keys)}
+  (OUT/f'training-wandb-{name}.json').write_text(json.dumps(result,indent=2,default=str)+'\n')
+  keys=[k for k in run.history_keys.get('keys',{}) if any(t in k for t in ['loss','learning_rate','optimizer','train/step','global_step'])]
+  print(name,run.state,'config_keys',list(run.config),'summary_step',run.summary.get('trainer/global_step'), 'historykeys',keys[:30])
+ except Exception as error:
+  (OUT/f'training-wandb-{name}-error.json').write_text(json.dumps({'path':path,'error_type':type(error).__name__,'message':clean(str(error))},indent=2)+'\n')
+  print(name,'FAILED',type(error).__name__)

@@ -1,0 +1,54 @@
+data:
+  tokenizer: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+  vocab_size: null
+  cache_dir: null
+  cache_catalog: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/preflight-smoke/cache_catalog.json
+  cache_options:
+    batch_size: 128
+  enforce_eos: true
+  auto_build_caches: false
+  chat_template: null
+  shuffle: true
+  permutation_type: feistel
+  block_cross_document_attention: true
+  components:
+    replay:
+      type: cached
+      source: null
+      cache_dir: s3://marin-us-east-02a/marin/datakit/store_4d2e363d/cluster=1/quality=4
+      format:
+        type: text
+        text_key: text
+      pack: null
+      tags: null
+      split: validation
+      flat_cache: true
+    sft:
+      type: cached
+      source: null
+      cache_dir: s3://marin-us-east-02a/marin/datakit/levanter-store/sft/penfever-traces/minimax-m27-131k/code-contests-noblock_7415d332/train
+      format:
+        type: text
+        text_key: text
+      pack: 262144
+      tags: null
+      split: validation
+      flat_cache: true
+  train_weights:
+    replay: 0.20345723684210526
+    sft: 0.7965427631578947
+  stop_strategy: restart
+  target_budget: null
+  experiment_budget: null
+  mixture_block_size: 1000
+  max_train_batches: null
+  num_validation_sequences:
+    replay: 2
+    sft: 4
+  shuffle_before_trainval_split: true
+  prior_context_phases: []
+sequence_length: 262144
+vocab_size: 128256
+expected_train_sequences:
+  sft: 146
+output_path: s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/snowball-sft-data-preflight-smoke-20261024/report.json

@@ -1,0 +1,34 @@
+"""Run resumable verified copies of the audited exact SFT caches."""
+
+import concurrent.futures
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+
+
+def transfer(record):
+    identity = hashlib.sha256(record["source"].encode()).hexdigest()[:16]
+    log = ROOT / "logs" / f"sft-transfer-{identity}.log"
+    with log.open("a") as stream:
+        result = subprocess.run(
+            ["uv", "run", "--frozen", "fsutil", "verified-copy", "--workers", "4",
+             record["source"], record["destination"]], stdout=stream, stderr=subprocess.STDOUT,
+        )
+    receipt = {"source": record["source"], "destination": record["destination"],
+               "exit_code": result.returncode, "log": str(log),
+               "completion_manifest": record["destination"] + "/.verified-copy-manifest.json"}
+    (ROOT / "audits" / f"sft-transfer-{identity}.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(json.dumps(receipt), flush=True)
+    return receipt
+
+
+if __name__ == "__main__":
+    records = json.loads((ROOT / "audits/sft-inputs-20261024.json").read_text())
+    assert all("error" not in r["gcs"] for r in records)
+    records.sort(key=lambda r: r["gcs"]["bytes"])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        receipts = list(pool.map(transfer, records))
+    raise SystemExit(any(r["exit_code"] for r in receipts))

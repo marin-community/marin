@@ -1,0 +1,41 @@
+"""Verify live rendering and EOS termination without persisting capability URLs."""
+import argparse
+import json
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+from tokenizers import Tokenizer
+
+parser=argparse.ArgumentParser();parser.add_argument('endpoint');parser.add_argument('label');args=parser.parse_args()
+root=Path(__file__).resolve().parent
+mint=subprocess.run(['uv','run','iris','--cluster=marin','endpoints','mint',args.endpoint,'--ttl-hours','1'],capture_output=True,text=True,check=True)
+match=re.search(r'url\s+(https?://\S+)',mint.stdout)
+assert match is not None,'Endpoint mint did not return a URL'
+base=match.group(1).rstrip('/')
+session=requests.Session()
+def call(path,payload=None):
+    response=session.get(base+path,timeout=90) if payload is None else session.post(base+path,json=payload,timeout=90)
+    if not response.ok:raise RuntimeError(f'Probe {path} returned HTTP {response.status_code}')
+    return response.json()
+models=call('/v1/models');model=models['data'][0]['id']
+tokenizer=Tokenizer.from_file(str(root.parent/'reports/confound-audit-20261030/tokenizer-hf-1005/tokenizer.json'))
+evidence={'endpoint_name':args.endpoint,'label':args.label,'served_model':model,'observed_at':datetime.now(timezone.utc).isoformat(),'renders':[],'eos':[]}
+for name,kwargs in [('mini_swe_omitted',{}),('terminus_explicit',{'enable_thinking':True}),('pi_explicit',{'enable_thinking':True}),('false_cannot_disable',{'enable_thinking':False})]:
+    request={'model':model,'messages':[{'role':'user','content':'Say hello.'}],'add_generation_prompt':True}
+    if kwargs:request['chat_template_kwargs']=kwargs
+    response=call('/tokenize',request)
+    rendered=tokenizer.decode(response['tokens'],skip_special_tokens=False)
+    assert '/think' in rendered and '/nothink' not in rendered,name
+    evidence['renders'].append({'harness_shape':name,'request':request,'response':response,'decoded_prompt':rendered})
+for token in [128009,128001]:
+    request={'model':model,'prompt':'Hello','temperature':0,'max_tokens':3,'logit_bias':{str(token):100},'return_tokens_as_token_ids':True,'logprobs':1}
+    response=call('/v1/completions',request)
+    choice=response['choices'][0]
+    evidence['eos'].append({'forced_token':token,'request':request,'response':response})
+    assert choice['finish_reason']=='stop',(token,choice['finish_reason'])
+    assert response['usage']['completion_tokens']<=1,(token,response['usage'])
+(root/f'live-endpoint-{args.label}.json').write_text(json.dumps(evidence,indent=2)+'\n')
+print(json.dumps({'label':args.label,'model':model,'rendered_thinking_checks':len(evidence['renders']),'eos_stop_checks':len(evidence['eos'])}))

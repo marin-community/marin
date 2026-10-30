@@ -1,0 +1,70 @@
+import hashlib
+import json
+from pathlib import Path
+
+import draccus
+import numpy as np
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
+
+from experiments.grug.snowball_sft.mixture import ReplaySource, SftSource, build_mixture
+
+ROOT = Path(__file__).resolve().parents[1]
+stores = json.loads((ROOT / "sources/full-ab-packed-2026.09.29.json").read_text())
+plan = json.loads((ROOT / "sources/original-full-ab-mix.json").read_text())
+budgets = json.loads((ROOT / "audits/replay-budget-plan-20261024.json").read_text())["cells"]
+sft = {
+    name: SftSource(
+        stores[name]["cache_path"].replace("gs://marin-us-central2/", "s3://marin-us-east-02a/marin/") + "/train",
+        tokens // 262144,
+    )
+    for name, tokens in plan["allocations_tokens"].items()
+}
+assert all(stores[name]["packed_sequences"] == source.packed_sequences for name, source in sft.items())
+replay = {}
+for row in budgets:
+    paths = [
+        f"s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/replay/{row['cell']}-train/2026.10.24.1/{stratum}"
+        if row[key] > 0 else None
+        for stratum, key in [("lte_64k", "short_tokens"), ("gt_64k", "long_tokens")]
+    ]
+    replay[row["cell"]] = ReplaySource(*paths, row["weight"])
+result = build_mixture(
+    sft, replay,
+    tokenizer="s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18",
+    cache_catalog="s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/full-mixture/2026.10.24/cache_catalog.json",
+    steps=4750, batch_size=256, block_size=64000,
+    heldout_sft_sources=(
+        "nemotron_sft_v3/math_v3/train",
+        "nemotron_sft_v3/competitive_programming_v2/competitive_coding_python",
+        "nemotron_sft_v3/math_proofs_v1/lean",
+        "nemotron_sft_v3/finance_v1/train",
+        "nemotron_sft_v3/science_v2/vendor",
+        "agenttrove",
+        "nemotron_sft_v3/agentic_v2/interactive_agent",
+        "identity-data",
+        "nemotron_sft_v3/multilingual_v1/code_zh",
+        "nemotron_sft_v3/multilingual_v1/stem_ja",
+    ), holdout_sequences=8,
+)
+weights = result.data.train_weights
+sampler = MixtureDataset(
+    {name: ListAsyncDataset([name]) for name in result.data.components},
+    [(step * 256, values) for step, values in weights], 64000, key=42,
+)
+totals = np.sum(sampler._counts_per_block_per_stage, axis=0)
+actual = dict(zip(sampler.dataset_index, totals.tolist(), strict=True))
+assert all(actual[name] == count for name, count in result.training_counts.items())
+assert sum(actual.values()) == 4750 * 256
+output = ROOT / "audits/full-mixture-data-20261024.json"
+output.write_text(json.dumps(draccus.encode(result.data), indent=2) + "\n")
+audit = dict(
+    data_config_sha256=hashlib.sha256(output.read_bytes()).hexdigest(), sft_sources=len(sft),
+    sft_training_counts=result.training_counts, holdouts=result.holdout_counts, actual_sampler_counts=actual,
+    steps=4750, batch_size=256, block_size=64000, stages=len(weights), total_positions=4750 * 256 * 262144,
+    sft_training_positions=sum(result.training_counts.values()) * 262144,
+    replay_positions=(4750 * 256 - sum(result.training_counts.values())) * 262144,
+)
+(ROOT / "audits/full-mixture-counts-20261024.json").write_text(json.dumps(audit, indent=2) + "\n")
+print({key: value for key, value in audit.items() if key not in ["sft_training_counts", "holdouts", "actual_sampler_counts"]})
+print("Holdouts:", result.holdout_counts)

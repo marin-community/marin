@@ -1,0 +1,23 @@
+import json
+import os
+import subprocess
+from pathlib import Path
+ROOT=Path(__file__).resolve().parent
+WORK=ROOT.parent/'worktrees/evals-rerun'
+CONFIG=Path('experiments/evaluation/campaigns/sft-thinking-eos-20261030')
+MODELS=json.loads((ROOT/'models.json').read_text())
+records=[]
+for tag,model in MODELS.items():
+ for arm in ['agentic','swe']:
+  model_path=CONFIG/'model-configs'
+  if arm=='swe':model_path/='swebench-verified'
+  cmd=['uv','run','python','-m','experiments.evaluation.cli','launch','--model-config',str(model_path/f'{model["name"]}.yaml'),'--federated_cluster','cw-rno2a','--priority','production','--version','sft-thinking-eos-20261030','--run-id',f'sft-thinking-eos-{tag}-{arm}-20261030','--records-prefix','s3://marin-us-east-02a/marin/evals/sft-thinking-eos-20261030']
+  benches=['swebench-verified'] if arm=='swe' else ['ot-tblite-recovery','tb2-recovery','ds-1000-local','bixbench-pi','bfclparity-pi']
+  for bench in benches:cmd+=['--harbor-config',str(CONFIG/'harbor-configs'/f'{bench}.yaml')]
+  if arm=='agentic':cmd+=['--judge-model-config',str(CONFIG/'judge-model-configs/MiniMaxAI-MiniMax-M3-MXFP8.yaml'),'--judge-accelerator','H100x8']
+  path=ROOT/f'dry-run-{tag}-{arm}.log'
+  with path.open('w') as log:result=subprocess.run(cmd+['--dry-run'],cwd=WORK,stdout=log,stderr=subprocess.STDOUT)
+  records.append({'tag':tag,'arm':arm,'command':cmd,'returncode':result.returncode,'log':str(path)})
+  (ROOT/'launch-plan.json').write_text(json.dumps(records,indent=2)+'\n')
+  print(tag,arm,result.returncode,flush=True)
+  if result.returncode:raise SystemExit(result.returncode)

@@ -1,0 +1,25 @@
+import json,concurrent.futures
+from pathlib import Path
+from rigging.filesystem.buckets import filesystem_for
+R=Path(__file__).parent; d=json.loads((R/'terminal-index.json').read_text())
+samples={'ot-tblite-recovery':['acl-permissions-inheritance','broken-python','log-summary','okhttp-trailers-crash','iris-dataset-classification','network-log-normalization'],'tb2-recovery':['terminal-bench/git-leak-recovery','terminal-bench/modernize-scientific-stack','terminal-bench/portfolio-optimization','terminal-bench/prove-plus-comm','terminal-bench/configure-git-webserver','terminal-bench/cancel-async-tasks']}
+rows=[]
+for b,tasks in samples.items():
+ for t in tasks:
+  for l in ['222','2048','1005']:
+   ts=sorted([r for r in d[l][b]['trials'] if r['task']==t and r.get('reward') is not None],key=lambda r:r['trial'])
+   wins=[r for r in ts if r['reward'].get('reward',0)==1]
+   r=(wins if (l=='1005' or t.endswith(('iris-dataset-classification','network-log-normalization','cancel-async-tasks','configure-git-webserver'))) and wins else ts)[0].copy();r.update(model=l,benchmark=b);rows.append(r)
+def get(r):
+ u=r['uri']+'/agent/trajectory.json'; f,p=filesystem_for(u)
+ if not f.exists(p):
+  u=r['uri']+'/attempts/000/agent/trajectory.json'; f,p=filesystem_for(u)
+ size=f.size(p);assert size<30_000_000,(u,size)
+ tr=json.loads(f.cat(p));r.update(trace_uri=u,trajectory=tr); return r
+with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:out=list(ex.map(get,rows))
+(R/'terminal-sample-traces.json').write_text(json.dumps(out,indent=2))
+for r in out:
+ print('\n###',r['benchmark'],r['task'],r['model'],r['trial'],r['reward'],r['exception'])
+ print('STEPS',len(r['trajectory']['steps']),'KEYS',[(s['step_id'],s['source'],list(s.keys())) for s in r['trajectory']['steps'][:3]])
+ for s in r['trajectory']['steps'][1:]:
+  print('STEP',s['step_id'],str(s.get('message',''))[:900], 'OBS',str(s.get('observation',''))[:600])

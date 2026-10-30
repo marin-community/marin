@@ -1,0 +1,59 @@
+"""Validate completed export metadata, then install and verify serving tokenizer files."""
+
+import hashlib
+import json
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT = Path(__file__).resolve().parents[1]
+DEST = "s3://marin-us-east-02a/marin/users/benfeuer/sft-pipe-repro/snowball-sft-export-step1536-20261028/hf"
+TOKENIZER = "s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18"
+
+
+def read_json(uri):
+    fs, path = filesystem_for(uri)
+    with fs.open(path) as source:
+        return json.load(source)
+
+
+manifest = read_json(DEST + "/export-manifest.json")
+request = read_json(DEST + "/export-request.json")
+assert manifest["request"] == request
+assert request["weights_kind"] == "snowball_sft_frozen_router"
+assert request["config"]["metadata_digest"] == "f93b2116a29b35e777b3357168e582516c0a69dd8ffdab906a1171c81f3cdc87"
+assert request["config"]["destination"] == DEST
+assert request["config"]["checkpoint"] == 's3://marin-us-east-02a/marin/users/benfeuer/sft-pipe-repro/snowball-sft-production-256h100-20261027c/checkpoints/step-1536'
+assert read_json(DEST + "/config.json") == request["hf_config"]
+index = read_json(DEST + "/model.safetensors.index.json")
+assert len(manifest["shards"]) == 39
+assert request["export_version"] == 4
+mapping = {}
+for record in manifest["shards"]:
+    assert record["export_id"] == manifest["export_id"]
+    fs, path = filesystem_for(DEST + "/" + record["filename"])
+    assert fs.size(path) == record["bytes"], record["filename"]
+    for name in record["tensor_names"]:
+        assert name not in mapping, name
+        mapping[name] = record["filename"]
+assert index["weight_map"] == mapping
+for layer in range(26):
+    for projection in ("gate_proj", "up_proj", "down_proj"):
+        assert f"model.layers.{layer}.mlp.experts.{projection}.weight" in mapping
+assert len(mapping) == 502
+hashes = {}
+for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
+    subprocess.run([str(Path.cwd() / ".venv/bin/fsutil"), "cp", TOKENIZER + "/" + name, DEST + "/" + name], check=True)
+    digests = []
+    for prefix in (TOKENIZER, DEST):
+        fs, path = filesystem_for(prefix + "/" + name)
+        with fs.open(path) as source:
+            digests.append(hashlib.file_digest(source, "sha256").hexdigest())
+    assert digests[0] == digests[1], name
+    hashes[name] = digests[0]
+assert hashes["tokenizer.json"] == "6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45"
+report = {"verified_at": datetime.now(UTC).isoformat(), "destination": DEST, "export_id": manifest["export_id"], "shards": 39, "tensor_count": len(mapping), "checks": "request, committed metadata pin, config, index mapping, all shard sizes; tokenizer source/destination SHA256", "tokenizer_sha256": hashes}
+(ROOT / "audits/export-step1536-verification-20261028.json").write_text(json.dumps(report, indent=2) + "\n")
+print(json.dumps(report))

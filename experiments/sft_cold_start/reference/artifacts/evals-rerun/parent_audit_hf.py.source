@@ -1,0 +1,64 @@
+"""Independently verify metadata-only HF corrections at fixed old/new revisions."""
+import hashlib
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+from huggingface_hub import HfApi, hf_hub_download
+
+ROOT = Path(__file__).resolve().parent
+OLD_REVISIONS = {
+    '222': '8eb867050d211719c11406b07aedf6642dd37941',
+    '471': '8c4cbe2dfab119bcb290b3aadb080d853c95c890',
+    '1024': 'f8445fc21bc30eb088245074fd3bf5de72b0a0c0',
+    '1536': 'dbb7afd515c5fa38a0dd3c5c99be50ba80f56da0',
+    '2048': 'e756eb218452af3d822f36fb1a0543f8e1bd61f5',
+    '2338': 'bc3196080e5ba34201fc250c844ef762559946be',
+}
+
+
+def files(info):
+    return {f.rfilename: {'size': f.size, 'blob_id': f.blob_id,
+                         'lfs_sha256': f.lfs.sha256 if f.lfs else None}
+            for f in info.siblings}
+
+
+def main():
+    receipt = json.loads((ROOT / 'hf-generation-config-receipt.json').read_text())
+    token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
+    api = HfApi(token=token)
+    original = Path(hf_hub_download(receipt['original_repo'], 'generation_config.json', revision=receipt['original_revision'], token=token)).read_bytes()
+    assert json.loads(original) == {'eos_token_id': [128001, 128009], 'bos_token_id': 128000}
+    records = {}
+    assert set(receipt['models']) == set(OLD_REVISIONS)
+    for step, row in receipt['models'].items():
+        assert row['parent_revision'] == OLD_REVISIONS[step]
+        before = api.model_info(row['repo'], revision=OLD_REVISIONS[step], files_metadata=True)
+        after = api.model_info(row['repo'], revision=row['revision'], files_metadata=True)
+        old_files, new_files = files(before), files(after)
+        assert set(new_files) - set(old_files) == {'generation_config.json'}
+        assert not set(old_files) - set(new_files)
+        assert all(new_files[k] == value for k, value in old_files.items())
+        payload = Path(hf_hub_download(row['repo'], 'generation_config.json', revision=row['revision'], token=token)).read_bytes()
+        assert payload == original
+        assert after.gated == 'manual' and after.private is False
+        readme = Path(hf_hub_download(row['repo'], 'README.md', revision=row['revision'], token=token)).read_text()
+        assert 'license: openmdw-1.1' in readme
+        assert 'Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. Use at your own risk in production settings.' in readme
+        shards = [k for k in old_files if k.endswith('.safetensors')]
+        assert len(shards) == 39 and all(new_files[k]['lfs_sha256'] for k in shards)
+        records[step] = {'repo': row['repo'], 'old_revision': before.sha, 'new_revision': after.sha,
+                         'changed_files': ['generation_config.json'], 'unchanged_weight_shards': len(shards),
+                         'unchanged_existing_files': len(old_files), 'generation_config_sha256': hashlib.sha256(payload).hexdigest(),
+                         'gated': after.gated, 'private': after.private,
+                         'org_members_gated_operator_receipt': row['org_members_gated'],
+                         'files': new_files}
+        print('Verified', step, after.sha, flush=True)
+    report = {'verified_at': datetime.now(UTC).isoformat(), 'models': records,
+              'scope': 'Independent HF API/file reads; all old blobs and weight LFS hashes unchanged. Manual gate verified live; org-member bypass from operator settings receipt.'}
+    (ROOT / 'parent-hf-audit.json').write_text(json.dumps(report, indent=2) + '\n')
+
+
+if __name__ == '__main__':
+    main()

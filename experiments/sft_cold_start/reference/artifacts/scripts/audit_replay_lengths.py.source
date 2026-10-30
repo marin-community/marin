@@ -1,0 +1,57 @@
+"""Inspect fixed replay shard lengths without reading the full token payload."""
+import concurrent.futures
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import numpy as np
+from levanter.store.jagged_array import JaggedArrayStore
+from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+INPUT = ROOT / "audits/replay-ledgers-20261024.json"
+OUTPUT = ROOT / "audits/replay-lengths-20261024.json"
+SEED = "sft-pipe-repro-v1"
+
+def inspect_bucket(bucket):
+    ordered = sorted(bucket["shards"], key=lambda s: hashlib.sha256(f'{SEED}:{bucket["uri"]}:{s["name"]}'.encode()).digest())
+    summaries = []
+    for role, shard in zip(("train-a", "train-b", "validation"), ordered[:3], strict=True):
+        path = bucket["uri"] + "/" + shard["name"]
+        store = JaggedArrayStore.open(path + "/input_ids", mode="r", dtype=np.int32)
+        offsets = np.asarray(store.offsets[:shard["rows"] + 1].read().result())
+        assert int(offsets[0]) == shard["rows"], path
+        lengths = np.diff(np.concatenate((np.array([0], dtype=np.int64), offsets[1:])))
+        assert int(lengths.sum()) == shard["tokens"], path
+        assert np.all(lengths > 0), path
+        long = lengths > 65536
+        summaries.append({
+            "role": role, "uri": path, "rows": shard["rows"], "tokens": shard["tokens"],
+            "offsets_sha256": hashlib.sha256(offsets.tobytes()).hexdigest(),
+            "length_quantiles": dict(zip(("p50", "p90", "p99", "max"), np.quantile(lengths, [0.5, 0.9, 0.99, 1]).tolist(), strict=True)),
+            "long_rows": int(long.sum()), "long_tokens": int(lengths[long].sum()),
+            "over_context_rows": int((lengths > 262144).sum()),
+        })
+    return {"cluster": bucket["cluster"], "quality": bucket["quality"], "shards": summaries}
+
+if __name__ == "__main__":
+    configure_coreweave_s3()
+    credentials = s3_credentials(StoreType.COREWEAVE)
+    assert credentials is not None
+    os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = credentials
+    region = data_buckets()["marin-us-east-02a"].signing_region
+    assert region is not None
+    os.environ["AWS_DEFAULT_REGION"] = region
+    os.environ["AWS_REGION"] = region
+    buckets = json.loads(INPUT.read_text())["buckets"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        summaries = []
+        for index, value in enumerate(pool.map(inspect_bucket, buckets), 1):
+            summaries.append(value)
+            if index % 20 == 0:
+                print(f"Validated lengths for {index}/200 buckets", flush=True)
+    result = {"seed": SEED, "source_inventory_sha256": hashlib.sha256(INPUT.read_bytes()).hexdigest(), "buckets": summaries}
+    OUTPUT.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps({"output": str(OUTPUT), "training_tokens": sum(s["tokens"] for b in summaries for s in b["shards"] if s["role"].startswith("train")), "training_long_tokens": sum(s["long_tokens"] for b in summaries for s in b["shards"] if s["role"].startswith("train"))}))

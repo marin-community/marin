@@ -1,0 +1,80 @@
+"""Compare bounded HF expert samples and every router bias with selected native weights."""
+
+import hashlib
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import numpy as np
+import tensorstore as ts
+from fsspec.asyn import sync
+from levanter.compat.fsspec_safetensor import _read_metadata_async
+from levanter.tensorstore_serialization import _create_ocdbt_spec
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+ROOT = Path(__file__).resolve().parents[1]
+DEST = "s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/snowball-sft-export-step222-20261025/hf"
+
+os.environ["AWS_ACCESS_KEY_ID"] = os.environ["CW_KEY_ID"]
+os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["CW_KEY_SECRET"]
+os.environ["AWS_DEFAULT_REGION"] = "auto"
+configure_coreweave_s3()
+fs, destination = filesystem_for(DEST)
+with fs.open(destination + "/export-manifest.json") as stream:
+    manifest = json.load(stream)
+with fs.open(destination + "/model.safetensors.index.json") as stream:
+    index = json.load(stream)
+pins = json.loads((ROOT / "audits/export-step222-pins-20261025.json").read_text())
+assert manifest["request"]["config"]["checkpoint"] == pins["checkpoint"]
+
+records = {}
+for filename in sorted(set(index["weight_map"].values())):
+    records.update(sync(fs.loop, _read_metadata_async, fs, destination + "/" + filename))
+assert set(records) == set(index["weight_map"])
+banks = {
+    projection: ts.open(
+        _create_ocdbt_spec(pins["checkpoint"], "params/stacked_blocks/stacked/mlp/expert_mlp/" + native),
+        open=True,
+    ).result()
+    for projection, native in (("gate_proj", "w_gate"), ("up_proj", "w_up"), ("down_proj", "w_down"))
+}
+router = ts.open(
+    _create_ocdbt_spec(pins["checkpoint"], "params/stacked_blocks/stacked/mlp/router_bias"), open=True
+).result()
+checks = []
+for layer in range(26):
+    for projection, bank in banks.items():
+        name = f"model.layers.{layer}.mlp.experts.{projection}.weight"
+        record = records[name]
+        assert record.shape == (bank.shape[1], bank.shape[3], bank.shape[2]), name
+        for expert, input_index, output_index in ((0, 0, 0), (7, 13, 17)):
+            native_value = np.asarray(bank[layer, expert, input_index, output_index].read().result())
+            position = np.ravel_multi_index((expert, output_index, input_index), record.shape)
+            start = record.byte_start + int(position) * record.dtype.itemsize
+            payload = fs.cat_file(record.file_path, start=start, end=start + record.dtype.itemsize)
+            exported_value = np.frombuffer(payload, dtype=record.dtype)[0]
+            assert native_value == exported_value, (name, expert, input_index, output_index)
+            checks.append({"tensor": name, "native_index": [layer, expert, input_index, output_index], "value": float(native_value)})
+    name = f"model.layers.{layer}.mlp.router.bias"
+    record = records[name]
+    payload = fs.cat_file(record.file_path, start=record.byte_start, end=record.byte_end)
+    actual = np.frombuffer(payload, dtype=record.dtype).reshape(record.shape)
+    expected = np.asarray(router[layer].read().result())
+    assert np.array_equal(actual, expected), name
+
+report = {
+    "verified_at": datetime.now(UTC).isoformat(),
+    "destination": DEST,
+    "checkpoint": pins["checkpoint"],
+    "export_id": manifest["export_id"],
+    "expert_tensors_sampled": 78,
+    "expert_values_compared": len(checks),
+    "router_bias_values_compared": int(np.prod(router.shape)),
+    "checks": checks,
+    "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    "scope": "Bounded samples in every routed expert tensor and all router biases; not full trained-weight equality",
+}
+(ROOT / "audits/export-step222-payload-verification-20261025.json").write_text(json.dumps(report, indent=2) + "\n")
+print(json.dumps({key: value for key, value in report.items() if key != "checks"}))

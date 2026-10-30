@@ -1,0 +1,35 @@
+"""Compare every expected Snowball parameter against the existing native manifest."""
+import json
+from pathlib import Path
+
+import equinox as eqx
+import jax
+import numpy as np
+from jax.sharding import AxisType, Mesh
+
+from experiments.grug.snowball_sft.model import GrugModelConfig, Transformer
+
+ROOT = Path("/Users/benfeuer/Documents/experiments/active/sft-pipe-repro/artifacts")
+config = GrugModelConfig(
+    vocab_size=128256, hidden_dim=2560, intermediate_dim=1280, shared_expert_intermediate_dim=2560,
+    num_shared_experts=1, num_experts=256, num_experts_per_token=4, num_layers=26, num_heads=20,
+    num_kv_heads=5, head_dim=128, max_seq_len=262144, sliding_window=2048, global_every=4,
+    layer_norm_eps=1e-5, initializer_std=0.009882117688026186, qk_mult=1.75,
+    attention_implementation="gpu_fa4_cute", moe_implementation="sonic", remat_mode="recompute_all",
+)
+mesh = Mesh(np.asarray(jax.devices()).reshape(1, 1, 1, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"), axis_types=(AxisType.Explicit,) * 5)
+with jax.set_mesh(mesh):
+    model = jax.eval_shape(lambda key: Transformer.init(config, key=key), jax.random.key(0))
+model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.shared, model, model.stacked_blocks.stacked.shared[0])
+expected = {}
+for path, array in jax.tree_util.tree_flatten_with_path({"params": model})[0]:
+    parts = [str(p.key if isinstance(p, jax.tree_util.DictKey) else p.name if isinstance(p, jax.tree_util.GetAttrKey) else p.idx) for p in path]
+    expected["/".join(parts)] = list(array.shape)
+actual = {a["path"]: a["shape"] for a in json.loads((ROOT / "sources/base-native-manifest.json").read_text())["arrays"]}
+result = {"missing": sorted(expected.keys() - actual.keys()),
+          "shape_mismatches": {k: [s, actual[k]] for k, s in expected.items() if k in actual and s != actual[k]},
+          "extra": sorted(actual.keys() - expected.keys()), "expected_arrays": len(expected)}
+(ROOT / "audits/initializer-shapes-20261024.json").write_text(json.dumps(result, indent=2) + "\n")
+print(json.dumps(result))
+assert not result["missing"] and not result["shape_mismatches"]

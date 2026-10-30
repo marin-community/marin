@@ -1,0 +1,41 @@
+import concurrent.futures,json
+from eval_fetch import OUT,fetch,redact
+from rigging.filesystem.buckets import filesystem_for
+
+def add_jobs(item,base,key):
+ try:
+  fs,p=filesystem_for(base)
+  jobs=fs.ls(p+'/harbor_jobs',detail=False)
+  for i,job in enumerate(jobs):
+   item['files'][key+f'_job{i}']=fetch('s3://'+job+'/config.json')
+ except (FileNotFoundError,OSError,ValueError) as e:item['errors'].append({'kind':key+'_jobs','type':type(e).__name__})
+
+def one(path):
+ item=json.loads(path.read_text());base=item['row']['result_uri']
+ if 'displayed_result' in item['files']:
+  d=item['files']['displayed_result']['data']
+  roots=[]
+  if 'shards'in d:
+   roots=[d['manifest']['source_summary'].split('/harbor_jobs/')[0]]+[x['results']for x in d['shards']]
+  else:
+   source=d.get('raw_source',d.get('source'))
+   for depth in range(5):
+    if not source:break
+    if not source.endswith('.json'):roots=[source];break
+    value=fetch(source);item['files']['prior_'+str(depth)]=value
+    d=value['data'];source=d.get('raw_source',d.get('source'))
+  for i,root in enumerate(roots):
+   if root.endswith('/record.json'):root=root.rsplit('/',1)[0]+'/results'
+   if not root.endswith('/results'):root+='/results'
+   item['files']['generation_record'+str(i)]=fetch(root.rsplit('/',1)[0]+'/record.json')
+   try:item['files']['generation_identity'+str(i)]=fetch(root+'/harbor_resume_identity.json')
+   except (FileNotFoundError,OSError):pass
+   if item['files']['generation_record'+str(i)]['data']['eval']['mechanism']=='harbor':add_jobs(item,root,'generation'+str(i))
+ elif 'identity'in item['files']:add_jobs(item,base,'harbor')
+ path.write_text(json.dumps(item,indent=2)+'\n')
+ return path.name
+
+if __name__=='__main__':
+ paths=[p for p in OUT.glob('eval-[012345]-*.json')]
+ with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+  for name in pool.map(one,paths):print(name,flush=True)
