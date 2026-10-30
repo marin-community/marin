@@ -366,43 +366,61 @@ def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, sele
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
     path = next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet"))
     pq.write_table(pq.read_table(path).slice(0, 6), path)
-    controls(recorded_runs, "learning-medium")
+    for i in range(4):
+        pin = gate.CONTROLS["learning-medium"][0]
+        recorded_runs(
+            "learning-medium",
+            presets.control_name(pin.preset, pin.main_commit, i),
+            score=0.49 + 0.01 * i,
+            metrics={"generate/std_num_tokens": 100 + i},
+        )
     answers = [_answer(f"task-{i}", value) for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))]
     recorded_runs(
         "learning-medium",
         "users/test/detail",
         answers=answers,
-        metrics={"reward/domain/candidate-only/avg_raw_reward": 1},
+        metrics={"reward/domain/candidate-only/avg_raw_reward": 1, "generate/std_num_tokens": 50},
     )
     report = rescore("learning-medium", "--candidate", "users/test/detail")
     rows = {row["metric"]: row for row in report["reported"]}
     for dimension, category in (("aaii_category", "x"), ("family", "a")):
         for band, value, initial in (("hard", 0.2, 0.05), ("learnable", 0.4, 0.5), ("easy", 0.8, 0.95)):
             cell = rows[f"panel-910/{dimension}/{category}/difficulty/{band}/mean"]
-            assert (
-                cell["run"],
-                cell["initializer"],
-                cell["tasks"],
-                cell["control_min"],
-                cell["control_max"],
+            assert tuple(
+                cell[key] for key in ("run", "initializer", "tasks", "control_min", "control_max")
             ) == pytest.approx((value, initial, 1, 0.49, 0.52))
             assert cell["tolerance"] == pytest.approx(
                 t.ppf(1 - 0.025 / 6, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
             )
+            assert cell["change"] == ("better" if band == "easy" else "worse")
     agentic = rows["panel-910/agentic/true/mean"]
     assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
     assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
     assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
     assert (report["verdict"], report["label"]) == ("pass", "no change")
+    assert rows["generate/std_num_tokens"]["change"] == "better"
     assert "reward/domain/candidate-only/avg_raw_reward" not in rows
     assert not {"panel-910/family_mean", "panel-910/mixed_fraction", "panel-910/all_wrong_fraction"} & rows.keys()
+    partial = [
+        _answer(f"task-{i}", value, error="Unavailable" if i == 0 else None)
+        for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))
+    ]
+    first = recorded_runs("learning-medium", "users/test/partial", answers=partial)
+    second = recorded_runs("learning-medium", "users/test/complete", answers=answers)
+    candidates = tuple(
+        ArtifactStep.adopt("users/test/" + path.parent.name, presets.PRESET_REVISION, str(path), kind=SkyRLRun)
+        for path in (first, second)
+    )
+    multi = run(gate.gate_step(presets.PRESETS["learning-medium"], candidates, inputs=gate.GateInputs()))[0]
+    category = next(row for row in multi.reported if row.metric == "panel-910/aaii_category/x/mean")
+    assert category.tasks is None and category.initializer == pytest.approx(0.6125)
+    assert category.run == pytest.approx(8 / 15)
     markdown = Path(report["report"]).with_suffix(".md").read_text()
     assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
 
 
 def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded_runs):
     key = "policy/mismatch/staleness0/log_ratio_abs_max"
-    controls(recorded_runs, "speed-medium")
     for i in range(4):
         pin = gate.CONTROLS["speed-medium"][0]
         recorded_runs(
@@ -441,6 +459,22 @@ def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded
     assert missing["verdict"] == "invalid" and "absent" in missing["reason"]
     zero = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", VLLM + ">=control")
     assert zero["verdict"] == "invalid" and "use a number bound" in zero["reason"]
+    promoted = rescore(
+        "speed-medium", "--candidate", "users/test/required-0.01", "--require", "startup/init_weight_sync_state<=control"
+    )
+    assert not {row["metric"] for row in promoted["guards"]} & {row["metric"] for row in promoted["reported"]}
+    controls(recorded_runs, "learning-medium")
+    recorded_runs("learning-medium", "users/test/repeated", score=0.45)
+    duplicate = rescore(
+        "learning-medium",
+        "--candidate",
+        "users/test/repeated",
+        "--require",
+        "panel-910/family_mean>=control",
+        "--require",
+        "panel-910/family_mean>=control",
+    )
+    assert duplicate["verdict"] == "fail" and len(duplicate["guards"]) == 1
 
 
 def test_update_guard_alone_sets_improves(recorded_runs):
@@ -450,16 +484,29 @@ def test_update_guard_alone_sets_improves(recorded_runs):
             "speed-medium",
             presets.control_name(pin.preset, pin.main_commit, i),
             speed=100 + i,
-            metrics={"timing/step_wall/group_admission": phase, "timing/step_wall/weight_sync": 300 + i - phase},
+            metrics={
+                "timing/step_wall/group_admission": phase,
+                "timing/step_wall/weight_sync": 300 + i - phase,
+                "async/performance/loss_tokens_per_configured_policy_gpu_second": 100 + i,
+            },
         )
     recorded_runs(
         "speed-medium",
         "users/test/faster",
-        metrics={"timing/step_wall/group_admission": 130, "timing/step_wall/weight_sync": 130},
+        metrics={
+            "timing/step_wall/group_admission": 130,
+            "timing/step_wall/weight_sync": 130,
+            "async/performance/loss_tokens_per_configured_policy_gpu_second": 10,
+        },
     )
     report = rescore("speed-medium", "--candidate", "users/test/faster")
     assert (report["verdict"], report["label"], report["guards"][0]["change"]) == ("pass", "improves", "better")
-    assert all(row["change"] in ("same", "unavailable") for row in report["reported"])
+    assert all(
+        row["change"] in ("same", "unavailable")
+        for row in report["reported"]
+        if not row["metric"].startswith("async/performance/")
+    )
+    assert next(row["change"] for row in report["reported"] if row["metric"].startswith("async/performance/")) == "worse"
 
 
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])

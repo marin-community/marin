@@ -400,8 +400,6 @@ _SPEED_REPORTS = (
             "unaccounted",
         )
     ),
-    Metric("async/performance/loss_tokens_per_configured_policy_gpu_second", True),
-    Metric("async/performance/response_tokens_per_configured_inference_gpu_second", True),
     Metric("vllm/median_generation_throughput", True),
     Metric("vllm/latency_ttft_mean", False),
     Metric("startup/init_weight_sync_state", False),
@@ -415,13 +413,7 @@ _LEARNING_MEDIUM = Preset(
     measured=range(21, 26),
     evaluations=(EVALUATIONS["panel-910"],),
     guards=(Metric("panel-910/family_mean", True),),
-    reported=(
-        *_TRAINING_REPORTS,
-        Metric("panel-910/mean", True),
-        Metric("async/rejected_rate", False),
-        Metric("consumed/length_stop_fraction", False),
-        Metric("generate/std_num_tokens", False),
-    ),
+    reported=(*_TRAINING_REPORTS, Metric("panel-910/mean", True)),
     gaps=(*_GAPS, Gap.EVAL_USES_TRAINING_SAMPLING),
     budget="105-120 min; 70-80 H100-h",
 )
