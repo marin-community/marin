@@ -9,10 +9,16 @@ import json
 import os
 
 import pytest
+from click.testing import CliRunner
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
+from verifyit.grade import GradingInfraError
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
+from experiments.post_training.task_data import build as build_module
+from experiments.post_training.task_data import expert_outputs as expert_outputs_module
+from experiments.post_training.task_data import math_r
+from experiments.post_training.task_data.build import cli
 from experiments.post_training.task_data.code_x import (
     DIRECTION_INPUT,
     DIRECTION_OUTPUT,
@@ -26,6 +32,7 @@ from experiments.post_training.task_data.code_x import (
     function_split,
     grade_x_task,
     synthesize_x_tasks,
+    write_cruxeval_prompts,
 )
 from experiments.post_training.task_data.code_x import (
     write_split as write_x_split,
@@ -69,17 +76,24 @@ def _valid_input(code: str, answer: str) -> int | None:
 class FakeChatClient:
     """An OpenAI-compatible chat client that replays canned responses and records request bodies."""
 
-    def __init__(self, messages: list[dict], finish_reasons: list[str] | None = None, failures: int = 0):
+    def __init__(
+        self,
+        messages: list[dict],
+        finish_reasons: list[str] | None = None,
+        failures: int = 0,
+        failure: type[Exception] = ConnectionError,
+    ):
         self.messages = list(messages)
         self.finish_reasons = list(finish_reasons or ["stop"] * len(messages))
         self.failures = failures
+        self.failure = failure
         self.bodies: list[dict] = []
 
     def complete(self, body):
         self.bodies.append(dict(body))
         if self.failures:
             self.failures -= 1
-            raise ConnectionError("transient")
+            raise self.failure("transient")
         return {"choices": [{"message": self.messages.pop(0), "finish_reason": self.finish_reasons.pop(0)}]}
 
 
@@ -161,6 +175,25 @@ def test_cruxeval_exclusion_requires_the_file_and_compares_code_inside_prompts(t
     same_function = [task for task in tasks if task.code == tasks[0].code]
     assert excluded == len(same_function)
     assert [task.task_id for task in kept] == [task.task_id for task in tasks if task.code != tasks[0].code]
+
+
+def test_write_cruxeval_prompts_writes_one_code_row_per_dataset_row(tmp_path):
+    """The exclusion file holds exactly the dataset's code field, one prompt per row."""
+    rows = [
+        {"code": "def f(x):\n    return x + 1\n", "id": "1", "input": "3", "output": "4"},
+        {"code": "def g(x):\n    return [x]\n", "id": "2", "input": "5", "output": "[5]"},
+    ]
+
+    def fake_load_dataset(repo, revision, split):
+        assert repo == "cruxeval-org/cruxeval" and split == "test"
+        assert revision == "b96af0450242eb4da433032b90998f25588a5d0f"
+        return iter(rows)
+
+    output = tmp_path / "cruxeval_prompts.jsonl"
+    count = write_cruxeval_prompts(output, load_dataset=fake_load_dataset)
+    assert count == 2
+    written = [json.loads(line) for line in output.read_text().splitlines()]
+    assert written == [{"prompt": row["code"].strip()} for row in rows]
 
 
 # --- X grading: direction dispatch, extraction, no echo rewards ---
@@ -319,8 +352,19 @@ def test_chat_completion_sends_sampling_params_keeps_reasoning_and_retries():
         "temperature": 0.6,
         "max_tokens": 20_000,
     }
+    # The GLM relay sends the chain of thought as ``reasoning``.
+    relay = FakeChatClient([{"content": "42", "reasoning": "doubled 21"}])
+    relay_response = chat_completion(relay, model="glm-5.3", messages=[], temperature=0.7, max_tokens=8)
+    assert relay_response.reasoning == "doubled 21"
     with pytest.raises(ConnectionError):
         chat_completion(FakeChatClient([{}], failures=3), model="m", messages=[], temperature=0.0, max_tokens=8)
+
+
+def test_chat_completion_retries_a_read_timeout():
+    # A long completion can outlast the socket timeout; urllib raises TimeoutError, not ConnectionError.
+    client = FakeChatClient([{"content": "late", "reasoning": "slow"}], failures=2, failure=TimeoutError)
+    response = chat_completion(client, model="m", messages=[], temperature=0.0, max_tokens=8)
+    assert response.content == "late" and len(client.bodies) == 3
 
 
 def test_trace_cap_counts_rendered_thinking_and_drops_truncated_traces():
@@ -439,3 +483,112 @@ def test_m1_writer_keeps_graded_rows_with_prompt_ids_and_tokens(tmp_path):
     assert line["task_id"] == "r-1" and line["prompt"] == prompt
     assert line["data_source"] == "task_R" and line["teacher_route"] == "E_R"
     assert len(line["input_ids"]) == len(line["assistant_masks"]) and any(line["assistant_masks"])
+
+
+def test_grade_keeps_only_the_graded_correct_traces(tmp_path):
+    task = {**OUTPUT_TASK, "task_id": "x-0"}
+    tasks = tmp_path / "x_train.jsonl"
+    tasks.write_text(json.dumps(task) + "\n")
+    traces = tmp_path / "x_traces.jsonl"
+    rows = [
+        {"task_id": task["task_id"], "reasoning": "trace the loop", "content": c, "completion_tokens": n}
+        for c, n in ((r"It returns $\boxed{42}$.", 30), (r"It returns $\boxed{43}$.", 40))
+    ]
+    traces.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    out = tmp_path / "x_graded.jsonl"
+    result = CliRunner().invoke(
+        cli, ["grade", "--task", "X", "--tasks", str(tasks), "--traces", str(traces), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    kept = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [row["completion_tokens"] for row in kept] == [30]
+    manifest = json.loads(out.with_suffix(".manifest.json").read_text())
+    assert (manifest["kept_under_cap"], manifest["graded_correct"]) == (2, 1)
+
+
+def test_parallel_answer_screening_draws_the_same_tasks():
+    pool = [
+        {"problem": f"Compute problem number {index} with care.", "answer": answer, "source": "math"}
+        for index, answer in enumerate(["2", "\\frac{1}{2}", "2", "x^2", "", "1<x<3", "\\frac{1}{2}"])
+    ]
+    serial = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=1)
+    parallel = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=2)
+    assert parallel == serial
+
+
+def test_a_screen_that_exceeds_its_cpu_budget_drops_the_answer(monkeypatch):
+    def spin(_answer):
+        while True:  # a runaway SymPy simplification, as on the pool's pathological answers
+            pass
+
+    monkeypatch.setattr(math_r, "answer_is_verifier_parsable", spin)
+    monkeypatch.setattr(math_r, "SCREEN_CPU_SECONDS", 0.2)
+    assert math_r.screened_answer("x") is False
+
+
+def test_grade_counts_a_trace_the_grader_cannot_settle_as_incorrect(tmp_path, monkeypatch):
+    def spin_on_runaway(task, completion):
+        while completion == "runaway":  # a pathological completion that hangs the verifier
+            pass
+        if completion == "deadline":
+            raise GradingInfraError("math verifier deadline exhausted")
+        return True
+
+    monkeypatch.setitem(build_module.GRADERS, "R", spin_on_runaway)
+    monkeypatch.setattr(expert_outputs_module, "GRADE_CPU_SECONDS", 0.2)
+    tasks = tmp_path / "r_train.jsonl"
+    tasks.write_text(json.dumps({"task_id": "r-0", "answer": "4"}) + "\n")
+    traces = tmp_path / "r_traces.jsonl"
+    rows = [
+        {"task_id": "r-0", "reasoning": "add", "content": content, "completion_tokens": tokens}
+        for content, tokens in (("runaway", 10), ("deadline", 15), (r"$\boxed{4}$", 20))
+    ]
+    traces.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    out = tmp_path / "r_graded.jsonl"
+    result = CliRunner().invoke(
+        cli, ["grade", "--task", "R", "--tasks", str(tasks), "--traces", str(traces), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line)["completion_tokens"] for line in out.read_text().splitlines()] == [20]
+    manifest = json.loads(out.with_suffix(".manifest.json").read_text())
+    assert (manifest["graded_correct"], manifest["ungradable"]) == (1, 2)
+
+
+def test_trace_rows_render_graded_traces_with_reasoning_under_the_mask(tmp_path, monkeypatch):
+    tokenizer = tiny_tokenizer(GRUG_TOKENS)
+    monkeypatch.setattr(build_module, "family_tokenizer", lambda family: tokenizer)
+    prompt = [{"role": "user", "content": "add two and two"}]
+    traces = tmp_path / "r_graded.jsonl"
+    trace = {
+        "task_id": "r-0",
+        "prompt": prompt,
+        "reasoning": "two plus two",
+        "content": "it is 4",
+        "completion_tokens": 9,
+    }
+    traces.write_text(json.dumps(trace) + "\n")
+    out = tmp_path / "r_expert_rows.jsonl"
+    result = CliRunner().invoke(
+        cli,
+        [
+            "trace-rows",
+            "--task",
+            "R",
+            "--traces",
+            str(traces),
+            "--out",
+            str(out),
+            "--family",
+            "grug",
+            "--temperature",
+            "0.7",
+            "--max-tokens",
+            "20480",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (row,) = [json.loads(line) for line in out.read_text().splitlines()]
+    assert (row["data_source"], row["task_id"], row["prompt"]) == ("task_R", "r-0", prompt)
+    supervised = [token for token, bit in zip(row["input_ids"], row["assistant_masks"], strict=True) if bit]
+    expected = f"{GRUG_TOKENS.think_open}two plus two{GRUG_TOKENS.think_close}it is 4{GRUG_TOKENS.turn_close}"
+    assert supervised == tokenizer.encode(expected, add_special_tokens=False)

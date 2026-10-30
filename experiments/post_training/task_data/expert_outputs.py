@@ -26,6 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from verifyit.grade import GradingInfraError
+
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
 from experiments.post_training.task_data.code_x import grade_x_task
 from experiments.post_training.task_data.expert_traces import (
@@ -34,7 +36,7 @@ from experiments.post_training.task_data.expert_traces import (
     chat_completion,
     rendered_completion_text,
 )
-from experiments.post_training.task_data.math_r import verify_final_answer
+from experiments.post_training.task_data.math_r import cpu_bounded, verify_final_answer
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,22 @@ def grade_r_task(task: dict[str, Any], completion: str) -> bool:
 
 
 GRADERS: dict[str, Callable[[dict[str, Any], str], bool]] = {"X": grade_x_task, "R": grade_r_task}
+
+GRADE_CPU_SECONDS = 60
+"""CPU budget for grading one completion: math-verify's own deadline can be swallowed (see math_r)."""
+
+
+def bounded_grade(grader: Callable[[dict[str, Any], str], bool], task: dict[str, Any], text: str) -> bool | None:
+    """The grader's verdict, or ``None`` when it cannot settle: the CPU budget runs out or
+    the math verifier exhausts its own deadline. Runs on the main thread (signals)."""
+
+    def settle() -> bool | None:
+        try:
+            return grader(task, text)
+        except GradingInfraError:
+            return None
+
+    return cpu_bounded(settle, cpu_seconds=GRADE_CPU_SECONDS)
 
 
 def tokenized_conversation(

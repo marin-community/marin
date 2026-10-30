@@ -20,14 +20,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import re
+import signal
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from datasets import load_dataset as hf_load_dataset
-from verifyit.grade import InvalidTask
+from verifyit.grade import GradingInfraError, InvalidTask
 from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_math import grade_math_text_candidate
 from verifyit.spec import MathSpec
@@ -93,30 +96,40 @@ def ngrams(text: str, n: int = OVERLAP_N_GRAM) -> frozenset[tuple[str, ...]]:
     return frozenset(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
 
 
+R_INSTRUCTION = "Solve the problem step by step, then give the final answer in \\boxed{}."
+"""The instruction every R and P_think prompt ends with. It is 13 words, one overlap n-gram."""
+
+
 def r_prompt(problem: str) -> str:
     """The canonical user prompt for one R task."""
-    return f"{problem.strip()}\n\nSolve the problem step by step, then give the final answer in \\boxed{{}}."
+    return f"{problem.strip()}\n\n{R_INSTRUCTION}"
 
 
 def answer_is_verifier_parsable(answer: str) -> bool:
     """Whether the math verifier can grade ``answer`` as a checkable final answer.
 
-    Three requirements: the reference must parse as a math expression at all (answers
+    Four requirements: the reference must parse as a math expression at all (answers
     like empty or malformed LaTeX raise ``InvalidTask``), a correct boxed restatement
-    must grade positive, and a mutated answer must grade zero — an answer that cannot
-    be told apart from a wrong one cannot check completions.
+    must grade positive, a mutated answer must grade zero — an answer that cannot
+    be told apart from a wrong one cannot check completions — and the verifier must
+    reach a verdict within its per-expression deadline at all (a pathological
+    expression that exhausts it raises ``GradingInfraError``; that is a property of
+    the answer, and the answer is not usable here).
     """
     correct = f"The final answer is $\\boxed{{{answer}}}$."
     mutated = f"The final answer is $\\boxed{{{answer}X'}}$."
     try:
         if grade_math_text_candidate(MathSpec(expected=answer), correct).reward <= 0:
             return False
-    except InvalidTask:
+    except (InvalidTask, GradingInfraError):
         return False
     try:
         mutated_reward = grade_math_text_candidate(MathSpec(expected=answer), mutated).reward
     except InvalidTask:
         return True
+    except GradingInfraError:
+        # The mutation could not be decided, so discrimination is unverified.
+        return False
     return mutated_reward <= 0
 
 
@@ -162,12 +175,71 @@ def _json_row(line: str) -> dict | None:
     return json.loads(line) if line else None
 
 
+SCREEN_CPU_SECONDS = 30
+"""CPU budget for screening one answer. math-verify's own deadline is a SIGALRM that
+can fire inside a gc callback (JAX installs one), where Python swallows the exception
+and the deadline never fires again; a few answers then ran away in SymPy for hours."""
+_SCREEN_RETRY_SECONDS = 0.5
+
+
+class _ScreenBudgetExceeded(BaseException):
+    """Raised by the screen watchdog; a BaseException so library ``except Exception`` blocks pass it on."""
+
+
+def _raise_budget_exceeded(_signum, _frame) -> None:
+    raise _ScreenBudgetExceeded
+
+
+def cpu_bounded(call: Callable[[], bool], *, cpu_seconds: float) -> bool | None:
+    """``call()`` under a CPU budget that cannot be swallowed; ``None`` when the budget runs out.
+
+    The watchdog is a profiling timer, separate from math-verify's SIGALRM, that keeps
+    firing every half second past the budget until its exception lands. Signals reach
+    only the main thread, so this must run there.
+    """
+    previous = signal.signal(signal.SIGPROF, _raise_budget_exceeded)
+    signal.setitimer(signal.ITIMER_PROF, cpu_seconds, _SCREEN_RETRY_SECONDS)
+    try:
+        return call()
+    except _ScreenBudgetExceeded:
+        return None
+    finally:
+        signal.setitimer(signal.ITIMER_PROF, 0)
+        signal.signal(signal.SIGPROF, previous)
+
+
+def screened_answer(answer: str) -> bool:
+    """:func:`answer_is_verifier_parsable` under :data:`SCREEN_CPU_SECONDS` of CPU.
+
+    An answer the verifier cannot settle within the budget is not usable for grading
+    and is dropped.
+    """
+    return bool(cpu_bounded(lambda: answer_is_verifier_parsable(answer), cpu_seconds=SCREEN_CPU_SECONDS))
+
+
+def answer_verdicts(pool_rows: list[dict[str, str]], *, workers: int) -> dict[str, bool]:
+    """:func:`screened_answer` of every distinct answer in the pool.
+
+    The verifier screen dominates the build, and short answers repeat across the pool,
+    so each distinct answer is screened once, over ``workers`` processes. Workers are
+    spawned rather than forked: the screen's deadlines are signals in each worker's
+    main thread, and forking a parent that loaded JAX is unsafe.
+    """
+    answers = sorted({str(row.get("answer", "")).strip() for row in pool_rows} - {""})
+    if workers == 1:
+        return {answer: screened_answer(answer) for answer in answers}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        verdicts = pool.map(screened_answer, answers, chunksize=64)
+        return dict(zip(answers, verdicts, strict=True))
+
+
 def draw_r_tasks(
     pool_rows: list[dict[str, str]],
     *,
     seed: int,
     reserved_pool_path: str | Path,
     probe_fraction: float = 0.1,
+    workers: int = 1,
 ) -> tuple[list[RTask], dict[str, int]]:
     """Draw verified R tasks from pool rows of ``{problem, answer, source}``.
 
@@ -196,6 +268,7 @@ def draw_r_tasks(
         "dropped_duplicate": 0,
         "dropped_unparsable_answer": 0,
     }
+    parsable = answer_verdicts(pool_rows, workers=workers)
     tasks: list[RTask] = []
     seen: set[str] = set()
     for row in pool_rows:
@@ -215,7 +288,7 @@ def draw_r_tasks(
         if normalized in seen:
             counts["dropped_duplicate"] += 1
             continue
-        if not answer_is_verifier_parsable(answer):
+        if not parsable[answer]:
             counts["dropped_unparsable_answer"] += 1
             continue
         seen.add(normalized)
@@ -266,6 +339,7 @@ def build_r_tasks(
     spec: RPoolSpec = R_POOL_SPEC,
     limit: int | None = None,
     load_dataset: Callable = hf_load_dataset,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Load the pinned pool, draw the R tasks, write both splits and ``manifest.json``.
 
@@ -275,7 +349,7 @@ def build_r_tasks(
     output_path = Path(output_dir)
     pool_rows, pool_entry = load_r_pool(spec, limit=limit, load_dataset=load_dataset)
     tasks, counts = draw_r_tasks(
-        pool_rows, seed=seed, reserved_pool_path=reserved_pool_path, probe_fraction=probe_fraction
+        pool_rows, seed=seed, reserved_pool_path=reserved_pool_path, probe_fraction=probe_fraction, workers=workers
     )
     split_counts = write_split(tasks, output_path)
     manifest = {
