@@ -49,15 +49,26 @@ def recorded_runs(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     panel = Path(presets.default_selection().path())
     tasks = [
-        {"task_id": f"task-{i}", "family": ("large", "small")[i == 0], "aaii_category": ("coding", "format")[i == 0]}
+        {
+            "task_id": f"task-{i}",
+            "family": ("large", "small")[i == 0],
+            "aaii_category": ("coding", "format")[i == 0],
+            "agentic": False,
+        }
         for i in range(910)
     ]
     pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
-    rates = tmp_path / scoring.PASS_RATES_NAME / presets.PRESET_REVISION / "pass_rates.parquet"
+    rates = tmp_path / scoring.PASS_RATES_NAME / scoring.PASS_RATE_REVISION / "pass_rates.parquet"
     rates.parent.mkdir(parents=True)
     revision = presets.MODEL_REVISION
     rows = [
-        {"task_id": f"task-{i}", "model_revision": revision, "passed": (0, 4, 8)[i % 3], "samples": 8}
+        {
+            "task_id": f"task-{i}",
+            "model_revision": revision,
+            "passed": (0, 4, 8)[i % 3],
+            "samples": 8,
+            "mean_score": (0.05, 0.5, 0.95)[i % 3],
+        }
         for i in range(910)
     ]
     pq.write_table(pa.Table.from_pylist(rows), rates)
@@ -79,7 +90,6 @@ def recorded_runs(selection, tmp_path, monkeypatch):
         version=presets.PRESET_REVISION,
         fixed=True,
         mixed=128,
-        detail=False,
         fingerprint="",
         answers=None,
         missing_receipt=False,
@@ -159,15 +169,13 @@ def recorded_runs(selection, tmp_path, monkeypatch):
                 rows = answers or [
                     _answer(
                         f"train-task-{i}" if evaluation.file == "train" else f"task-{i}",
-                        (
-                            float(i < mixed and attempt == 0)
-                            if evaluation.file == "train"
-                            else 1.0 if detail and i == 0 else average
-                        ),
+                        (float(i < mixed and attempt == 0) if evaluation.file == "train" else average),
                         tokens=(preset.recipe.fixed_reply_tokens or 1) if fixed else 1,
                         error="GraderUnavailable" if i < unscored else None,
                     )
-                    for i in range((evaluation.sample or 910) - drop_task)
+                    for i in range(
+                        (evaluation.sample or presets.selection_summary(selection)["full_validation_rows"]) - drop_task
+                    )
                     for attempt in range(evaluation.answers)
                 ]
                 session = "eval_only" if step == -1 else f"global_step_{step}_evals"
@@ -347,15 +355,111 @@ def test_rescore_reports_candidate_and_control_contracts(
     )
 
 
-def test_detail_rows_use_their_count_and_leave_the_label_to_declared_metrics(recorded_runs):
+def test_detail_rows_use_table_counts_and_initializer_scores(recorded_runs, selection, tmp_path):
+    panel = Path(selection.path())
+    summary = json.loads((panel / "summary.json").read_text())
+    _json(panel / "summary.json", summary | {"full_validation_rows": 6})
+    tasks = [
+        {"task_id": f"task-{i}", "family": "ab"[i // 3], "aaii_category": "xy"[i // 3], "agentic": bool(i % 2)}
+        for i in range(6)
+    ]
+    pq.write_table(pa.Table.from_pylist(tasks), panel / presets.TASK_MANIFEST_FILENAME)
+    path = next(tmp_path.glob("rl-data/snowball-pass-rates/*/*/pass_rates.parquet"))
+    pq.write_table(pq.read_table(path).slice(0, 6), path)
     controls(recorded_runs, "learning-medium")
-    recorded_runs("learning-medium", "users/test/detail", score=0.495, detail=True)
+    answers = [_answer(f"task-{i}", value) for i, value in enumerate((0.2, 0.4, 0.8, 0.1, 0.5, 0.9))]
+    recorded_runs(
+        "learning-medium",
+        "users/test/detail",
+        answers=answers,
+        metrics={"reward/domain/candidate-only/avg_raw_reward": 1},
+    )
     report = rescore("learning-medium", "--candidate", "users/test/detail")
     rows = {row["metric"]: row for row in report["reported"]}
-    small = rows["panel-910/family/small/mean"]
-    assert (report["verdict"], report["label"], small["change"]) == ("pass", "no change", "better")
-    assert small["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 12, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
-    assert any("/difficulty/" in key for key in rows)
+    for dimension, category in (("aaii_category", "x"), ("family", "a")):
+        for band, value, initial in (("hard", 0.2, 0.05), ("learnable", 0.4, 0.5), ("easy", 0.8, 0.95)):
+            cell = rows[f"panel-910/{dimension}/{category}/difficulty/{band}/mean"]
+            assert (
+                cell["run"],
+                cell["initializer"],
+                cell["tasks"],
+                cell["control_min"],
+                cell["control_max"],
+            ) == pytest.approx((value, initial, 1, 0.49, 0.52))
+            assert cell["tolerance"] == pytest.approx(
+                t.ppf(1 - 0.025 / 6, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25)
+            )
+    agentic = rows["panel-910/agentic/true/mean"]
+    assert (agentic["run"], agentic["initializer"], agentic["tasks"]) == pytest.approx((1.4 / 3, 0.5, 3))
+    assert rows["panel-910/aaii_category/x/mean"]["run"] == pytest.approx(1.4 / 3)
+    assert agentic["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 5, 3) * math.sqrt(5 / 3) * 0.01 * math.sqrt(1.25))
+    assert (report["verdict"], report["label"]) == ("pass", "no change")
+    assert "reward/domain/candidate-only/avg_raw_reward" not in rows
+    assert not {"panel-910/family_mean", "panel-910/mixed_fraction", "panel-910/all_wrong_fraction"} & rows.keys()
+    markdown = Path(report["report"]).with_suffix(".md").read_text()
+    assert "## Breakdown" in markdown and "### panel-910: aaii_category x difficulty" in markdown
+
+
+def test_requirements_enforce_each_replicate_and_calibrate_added_guards(recorded_runs):
+    key = "policy/mismatch/staleness0/log_ratio_abs_max"
+    controls(recorded_runs, "speed-medium")
+    for i in range(4):
+        pin = gate.CONTROLS["speed-medium"][0]
+        recorded_runs(
+            "speed-medium", presets.control_name(pin.preset, pin.main_commit, i), speed=100 + i, metrics={key: i * 0.001}
+        )
+    for value, expected in ((0, "pass"), (0.01, "fail")):
+        recorded_runs(
+            "speed-medium", f"users/test/required-{value}", metrics={key: value}, argv=["--require", key + "<=0"]
+        )
+        report = rescore("speed-medium", "--candidate", f"users/test/required-{value}")
+        assert report["verdict"] == expected
+        assert [(row["value"], row["holds"]) for row in report["invariants"] if row["name"] == "require/" + key] == [
+            (value, value == 0)
+        ]
+    candidates = tuple(
+        ArtifactStep.adopt(
+            f"users/test/required-{value}",
+            presets.PRESET_REVISION,
+            str(Path(presets.artifact_prefix("east")) / f"users/test/required-{value}" / presets.PRESET_REVISION),
+            kind=SkyRLRun,
+        )
+        for value in (0, 0.01)
+    )
+    multi = run(
+        gate.gate_step(presets.PRESETS["speed-medium"], candidates, inputs=gate.GateInputs(requirements=(key + "<=0",)))
+    )[0]
+    assert multi.verdict == "fail"
+    assert [(row.replicate, row.holds) for row in multi.invariants if row.name == "require/" + key] == [
+        (0, True),
+        (1, False),
+    ]
+    relative = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", key + "<=control")
+    row = relative["guards"][-1]
+    assert row["tolerance"] == pytest.approx(t.ppf(1 - 0.025 / 3, 3) * math.sqrt(5 / 3) * 0.001 * math.sqrt(1.25))
+    missing = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", "absent>=1")
+    assert missing["verdict"] == "invalid" and "absent" in missing["reason"]
+    zero = rescore("speed-medium", "--candidate", "users/test/required-0.01", "--require", VLLM + ">=control")
+    assert zero["verdict"] == "invalid" and "use a number bound" in zero["reason"]
+
+
+def test_update_guard_alone_sets_improves(recorded_runs):
+    pin = gate.CONTROLS["speed-medium"][0]
+    for i, phase in enumerate((0, 200, 0, 200)):
+        recorded_runs(
+            "speed-medium",
+            presets.control_name(pin.preset, pin.main_commit, i),
+            speed=100 + i,
+            metrics={"timing/step_wall/group_admission": phase, "timing/step_wall/weight_sync": 300 + i - phase},
+        )
+    recorded_runs(
+        "speed-medium",
+        "users/test/faster",
+        metrics={"timing/step_wall/group_admission": 130, "timing/step_wall/weight_sync": 130},
+    )
+    report = rescore("speed-medium", "--candidate", "users/test/faster")
+    assert (report["verdict"], report["label"], report["guards"][0]["change"]) == ("pass", "improves", "better")
+    assert all(row["change"] in ("same", "unavailable") for row in report["reported"])
 
 
 @pytest.mark.parametrize("preset", ["learning-medium", "data-medium"])

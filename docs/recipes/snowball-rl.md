@@ -74,10 +74,32 @@ pin's own mean.
 Guards compare candidate and control replicate means, signed so positive means better.
 Tolerance is `t(1 - 0.025/k, df) * sd * sqrt(1/n_run + 1/n_control)`, with `k` guards
 and calibrated run-to-run spread `sd`. Each run reduces update time to its median;
-other metrics use their mean. A guard fails below negative tolerance. Declared reported
-metrics use `k=1` in both directions and determine the label with the verdict:
-`improves`, `trade-off`, `regression` or `no change`. Panel detail rows use their own
-count for `k` and do not determine the label.
+other metrics use their mean. A guard fails below negative tolerance. Guards and declared
+reported metrics determine `improves`, `trade-off`, `regression` or `no change`.
+Non-panel reported metrics use `k=1`. Breakdown rows use a separate `k` equal to
+each table’s row count; detail rows do not determine the label.
+
+Add repeatable requirements to a gated candidate with `--require 'KEY<=NUMBER'`,
+`--require 'KEY>=NUMBER'`, `--require 'KEY<=control'` or `--require 'KEY>=control'`.
+For example, `--require 'policy/mismatch/staleness0/log_ratio_abs_max<=0'` requires
+zero mismatch on every replicate; `--require 'panel-910/aaii_category/coding/mean>=control'`
+adds a calibrated guard. Numeric bounds produce per-replicate invariants. Relative
+bounds count with the preset guards; zero control spread requires a numeric bound.
+Launch preflight checks raw keys against control r0's first measured metrics file;
+panel keys need a preset evaluation prefix. Candidate keys must exist at scoring.
+Train-long and control collection refuse requirements. Python callers pass the same
+strings as `build_run(requirements=(...))`. Requirements change the report identity;
+training names and configs stay fixed. Re-scoring appends `--require` to any recorded
+requirements, so completed runs can receive new constraints on CPU.
+
+The Breakdown tables show overall and agentic results, family, AAII category,
+difficulty, category × difficulty, family × difficulty and training reward per source.
+Each populated mean slice includes its scored task count, initializer normalized score,
+control mean and replicate range, candidate mean, signed difference, tolerance and change.
+Guard keys appear once; one-answer panels report neither mixed nor all-wrong fractions.
+Speed-medium also reports learner and engine tokens per configured GPU-second.
+Learning/data-medium reports rejected groups, length stops and reply-length spread;
+training reward per source uses keys recorded by every control.
 
 Every planned batch/update must finish, losses and gradients must be finite, panel
 coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed
@@ -106,7 +128,8 @@ Host status lists changed RL paths, including uncommitted edits, against the con
 commit, or explains missing git metadata. This list does not affect the verdict.
 
 `snowball_pass_rates` answers each panel task eight times at temperature 1. Its artifact
-pins the initializer revision and records task IDs, passed answers and scored samples,
+pins the initializer revision and records task IDs, passed answers, scored samples and
+mean normalized scores,
 excluding grading errors. Reports join easy (> 0.7), learnable (0.1–0.7) and hard
 (< 0.1) pass-rate bands for reporting only. Refresh when the initializer revision changes.
 
