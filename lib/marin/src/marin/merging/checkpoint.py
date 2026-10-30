@@ -6,7 +6,8 @@
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass, replace
+import re
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import safetensors.torch
@@ -40,6 +41,8 @@ METADATA_NAMES = (
 class CheckpointSource:
     path: str
     revision: str
+    # Full-match regex -> (stored dtype, loaded dtype). Empty means no conversions.
+    dtype_widenings: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,12 @@ class CheckpointReader:
 
     def __init__(self, source: CheckpointSource):
         self.source = source
+        self.widening_patterns = []
+        for pattern, (from_dtype, to_dtype) in source.dtype_widenings.items():
+            if to_dtype != "float32" or from_dtype not in ("bfloat16", "float16"):
+                raise ValueError("Only explicit bfloat16 or float16 -> float32 widening is supported")
+            stored_dtype = torch.bfloat16 if from_dtype == "bfloat16" else torch.float16
+            self.widening_patterns.append((re.compile(pattern), stored_dtype))
         self.fs, self.path = filesystem_for(source.path)
         if self.fs.exists(prefix_join(self.path, INCOMPLETE_NAME)):
             raise ValueError(f"Incomplete merged checkpoint: {source.path}")
@@ -86,6 +95,15 @@ class CheckpointReader:
         if shard != self.shard_name:
             self.tensors.clear()
             self.tensors = safetensors.torch.load(self.fs.cat_file(prefix_join(self.path, shard)))
+            for tensor_name, tensor in self.tensors.items():
+                for pattern, stored_dtype in self.widening_patterns:
+                    if not pattern.fullmatch(tensor_name):
+                        continue
+                    if tensor.dtype != stored_dtype:
+                        raise ValueError(
+                            f"Expected {stored_dtype} for allowlisted tensor {tensor_name}, got {tensor.dtype}"
+                        )
+                    self.tensors[tensor_name] = tensor.to(torch.float32)
             self.shard_name = shard
         return self.tensors[name]
 
