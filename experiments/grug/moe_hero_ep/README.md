@@ -171,7 +171,27 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
 at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
-decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
+decay. On the next relaunch, the d6144 hero and eval-enabled diagnostics evaluate at 4096 and the
+current training length, adding fixed 65,536 and 262,144 evals once training reaches those lengths.
+Duplicate lengths run only once, at every scheduled eval. Set `GrugEvalConfig.seq_lens` to select other lengths;
+`None` evaluates only at the training length, as the smaller scaling-ladder rungs do.
+
+Each length has its own metrics, such as `eval_dropless/seq_len_4096/paloma/macro_loss`.
+The unqualified `eval_dropless/paloma/macro_loss` continues to report the training-length eval.
+The per-length series let checkpoints be compared at fixed packing across context switches.
+Continuous-text validation retains its final partial sequence with right padding, including a corpus
+shorter than one sequence. Padding is excluded from attention and loss, including the real-to-pad
+prediction. This keeps PTB and WikiText-103 in the 262K Paloma aggregate. Including the previously
+discarded tail can slightly change historical packing-matched comparisons.
+
+`eval_batch_size` specifies the batch at the training length. Other lengths keep its total token
+budget, rounded down to a whole number of batch shards. Dropless evals keep the training context
+width and fold its expert axis into data in place, using the device-group layout from
+[PR #10709](https://github.com/marin-community/marin/pull/10709). Each device retains its training
+context group and uses its training `(data, expert)` group for eval data. This avoids new NCCL
+communicators that can exhaust GPU memory when eval changes the device groups. With the current
+16K hero and batch 704, 4K/16K evals use batches 2816/704, both at CP1 and 16,384 tokens per GPU.
+GPU peak memory and wall time for multiple eval lengths have not been measured.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
 (`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
@@ -440,7 +460,8 @@ checkpoint policy all follow `--size`:
 | d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
-batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+batch at the training length is 64 × racks (one sequence per device); other eval lengths follow
+the token budget and context layout described above. The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the

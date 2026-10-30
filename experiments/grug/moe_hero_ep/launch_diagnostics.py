@@ -41,6 +41,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_eval_seq_lens,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
@@ -343,6 +344,7 @@ def build_diagnostic_run(
                 GrugEvalConfig(
                     steps_per_eval=eval_every,
                     eval_batch_size=batch_axes,
+                    seq_lens=hero_eval_seq_lens(model.max_seq_len),
                     eval_current=False,  # matches the ladder; see #8861
                     eval_ema=False,
                     compute_bpb=True,
