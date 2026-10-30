@@ -639,6 +639,8 @@ class Job:
                 raise ValueError(
                     "SOTOPIA correction requires one agent and one dataset per job"
                 )
+            if config.sotopia_cohort is None:
+                raise ValueError("SOTOPIA correction requires an explicit sotopia_cohort")
             metadata = [sotopia_benchmark_metadata(item) for item in metadata]
         return task_configs, tuple(metadata)
 
@@ -1226,6 +1228,7 @@ class Job:
                 model = self.config.sotopia_model or self.config.agents[0].model_name
                 if model is None:
                     raise ValueError("SOTOPIA correction requires a model name")
+                assert self.config.sotopia_cohort is not None
                 evidence = correct_sotopia(
                     combined_trial_results,
                     model=model,

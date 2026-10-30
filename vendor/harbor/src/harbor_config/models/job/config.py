@@ -406,7 +406,7 @@ class JobConfig(BaseModel):
     sotopia_model: str | None = None
     """Candidate identity for cohort replacement when the served model uses an alias."""
     sotopia_cohort: SotopiaCohort | None = None
-    """Optional comparison-cohort manifest; SOTOPIA uses its versioned policy cohort by default."""
+    """Comparison cohort required for SOTOPIA length correction."""
     agents: list[AgentConfig] = Field(default_factory=lambda: [AgentConfig()])
     user_agent: UserAgentConfig | None = Field(
         default=None,

@@ -28,10 +28,11 @@ the evaluated model at each request. It counts the rendered prompt with the serv
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
 The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Harbor applies the length correction at job completion using its versioned
-`policy-10197-v1` cohort of 13 baseline archives plus the evaluated model’s current run.
-Set `sotopia_cohort` in the Harbor YAML to override the cohort with a `version` and
-`models` list containing `model` and `results_path` for each baseline. A rerun of a baseline model
+dimensions. It also records the evaluated agent's emitted character count. Harbor applies
+length correction at job completion using the campaign's `sotopia_cohort` in
+`harbor-configs/sotopia-hard.yaml`: the versioned `policy-10197-v1` cohort of 13 baseline
+archives plus the evaluated model’s current run. SOTOPIA jobs require an explicit cohort
+with a `version` and a `models` list containing `model` and `results_path` for each baseline. A rerun of a baseline model
 replaces its previous source in the fit. Harbor preserves raw rewards and saves the cohort sources, input digest, fit parameters,
 and adjusted episodes in the job result. Marin reads the corrected metric from that result. Goal achievement remains an explicit
 non-default dataset generation mode.

@@ -8,6 +8,7 @@ from harbor.job import Job
 from harbor.models.benchmark import BenchmarkMetadata, MetricKind, MetricMetadata
 from harbor.models.job.config import DatasetConfig, JobConfig
 from harbor.models.trial.config import AgentConfig
+from harbor_config.models.job.config import SotopiaCohort
 
 
 def _write_task(root: Path, name: str) -> None:
@@ -195,6 +196,7 @@ async def test_sotopia_preflight_declares_corrected_metric_with_raw_reward(tmp_p
             job_name="sotopia-metadata",
             jobs_dir=tmp_path / "jobs",
             agents=[AgentConfig(name="sotopia", model_name="candidate")],
+            sotopia_cohort=SotopiaCohort(version="test-v1", models=[]),
             datasets=[DatasetConfig(path=dataset)],
         )
     )

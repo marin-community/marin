@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from click.testing import CliRunner
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
@@ -345,3 +346,34 @@ def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path
     assert caught.value.status is RunStatus.INFRA_FAILED
     assert caught.value.jobs == {"policy-judge": "/test/policy-judge"}
     assert caught.value.log_tails == {"policy-judge": ("endpoint registration failed",)}
+
+
+def test_campaign_cohort_change_invalidates_only_sotopia(tmp_path, submitted_batches):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    config_path = tmp_path / "sotopia-hard.yaml"
+    config = yaml.safe_load((campaign / "harbor-configs/sotopia-hard.yaml").read_text())
+    config_path.write_text(yaml.safe_dump(config))
+    command = _command(tmp_path)
+    command[command.index("--evals") + 1] = "financebench,olympiadbench"
+    command.extend(
+        [
+            "--harbor-config",
+            str(config_path),
+            "--policy-finalization-config",
+            str(campaign / "finalization.yaml"),
+        ]
+    )
+    runner = CliRunner()
+    first = runner.invoke(cli, command)
+    assert first.exit_code == 0, first.output
+    before = {item.identity.eval_ref.name: item.identity.run_id for item in submitted_batches[-1].evaluations}
+
+    config["sotopia_cohort"]["models"][0]["results_path"] += "-replacement"
+    config_path.write_text(yaml.safe_dump(config))
+    second = runner.invoke(cli, command)
+    assert second.exit_code == 0, second.output
+    after = {item.identity.eval_ref.name: item.identity.run_id for item in submitted_batches[-1].evaluations}
+
+    assert after["sotopia-hard"] != before["sotopia-hard"]
+    assert after["financebench"] == before["financebench"]
+    assert after["olympiadbench"] == before["olympiadbench"]

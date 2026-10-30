@@ -10,14 +10,13 @@ import json
 import math
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import cast
 
 import numpy as np
 from finestore.reader import ReadView
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
@@ -37,7 +36,6 @@ DIMENSIONS = (
     "sotopia_goal",
 )
 REGULARIZATION = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
-DEFAULT_COHORT = Path(__file__).with_name("sotopia-policy-10197-v1.json")
 
 
 @dataclass(frozen=True)
@@ -135,20 +133,23 @@ def read_episodes(cell: SotopiaCell) -> list[EpisodeScore]:
     if rows is None:
         raise ValueError(f"no normalized SOTOPIA samples for {cell.model}")
     sample_rows = rows.to_pylist(maps_as_pydicts="strict")
-    fs, harbor_jobs = filesystem_for(prefix_join(cell.results_path, "harbor_jobs"))
+    pattern = StoragePath(prefix_join(cell.results_path, "harbor_jobs", "**", "sotopia-summary.json"))
     summaries: dict[str, list[tuple[int, str]]] = defaultdict(list)
-    for path in fs.find(harbor_jobs):
-        if match := SUMMARY.search(path):
-            summaries[match.group(1)].append((int(match.group(2)), path))
+    for path in pattern.glob():
+        if match := SUMMARY.search(str(path)):
+            summaries[match.group(1)].append((int(match.group(2)), str(path)))
 
     summary_paths = {
         row["trial_id"]: max(summaries[row["trial_id"]])[1]
         for row in sample_rows
         if summaries[row["trial_id"]]
     }
-    payloads = fs.cat(list(summary_paths.values()), on_error="omit")
-    if isinstance(payloads, bytes):
-        payloads = {next(iter(summary_paths.values())): payloads}
+    with ThreadPoolExecutor() as executor:
+        payloads = dict(zip(
+            summary_paths.values(),
+            executor.map(StoragePath.read_bytes, (StoragePath(path) for path in summary_paths.values())),
+            strict=True,
+        ))
 
     episodes = []
     for row in sample_rows:
@@ -373,11 +374,10 @@ class SotopiaCorrection:
 
 
 def correct_sotopia(
-    trials: list[TrialResult], *, model: str, cohort: SotopiaCohort | None = None
+    trials: list[TrialResult], *, model: str, cohort: SotopiaCohort
 ) -> SotopiaCorrection:
     """Return corrected scores and the full inputs needed to reproduce the fit."""
-    cohort_document = cohort.model_dump() if cohort is not None else json.loads(DEFAULT_COHORT.read_text())
-    cohort = cohort or SotopiaCohort.model_validate(cohort_document)
+    cohort_document = cohort.model_dump()
     sources = [SotopiaCell(row.model, row.results_path) for row in cohort.models if row.model != model]
     episodes = [episode for source in sources for episode in read_episodes(source)]
     candidate = []
