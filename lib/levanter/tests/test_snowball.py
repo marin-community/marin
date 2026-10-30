@@ -285,6 +285,51 @@ def test_snowball_gated_norm_selector_preserves_state_dict_and_propagates():
         np.testing.assert_array_equal(native_state[name], fixed_state[name], err_msg=name)
 
 
+def test_snowball_fixed_schedule_project_output_uses_xsa_for_nonstandard_head_width(monkeypatch):
+    """The fixed selector keeps XSA semantics when a portable test uses a small head width."""
+
+    def reference_linear(x, weight):
+        return jax.lax.dot_general(
+            x,
+            weight,
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+        )
+
+    monkeypatch.setattr(snowball_module, "fixed_schedule_linear", reference_linear)
+    native_cfg = _tiny_config(
+        hidden_dim=5,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=3,
+        projection_implementation="native",
+    )
+    fixed_cfg = dataclasses.replace(native_cfg, projection_implementation="fixed_schedule")
+    with jax.set_mesh(_single_device_grug_mesh()):
+        native = SnowballAttention.init(native_cfg, key=jax.random.key(31))
+        fixed = SnowballAttention.init(fixed_cfg, key=jax.random.key(31))
+        gate_weights = jnp.sin(jnp.arange(10, dtype=jnp.float32).reshape(5, 2) + 0.3) / 3
+        native = eqx.tree_at(lambda module: module.attn_gate, native, gate_weights)
+        fixed = eqx.tree_at(lambda module: module.attn_gate, fixed, gate_weights)
+        x = jnp.arange(2 * 4 * 5, dtype=jnp.float32).reshape(2, 4, 5) / 17
+        attn_out = jnp.arange(2 * 4 * 2 * 3, dtype=jnp.float32).reshape(2, 4, 2, 3) / 13
+        value = jnp.arange(2 * 4 * 1 * 3, dtype=jnp.float32).reshape(2, 4, 1, 3) / 11 + 0.2
+        native_output = native._project_output(x, attn_out, value)
+        fixed_output = fixed._project_output(x, attn_out, value)
+
+    y = np.asarray(attn_out)
+    aligned_value = np.repeat(np.asarray(value), 2, axis=2)
+    dot = np.sum(y * aligned_value, axis=-1, keepdims=True)
+    norm = np.sum(aligned_value * aligned_value, axis=-1, keepdims=True)
+    projected = y - dot / (norm + 1e-6) * aligned_value
+    logits = np.einsum("bsd,dn->bsn", np.asarray(x), np.asarray(gate_weights))
+    gate = 2 / (1 + np.exp(-logits))
+    expected = np.einsum("bsh,hd->bsd", (gate[..., None] * projected).reshape(2, 4, 6), np.asarray(fixed.w_o))
+    np.testing.assert_allclose(np.asarray(fixed_output), expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(native_output), expected, rtol=1e-5, atol=1e-5)
+    assert float(np.max(gate) - np.min(gate)) > 0.1
+
+
 def test_snowball_fixed_schedule_shared_dense_and_lmhead_cover_public_train_prefill_decode(monkeypatch):
     """The opt-in contractions preserve the public paths and parameter identities on CPU."""
 

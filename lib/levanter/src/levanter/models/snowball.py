@@ -73,6 +73,7 @@ from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 from levanter.kernels.pallas.rms_norm import Implementation as BatchInvariantRmsNormImplementation
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
 from levanter.kernels.pallas.rms_norm.reference import MAX_FLATTENED_ROWS
+from levanter.kernels.pallas.xsa import xsa_forward
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
@@ -815,11 +816,19 @@ class SnowballAttention(eqx.Module):
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = _partition_match(aligned_v, attn_out)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.cfg.projection_implementation == "fixed_schedule":
+            xsa_implementation = "pallas_tpu" if jax.default_backend() == "tpu" else "reference"
+            attn_out = xsa_forward(attn_out, aligned_v, xsa_implementation)
+        else:
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        if self.cfg.projection_implementation == "fixed_schedule":
+            gate_logits = _fixed_schedule_projection(x, self.attn_gate)
+        else:
+            gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate)
+        gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
         gate = _partition_match(gate, attn_out)
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
@@ -827,6 +836,8 @@ class SnowballAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=_activation_spec("model"),
         )
+        if self.cfg.projection_implementation == "fixed_schedule":
+            return _fixed_schedule_projection(attn_out, self.w_o)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
     @named_call

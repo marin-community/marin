@@ -277,3 +277,15 @@ precision, as the default GPU precision can round full-sequence and incremental
 matrix shapes differently. One H100 default-precision case exceeded the 1e-4
 comparison tolerance; default-precision parity remains a separate validation target.
 Full-checkpoint accelerator throughput and matched vLLM performance remain unmeasured.
+
+## Snowball fixed-schedule attention postprocessing
+
+The opt-in `projection_implementation="fixed_schedule"` path uses the bounded
+XSA kernel for the per-head projection away from the current value row. It then
+uses the same fixed-schedule linear projection for the head gate and `w_o`.
+The XSA reference computes one float32 dot and value norm per flattened token
+row with `1e-6` epsilon; the TPU implementation requires width 128 and keeps
+the row schedule fixed on the bounded four-device data-parallel mesh (context,
+expert and model axes each have size one). Forward and reference-backward paths
+preserve caller layouts, including singleton mesh annotations. CPU uses the
+portable reference. Native behavior remains the default.
