@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import NamedTuple
 
 import equinox as eqx
 import jax
@@ -928,16 +929,21 @@ def _make_diagnostic_watch_step(
     return diagnostic_watch_step
 
 
-def clip_by_total_norm(grads: PyTree, max_norm: float) -> tuple[PyTree, jax.Array, jax.Array]:
+class ClippedGradients(NamedTuple):
+    grads: PyTree
+    pre_clip_norm: jax.Array
+    clipped: jax.Array
+
+
+def clip_by_total_norm(grads: PyTree, max_norm: float) -> ClippedGradients:
     """Rescale ``grads`` to global L2 norm ``max_norm`` when their norm exceeds it.
 
-    Returns the clipped gradients, the pre-clip global norm, and whether the clip fired. At or below
-    ``max_norm`` every leaf is multiplied by exactly 1, so the gradients pass through bitwise.
+    At or below ``max_norm`` every leaf is multiplied by exactly 1, so the gradients pass through bitwise.
     """
     norm = optax.global_norm(grads)
     clipped = norm > max_norm
     scale = jnp.where(clipped, max_norm / norm, 1.0)
-    return jax.tree.map(lambda g: g * scale.astype(g.dtype), grads), norm, clipped
+    return ClippedGradients(jax.tree.map(lambda g: g * scale.astype(g.dtype), grads), norm, clipped)
 
 
 def _make_train_step(
@@ -982,8 +988,10 @@ def _make_train_step(
         if max_grad_norm is None:
             metrics[GRAD_NORM_METRIC] = optax.global_norm(grads)
         else:
-            grads, metrics[GRAD_NORM_METRIC], clipped = clip_by_total_norm(grads, max_grad_norm)
-            metrics[GRAD_CLIPPED_METRIC] = clipped.astype(jnp.float32)
+            clip = clip_by_total_norm(grads, max_grad_norm)
+            grads = clip.grads
+            metrics[GRAD_NORM_METRIC] = clip.pre_clip_norm
+            metrics[GRAD_CLIPPED_METRIC] = clip.clipped.astype(jnp.float32)
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
             if state.master_params is None:
