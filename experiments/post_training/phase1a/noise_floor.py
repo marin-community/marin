@@ -1,0 +1,165 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Three-seed Phase 0c noise estimates from the validated scoring summaries."""
+
+import argparse
+import json
+import math
+import statistics
+from collections import defaultdict
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+SEEDS = (0, 1, 2)
+STEPS = (10, 30, 50, 100)
+COUNTS = {"P_X": 1000, "P_R": 1000, "P_chat": 1500, "P_think": 300}
+FORWARD_POSITIONS = 1_702_261
+
+
+@dataclass(frozen=True)
+class SeedMetrics:
+    method: str
+    step: int
+    seed: int
+    metrics: dict[str, float]
+
+
+@dataclass(frozen=True)
+class Spread:
+    values: tuple[float, ...]
+    mean: float
+    sample_std: float
+    minimum: float
+    maximum: float
+    range: float
+
+
+def spread(values: tuple[float, ...]) -> Spread:
+    return Spread(
+        values, statistics.mean(values), statistics.stdev(values), min(values), max(values), max(values) - min(values)
+    )
+
+
+def seed_metrics(record: dict) -> SeedMetrics:
+    """Validate probe coverage and extract token-weighted metrics and buckets."""
+    summaries = record["summaries"]
+    metrics = {}
+    for name in (
+        "kl_P_X",
+        "reverse_P_X",
+        "kl_P_R",
+        "kl_P_chat",
+        "kl_P_think",
+        "flip_P_X",
+        "flip_P_chat",
+        "flip_P_think",
+    ):
+        summary = summaries[name]
+        family = name.split("_", 1)[1]
+        if summary["sequences"] != COUNTS[family]:
+            raise ValueError(f"{name}: expected {COUNTS[family]} sequences, got {summary['sequences']}")
+        if name in ("kl_P_X", "flip_P_X") and summary["positions"] != FORWARD_POSITIONS:
+            raise ValueError(f"{name}: does not cover the frozen forward task-X positions")
+        field = "flip_rate" if name.startswith("flip_") else "token_mean_kl"
+        metrics[name] = float(summary[field])
+        buckets = summary["buckets"]
+        if sum(b["positions"] for b in buckets.values()) != summary["positions"]:
+            raise ValueError(f"{name}: buckets do not partition the scored positions")
+        for bucket, result in buckets.items():
+            metrics[f"{name}/bucket/{bucket}"] = float(result[field])
+        for quartile, result in summary.get("reference_margin_quartiles", {}).items():
+            metrics[f"{name}/margin/{quartile}"] = float(result[field])
+    if not all(math.isfinite(value) for value in metrics.values()):
+        raise ValueError("Noise estimates require finite metrics")
+    if float(record["learning_rate"]) != 5e-7:
+        raise ValueError("Noise-floor records must use the chosen common LR 5e-7")
+    return SeedMetrics(record["method"], int(record["step"]), int(record["seed"]), metrics)
+
+
+def gate_inputs(records: list[SeedMetrics], forward_baseline: float, reverse_baseline: float) -> list[dict]:
+    """Report each spread against forward and reverse mean single-task gains.
+
+    The design does not specify whether 'noise' means standard deviation or
+    range. Keep both comparisons explicit, without selecting one after seeing
+    the results. Gains use the three-seed mean and retain their sign.
+    """
+    groups = defaultdict(list)
+    for record in records:
+        groups[(record.method, record.step)].append(record)
+    if set(groups) != {(method, step) for method in ("m1", "m4") for step in STEPS}:
+        raise ValueError("Expected both methods at every scored step")
+    output = []
+    for (method, step), group in sorted(groups.items()):
+        group.sort(key=lambda row: row.seed)
+        if tuple(row.seed for row in group) != SEEDS:
+            raise ValueError(f"{method} step {step}: expected exactly seeds 0, 1, 2")
+        all_keys = set().union(*(row.metrics for row in group))
+        keys = set.intersection(*(set(row.metrics) for row in group))
+        unavailable = {
+            key: {"missing_seeds": [row.seed for row in group if key not in row.metrics]}
+            for key in sorted(all_keys - keys)
+        }
+        if any(not key.startswith("reverse_P_X/bucket/") for key in unavailable):
+            raise ValueError(f"{method} step {step}: fixed-probe metrics or buckets differ across seeds")
+        distributions = {key: spread(tuple(row.metrics[key] for row in group)) for key in sorted(keys)}
+        gains = {
+            "forward": forward_baseline - distributions["kl_P_X"].mean,
+            "reverse": reverse_baseline - distributions["reverse_P_X"].mean,
+        }
+        progress = {
+            direction: [1 - row.metrics[key] / baseline for row in group]
+            for direction, key, baseline in (
+                ("forward", "kl_P_X", forward_baseline),
+                ("reverse", "reverse_P_X", reverse_baseline),
+            )
+        }
+        comparisons = {}
+        for key, distribution in distributions.items():
+            comparisons[key] = {
+                **asdict(distribution),
+                "gate": {
+                    direction: {
+                        "threshold": gain / 3,
+                        "sample_std_pass": distribution.sample_std < gain / 3,
+                        "range_pass": distribution.range < gain / 3,
+                    }
+                    for direction, gain in gains.items()
+                },
+            }
+        output.append(
+            dict(
+                method=method,
+                step=step,
+                seeds=SEEDS,
+                gains=gains,
+                progress=progress,
+                metrics=comparisons,
+                unavailable_metrics=unavailable,
+            )
+        )
+    return output
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--records", type=Path, required=True, help="Combined scoring summaries with explicit seed fields"
+    )
+    parser.add_argument("--forward-baseline", type=Path, required=True)
+    parser.add_argument("--reverse-baseline", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    baselines = [json.loads(path.read_text()) for path in (args.forward_baseline, args.reverse_baseline)]
+    for baseline in baselines:
+        if baseline["sequences"] != COUNTS["P_X"] or not 0 < baseline["token_mean_kl"] < math.inf:
+            raise ValueError("Each baseline needs 1000 sequences and finite positive KL")
+    if baselines[0]["positions"] != FORWARD_POSITIONS:
+        raise ValueError("Forward baseline does not cover the frozen task-X positions")
+    records = [seed_metrics(row) for row in json.loads(args.records.read_text())]
+    result = gate_inputs(records, *(baseline["token_mean_kl"] for baseline in baselines))
+    args.output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
+
+
+if __name__ == "__main__":
+    main()
