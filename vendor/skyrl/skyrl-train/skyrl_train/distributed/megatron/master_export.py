@@ -19,14 +19,13 @@ from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_mas
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 
 
-
 def load_fp32_masters(ckpt_dir: str) -> dict[str, torch.Tensor]:
     """Read every FP32 master record, keyed by model-space weight name.
 
     Raises ValueError unless the checkpoint metadata shows a full set of FP32 master
     records; there is no model-weight fallback, so a BF16 checkpoint cannot pass as an
-    FP32 export. Holds every master in memory; large checkpoints need a streaming
-    reader.
+    FP32 export. Holds every master in memory; compare large checkpoints a tensor at a
+    time with ``fp32_master_names`` and ``load_fp32_master``.
     """
     metadata = _storage_reader(ckpt_dir).read_metadata()
     masters = _master_records(metadata, ckpt_dir)
@@ -38,6 +37,24 @@ def load_fp32_masters(ckpt_dir: str) -> dict[str, torch.Tensor]:
         no_dist=True,
     )
     return state
+
+
+def fp32_master_names(ckpt_dir: str) -> set[str]:
+    """The model-space names of a checkpoint's FP32 master records (raises if it has none)."""
+    return set(_master_records(_storage_reader(ckpt_dir).read_metadata(), ckpt_dir))
+
+
+def load_fp32_master(ckpt_dir: str, name: str) -> torch.Tensor:
+    """One FP32 master record, so large checkpoints can be compared a tensor at a time."""
+    record = _master_records(_storage_reader(ckpt_dir).read_metadata(), ckpt_dir)[name]
+    state = {name: torch.empty(record.size, dtype=torch.float32)}
+    dcp.load(
+        state,
+        storage_reader=_storage_reader(ckpt_dir),
+        planner=DefaultLoadPlanner(flatten_state_dict=False, flatten_sharded_tensors=False),
+        no_dist=True,
+    )
+    return state[name]
 
 
 def _storage_reader(ckpt_dir: str):
@@ -73,4 +90,3 @@ def _master_records(metadata: Metadata, ckpt_dir: str) -> dict[str, TensorStorag
             "with FP32 master records (model-space optimizer.state.fp32_param records)"
         )
     return masters
-

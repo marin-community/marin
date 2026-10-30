@@ -35,7 +35,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cloud.iris.artifacts import fs_and_path, terminal_checkpoint_step
+from cloud.iris.artifacts import fs_and_path
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
@@ -393,39 +393,9 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 
 
-def export_terminal_policy(training_config_path: Path) -> None:
-    """Derive and run the terminal policy export from one training launch document."""
-    training_config = load_launch_config(training_config_path)
-    checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = terminal_checkpoint_step(checkpoint_root)
-    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
-    request = _read_hf_export_request(checkpoint_path)
-    if request is None:
-        raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
-    if request.status is HFExportStatus.COMPLETE:
-        return
-    allocation = training_config.iris.allocation
-    spec = ExportJobSpec(
-        request=request,
-        cluster=str(training_config.iris.cluster),
-        priority=str(training_config.iris.priority),
-        gpu_variant=str(allocation.gpu_variant),
-        job_name=f"{training_config.iris.job_name}-export-{step}",
-        timeout=DEFAULT_HF_EXPORT_TIMEOUT,
-        no_wait=False,
-        cluster_config=str(training_config.iris.cluster_config),
-        target_cluster=training_config.iris.target_cluster,
-        parent_cluster_config=training_config.iris.parent_cluster_config,
-        cpu=float(allocation.cpu),
-        memory=str(allocation.memory),
-        disk=str(allocation.disk),
-        allocation_gpus_per_node=int(allocation.gpus_per_node),
-    )
-    resolved_spec = _with_checkpoint_export_config(training_config_path, spec)
-    submit_requested_export(resolved_spec, build_command(resolved_spec))
-
-
-def _submit_conversion(training_config_path: Path, training_config: DictConfig, request: HFExportRequest, step: int) -> None:
+def _submit_conversion(
+    training_config_path: Path, training_config: DictConfig, request: HFExportRequest, step: int
+) -> None:
     """Build, submit, and wait out one checkpoint conversion gang."""
     allocation = training_config.iris.allocation
     spec = ExportJobSpec(
@@ -462,9 +432,7 @@ def pending_export_steps(training_config: DictConfig) -> list[tuple[int, str]]:
     # detail=True keeps the entry shape deterministic: the guarded remote-I/O
     # filesystem's listdir returned detail dicts, which sorted() cannot order.
     entries = filesystem.ls(root_path, detail=True)
-    names = sorted(
-        str(entry["name"] if isinstance(entry, dict) else entry) for entry in entries
-    )
+    names = sorted(str(entry["name"] if isinstance(entry, dict) else entry) for entry in entries)
     pending: list[tuple[int, str]] = []
     for name in names:
         directory = name.rstrip("/").rsplit("/", 1)[-1]
