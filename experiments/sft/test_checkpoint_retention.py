@@ -85,7 +85,7 @@ def test_sft_default_rolls_temporary_checkpoints_resumes_and_keeps_final(sft_tra
     checkpointer = config.create("test-run")
     checkpointer.on_step(tree=_state(0), step=0)
 
-    # Cross the launcher's former 5,000-step permanent interval.
+    # A round-numbered training step must not implicitly retain a permanent copy.
     for step in (4999, 5000):
         clock.current += datetime.timedelta(minutes=30)
         checkpointer.on_step(tree=_state(step), step=step)
