@@ -20,6 +20,7 @@ class EvalTaskConfig:
     num_fewshot: int | None
     task_alias: str | None = None
     task_kwargs: dict | None = None
+    selected_source_keys: tuple[str, ...] | None = None
     generation: bool = False
     """Whether the task scores generated text rather than prompt loglikelihoods."""
     unsafe_code: bool = False
@@ -35,6 +36,8 @@ def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | No
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+    if any(task.selected_source_keys is not None for task in tasks):
+        raise ValueError("selected_source_keys requires the Evalchemy source execution path")
     return [
         TaskConfig(
             task=task.name,

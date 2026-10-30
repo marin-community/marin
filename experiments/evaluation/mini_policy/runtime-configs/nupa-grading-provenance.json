@@ -1,0 +1,21 @@
+{
+  "historical_marin_scorer_revision": "4d89386f39babc725e18a36891c8ec4785c16ef5",
+  "historical_evalchemy_correction": "2baaab1b9c0c9c8caffcd8f6df45355539aef436",
+  "purpose": "Bring grading into parity with the frozen NUPA target; no prompt, dataset, sampling, or serving change. All timing arms launched before this adoption must be regraded from their stored responses.",
+  "files": {
+    "vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/scorer.py": "fc736d7e106025a062d2ec1da5ddebaed55029b51027f77c658b9ad2bcdd562d",
+    "vendor/evalchemy/eval/graders/math_specs.py": "20c64ace2ad734edf9346fc4fee71d62289630f603bfe42f7cc38454d81a25ba"
+  },
+  "validation": {
+    "raw_trial_replay": {
+      "models": 18,
+      "trials": 90000,
+      "mismatches": 0,
+      "evidence": "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/nupa-grader-parity-20261030/summary.json"
+    },
+    "scorer_tests": {
+      "job": "/benfeuer/mini-policy-nupa-scorer-tests-20261030",
+      "passed": 37
+    }
+  }
+}

@@ -231,6 +231,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     ]
     # Pass every explicit shot count, including 0. A file-backed task may leave the value unset to use
     # the evaluator task's own default; explicit 0 must still override defaults such as gsm8k's 5-shot.
+    if task.get("selected_source_keys") is not None:
+        cmd += ["--selected_source_keys", json.dumps(task["selected_source_keys"], separators=(",", ":"))]
     if task["num_fewshot"] is not None:
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
     if config.get("judge_protocol", "default") != "default":

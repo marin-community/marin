@@ -63,6 +63,7 @@ class TaskDeclaration(Protocol):
     generation: bool
     unsafe_code: bool
     completion_only: bool
+    selected_source_keys: tuple[str, ...] | None
 
 
 logger = logging.getLogger(__name__)
@@ -556,6 +557,7 @@ def _recorded_tasks(
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    selected_source_keys=task.selected_source_keys,
                 )
             )
             continue
@@ -568,6 +570,7 @@ def _recorded_tasks(
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    selected_source_keys=task.selected_source_keys,
                     benchmark=benchmark,
                 )
             )

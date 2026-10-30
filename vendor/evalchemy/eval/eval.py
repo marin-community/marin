@@ -10,7 +10,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional, Union
 
 import lm_eval.api.metrics
@@ -76,6 +76,18 @@ def _attach_benchmark_metadata(results: dict[str, Any], args: argparse.Namespace
             continue
         count = results["task_outcomes"].get(task, {}).get("expected_count")
         metadata.append(infer_benchmark_metadata(task, metrics, n_attempted=count))
+    selected_keys = getattr(args, "selected_source_keys", None)
+    if selected_keys is not None:
+        if len(metadata) != 1 or len(results["task_outcomes"]) != 1:
+            raise ValueError("selected_source_keys requires one described benchmark")
+        parent = metadata[0]
+        outcome = next(iter(results["task_outcomes"].values()))
+        count = int(outcome["expected_count"])
+        results["task_selection"] = {
+            "selected_source_keys": json.loads(selected_keys),
+            "parent_benchmark_metadata": parent.to_dict(),
+        }
+        metadata = [replace(parent, n_benchmark=count, n_attempted=count)]
     results["benchmark_metadata"] = {description.task: description.to_dict() for description in metadata}
     results["canonical_results"] = canonicalize_results(results["results"], metadata)
 

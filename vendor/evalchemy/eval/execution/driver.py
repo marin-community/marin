@@ -32,6 +32,7 @@ from eval.execution.run_spec import RunSpec
 from eval.graders.answer_equivalence import JudgeConfig
 from eval.graders.specs import GRADERS
 from eval.robust_api import completion_response_text_unavailable
+from eval.source_selection import selected_specs
 from eval.sources.common import SourceOptions
 from eval.task import BaseBenchmark
 from eval.sources.lm_eval import LMEvalMetrics, LMEvalSource
@@ -56,6 +57,7 @@ class SourcePlan:
     judge_config: JudgeConfig | None = None
     expected_examples: int | None = None
     benchmark: BaseBenchmark | None = None
+    selected_source_keys: tuple[str, ...] | None = None
 
 
 def _interleave(plans: list[SourcePlan]) -> Iterator[EvalSpec]:
@@ -133,6 +135,13 @@ def source_plans(tasks, routes, custom, native, run: RunSpec, model) -> list[Sou
             graders[source.grader_name] = source.grader()
         reducer = LMEvalMetrics(loaded["tasks"], loaded["groups"])
         plans.append(SourcePlan(task, route, tuple(sources), tuple(loaded["tasks"]), reducer, graders))
+    if run.selected_source_keys is not None:
+        if len(plans) != 1:
+            raise ValueError("selected_source_keys requires one benchmark per invocation")
+        plan = plans[0]
+        plan.sources = (selected_specs(plan.sources, run.selected_source_keys),)
+        plan.expected_examples = len(run.selected_source_keys)
+        plan.selected_source_keys = run.selected_source_keys
     return plans
 
 
@@ -222,7 +231,7 @@ async def run_evaluations(
         expected = sum(manifest.expected_sample_count for manifest in manifests)
         generated = sum(manifest.generated_sample_count for manifest in manifests)
         score_count = sum(len(scored[task]) for task in plan.task_names)
-        if plan.benchmark is not None:
+        if plan.benchmark is not None and plan.selected_source_keys is None:
             plan.expected_examples = plan.benchmark.describe(plan.name).n_attempted
         if plan.expected_examples is not None and expected != plan.expected_examples:
             plan.errors.append(

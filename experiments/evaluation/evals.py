@@ -99,6 +99,7 @@ class EvalchemyDefinition:
                     generation=task.generation,
                     unsafe_code=task.unsafe_code,
                     completion_only=task.completion_only,
+                    selected_source_keys=task.selected_source_keys,
                 )
                 for task in config.tasks
             ),
@@ -282,6 +283,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
                 generation=options.generation if options is not None else False,
                 unsafe_code=options.unsafe_code if options is not None else False,
                 completion_only=options.completion_only if options is not None else False,
+                selected_source_keys=options.selected_source_keys if options is not None else None,
             )
         )
 

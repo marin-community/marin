@@ -1,0 +1,452 @@
+{
+  "model_config": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/Qwen-Qwen3.6-35B-A3B.yaml",
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+  "plans": [
+    {
+      "benchmark": "NUPA",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/nupa.yaml",
+      "config_text": "tasks: [NUPA5K-Loose]\ntask_options:\n  NUPA5K-Loose:\n    num_fewshot: 0\n    task_alias: nupa5k\n    generation: true\napply_chat_template: true\nbatch_size: 1\nseed: 20222943\n# Evalchemy's pinned NUPA5K-Loose prompt measurement reserves its longest prompt and\n# standard cushion, then assigns the rest of this context window to the response.\nmax_length: 73664\nruntime_extras: [nupa5k-loose]\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,max_length=73664",
+          "--tasks",
+          "NUPA5K-Loose",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "nupa5k",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "20222943",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {}
+    },
+    {
+      "benchmark": "aime24",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/aime24.yaml",
+      "config_text": "tasks: [AIME24]\ntask_options:\n  AIME24:\n    num_fewshot: 0\n    task_alias: aime24\n    generation: true\n# No max_tokens: Evalchemy sizes AIME24 responses from the served context window minus the\n# benchmark's longest prompt (evalchemy#132). An explicit cap truncated reasoning models' chains.\nruntime_extras: [aime24]\nseed: 42\ngen_kwargs: do_sample=true,temperature=0.7\nchat_template_kwargs:\n  enable_thinking: true\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiB0cnVlfQ==,max_length=73664",
+          "--tasks",
+          "AIME24",
+          "--gen_kwargs",
+          "do_sample=true,temperature=0.7",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "aime24",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    },
+    {
+      "benchmark": "cruxeval",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/cruxeval.yaml",
+      "config_text": "tasks: [CruxEval]\ntask_options:\n  CruxEval:\n    num_fewshot: 0\n    task_alias: cruxeval\n    generation: true\napply_chat_template: true\nbatch_size: 1\nseed: 42\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [cruxeval]\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "CruxEval",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "cruxeval",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "gpqa-diamond",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/gpqa-diamond.yaml",
+      "config_text": "tasks: [GPQADiamond]\ntask_options:\n  GPQADiamond:\n    num_fewshot: 0\n    task_alias: gpqa-diamond\n    generation: true\napply_chat_template: true\nbatch_size: 1\nseed: 42\ngen_kwargs: do_sample=true,temperature=0.7\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [gpqadiamond]\nchat_template_kwargs:\n  enable_thinking: true\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiB0cnVlfQ==,max_length=73664",
+          "--tasks",
+          "GPQADiamond",
+          "--gen_kwargs",
+          "do_sample=true,temperature=0.7",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "gpqa-diamond",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    },
+    {
+      "benchmark": "gsm8k-0shot",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/gsm8k-0shot.yaml",
+      "config_text": "tasks: [gsm8k]\ntask_options:\n  gsm8k:\n    num_fewshot: 0\n    task_alias: gsm8k_0shot\n    generation: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "gsm8k",
+          "--gen_kwargs",
+          "max_gen_toks=69568",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "gsm8k_0shot",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "humanevalplus",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml",
+      "config_text": "tasks: [HumanEvalPlus]\ntask_options:\n  HumanEvalPlus:\n    num_fewshot: 0\n    task_alias: humanevalplus\n    generation: true\n    unsafe_code: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [humanevalplus]\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "HumanEvalPlus",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "humanevalplus",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--confirm_run_unsafe_code",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "ifbench",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/ifbench.yaml",
+      "config_text": "tasks: [IFBench]\ntask_options:\n  IFBench:\n    num_fewshot: 0\n    task_alias: ifbench\n    generation: true\napply_chat_template: true\nbatch_size: 1\nseed: 42\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [ifbench]\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "IFBench",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "ifbench",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "math500",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml",
+      "config_text": "tasks: [MATH500]\ntask_options:\n  MATH500:\n    num_fewshot: 0\n    task_alias: math500\n    generation: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [math500]\nchat_template_kwargs:\n  enable_thinking: true\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiB0cnVlfQ==,max_length=73664",
+          "--tasks",
+          "MATH500",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "math500",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    },
+    {
+      "benchmark": "mbppplus",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mbppplus.yaml",
+      "config_text": "tasks: [MBPPPlus]\ntask_options:\n  MBPPPlus:\n    num_fewshot: 0\n    task_alias: mbppplus\n    generation: true\n    unsafe_code: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [mbppplus]\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "MBPPPlus",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "mbppplus",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--confirm_run_unsafe_code",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "mmlu-pro",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mmlu-pro.yaml",
+      "config_text": "tasks: [MMLUPro]\ntask_options:\n  MMLUPro:\n    num_fewshot: 0\n    task_alias: mmlu-pro\n    generation: true\napply_chat_template: true\nbatch_size: 1\nseed: 42\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nmax_length: 65536\nruntime_extras: [mmlupro]\nchat_template_kwargs:\n  enable_thinking: true\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiB0cnVlfQ==,max_length=65536",
+          "--tasks",
+          "MMLUPro",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "mmlu-pro",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    },
+    {
+      "benchmark": "mrcr",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mrcr.yaml",
+      "config_text": "tasks: [MRCR]\ntask_options:\n  MRCR:\n    num_fewshot: 0\n    task_alias: mrcr\n    generation: true\napply_chat_template: true\nchat_tokenizer_backend: huggingface\nbatch_size: 1\nseed: 42\nmax_tokens: 4096\nmax_length: 73728\nruntime_extras: [mrcr]\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=huggingface,tokenizer=Qwen/Qwen3.6-35B-A3B,trust_remote_code=True,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,revision=995ad96eacd98c81ed38be0c5b274b04031597b0,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "MRCR",
+          "--gen_kwargs",
+          "max_gen_toks=4096",
+          "--max_tokens",
+          "4096",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "mrcr",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--batch_size",
+          "1",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "olympiadbench",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/olympiadbench.yaml",
+      "config_text": "tasks: [OlympiadBench]\ntask_options:\n  OlympiadBench:\n    num_fewshot: 0\n    task_alias: olympiadbench\n    generation: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nruntime_extras: [olympiadbench]\nseed: 42\ngen_kwargs: do_sample=true,temperature=0.7\nchat_template_kwargs:\n  enable_thinking: true\njudge:\n  base_url: https://api.together.xyz/v1\n  model: openai/gpt-oss-120b\n  api_key:\n    - env:TOGETHER_API_KEY\n    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiB0cnVlfQ==,max_length=73664",
+          "--tasks",
+          "OlympiadBench",
+          "--gen_kwargs",
+          "do_sample=true,temperature=0.7",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "olympiadbench",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--seed",
+          "42",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": true
+      }
+    },
+    {
+      "benchmark": "triviaqa",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/triviaqa.yaml",
+      "config_text": "tasks: [triviaqa]\nruntime_memory: 128g\nextra_model_args:\n  num_concurrent: 128\ntask_options:\n  triviaqa:\n    num_fewshot: 5\n    task_alias: triviaqa_5shot\n    generation: true\n# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own\n# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.\nchat_template_kwargs:\n  enable_thinking: false\n",
+      "commands": [
+        [
+          "--model",
+          "local-chat-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/chat/completions,tokenizer_backend=none,tokenized_requests=False,num_concurrent=128,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,chat_template_kwargs=base64:eyJlbmFibGVfdGhpbmtpbmciOiBmYWxzZX0=,max_length=73664",
+          "--tasks",
+          "triviaqa",
+          "--gen_kwargs",
+          "max_gen_toks=69568",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "triviaqa_5shot",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "5",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets",
+          "--apply_chat_template"
+        ]
+      ],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    {
+      "benchmark": "truthfulqa",
+      "config_path": "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/truthfulqa.yaml",
+      "config_text": "tasks: [truthfulqa_mc2]\ntask_options:\n  truthfulqa_mc2:\n    num_fewshot: 0\n    task_alias: truthfulqa_mc2_0shot\n",
+      "commands": [
+        [
+          "--model",
+          "local-completions",
+          "--model_args",
+          "model=Qwen/Qwen3.6-35B-A3B,base_url=http://not-used.invalid/v1/completions,tokenizer=Qwen/Qwen3.6-35B-A3B,tokenizer_backend=huggingface,trust_remote_code=True,tokenized_requests=False,num_concurrent=64,max_retries=8,timeout=1800,transport_retry_budget=5400.0,transport_attempt_timeout=1800.0,max_length=73664",
+          "--tasks",
+          "truthfulqa_mc2",
+          "--finestore_output_path",
+          "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/source-audit/no-generations",
+          "--finestore_output_prefix",
+          "truthfulqa_mc2_0shot",
+          "--verbosity",
+          "INFO",
+          "--num_fewshot",
+          "0",
+          "--dataset_cache",
+          "s3://marin-us-east-02a/tmp/ttl=30d/evalchemy-datasets"
+        ]
+      ],
+      "chat_template_kwargs": {}
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+schema_version: 1
+name: mini-micro-rl-validation-pi-65k-16k-thinking-on-v1
+purpose: rl_validation
+policy_conformance_claim: false
+selection:
+  study: study-20261030-v6-21x21
+  seed: 0
+  random_seed: 20261030
+  reference_fold: 1
+  mini_unique_tasks: 840
+  micro_unique_tasks: 210
+  nesting: micro_is_first_210_of_mini
+model:
+  total_context_length: 65536
+  max_output_tokens_per_turn: 16384
+  thinking: true
+  chat_template_kwargs:
+    enable_thinking: true
+agentic:
+  harness: pi
+  version: 0.87.0
+  task_session: harbor_trial
+  model_info:
+    max_input_tokens: 65536
+    max_output_tokens: 16384
+  thinking: high
+  thinking_format: chat-template
+limits:
+  agent_timeout: 1800
+  verifier_timeout: 300
+  setup_timeout: 360
+  cleanup_timeout: 60
+  max_total_tokens_per_episode: null
+repetitions: preserve_source_task_repetitions
+truthfulqa:
+  validation: generated_choice_truthful_answer_accuracy
+  policy_index: original_mc2_loglikelihood
+
+judge:
+  model: MiniMaxAI/MiniMax-M3-MXFP8
+  context: inherit_canonical_judge_config

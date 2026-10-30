@@ -74,6 +74,7 @@ class EvalchemyTaskOptions(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    selected_source_keys: tuple[str, ...] | None = Field(default=None, min_length=1)
 
 
 class EvalchemyConfig(BaseModel):

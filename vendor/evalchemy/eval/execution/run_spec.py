@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from argparse import Namespace
 from dataclasses import dataclass, field, fields
 from typing import Any
@@ -16,6 +18,7 @@ from eval.execution.generation import canonical_generation_kwargs
 @dataclass(frozen=True)
 class RunSpec:
     limit: int | float | None = None
+    selected_source_keys: tuple[str, ...] | None = None
     max_length: int | None = None
     max_tokens: int | None = None
     generation: dict[str, Any] = field(default_factory=dict)
@@ -38,6 +41,13 @@ class RunSpec:
             item.name: getattr(args, item.name, item.default)
             for item in fields(cls) if item.name not in {"generation", "seeds", "pass_at_k"}
         }
+        if values["selected_source_keys"] is not None:
+            selection = json.loads(values["selected_source_keys"])
+            if not isinstance(selection, list) or not selection or any(not isinstance(key, str) for key in selection):
+                raise ValueError("selected_source_keys must encode a nonempty JSON string list")
+            if len(set(selection)) != len(selection):
+                raise ValueError("selected_source_keys contains duplicates")
+            values["selected_source_keys"] = tuple(selection)
         generation = canonical_generation_kwargs(parse_generation_overrides(getattr(args, "gen_kwargs", None)))
         model_args = parse_key_value_args(getattr(args, "model_args", ""))
         values["model_name"] = model_args.get("pretrained", model_args.get("model", values["model_name"]))

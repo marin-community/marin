@@ -1,0 +1,2842 @@
+{
+  "tracker": "/Users/benfeuer/Documents/experiments/complete/eval-policy-09-25/TRACKER.md",
+  "tracker_sha256": "fe26792f72cbd9092f0f33fa416213a80b4b4303f89472d743aa65e71f93d3b1",
+  "cohort_selection": "All twelve non-K2 baselines; six prespecified Snowball/Grug lineage and training-stage representatives. Selection frozen before task-level fitting.",
+  "models": [
+    "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+    "Qwen/Qwen3.6-35B-A3B",
+    "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "inclusionAI/Ling-lite-1.5",
+    "google/gemma-4-26B-A4B-it",
+    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+    "openai/gpt-oss-20b",
+    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+    "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+    "arcee-ai/Trinity-Mini",
+    "zai-org/GLM-4.7-Flash",
+    "Aleph-Alpha/Kolibri-1",
+    "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+    "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+    "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
+  ],
+  "predictor_exclusions": [
+    "financebench",
+    "piqa",
+    "winogrande",
+    "boolq",
+    "SOTOPIA-hard"
+  ],
+  "cells": [
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "math500",
+      "display_score": 0.95,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "humanevalplus",
+      "display_score": 0.726,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-humanevalplus-8396/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "mbppplus",
+      "display_score": 0.669,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-mbppplus-caf4/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "olympiadbench",
+      "display_score": 0.293,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.877,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "piqa",
+      "display_score": 0.823,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-130603-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-piqa-bd3a/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "winogrande",
+      "display_score": 0.764,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-winogrande-9ac6/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "boolq",
+      "display_score": 0.85,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123031-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-boolq-37bd/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "truthfulqa",
+      "display_score": 0.484,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-113944-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-truthfulqa-4138/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "triviaqa",
+      "display_score": 0.615,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-131528-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-triviaqa-ab37/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "aime24",
+      "display_score": 0.763,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.71,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123230-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-mmlu-pro-aeff/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.673,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123130-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-gpqa-diamond-f4ce/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "cruxeval",
+      "display_score": 0.652,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123051-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-cruxeval-181b/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "financebench",
+      "display_score": 0.4,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "ifbench",
+      "display_score": 0.22,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123210-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-ifbench-7a43/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "mrcr",
+      "display_score": 0.192,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-123250-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-mrcr-d37a/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "NUPA",
+      "display_score": 0.609,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "swebench-verified",
+      "display_score": 0.354,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/de7f7487ccd13043977ed7ca14e03e9f00370c0a7a08f5532ae7e982037470fc.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.209,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-130425-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-ot-tblite-recovery-c620/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.109,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-130828-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-tb2-recovery-95c6/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.4,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-130133-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-ds-1000-local-3f8b/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.057,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-124101-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-bfclparity-pi-c9fd/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.117,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-114254-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-bixbench-pi-ec3e/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "tau3-pi",
+      "display_score": 0.045,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-141443-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-tau3-pi-bd75/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.657,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "math500",
+      "display_score": 0.984,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "humanevalplus",
+      "display_score": 0.884,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-humanevalplus-2121/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "mbppplus",
+      "display_score": 0.783,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-mbppplus-5e99/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "olympiadbench",
+      "display_score": 0.327,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.908,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "piqa",
+      "display_score": 0.824,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-piqa-b922/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "winogrande",
+      "display_score": 0.77,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-winogrande-e1b8/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "boolq",
+      "display_score": 0.85,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-boolq-9707/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "truthfulqa",
+      "display_score": 0.546,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-truthfulqa-e8af/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "triviaqa",
+      "display_score": 0.669,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-triviaqa-09f7/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "aime24",
+      "display_score": 0.95,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.853,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-mmlu-pro-1570/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.827,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-gpqa-diamond-223a/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "cruxeval",
+      "display_score": 0.866,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-cruxeval-2d3f/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "financebench",
+      "display_score": 0.56,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "ifbench",
+      "display_score": 0.357,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-ifbench-7e6a/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "mrcr",
+      "display_score": 0.927,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-mrcr-60c3/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "NUPA",
+      "display_score": 0.831,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "swebench-verified",
+      "display_score": 0.67,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/730de697184710b7b19a4e1e0cf4e187e6779fc90d5fe3cf82d0c77c0ae71359.json"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.619,
+      "source": "s3://marin-us-east-02a/marin/evals/20260929-224600-Qwen-Qwen3.6-35B-A3B-ot-tblite-recovery-850e/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.365,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141550-Qwen-Qwen3.6-35B-A3B-tb2-recovery-5b2e/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.255,
+      "source": "s3://marin-us-east-02a/marin/evals/20260930-044134-Qwen-Qwen3.6-35B-A3B-ds-1000-local-c9bf/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.764,
+      "source": "s3://marin-us-east-02a/marin/evals/20260930-084341-Qwen-Qwen3.6-35B-A3B-bfclparity-pi-8288/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.4,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-034442-Qwen-Qwen3.6-35B-A3B-bixbench-pi-ead9/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "tau3-pi",
+      "display_score": 0.351,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-183028-Qwen-Qwen3.6-35B-A3B-tau3-pi-9862/results"
+    },
+    {
+      "model": "Qwen/Qwen3.6-35B-A3B",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.642,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/Qwen--Qwen3.6-35B-A3B.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "math500",
+      "display_score": 0.89,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "humanevalplus",
+      "display_score": 0.872,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-humanevalplus-2819/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "mbppplus",
+      "display_score": 0.77,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-mbppplus-500e/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "olympiadbench",
+      "display_score": 0.467,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.889,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "piqa",
+      "display_score": 0.78,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-piqa-0560/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "winogrande",
+      "display_score": 0.717,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-winogrande-c156/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "boolq",
+      "display_score": 0.88,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-165056-Qwen-Qwen3-Coder-30B-A3B-Instruct-boolq-d4d2/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "truthfulqa",
+      "display_score": 0.598,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-truthfulqa-d6cb/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "triviaqa",
+      "display_score": 0.584,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-triviaqa-b4f6/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "aime24",
+      "display_score": 0.29,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.712,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-mmlu-pro-44f7/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.517,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-gpqa-diamond-f707/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "cruxeval",
+      "display_score": 0.805,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-cruxeval-b439/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "financebench",
+      "display_score": 0.56,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "ifbench",
+      "display_score": 0.247,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-ifbench-d0e1/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "mrcr",
+      "display_score": 0.315,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-mrcr-4d4d/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "NUPA",
+      "display_score": 0.34,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "swebench-verified",
+      "display_score": 0.277,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/qwen-coder-da9813b5c1f4da3879788f1dfc16940bec9045f883ae116dfb57c9031e5a664f.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.255,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-170244-Qwen-Qwen3-Coder-30B-A3B-Instruct-ot-tblite-recovery-53b7/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.109,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-170244-Qwen-Qwen3-Coder-30B-A3B-Instruct-tb2-recovery-8f32/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.2,
+      "source": "s3://marin-us-east-02a/marin/evals/20260930-030619-Qwen-Qwen3-Coder-30B-A3B-Instruct-ds-1000-local-9592/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.602,
+      "source": "s3://marin-us-east-02a/marin/evals/20260930-013356-Qwen-Qwen3-Coder-30B-A3B-Instruct-bfclparity-pi-00af/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.156,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-172045-Qwen-Qwen3-Coder-30B-A3B-Instruct-bixbench-pi-93ce/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "tau3-pi",
+      "display_score": 0.08,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-061942-Qwen-Qwen3-Coder-30B-A3B-Instruct-tau3-pi-3d16/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.691,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/Qwen--Qwen3-Coder-30B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "math500",
+      "display_score": 0.968,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "humanevalplus",
+      "display_score": 0.896,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-humanevalplus-9bf3/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "mbppplus",
+      "display_score": 0.804,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-mbppplus-13a5/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "olympiadbench",
+      "display_score": 0.557,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.948,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "piqa",
+      "display_score": 0.817,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-piqa-6156/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "winogrande",
+      "display_score": 0.789,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-175350-Qwen-Qwen3-Next-80B-A3B-Instruct-winogrande-2379/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "boolq",
+      "display_score": 0.909,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-boolq-4d88/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "truthfulqa",
+      "display_score": 0.607,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-truthfulqa-dd4a/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "triviaqa",
+      "display_score": 0.771,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-triviaqa-0de3/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "aime24",
+      "display_score": 0.803,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.812,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-mmlu-pro-c550/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.726,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-gpqa-diamond-3d31/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "cruxeval",
+      "display_score": 0.895,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-cruxeval-229e/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "financebench",
+      "display_score": 0.52,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "ifbench",
+      "display_score": 0.38,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-ifbench-667b/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "mrcr",
+      "display_score": 0.342,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-mrcr-8161/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "NUPA",
+      "display_score": 0.386,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "swebench-verified",
+      "display_score": 0.131,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/qwen-next-frozen-6bea9d49d17d2188d585bf185446c641dce5030c5049dcf051036a0654242216.json"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132509-Qwen-Qwen3-Next-80B-A3B-Instruct-ot-tblite-recovery-1872/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132509-Qwen-Qwen3-Next-80B-A3B-Instruct-tb2-recovery-9ab9/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-192049-Qwen-Qwen3-Next-80B-A3B-Instruct-ds-1000-local-c439/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.163,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-201512-Qwen-Qwen3-Next-80B-A3B-Instruct-bfclparity-pi-9a6d/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.143,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-191246-Qwen-Qwen3-Next-80B-A3B-Instruct-bixbench-pi-9c63/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "tau3-pi",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-155000-Qwen-Qwen3-Next-80B-A3B-Instruct-tau3-pi-8b13/results"
+    },
+    {
+      "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.598,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/Qwen--Qwen3-Next-80B-A3B-Instruct.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "math500",
+      "display_score": 0.85,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "humanevalplus",
+      "display_score": 0.762,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-humanevalplus-8b18/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "mbppplus",
+      "display_score": 0.627,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-mbppplus-e287/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "olympiadbench",
+      "display_score": 0.447,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.848,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "piqa",
+      "display_score": 0.799,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-piqa-4527/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "winogrande",
+      "display_score": 0.685,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-winogrande-c617/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "boolq",
+      "display_score": 0.872,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-boolq-0641/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "truthfulqa",
+      "display_score": 0.507,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-181804-inclusionAI-Ling-lite-1.5-truthfulqa-3487/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "triviaqa",
+      "display_score": 0.565,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-triviaqa-d205/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "aime24",
+      "display_score": 0.193,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.605,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-mmlu-pro-e779/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.343,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-gpqa-diamond-87b8/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "cruxeval",
+      "display_score": 0.601,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-cruxeval-d09d/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "financebench",
+      "display_score": 0.5,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "ifbench",
+      "display_score": 0.223,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-ifbench-a03e/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "mrcr",
+      "display_score": 0.097,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-mrcr-6177/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "NUPA",
+      "display_score": 0.158,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "swebench-verified",
+      "display_score": 0.004,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/ling-2f4d6d48a31a6e242829cd06f9ddb1bda1015c7f96e159cdfe99da06aeb365f9.json"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.01,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141305-inclusionAI-Ling-lite-1.5-ot-tblite-recovery-234e/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.004,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141305-inclusionAI-Ling-lite-1.5-tb2-recovery-15b1/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141305-inclusionAI-Ling-lite-1.5-ds-1000-local-efad/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.089,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141305-inclusionAI-Ling-lite-1.5-bfclparity-pi-4d84/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.015,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-120649-inclusionAI-Ling-lite-1.5-bixbench-pi-9183/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "tau3-pi",
+      "display_score": 0.12,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-111829-inclusionAI-Ling-lite-1.5-tau3-pi-49b7/results"
+    },
+    {
+      "model": "inclusionAI/Ling-lite-1.5",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.655,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/inclusionAI--Ling-lite-1.5.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "math500",
+      "display_score": 0.98,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "humanevalplus",
+      "display_score": 0.902,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-humanevalplus-1e05/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "mbppplus",
+      "display_score": 0.802,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-mbppplus-b97a/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "olympiadbench",
+      "display_score": 0.62,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.933,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "piqa",
+      "display_score": 0.563,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-piqa-1f26/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "winogrande",
+      "display_score": 0.534,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-winogrande-2b60/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "boolq",
+      "display_score": 0.689,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-boolq-309d/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "truthfulqa",
+      "display_score": 0.551,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-truthfulqa-1fe0/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "triviaqa",
+      "display_score": 0.677,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-triviaqa-28fa/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "aime24",
+      "display_score": 0.887,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.85,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-mmlu-pro-52d7/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.786,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-132655-google-gemma-4-26B-A4B-it-gpqa-diamond-de55/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "cruxeval",
+      "display_score": 0.901,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-100442-google-gemma-4-26B-A4B-it-cruxeval-8a55/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "financebench",
+      "display_score": 0.66,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "ifbench",
+      "display_score": 0.42,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-105042-google-gemma-4-26B-A4B-it-ifbench-cd35/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "mrcr",
+      "display_score": 0.439,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-110659-google-gemma-4-26B-A4B-it-mrcr-ba1d/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "NUPA",
+      "display_score": 0.76,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "swebench-verified",
+      "display_score": 0.565,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/3f782cdb9ca14c333e1dab967d2874a5d6f4c1c24929fb8e1d9989a8f9c29502.json"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.481,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141854-google-gemma-4-26B-A4B-it-ot-tblite-recovery-61df/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.328,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141854-google-gemma-4-26B-A4B-it-tb2-recovery-c651/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.415,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141854-google-gemma-4-26B-A4B-it-ds-1000-local-5f01/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.8,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-141854-google-gemma-4-26B-A4B-it-bfclparity-pi-b916/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.304,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-091547-google-gemma-4-26B-A4B-it-bixbench-pi-d462/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "tau3-pi",
+      "display_score": 0.032,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-193055-google-gemma-4-26B-A4B-it-tau3-pi-2571/results"
+    },
+    {
+      "model": "google/gemma-4-26B-A4B-it",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.673,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/google--gemma-4-26B-A4B-it.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "math500",
+      "display_score": 0.97,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "humanevalplus",
+      "display_score": 0.823,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-humanevalplus-7530/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "mbppplus",
+      "display_score": 0.762,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-mbppplus-578d/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "olympiadbench",
+      "display_score": 0.22,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.518,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "piqa",
+      "display_score": 0.826,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-piqa-888c/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "winogrande",
+      "display_score": 0.762,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-winogrande-b64c/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "boolq",
+      "display_score": 0.893,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-boolq-205a/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "truthfulqa",
+      "display_score": 0.554,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-truthfulqa-320c/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "triviaqa",
+      "display_score": 0.638,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-triviaqa-0ba8/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "aime24",
+      "display_score": 0.893,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.817,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-mmlu-pro-69f4/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.749,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-gpqa-diamond-4007/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "cruxeval",
+      "display_score": 0.65,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-cruxeval-e4a2/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "financebench",
+      "display_score": 0.52,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "ifbench",
+      "display_score": 0.29,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-ifbench-edf0/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "mrcr",
+      "display_score": 0.407,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-075733-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-mrcr-4d47/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "NUPA",
+      "display_score": 0.759,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "swebench-verified",
+      "display_score": 0.47,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/e20e61985030d7ad85f0573b3bd0dce1e834de62e1bd4b79d704d5eb203d215a.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.37,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142034-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-ot-tblite-recovery-6267/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.22,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142034-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-tb2-recovery-7b0a/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.295,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142034-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-ds-1000-local-08ce/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.756,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142034-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-bfclparity-pi-9b05/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.317,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-142034-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-bixbench-pi-8600/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "tau3-pi",
+      "display_score": 0.12,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-060458-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-tau3-pi-2e47/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.673,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "math500",
+      "display_score": 0.946,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "humanevalplus",
+      "display_score": 0.841,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-humanevalplus-6459/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "mbppplus",
+      "display_score": 0.675,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-mbppplus-48f0/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "olympiadbench",
+      "display_score": 0.493,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.939,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "piqa",
+      "display_score": 0.755,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-piqa-9338/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "winogrande",
+      "display_score": 0.59,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-winogrande-4b54/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "boolq",
+      "display_score": 0.757,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-boolq-3c04/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "truthfulqa",
+      "display_score": 0.53,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-truthfulqa-a18e/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "triviaqa",
+      "display_score": 0.532,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-triviaqa-2953/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "aime24",
+      "display_score": 0.783,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.739,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-mmlu-pro-bf24/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.667,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-gpqa-diamond-2375/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "cruxeval",
+      "display_score": 0.575,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-cruxeval-cdd2/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "financebench",
+      "display_score": 0.36,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "ifbench",
+      "display_score": 0.26,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-ifbench-8235/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "mrcr",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-024824-openai-gpt-oss-20b-mrcr-12ce/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "NUPA",
+      "display_score": 0.743,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "swebench-verified",
+      "display_score": 0.306,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/69ed970155c497bc96a0c13a29a31e34060b3ca4fbbaf5bbb354be3e90e2fb0b.json"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.181,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182922-openai-gpt-oss-20b-ot-tblite-recovery-cddc/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.065,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182922-openai-gpt-oss-20b-tb2-recovery-997b/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.245,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182922-openai-gpt-oss-20b-ds-1000-local-5d01/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.667,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-182922-openai-gpt-oss-20b-bfclparity-pi-5101/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.167,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-185925-openai-gpt-oss-20b-bixbench-pi-0112/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "tau3-pi",
+      "display_score": 0.075,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-155151-openai-gpt-oss-20b-tau3-pi-a48d/results"
+    },
+    {
+      "model": "openai/gpt-oss-20b",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.664,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/openai--gpt-oss-20b.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "math500",
+      "display_score": 0.974,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "humanevalplus",
+      "display_score": 0.841,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-humanevalplus-08a9/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "mbppplus",
+      "display_score": 0.704,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-mbppplus-6c0d/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "olympiadbench",
+      "display_score": 0.393,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.857,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "piqa",
+      "display_score": 0.808,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-piqa-6683/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "winogrande",
+      "display_score": 0.712,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-winogrande-5374/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "boolq",
+      "display_score": 0.85,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-boolq-7ec4/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "truthfulqa",
+      "display_score": 0.514,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-truthfulqa-54a0/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "triviaqa",
+      "display_score": 0.645,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-triviaqa-d622/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "aime24",
+      "display_score": 0.913,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.784,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-mmlu-pro-e0c5/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.699,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-gpqa-diamond-7c39/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "cruxeval",
+      "display_score": 0.44,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-cruxeval-fac2/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "financebench",
+      "display_score": 0.38,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "ifbench",
+      "display_score": 0.317,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-ifbench-4886/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "mrcr",
+      "display_score": 0.164,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-231638-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-mrcr-18d0/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "NUPA",
+      "display_score": 0.781,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "swebench-verified",
+      "display_score": 0.297,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/1876ecf456f98d6e6838b41bd323dc932e7da54a58192b7321f41cae829d8ff6.json"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.201,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-224136-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-ot-tblite-recovery-b642/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.086,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-224136-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-tb2-recovery-14c1/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.3,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-224136-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-ds-1000-local-65bb/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.764,
+      "source": "s3://marin-us-east-02a/marin/evals/20260927-224136-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-bfclparity-pi-067f/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.239,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-003118-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-bixbench-pi-734f/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "tau3-pi",
+      "display_score": 0.067,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-154641-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-tau3-pi-0d43/results"
+    },
+    {
+      "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.648,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "math500",
+      "display_score": 0.912,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "humanevalplus",
+      "display_score": 0.774,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-humanevalplus-af25/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "mbppplus",
+      "display_score": 0.706,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-mbppplus-762b/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "olympiadbench",
+      "display_score": 0.327,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.877,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "piqa",
+      "display_score": 0.814,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-piqa-8296/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "winogrande",
+      "display_score": 0.801,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-winogrande-aaec/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "boolq",
+      "display_score": 0.893,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-boolq-c08c/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "truthfulqa",
+      "display_score": 0.579,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-truthfulqa-c15e/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "triviaqa",
+      "display_score": 0.658,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-triviaqa-3a8c/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "aime24",
+      "display_score": 0.753,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.684,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-mmlu-pro-41c8/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.652,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-gpqa-diamond-4e84/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "cruxeval",
+      "display_score": 0.585,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-cruxeval-6d52/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "financebench",
+      "display_score": 0.42,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "ifbench",
+      "display_score": 0.257,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-ifbench-e901/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "mrcr",
+      "display_score": 0.822,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-012306-moonshotai-Kimi-Linear-48B-A3B-Instruct-mrcr-4453/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "NUPA",
+      "display_score": 0.356,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "swebench-verified",
+      "display_score": 0.202,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/3d430e0cc47323b69d737f56b98c1d4eed0b775af66f3a26418bc25404692410.json"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.173,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-061642-moonshotai-Kimi-Linear-48B-A3B-Instruct-ot-tblite-recovery-1747/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.076,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-061642-moonshotai-Kimi-Linear-48B-A3B-Instruct-tb2-recovery-17f3/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.171,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-061642-moonshotai-Kimi-Linear-48B-A3B-Instruct-ds-1000-local-df7f/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.252,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-061642-moonshotai-Kimi-Linear-48B-A3B-Instruct-bfclparity-pi-12be/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.123,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-064523-moonshotai-Kimi-Linear-48B-A3B-Instruct-bixbench-pi-9a4d/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "tau3-pi",
+      "display_score": 0.109,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-154600-moonshotai-Kimi-Linear-48B-A3B-Instruct-tau3-pi-dcb0/results"
+    },
+    {
+      "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.665,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/moonshotai--Kimi-Linear-48B-A3B-Instruct.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "math500",
+      "display_score": 0.95,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "humanevalplus",
+      "display_score": 0.561,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-humanevalplus-e279/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "mbppplus",
+      "display_score": 0.696,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-mbppplus-7d35/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "olympiadbench",
+      "display_score": 0.18,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.941,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "piqa",
+      "display_score": 0.811,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-piqa-b942/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "winogrande",
+      "display_score": 0.725,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-winogrande-3783/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "boolq",
+      "display_score": 0.868,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-boolq-46e0/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "truthfulqa",
+      "display_score": 0.543,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-truthfulqa-ab65/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "triviaqa",
+      "display_score": 0.716,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-triviaqa-0283/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "aime24",
+      "display_score": 0.617,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.738,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-mmlu-pro-4758/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.483,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-gpqa-diamond-af7c/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "cruxeval",
+      "display_score": 0.36,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-072724-arcee-ai-Trinity-Mini-cruxeval-9e0d/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "financebench",
+      "display_score": 0.56,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "ifbench",
+      "display_score": 0.183,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-210451-arcee-ai-Trinity-Mini-ifbench-b9de/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "mrcr",
+      "display_score": 0.114,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-211140-arcee-ai-Trinity-Mini-mrcr-8d73/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "NUPA",
+      "display_score": 0.479,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "swebench-verified",
+      "display_score": 0.013,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/ae51b529dc2e7f562f6dacc00463e3f14ed9c8764c38bf261b8fa73ab0c6228a.json"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.036,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-213845-arcee-ai-Trinity-Mini-ot-tblite-recovery-d9dd/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.004,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-181610-arcee-ai-Trinity-Mini-tb2-recovery-e7b3/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.046,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-204315-arcee-ai-Trinity-Mini-ds-1000-local-1a61/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.179,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-201655-arcee-ai-Trinity-Mini-bfclparity-pi-868f/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20260928-095824-arcee-ai-Trinity-Mini-bixbench-pi-30e5/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "tau3-pi",
+      "display_score": 0.067,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-060627-arcee-ai-Trinity-Mini-tau3-pi-221e/results"
+    },
+    {
+      "model": "arcee-ai/Trinity-Mini",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.665,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/arcee-ai--Trinity-Mini.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "math500",
+      "display_score": 0.962,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "humanevalplus",
+      "display_score": 0.811,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-humanevalplus-212a/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "mbppplus",
+      "display_score": 0.68,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-mbppplus-a8e8/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "olympiadbench",
+      "display_score": 0.03,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.6,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "piqa",
+      "display_score": 0.794,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-piqa-597f/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "winogrande",
+      "display_score": 0.735,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-winogrande-d7b7/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "boolq",
+      "display_score": 0.884,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-boolq-2cd0/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "truthfulqa",
+      "display_score": 0.513,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-truthfulqa-f259/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "triviaqa",
+      "display_score": 0.664,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-triviaqa-2f7f/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "aime24",
+      "display_score": 0.587,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.743,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204333-zai-org-GLM-4.7-Flash-mmlu-pro-c940/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.433,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-060809-zai-org-GLM-4.7-Flash-gpqa-diamond-15f4/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "cruxeval",
+      "display_score": 0.666,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-155333-zai-org-GLM-4.7-Flash-cruxeval-ece8/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "financebench",
+      "display_score": 0.3,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "ifbench",
+      "display_score": 0.377,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-060820-zai-org-GLM-4.7-Flash-ifbench-16a4/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "mrcr",
+      "display_score": 0.298,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-063048-zai-org-GLM-4.7-Flash-mrcr-bda6/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "NUPA",
+      "display_score": 0.375,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "swebench-verified",
+      "display_score": 0.493,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/10c81c4b6e0fae114bb16990558604d752b29228b90e3d7607bfd67662c3bc55.json"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.279,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204411-zai-org-GLM-4.7-Flash-ot-tblite-recovery-f164/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.155,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-191853-zai-org-GLM-4.7-Flash-tb2-recovery-8f11/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.285,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204411-zai-org-GLM-4.7-Flash-ds-1000-local-36ca/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.667,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204411-zai-org-GLM-4.7-Flash-bfclparity-pi-7278/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.23,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-204548-zai-org-GLM-4.7-Flash-bixbench-pi-d82a/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "tau3-pi",
+      "display_score": 0.18,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-115510-zai-org-GLM-4.7-Flash-tau3-pi-5041/results"
+    },
+    {
+      "model": "zai-org/GLM-4.7-Flash",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.652,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/zai-org--GLM-4.7-Flash.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "math500",
+      "display_score": 0.992,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/math500/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "humanevalplus",
+      "display_score": 0.768,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-humanevalplus-6cd7/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "mbppplus",
+      "display_score": 0.725,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-mbppplus-b75b/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "olympiadbench",
+      "display_score": 0.23,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.892,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "piqa",
+      "display_score": 0.789,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-piqa-4364/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "winogrande",
+      "display_score": 0.628,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-winogrande-b630/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "boolq",
+      "display_score": 0.865,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-boolq-6c94/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "truthfulqa",
+      "display_score": 0.488,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-truthfulqa-71aa/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "triviaqa",
+      "display_score": 0.492,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-triviaqa-7f61/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "aime24",
+      "display_score": 0.933,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/aime24/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.799,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-mmlu-pro-de01/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.779,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-gpqa-diamond-fbe5/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "cruxeval",
+      "display_score": 0.784,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-cruxeval-c393/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "financebench",
+      "display_score": 0.36,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "ifbench",
+      "display_score": 0.343,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-140714-Aleph-Alpha-Kolibri-1-ifbench-7c8a/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "mrcr",
+      "display_score": 0.326,
+      "source": "s3://marin-us-east-02a/marin/evals/20261005-140737-Aleph-Alpha-Kolibri-1-mrcr-ed55/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "NUPA",
+      "display_score": 0.738,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "swebench-verified",
+      "display_score": 0.622,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/ee5293733fd1665b4d70b65e4c5e4165e1431f31f89a2f0e0678138904e95723.json"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.524,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-091419-Aleph-Alpha-Kolibri-1-ot-tblite-recovery-fcd1/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.224,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-091419-Aleph-Alpha-Kolibri-1-tb2-recovery-1950/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.375,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-091419-Aleph-Alpha-Kolibri-1-ds-1000-local-ef31/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.67,
+      "source": "s3://marin-us-east-02a/marin/evals/20261004-091419-Aleph-Alpha-Kolibri-1-bfclparity-pi-0124/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.294,
+      "source": "s3://marin-us-east-02a/marin/evals/20261003-210529-Aleph-Alpha-Kolibri-1-bixbench-pi-beee/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "tau3-pi",
+      "display_score": 0.126,
+      "source": "s3://marin-us-east-02a/marin/evals/20261006-062456-Aleph-Alpha-Kolibri-1-tau3-pi-ee5f/results"
+    },
+    {
+      "model": "Aleph-Alpha/Kolibri-1",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.651,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/Aleph-Alpha--Kolibri-1.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "math500",
+      "display_score": 0.942,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-110826-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-math500-53fa/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "humanevalplus",
+      "display_score": 0.689,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-110826-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-humanevalplus-841d/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "mbppplus",
+      "display_score": 0.587,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-110826-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-mbppplus-8050/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "olympiadbench",
+      "display_score": 0.327,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.893,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "piqa",
+      "display_score": 0.822,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-114459-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-piqa-990d/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "winogrande",
+      "display_score": 0.758,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-121607-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-winogrande-a937/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "boolq",
+      "display_score": 0.854,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111632-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-boolq-0401/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "truthfulqa",
+      "display_score": 0.487,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-120126-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-truthfulqa-d8c4/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "triviaqa",
+      "display_score": 0.59,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-120106-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-triviaqa-a8c3/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "aime24",
+      "display_score": 0.757,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111537-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-aime24-9b18/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.707,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-113554-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-mmlu-pro-a46c/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.623,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-112818-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-gpqa-diamond-0831/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "cruxeval",
+      "display_score": 0.661,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111652-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-cruxeval-2776/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "financebench",
+      "display_score": 0.42,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "ifbench",
+      "display_score": 0.263,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-112859-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-ifbench-688b/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "mrcr",
+      "display_score": 0.2,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-113615-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-mrcr-77cc/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "NUPA",
+      "display_score": 0.59,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "swebench-verified",
+      "display_score": 0.257,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/d18f46762ce4151d4932737ad5d1fbb4b9578e7c61a2e01027aa7c9cd92429df.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.213,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-114320-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-ot-tblite-recovery-2394/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.123,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-115854-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-tb2-recovery-7c7c/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.335,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111725-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-ds-1000-local-5430/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.415,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111611-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-bfclparity-pi-e680/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.103,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111055-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-bixbench-pi-cd7f/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "tau3-pi",
+      "display_score": 0.112,
+      "source": "s3://marin-us-east-02a/marin/evals/20261011-111217-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-tau3-pi-b8c1/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.658,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "math500",
+      "display_score": 0.962,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-210826-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-math500-dfe3/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "humanevalplus",
+      "display_score": 0.677,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212547-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-humanevalplus-cf97/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "mbppplus",
+      "display_score": 0.672,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212639-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-mbppplus-620b/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "olympiadbench",
+      "display_score": 0.233,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/olympiadbench/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.776,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/gsm8k-shared-boxed-extractor-20261016-a993b525/results/gsm8k-0shot/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "piqa",
+      "display_score": 0.823,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212954-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-piqa-9fb6/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "winogrande",
+      "display_score": 0.763,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-214016-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-winogrande-9e34/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "boolq",
+      "display_score": 0.861,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212148-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-boolq-7360/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "truthfulqa",
+      "display_score": 0.481,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-213946-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-truthfulqa-1bee/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "triviaqa",
+      "display_score": 0.587,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-213920-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-triviaqa-feaa/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "aime24",
+      "display_score": 0.81,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-211929-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-aime24-bdf0/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.704,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212706-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-mmlu-pro-82c8/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.692,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-gpqa-diamond-5194/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "cruxeval",
+      "display_score": 0.662,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212217-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-cruxeval-0258/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "financebench",
+      "display_score": 0.42,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/minimax-m3-judge-regrade-20261015-262k-016dd78b/results/financebench/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "ifbench",
+      "display_score": 0.18,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212613-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-ifbench-5532/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "mrcr",
+      "display_score": 0.178,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212733-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-mrcr-b5ed/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "NUPA",
+      "display_score": 0.295,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-repeated-terminal-20261016-2baaab1b-r2/results/nupa/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "swebench-verified",
+      "display_score": 0.394,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/c7087022f96165dff13919d6ae47a51bd0fd91ed059c1807d4aa20b5e6581200.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.256,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212927-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-ot-tblite-recovery-f121/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.124,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-213853-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-tb2-recovery-bd10/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.271,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212257-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-ds-1000-local-f0aa/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.525,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-212012-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-bfclparity-pi-fe1b/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.142,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-211101-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-bixbench-pi-611a/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "tau3-pi",
+      "display_score": 0.064,
+      "source": "s3://marin-us-east-02a/marin/evals/20261012-211338-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-tau3-pi-9223/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.636,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/sotopia-overall-length-controlled-20261015-c5ef5789/results/sotopia-hard/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "math500",
+      "display_score": 0.962,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-103125-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-math500-f932/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "humanevalplus",
+      "display_score": 0.872,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105224-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-humanevalplus-bb56/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "mbppplus",
+      "display_score": 0.775,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105318-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-mbppplus-106c/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "olympiadbench",
+      "display_score": 0.313,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105440-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-olympiadbench-bef3/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.914,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105157-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-gsm8k-0shot-83c2/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "piqa",
+      "display_score": 0.82,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105549-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-piqa-50b7/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "winogrande",
+      "display_score": 0.767,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-111114-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-winogrande-2efc/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "boolq",
+      "display_score": 0.832,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105008-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-boolq-ee50/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "truthfulqa",
+      "display_score": 0.487,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-111046-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-truthfulqa-412b/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "triviaqa",
+      "display_score": 0.572,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105807-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-triviaqa-c054/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "aime24",
+      "display_score": 0.73,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-104601-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-aime24-7dbe/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.736,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-142618-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-mmlu-pro-c089/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.635,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105130-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-gpqa-diamond-21f5/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "cruxeval",
+      "display_score": 0.691,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105035-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-cruxeval-ffe8/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "financebench",
+      "display_score": 0.58,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105102-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-financebench-795d/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "ifbench",
+      "display_score": 0.3,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105251-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-ifbench-efd0/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "mrcr",
+      "display_score": 0.221,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105413-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-mrcr-88fd/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "NUPA",
+      "display_score": 0.668,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-vendored-20261027-4d89386f39-r1/results/nupa/open-athena--Snowball-Smartie-RL-2026.10.15.32-step14.json"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "swebench-verified",
+      "display_score": 0.322,
+      "source": "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/sealed/7a0e519c86d35dc0de54b2ab670208a4ed967c800442a418e383c5d14ded322f.json"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.196,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105521-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-ot-tblite-recovery-83ec/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.098,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-105630-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-tb2-recovery-c62b/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.235,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-103730-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-ds-1000-local-ff83/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.341,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-104642-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-bfclparity-pi-e8cb/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.093,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-104831-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-bixbench-pi-72d5/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "tau3-pi",
+      "display_score": 0.096,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-103839-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-tau3-pi-b335/results"
+    },
+    {
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.669,
+      "source": "s3://marin-us-east-02a/marin/evals/20261019-103924-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-sotopia-hard-6800/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "math500",
+      "display_score": 0.93,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-math500-eddc043577bc54229a82b9dbeafa6482/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "humanevalplus",
+      "display_score": 0.744,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-humanevalplus-d8322cf972cf5d7a89f2508881d3d595/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "mbppplus",
+      "display_score": 0.611,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-mbppplus-c217ab7318165f76a5ae1729ae16f2fc/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "olympiadbench",
+      "display_score": 0.25,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-olympiadbench-257b4d4dfde15dd28af91a629c4eba85/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.719,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-gsm8k-0shot-fb23a09bd07a50cb97ab6481fcc2ed79/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "piqa",
+      "display_score": 0.825,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-piqa-5ea1a7cd8e5a5cad89decb90beed47eb/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "winogrande",
+      "display_score": 0.755,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-winogrande-184dc1540f5f57429fe417bc3cb57726/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "boolq",
+      "display_score": 0.862,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-boolq-0f8dfd67d404547da3d60b437b9052b4/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "truthfulqa",
+      "display_score": 0.475,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-truthfulqa-1f814beb24e75d7384454071c151eb32/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "triviaqa",
+      "display_score": 0.403,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-triviaqa-70b6c279a1d4522086887132b5de3940/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "aime24",
+      "display_score": 0.723,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-aime24-7291c3cb1669575b9603120a0a1c0a15/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.698,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-155650-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9e85b9fc765243a9be02b2c01c15082c-mmlu-pro-7ba702d700d65fa79ecc61566a5f12c8/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.614,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-gpqa-diamond-f241a3376d21580699e516a6336a089f/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "cruxeval",
+      "display_score": 0.564,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-cruxeval-9cc9e55ffb865e5a8492a029940b143c/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "financebench",
+      "display_score": 0.64,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-financebench-ba4a228b47ab5d1fb0b8a646b1a095e5/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "ifbench",
+      "display_score": 0.21,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-ifbench-37f6f53c7a5d5ce4ad3b59a2e0db5e46/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "mrcr",
+      "display_score": 0.141,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104611-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-1b96c1ee38ca40d1927bf7870c1b9e00-mrcr-a7d0531543e55f0ea7296327ab02b0de/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "NUPA",
+      "display_score": 0.117,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-vendored-20261027-4d89386f39-r1/results/nupa/open-athena--Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25.json"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "swebench-verified",
+      "display_score": 0.115,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-160237-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-2e031acaa4f54177b70edb78f3964574-swebench-verified-c672100a3d155193be25262b3b8b649a/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.014,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104647-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9d6bd9af3fd24cfc961bbf01e7d09075-ot-tblite-recovery-049c5e1e4054592ab4aa633877af224e/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.008,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104647-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9d6bd9af3fd24cfc961bbf01e7d09075-tb2-recovery-cc7bb11dd19059f692c4744b706a76c7/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.055,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104647-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9d6bd9af3fd24cfc961bbf01e7d09075-ds-1000-local-157a1f240c885c3a859c9e16b8f21ecd/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.398,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104647-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9d6bd9af3fd24cfc961bbf01e7d09075-bfclparity-pi-2e273190722c5453a837dd3600a078fa/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.063,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-105001-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-ab77dbded0074b0a88b473281d75632d-bixbench-pi-72261aa34fa058809762548ac0c326c8/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "tau3-pi",
+      "display_score": 0.04,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-105137-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-5a58ecc46e2e489ba96a6a0bdeb1be8d-tau3-pi-72d8a69131635ad6b5bd6f01ac87e6e0/results"
+    },
+    {
+      "model": "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.639,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-104647-open-athena-Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25-9d6bd9af3fd24cfc961bbf01e7d09075-sotopia-hard-0453f7d84c4b5a02a8da017efe0ba145/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "math500",
+      "display_score": 0.104,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-math500-3a3cc31cb0005be8a174fa05ed78fc1a/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "humanevalplus",
+      "display_score": 0.177,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-humanevalplus-9416e26f011c5d6c9e5556745ab6c885/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "mbppplus",
+      "display_score": 0.257,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-mbppplus-607f5b6c3a6b5f6198579a698c7685b9/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "olympiadbench",
+      "display_score": 0.1,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-olympiadbench-4ed23cd5163d54159b2859420524e64e/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "gsm8k-0shot",
+      "display_score": 0.186,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-gsm8k-0shot-1ddc2f51c3b45add86ce337f1a61f624/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "piqa",
+      "display_score": 0.823,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-103013-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-401bd529c6204e2db4bf2f68e1572c9a-piqa-2cdf9c7a976c58dd8398f7d80a66f3aa/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "winogrande",
+      "display_score": 0.766,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-103013-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-401bd529c6204e2db4bf2f68e1572c9a-winogrande-38cfbfb77599537f805588ca941709f4/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "boolq",
+      "display_score": 0.857,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-103013-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-401bd529c6204e2db4bf2f68e1572c9a-boolq-0721ba98154756eeb5c50bde2ab25de3/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "truthfulqa",
+      "display_score": 0.48,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-105913-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-e35be9f91a7e41af9e60adf68ec5dd1c-truthfulqa-d8409a7974275c648ab8349ce6095ac5/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "triviaqa",
+      "display_score": 0.187,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-triviaqa-4deaa6cca891547ca4a71eaa7d5f7a2f/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "aime24",
+      "display_score": 0.13,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-aime24-0d4e80d96d60594087088aab1e71467e/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "mmlu-pro",
+      "display_score": 0.376,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-mmlu-pro-240a8a2bf5a15e82822fb0784ad4822d/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "gpqa-diamond",
+      "display_score": 0.33,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-gpqa-diamond-2512b1e9d41156ca822d3961a1347fe0/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "cruxeval",
+      "display_score": 0.234,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-cruxeval-1b0339b10695506f86eb61afda906510/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "financebench",
+      "display_score": 0.26,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-financebench-6e42052f4291508480ace083e0fcf256/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "ifbench",
+      "display_score": 0.083,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-ifbench-162c3cca192e5d278d9938d2f1e1b027/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "mrcr",
+      "display_score": 0.037,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-112811-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-920114e327da435ba8cd75abc7069803-mrcr-1f2b9c3e75f65680ada569858cdf4780/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "NUPA",
+      "display_score": 0.053,
+      "source": "s3://marin-us-east-02a/marin/evals/ablations/nupa-loose-vendored-20261027-4d89386f39-r1/results/nupa/open-athena--snowball-67b-a2b-base-262k-qk175-skew8.json"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "swebench-verified",
+      "display_score": 0.002,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-160550-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-26e66a731ca4413da225b5ef1b598950-swebench-verified-20dd1fbdb5365d7384441f505c1908d7/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "ot-tblite-recovery",
+      "display_score": 0.055,
+      "source": "s3://marin-us-east-02a/marin/evals/20261029-065123-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-c6df53c8c683461587fe7b9c74c420a2-ot-tblite-recovery-e1774f0a70325f7cab5318d79b4e19e3/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "tb2-recovery",
+      "display_score": 0.03,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-142824-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-37f6dc9e11324686988283ac0ce2cdf7-tb2-recovery-3a3f239a86d850f8afc764e373820423/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "ds-1000-local",
+      "display_score": 0.055,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-142824-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-37f6dc9e11324686988283ac0ce2cdf7-ds-1000-local-cdd650cfd59d5a268fd0ee309d50fa02/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "bfclparity-pi",
+      "display_score": 0.016,
+      "source": "s3://marin-us-east-02a/marin/evals/20261029-171733-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-c683e0ae42d24711b01f2090927b85c6-bfclparity-pi-e35dd216d941514aae7fe70c657dd3dd/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "bixbench-pi",
+      "display_score": 0.0,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-143145-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-53b9685da336472b84ad608401358c56-bixbench-pi-f2d7d51d2aa35a6bb68b76c91529ccce/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "tau3-pi",
+      "display_score": 0.067,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-143328-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-f3e4ffd7c50048d386f0527ed11fea75-tau3-pi-74de422cb6e45cc28d7619e0fbcd2002/results"
+    },
+    {
+      "model": "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+      "benchmark": "SOTOPIA-hard",
+      "display_score": 0.619,
+      "source": "s3://marin-us-east-02a/marin/evals/20261026-142824-open-athena-snowball-67b-a2b-base-262k-qk175-skew8-37f6dc9e11324686988283ac0ce2cdf7-sotopia-hard-7b5db66caad2583e8aadc8e238ff5544/results"
+    }
+  ]
+}

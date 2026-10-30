@@ -1,0 +1,368 @@
+diff --git a/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md b/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md
+index 090ecaa5b9..84afa82807 100644
+--- a/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md
++++ b/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md
+@@ -14,8 +14,13 @@ extracts a numeric prefix after its answer delimiter or marker.
+ 
+ Evalchemy's [permissive extraction change](https://github.com/marin-community/evalchemy/pull/187)
+ also accepts trailing boxed numbers, inline math, equations, explicit answer
+-lines, and a bare number on the last line. It discards content before the last
+-`<|end_think|>` marker and rejects an unfinished `<|start_think|>` block.
++lines, a bare number on the last line, and a type-valid numeric suffix after a
++sentence-ending period. It also recovers a terminal numeric token that exactly
++repeats the reference answer twice without a separator; a larger number that
++merely ends with that repetition does not qualify. The extracted answer stored
++with each sample is the one actually used for scoring. The grader discards
++content before the last `<|end_think|>` marker and rejects an unfinished
++`<|start_think|>` block.
+ These rules can credit a correct number after a reasoning response even when the
+ model did not follow the direct-answer instruction. They measure numeracy with
+ less dependence on output formatting and instruction following.
+diff --git a/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/scorer.py b/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/scorer.py
+index 43c003db52..410c947c5e 100644
+--- a/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/scorer.py
++++ b/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/scorer.py
+@@ -40,6 +40,7 @@ _READ_FROM_RIGHT = {
+ 
+ @dataclass(frozen=True)
+ class ExampleScore:
++    extracted_answer: str | None
+     exact_match: float
+     digit_match: float
+     dlength: float
+@@ -77,10 +78,22 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
+     direct = _ANSWER_MARKER_RE.sub("", stripped, count=1)
+     match = _ANSWER_PATTERNS[answer_format].match(direct)
+     if match is None:
+-        return _full_answer(tail.splitlines()[-1].strip() if tail else "", answer_format)
++        final_line = tail.splitlines()[-1].strip() if tail else ""
++        return _full_answer(final_line, answer_format) or _answer_after_terminal_period(tail, answer_format)
+     return _normalize_answer(match.group())
+ 
+ 
++def _answer_after_terminal_period(text: str, answer_format: str) -> str | None:
++    """Extract a typed answer appended after sentence-ending punctuation."""
++    for boundary in range(len(text) - 1, -1, -1):
++        if text[boundary] != ".":
++            continue
++        answer = _full_answer(text[boundary + 1 :].strip(), answer_format)
++        if answer is not None:
++            return answer
++    return None
++
++
+ def _full_answer(candidate: str, answer_format: str) -> str | None:
+     if _ANSWER_PATTERNS[answer_format].fullmatch(candidate) is None:
+         return None
+@@ -94,10 +107,15 @@ def _normalize_answer(answer: str) -> str:
+ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> ExampleScore:
+     """Score a completion with permissive extraction and exact numeric components."""
+     extracted = extract_answer(prediction, answer_format)
++    if extracted != _normalize_answer(gold):
++        repeated_reference = _repeated_terminal_reference(prediction, gold)
++        if repeated_reference is not None:
++            extracted = repeated_reference
+     gold_parts = _digit_parts(gold, answer_format)
+     prediction_parts = _digit_parts(extracted or "", answer_format)
+     format_valid = extracted is not None
+     return ExampleScore(
++        extracted_answer=extracted,
+         exact_match=1.0 if format_valid and prediction_parts == gold_parts else 0.0,
+         digit_match=_digit_match(prediction_parts, gold_parts, answer_format),
+         dlength=float(abs(_total_part_length(prediction_parts) - _total_part_length(gold_parts))),
+@@ -106,6 +124,18 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
+     )
+ 
+ 
++def _repeated_terminal_reference(prediction: str | None, gold: str) -> str | None:
++    """Recover an exact reference answer emitted twice without a separator."""
++    if prediction is None:
++        return None
++    tail = prediction.strip().rstrip(" \t\r\n.,;:!?$")
++    terminal_token = tail.rsplit(maxsplit=1)[-1] if tail else ""
++    normalized_gold = _normalize_answer(gold)
++    if _normalize_answer(terminal_token) == normalized_gold * 2:
++        return normalized_gold
++    return None
++
++
+ def length_bucket(digit: int, *, max_digit: int | None = None) -> str:
+     """Return the NUPA S/M/L/XL interval for a digit length."""
+     if max_digit is None:
+diff --git a/vendor/evalchemy/eval/graders/math_specs.py b/vendor/evalchemy/eval/graders/math_specs.py
+index 3365a19b99..47a1d135e9 100644
+--- a/vendor/evalchemy/eval/graders/math_specs.py
++++ b/vendor/evalchemy/eval/graders/math_specs.py
+@@ -106,7 +106,7 @@ def nupa(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
+     return Grade({
+         "exact_match": score.exact_match, "digit_match": score.digit_match, "dlength": score.dlength,
+         "format_valid_rate": score.format_valid, "no_answer_rate": score.no_answer,
+-    }, filtered_resps=[scorer.extract_answer(str(responses[-1]), answer_format)])
++    }, filtered_resps=[score.extracted_answer])
+ 
+ def math_equivalence(spec: EvalSpec, responses: Sequence[Any]) -> Grade | JudgePlan:
+     try:
+diff --git a/vendor/evalchemy/eval/lm_eval_tasks/gsm8k/utils.py b/vendor/evalchemy/eval/lm_eval_tasks/gsm8k/utils.py
+index e90c34134c..e2e0ef9f36 100644
+--- a/vendor/evalchemy/eval/lm_eval_tasks/gsm8k/utils.py
++++ b/vendor/evalchemy/eval/lm_eval_tasks/gsm8k/utils.py
+@@ -3,25 +3,72 @@
+ import re
+ 
+ from eval.generation_stops import GSM8K_STOP_SEQUENCES, truncate_at_stop
++from eval.graders.answer_extraction import extract_final_boxed_answer
+ from eval.graders.minerva_math import is_equiv, normalize_final_answer
+ 
+-_NUMBER = r"-?\$?\d[\d,]*(?:\.\d+)?"
+-_BOXED_ANSWER = re.compile(rf"\\boxed\{{\s*({_NUMBER})\s*\}}")
++_BARE_NUMBER = r"-?\d[\d,]*(?:\.\d+)?"
++_NUMBER = rf"\$?{_BARE_NUMBER}"
+ _FINAL_ANSWER = re.compile(rf"(?i)\b(?:final\s+answer|answer)\s*(?:is|:|=)?\s*({_NUMBER})")
+ _NUMERIC_CANDIDATE = re.compile(_NUMBER)
++_ANNOTATED_SCALAR = re.compile(
++    rf"^\s*(?:\\?\$)?(?P<number>{_BARE_NUMBER})"
++    r"(?:\s|[A-Za-z/.:_-]|%|\\[ ,;!%]|(?:\\text|\\mathrm|\\operatorname)\s*\{[^{}]*\})*$"
++)
++_LEADING_SCALAR = re.compile(rf"^\s*(?:\\?\$|€|£)?\s*(?P<number>{_BARE_NUMBER})")
++_NUMERIC_TOKEN = re.compile(_BARE_NUMBER)
++_CLOCK_ANSWER = re.compile(
++    r"^\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?:a\.?m\.?|p\.?m\.?))?\s*$",
++    re.IGNORECASE,
++)
++_TEXT_ANNOTATION = re.compile(r"\\(?:text|textbf|mathrm|operatorname)\s*\{([^{}]*)\}")
++_TEXT_BLOCK = re.compile(r"\\(?:text|textbf|mathrm|operatorname)\s*\{[^{}]*\}")
+ _FALLBACK = "[invalid]"
+ 
+ 
+ def extract_gsm8k_flexible_answer(response: str) -> str:
+     """Prefer final-answer syntax before falling back to the last number."""
+     response = truncate_at_stop(response, GSM8K_STOP_SEQUENCES)
+-    for pattern in (_BOXED_ANSWER, _FINAL_ANSWER, _NUMERIC_CANDIDATE):
++    boxed = extract_final_boxed_answer(response)
++    if boxed:
++        return boxed.strip()
++    for pattern in (_FINAL_ANSWER, _NUMERIC_CANDIDATE):
+         matches = pattern.findall(response)
+         if matches:
+             return matches[-1].strip()
+     return _FALLBACK
+ 
+ 
++def _gsm8k_equivalence_candidates(prediction: str, question: str) -> list[str]:
++    candidates = [prediction]
++    annotated = _ANNOTATED_SCALAR.fullmatch(prediction)
++    if annotated is not None:
++        candidates.append(annotated.group("number"))
++
++    scalar_text = prediction.replace("{,}", ",").replace(",\\!", ",").replace("\\,", "")
++    numeric_tokens = _NUMERIC_TOKEN.findall(scalar_text)
++    if len(numeric_tokens) == 1:
++        candidates.append(numeric_tokens[0])
++    leading = _LEADING_SCALAR.match(scalar_text)
++    if leading is not None:
++        candidates.append(leading.group("number"))
++
++    if "=" in scalar_text:
++        right_hand_tokens = _NUMERIC_TOKEN.findall(scalar_text.rsplit("=", 1)[-1])
++        if len(right_hand_tokens) == 1:
++            candidates.append(right_hand_tokens[0])
++
++    arithmetic = _TEXT_BLOCK.sub("", scalar_text).replace("\\over", "/")
++    if not re.search(r"[A-Za-z]", arithmetic) and re.search(r"[+*/]", arithmetic):
++        candidates.append(arithmetic)
++
++    if "time" in question.lower():
++        clock_text = _TEXT_ANNOTATION.sub(r"\1", prediction).replace("\\,", " ").replace("\\ ", " ")
++        clock = _CLOCK_ANSWER.fullmatch(clock_text)
++        if clock is not None and clock.group("minute") == "00":
++            candidates.append(str(int(clock.group("hour"))))
++    return list(dict.fromkeys(candidates))
++
++
+ def gsm8k_flexible_extraction_filter(resps: list[list[str]], docs: list[dict]) -> list[list[str]]:
+     """Extract one auditable flexible answer per GSM8K completion."""
+     del docs
+@@ -38,6 +85,14 @@ def process_results(doc: dict, results: list[str]) -> dict[str, float]:
+         return {"exact_match": 0.0}
+ 
+     reference = doc["answer"].rsplit("#### ", 1)[-1]
+-    candidate = normalize_final_answer(prediction)
+     reference = normalize_final_answer(reference)
+-    return {"exact_match": float(is_equiv(candidate, reference))}
++    candidates = [
++        normalize_final_answer(candidate)
++        for candidate in _gsm8k_equivalence_candidates(prediction, doc.get("question", ""))
++    ]
++    equivalent = any(is_equiv(candidate, reference) for candidate in candidates)
++    question = doc.get("question", "").lower()
++    if not equivalent and ("percent" in question or "pass rate" in question):
++        percent_reference = rf"\frac{{{reference}}}{{100}}"
++        equivalent = any(is_equiv(candidate, percent_reference) for candidate in candidates)
++    return {"exact_match": float(equivalent)}
+diff --git a/vendor/evalchemy/tests/graders/test_gsm8k_task.py b/vendor/evalchemy/tests/graders/test_gsm8k_task.py
+index 148b6ef90e..428ce0a4d1 100644
+--- a/vendor/evalchemy/tests/graders/test_gsm8k_task.py
++++ b/vendor/evalchemy/tests/graders/test_gsm8k_task.py
+@@ -5,7 +5,11 @@ from lm_eval.api.instance import Instance
+ from lm_eval.filters import build_filter_ensemble
+ from lm_eval.tasks._yaml_loader import load_yaml
+ 
+-from eval.lm_eval_tasks.gsm8k.utils import gsm8k_flexible_extraction_filter, process_results
++from eval.lm_eval_tasks.gsm8k.utils import (
++    extract_gsm8k_flexible_answer,
++    gsm8k_flexible_extraction_filter,
++    process_results,
++)
+ 
+ 
+ @pytest.mark.parametrize(
+@@ -15,6 +19,22 @@ from eval.lm_eval_tasks.gsm8k.utils import gsm8k_flexible_extraction_filter, pro
+         ("9", "9.0", 1.0),
+         ("1,200", "1200", 1.0),
+         ("$18", "18", 1.0),
++        ("\\$235.00", "235", 1.0),
++        ("24\\%", "24", 1.0),
++        ("448 mL", "448", 1.0),
++        ("\\$10,000\\ \\text{per day}", "10000", 1.0),
++        ("10\\ \\text{days}", "10", 1.0),
++        ("\\$15/week", "15", 1.0),
++        ("\\frac{1}{2}", "0.5", 1.0),
++        ("€77", "77", 1.0),
++        ("There are 5 rats in each cage.", "5", 1.0),
++        ("49^\\circ\\text{F}", "49", 1.0),
++        ("\\text{Sid averaged a speed of 50 miles per hour.}", "50", 1.0),
++        ("160\\text{ minutes}\\;(= 2\\text{ hours }40\\text{ minutes})", "160", 1.0),
++        ("\\$25{,}000 \\text{ per year}", "25000", 1.0),
++        ("50\\% - 25\\% = 25\\%", "25", 1.0),
++        ("3 \\text{ onions} + 1 \\text{ potato}", "4", 1.0),
++        ("16\\text{ chocolate bars} \\over 8\\text{ children}", "2", 1.0),
+         ("0.5", "1/2", 1.0),
+         ("0.5", "1", 0.0),
+         ("9.1", "9", 0.0),
+@@ -42,3 +62,49 @@ def test_gsm8k_task_scores_filtered_answer_with_minerva():
+ 
+     answer = instance.filtered_resps["flexible-extract"]
+     assert config["process_results"]({"answer": "3 + 6 = 9\n#### 9"}, [answer]) == {"exact_match": 1.0}
++
++
++@pytest.mark.parametrize(
++    ("response", "expected"),
++    [
++        ("The answer is \\boxed{2:00} pm.", 1.0),
++        ("The answer is \\boxed{11:30} am.", 0.0),
++    ],
++)
++def test_gsm8k_task_treats_whole_hour_clock_answer_as_reference_hour(response, expected):
++    doc = {
++        "question": "What is the latest time of day to start and finish by 5:00 pm?",
++        "answer": "The latest start is 2:00 pm.\n#### 2",
++    }
++    prediction = extract_gsm8k_flexible_answer(response)
++
++    assert process_results(doc, [prediction]) == {"exact_match": expected}
++
++
++@pytest.mark.parametrize("prediction", ["\\frac{1}{4}", "1/4", "0.25"])
++def test_gsm8k_task_accepts_fractional_form_for_percentage_question(prediction):
++    doc = {
++        "question": "What percentage of the watermelon does each adult get?",
++        "answer": "Each adult gets 25 percent.\n#### 25",
++    }
++
++    assert process_results(doc, [prediction]) == {"exact_match": 1.0}
++
++
++def test_gsm8k_task_accepts_fractional_form_for_pass_rate_question():
++    doc = {
++        "question": "What is the school's overall pass rate?",
++        "answer": "The pass rate is 70 percent.\n#### 70",
++    }
++
++    assert process_results(doc, ["700/1000"]) == {"exact_match": 1.0}
++
++
++@pytest.mark.parametrize("prediction", ["\\$600", "Friday", "Not enough information", "70"])
++def test_gsm8k_task_rejects_wrong_box_even_if_reasoning_contains_reference(prediction):
++    doc = {
++        "question": "How many OLED TVs did the store sell?",
++        "answer": "The store sold 25 OLED TVs.\n#### 25",
++    }
++
++    assert process_results(doc, [prediction]) == {"exact_match": 0.0}
+diff --git a/vendor/evalchemy/tests/graders/test_nupa.py b/vendor/evalchemy/tests/graders/test_nupa.py
+index 226b7100b3..d823c5feb2 100644
+--- a/vendor/evalchemy/tests/graders/test_nupa.py
++++ b/vendor/evalchemy/tests/graders/test_nupa.py
+@@ -2,6 +2,9 @@ from importlib import import_module
+ 
+ import pytest
+ 
++from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
++from eval.graders.math_specs import nupa
++
+ scorer = import_module("eval.chat_benchmarks.NUPA-Loose.scorer")
+ 
+ 
+@@ -57,6 +60,62 @@ def test_extract_answer_uses_final_content(prediction, answer_format, expected):
+     assert scorer.extract_answer(prediction, answer_format) == expected
+ 
+ 
++@pytest.mark.parametrize(
++    ("prediction", "answer_format", "expected"),
++    [
++        ("The calculation ends here.42", scorer.INTEGER, "42"),
++        ("The calculation ends here.486.612", scorer.FLOAT, "486.612"),
++        ("The calculation ends here.43/20", scorer.FRACTION, "43/20"),
++        ("The calculation ends here.5.09786549e52", scorer.SCIENTIFIC, "5.09786549e52"),
++    ],
++)
++def test_extract_answer_accepts_typed_terminal_suffix(prediction, answer_format, expected):
++    assert scorer.extract_answer(prediction, answer_format) == expected
++
++
++@pytest.mark.parametrize(
++    ("prediction", "gold", "answer_format"),
++    [
++        ("Thus the final answer is 1818", "18", scorer.INTEGER),
++        ("Thus the final answer is 486.612486.612", "486.612", scorer.FLOAT),
++        ("Thus the final answer is 43/2043/20", "43/20", scorer.FRACTION),
++        ("Thus the final answer is 5.09786549e525.09786549e52", "5.09786549e52", scorer.SCIENTIFIC),
++    ],
++)
++def test_score_prediction_accepts_exact_repeated_terminal_reference(prediction, gold, answer_format):
++    score = scorer.score_prediction(prediction, gold, answer_format)
++
++    assert score.extracted_answer == gold
++    assert score.exact_match == 1.0
++
++
++@pytest.mark.parametrize(
++    ("prediction", "gold"),
++    [("Thus the final answer is 1818", "19"), ("Thus the final answer is 11818", "18")],
++)
++def test_score_prediction_does_not_credit_repeated_nonreference_answer(prediction, gold):
++    score = scorer.score_prediction(prediction, gold, scorer.INTEGER)
++
++    assert score.exact_match == 0.0
++
++
++def test_nupa_grade_records_the_answer_used_for_scoring():
++    spec = EvalSpec(
++        task="NUPA5K-Loose",
++        source=SourceRef("fixture"),
++        source_id="1",
++        ordinal=0,
++        requests=(),
++        grader=GraderSpec("nupa", {"format": scorer.INTEGER}),
++        target="18",
++    )
++
++    grade = nupa(spec, ["Thus the final answer is 1818"])
++
++    assert grade.metrics["exact_match"] == 1.0
++    assert grade.filtered_resps == ["18"]
++
++
+ def test_score_prediction_preserves_numeric_representation():
+     exact = scorer.score_prediction("9.9", "9.9", scorer.FLOAT)
+     wrong_digits = scorer.score_prediction("9.11", "9.9", scorer.FLOAT)

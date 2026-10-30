@@ -201,6 +201,7 @@ def setup_parser() -> argparse.ArgumentParser:
         metavar="CRITICAL|ERROR|WARNING|INFO|DEBUG",
         help="Controls the reported logging error level. Set to DEBUG when testing + adding new task configurations for comprehensive log output.",
     )
+    parser.add_argument("--selected_source_keys", type=str, default=None, help="JSON list of canonical namespace/source_id keys; retain every repeat of each selected source.")
     parser.add_argument(
         "--predict_only",
         "-x",

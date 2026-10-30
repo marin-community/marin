@@ -1,0 +1,9 @@
+{
+  "historical_evalchemy_revision": "a993b52543c493e58956be94ed6d3420b94143c0",
+  "canonical_source": "https://github.com/marin-community/evalchemy/blob/a993b52543c493e58956be94ed6d3420b94143c0/eval/lm_eval_tasks/gsm8k/utils.py",
+  "old_vendored_sha256": "da530631e20dd411fae168bc00177cc4d7c162020fd3b3b97506ded5167c0fe7",
+  "target_sha256": "601435e7d38f1472b088a58061632c74378b31be3a706fbd95455fe68b449f8a",
+  "purpose": "Match the GSM8K extractor and scoring used by the frozen tracker; no generation change. Stored responses from prior timing snapshots require a common offline replay before score comparison.",
+  "validation": "Raw cohort replay and regression tests pending.",
+  "timing_caveat": "Earlier timing snapshots used the older extractor; quantify corrected grading overhead before accepting cross-snapshot compute comparisons."
+}
