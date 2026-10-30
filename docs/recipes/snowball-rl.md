@@ -99,7 +99,9 @@ control mean and replicate range, candidate mean, signed difference, tolerance a
 Guard keys appear once; one-answer panels report neither mixed nor all-wrong fractions.
 Speed-medium also reports learner and engine tokens per configured GPU-second.
 Learning/data-medium reports rejected groups, length stops and reply-length spread;
-training reward per source uses keys recorded by every control.
+training reward per source uses keys recorded by every control. Telemetry detail rows
+do not determine the change label. Initializer values average candidate replicates;
+task counts are unavailable when their scored-task counts differ.
 
 Every planned batch/update must finish, losses and gradients must be finite, panel
 coverage must reach 99%, grader infrastructure failures must be at most 1%, and speed
