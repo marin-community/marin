@@ -46,7 +46,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import resolve_checkpointer_output_path, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
@@ -193,8 +193,6 @@ class GrugModel:
     ema_beta: float | None = None
     log_every: int = 1
     seed: int = 0
-    save_interval_minutes: int = 30
-    checkpoint_keep: list[dict] | None = None
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
 
@@ -247,8 +245,7 @@ class GrugModel:
             init_from_path=init_from_path,
             expert_parallel=self.expert_parallel,
             per_device_parallelism=self.per_device_parallelism,
-            save_interval_minutes=self.save_interval_minutes,
-            checkpoint_keep=self.checkpoint_keep,
+            checkpointer=resolve_checkpointer_output_path(spec.checkpointer, ctx.output_path),
             grug_trainer=GrugTrainerConfig(
                 z_loss_weight=self.z_loss_weight,
                 ema_beta=self.ema_beta,
