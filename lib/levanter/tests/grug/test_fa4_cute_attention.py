@@ -44,6 +44,32 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     return q, k, v
 
 
+def test_packed_bounds_with_singleton_batch_mesh_axes():
+    run_on_cpu_devices(
+        """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.grug.attention import AttentionMask
+        from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
+
+        mesh = Mesh(np.asarray(jax.devices()).reshape(1,1,2,1,1),
+                    ('replica_dcn','data','context','expert','model'), axis_types=(AxisType.Explicit,)*5)
+        with jax.set_mesh(mesh):
+            ids = jax.device_put(jnp.array([[0,0,0,1,1,1,-1,-1]], dtype=jnp.int32),
+                                NamedSharding(mesh, P(('replica_dcn','data','expert'),None)))
+            lower, valid = jax.jit(lambda ids: fa4_cute_segment_bounds(
+                AttentionMask.causal().with_segment_ids(ids), batch_size=1, seq_len=8,
+                sliding_window=None,
+            ))(ids)
+            np.testing.assert_array_equal(np.asarray(lower)[0,:6], [0,0,0,3,3,3])
+            np.testing.assert_array_equal(valid, [[True,True,True,True,True,True,False,False]])
+        """,
+        device_count=2,
+    )
+
+
 def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     segment_ids = jnp.zeros((1, 8), dtype=jnp.int32)
     lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
