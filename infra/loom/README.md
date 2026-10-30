@@ -13,12 +13,24 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 `Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
 the production stack explicitly.
 
-The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
-Its private key, webhook secret, and client secret belong only in the
-`LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
-`https://loom.oa.dev`. Its organization permissions must grant **Members:
-Read-only** so Loom can verify private `Open-Athena` membership during sign-in
-and hourly revalidation.
+Loom uses two private GitHub Apps with separate credentials:
+
+| App | Owner | Purpose | Permissions |
+|---|---|---|---|
+| `loom-oa-dev` | `marin-community` | Repository access and webhooks | Existing repository permissions |
+| Authentication App | `Open-Athena` | GitHub sign-in and membership renewal | Organization Members read-only |
+
+Both Apps' private keys, the repository webhook secret, and the authentication
+App's OAuth client secret belong only in `LOOM_DOTENV`. The repository webhook
+uses `https://loom.oa.dev/api/github/webhook`; the authentication callback uses
+`https://loom.oa.dev/api/auth/github/callback`. Install the authentication App on
+`Open-Athena`. It needs no repository permissions and no active webhook.
+
+The admission policy remains `Open-Athena:188075292` plus existing manual
+approvals. Installing or authorizing either App does not grant Loom access.
+GitHub permits only members of a private App's owning organization to authorize
+it, so every intended GitHub sign-in user, including a manually approved user,
+must belong to `Open-Athena` when using this authentication App.
 
 Authenticate Pulumi's providers and the local Docker client:
 
@@ -37,6 +49,58 @@ rather than stalling while `gcloud` generates and propagates a new key.
 ```sh
 gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
 ```
+
+## Separate the authentication App
+
+Existing single-App deployments must configure authentication credentials
+before rolling out the Loom release that separates the clients. The server
+refuses to start with organization admission enabled and no authentication-App
+ID or private key. Membership renewal never falls back to repository credentials.
+
+1. Build a Loom version with the separate `github-auth-app` setup command. In an
+   isolated registration home, create the App under `Open-Athena`:
+
+   ```sh
+   WEAVER_HOME=/path/to/private/registration-home loom setup github-auth-app \
+     --base-url https://loom.oa.dev --org Open-Athena --name loom-oa-login \
+     --owner ADMIN_LOGIN --owner-id ADMIN_NUMERIC_GITHUB_ID \
+     --config /path/to/private/loom-auth.toml
+   ```
+
+   An Open-Athena organization owner, or a user permitted to register Apps there,
+   must confirm registration in GitHub's browser flow. The wizard creates a private
+   App with Members read-only, the login callback, and no active webhook. The isolated home keeps registration
+   separate from an operator's running Loom database.
+2. An Open-Athena organization owner must install the new App on `Open-Athena`
+   and approve Members read-only. Keep `loom-oa-dev` private and installed on
+   the Marin repositories it already serves.
+3. Merge these fields from the generated authentication configuration into the
+   reviewed, complete production dotenv payload:
+
+   - `LOOM_GITHUB_AUTH_APP_ID`
+   - `LOOM_GITHUB_AUTH_APP_PRIVATE_KEY`
+   - `LOOM_GITHUB_AUTH_APP_SLUG` (setup metadata)
+   - `LOOM_GITHUB_CLIENT_ID`
+   - `LOOM_GITHUB_CLIENT_SECRET`
+
+   The OAuth client ID and secret must come from the new authentication App.
+   Preserve the existing `LOOM_GITHUB_APP_ID`, `LOOM_GITHUB_APP_PRIVATE_KEY`,
+   `LOOM_GITHUB_WEBHOOK_SECRET`, and other production settings. Rendering only
+   the new authentication file does not produce a complete production payload.
+4. Follow [Update secrets](#update-secrets) to upload a new numbered
+   `LOOM_DOTENV` version and pin it in `dotenvSecretVersion`. Roll out the Loom
+   build with the separate clients and that secret version together. Leave
+   `auth.github_organizations: Open-Athena:188075292` unchanged.
+5. Sign in with an active Open-Athena member outside `marin-community`. Confirm
+   the account has organization-derived authorization, renews after one hour,
+   and can use the repositories granted to its Loom profile. Verify repository
+   webhooks and PR operations still use `loom-oa-dev`.
+
+Existing manually approved accounts with only a GitHub login must still have
+their verified numeric GitHub ID bound in **People & security**. Earlier
+successful GitHub sign-ins recorded that ID. A username-only manual row is
+rejected before organization admission to prevent a reclaimed GitHub username
+from inheriting the previous account's access.
 
 ## Deploy
 
