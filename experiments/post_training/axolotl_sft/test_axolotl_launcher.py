@@ -19,6 +19,10 @@ from experiments.post_training.axolotl_sft.bases import (
     QWEN3_30B_A3B_BASE,
 )
 from experiments.post_training.axolotl_sft.launcher import (
+    AXOLOTL_TASK_IMAGE,
+    PAYLOAD_ENV,
+    POD_RUNNER,
+    iris_command,
     AXOLOTL_TRANSFORMERS_PIN,
     DECODER_LAYER_CLASSES,
     FP32_MASTER_PLUGIN,
@@ -31,6 +35,7 @@ from experiments.post_training.axolotl_sft.launcher import (
     axolotl_config,
     launch_payload,
 )
+from experiments.post_training.axolotl_sft.pod_runner import _check_template
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 
 # The #8225 Stage 0 optimizer, every field explicit.
@@ -176,6 +181,16 @@ def test_smoke_payload_caps_steps_and_skips_intermediate_saves():
     assert restored["data_uri"] == spec.data_uri and restored["init_uri"] is None
 
 
+def test_iris_command_runs_the_pod_runner_in_the_pinned_image_with_the_payload():
+    payload = launch_payload(_spec(QWEN3_30B_A3B_BASE), output_uri="s3://bucket/out")
+    command = iris_command(payload, job_name="opd-0b-test", cluster="cw-rno2a", timeout_hours=2)
+    assert command[command.index("--task-image") + 1] == AXOLOTL_TASK_IMAGE
+    assert "--no-sync" in command and command[command.index("--gpu") + 1] == "H100x8"
+    assert command[command.index("--replicas") + 1] == "2"
+    assert json.loads(command[command.index(PAYLOAD_ENV) + 1]) == json.loads(json.dumps(payload, sort_keys=True))
+    assert command[-2:] == ["python", POD_RUNNER] and os.path.exists(POD_RUNNER)
+
+
 def _hf_reachable() -> bool:
     return os.environ.get("HF_HUB_OFFLINE") != "1"
 
@@ -234,3 +249,11 @@ def test_masking_canary_on_the_shared_template(base_name):
     # Positions, not token values, are disjoint: the partition assertion above
     # already places every rendered token in exactly one message's span.
     assert template_sha256(tokens) == hashlib.sha256(template.encode()).hexdigest()
+
+
+def test_template_check_rejects_a_processor_jinja_that_differs(tmp_path):
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps({"chat_template": "shared"}))
+    _check_template(tmp_path, "shared")
+    (tmp_path / "chat_template.jinja").write_text("published")
+    with pytest.raises(ValueError, match="differs from the configured"):
+        _check_template(tmp_path, "shared")
