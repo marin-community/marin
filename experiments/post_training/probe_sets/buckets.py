@@ -17,6 +17,15 @@ token gets an assistant mask, its assistant-turn index, and one bucket:
 - ``delimiter``: generated structural tokens (think open/close, the closing turn token);
 - ``context``: everything unscored (system, user and tool turns, headers).
 
+An assistant turn's reasoning comes either from ``reasoning_content`` (the template
+renders the think markers) or from think markers left verbatim in a sampled reply's
+``content``. Sampled replies do not always pair their markers: a reply can open a think
+block it never closes (the reasoning runs to the end of the reply) or close one it never
+opened (the generation prompt carries no open marker, so the reasoning starts at the
+reply's start). Passing the raw reply as ``content`` keeps the rendered tokens equal to
+what the model sampled; splitting an unpaired reply into ``reasoning_content`` would
+make the template add a marker the model never produced.
+
 Tool observations are fixed context, so KL is scored only where the mask is set.
 Reasoning tokens also carry their relative-position decile within the reasoning span,
 for P_think's thinking-depth buckets.
@@ -30,7 +39,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from transformers.convert_slow_tokenizer import bytes_to_unicode
+
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
+from experiments.post_training.task_data.terminus_answers import json_string_spans
 
 
 class Bucket(StrEnum):
@@ -56,30 +68,44 @@ class TaggedSequence:
     reasoning_decile: list[int]
 
 
-def _json_string_values(content: str, key: str) -> list[tuple[int, int]]:
-    """Character spans of every ``"key": "<value>"`` string value in ``content``, quotes excluded."""
-    spans = []
-    for match in re.finditer(rf'"{re.escape(key)}"\s*:\s*"', content):
-        start = index = match.end()
-        while index < len(content) and content[index] != '"':
-            index += 2 if content[index] == "\\" else 1
-        if index >= len(content):
-            raise ValueError(f"unterminated JSON string for {key!r}")
-        spans.append((start, index))
-    return spans
-
-
 def _content_spans(content: str) -> list[tuple[int, int, Bucket]]:
     """Terminus-2 spans inside an assistant reply's JSON, relative to the content."""
     spans = [
         (start, end, Bucket.REASONING)
         for key in _TERMINUS_REASONING_FIELDS
-        for start, end in _json_string_values(content, key)
+        for start, end in json_string_spans(content, key)
     ]
-    spans += [
-        (start, end, Bucket.TOOL_ARGUMENTS) for start, end in _json_string_values(content, _TERMINUS_COMMAND_FIELD)
-    ]
+    spans += [(start, end, Bucket.TOOL_ARGUMENTS) for start, end in json_string_spans(content, _TERMINUS_COMMAND_FIELD)]
     return sorted(spans)
+
+
+def _think_marker_spans(content: str, think_open: str, think_close: str) -> list[tuple[int, int, Bucket]]:
+    """Reasoning and delimiter spans from think markers in a reply's raw content.
+
+    An open marker starts a reasoning span (a repeated open inside a span is only a
+    delimiter); a close ends it. A close before any marker ends a span that started at
+    the reply's start; a later close with no open is only a delimiter. A span still open
+    at the end runs to the end of the content. Reasoning spans come first so the
+    delimiters paint over any marker inside one.
+    """
+    reasoning: list[tuple[int, int, Bucket]] = []
+    delimiters: list[tuple[int, int, Bucket]] = []
+    reasoning_start: int | None = None
+    seen_marker = False
+    for match in re.finditer(f"{re.escape(think_open)}|{re.escape(think_close)}", content):
+        delimiters.append((match.start(), match.end(), Bucket.DELIMITER))
+        if match.group() == think_open:
+            if reasoning_start is None:
+                reasoning_start = match.end()
+        elif reasoning_start is not None:
+            reasoning.append((reasoning_start, match.start(), Bucket.REASONING))
+            reasoning_start = None
+        elif not seen_marker:
+            reasoning.append((0, match.start(), Bucket.REASONING))
+        seen_marker = True
+    if reasoning_start is not None:
+        reasoning.append((reasoning_start, len(content), Bucket.REASONING))
+    return reasoning + delimiters
 
 
 def _find(text: str, piece: str, cursor: int) -> int:
@@ -122,7 +148,9 @@ def _char_buckets(text: str, messages: list[dict[str, Any]], family: str) -> tup
         if message.get("content"):
             content_start = _find(text, message["content"], cursor)
             paint(content_start, content_start + len(message["content"]), content_bucket)
-            for span_start, span_end, bucket in _content_spans(message["content"]):
+            spans = _content_spans(message["content"])
+            spans += _think_marker_spans(message["content"], tokens.think_open, tokens.think_close)
+            for span_start, span_end, bucket in spans:
                 paint(content_start + span_start, content_start + span_end, bucket)
             cursor = content_start + len(message["content"])
         for call in message.get("tool_calls") or []:
@@ -167,6 +195,60 @@ def tag_conversation(tokenizer, family: str, messages: list[dict[str, Any]]) -> 
     return TaggedSequence(
         input_ids=list(encoding["input_ids"]),
         assistant_mask=mask,
+        assistant_turn=turns,
+        buckets=buckets,
+        reasoning_decile=_reasoning_deciles(buckets, turns),
+    )
+
+
+_BYTE_DECODER = {character: byte for byte, character in bytes_to_unicode().items()}
+
+
+def _token_bytes(tokenizer, token_ids: list[int]) -> list[bytes]:
+    """Each token's raw bytes under a byte-level BPE vocabulary; added tokens are their own text."""
+    added = {index: token.content for index, token in tokenizer.added_tokens_decoder.items()}
+    pieces = []
+    for index, token in zip(token_ids, tokenizer.convert_ids_to_tokens(token_ids), strict=True):
+        pieces.append(added[index].encode() if index in added else bytes(_BYTE_DECODER[char] for char in token))
+    return pieces
+
+
+def decode_token_bytes(tokenizer, token_ids: list[int]) -> str:
+    """The ids' text with invalid UTF-8 kept as surrogate escapes, so it re-encodes to the same bytes.
+
+    A sampled reply can hold stray byte tokens that form no character; the tokenizer's
+    own decode would replace them and lose the alignment.
+    """
+    return b"".join(_token_bytes(tokenizer, token_ids)).decode("utf-8", errors="surrogateescape")
+
+
+def tag_token_ids(tokenizer, family: str, messages: list[dict[str, Any]], token_ids: list[int]) -> TaggedSequence:
+    """Tag given token ids (e.g. a model's samples) against ``messages`` rendered through the shared template.
+
+    The ids need not be the tokenizer's own encoding of the text: each token is aligned
+    by bytes and takes the bucket of the character its first byte falls in. The ids'
+    bytes must be a prefix of the rendered text, which a reply cut at the cap (no
+    closing token) satisfies; decode replies with :func:`decode_token_bytes`. Requires a
+    byte-level BPE vocabulary.
+    """
+    text = tokenizer.apply_chat_template(
+        messages, chat_template=shared_template(FAMILY_TOKEN_MAPS[family]), tokenize=False
+    )
+    char_buckets, char_turns = _char_buckets(text, messages, family)
+    byte_chars = [index for index, char in enumerate(text) for _ in char.encode("utf-8", "surrogateescape")]
+    text_bytes = text.encode("utf-8", "surrogateescape")
+    buckets: list[Bucket] = []
+    turns: list[int] = []
+    offset = 0
+    for piece in _token_bytes(tokenizer, token_ids):
+        if text_bytes[offset : offset + len(piece)] != piece:
+            raise ValueError(f"token ids diverge from the rendered conversation at byte {offset}")
+        buckets.append(char_buckets[byte_chars[offset]])
+        turns.append(char_turns[byte_chars[offset]])
+        offset += len(piece)
+    return TaggedSequence(
+        input_ids=list(token_ids),
+        assistant_mask=[int(bucket is not Bucket.CONTEXT) for bucket in buckets],
         assistant_turn=turns,
         buckets=buckets,
         reasoning_decile=_reasoning_deciles(buckets, turns),
