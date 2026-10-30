@@ -28,18 +28,19 @@ from experiments.post_training.phase1a.launch import (
     selected_runs,
     teacher_model,
 )
+from experiments.post_training.phase1a.launch_test_support import COMPOSE
 from experiments.post_training.phase1a.matrix import (
+    BATCH_NOISE_CONTROLS,
     CHECKPOINT_STEPS,
     EXPORT_CHECKPOINT_STEPS,
     GPUS_PER_NODE,
     LR_SWEEP,
     M4_POLICY_NODES,
     M4_ROLLOUT_ENGINES,
-    BATCH_NOISE_CONTROLS,
     PHASE1A_CONDITIONS,
-    SEEDS,
     POLICY_NODES,
     SAMPLES_PER_PROMPT,
+    SEEDS,
     STEPS,
     TEACHER_ROUTES,
     Condition,
@@ -70,7 +71,9 @@ def test_matrix_holds_twenty_two_cells_two_nulls_and_an_eight_run_sweep():
         for condition in (Condition.X, Condition.R, Condition.XR)
         for seed in SEEDS
     } | {(method, condition, 0) for method in Method for condition in BATCH_NOISE_CONTROLS}
-    assert {(run.method, run.condition, run.seed) for run in runs if run.condition is not Condition.PROCEDURE_NULL} == expected_cells
+    assert {
+        (run.method, run.condition, run.seed) for run in runs if run.condition is not Condition.PROCEDURE_NULL
+    } == expected_cells
     assert {run.learning_rate for run in runs} == {1e-6}
     sweep = phase0c_lr_sweep()
     assert len(sweep) == 8 and {run.condition for run in sweep} == {Condition.X}
@@ -162,44 +165,6 @@ def test_a_short_prompt_pool_raises():
     samples = {Task.X: eligible_samples(_samples(Task.X, ids, 4), Task.X)}
     with pytest.raises(ValueError, match="needs 1600"):
         layout(run, {Task.X: {}}, samples)
-
-
-# --- matched fields through SkyRL's own launcher ---
-
-COMPOSE = """
-import json
-import sys
-from pathlib import Path
-
-from cloud.iris.launch_config import load_launch_config
-from skyrl_train.checkpoint_schedule import CheckpointSchedule
-from skyrl_train.config.training_budget import training_budget
-
-def matched(path):
-    cfg = load_launch_config(Path(path)).skyrl
-    CheckpointSchedule.from_config(cfg)  # the trainer's own start-up check of the checkpoint fields
-    budget = training_budget(cfg)
-    optimizer = cfg.trainer.policy.optimizer_config
-    return {
-        "sequences_per_step": budget.sequences_per_step,
-        "sequences_per_mini_batch": budget.sequences_per_mini_batch,
-        "max_input_tokens": budget.max_input_tokens,
-        "response_caps": dict(budget.response_caps.by_data_source),
-        "optimizer": [optimizer.optimizer, optimizer.lr, list(optimizer.adam_betas), optimizer.weight_decay,
-                      optimizer.max_grad_norm, optimizer.num_warmup_steps, optimizer.scheduler],
-        "steps": [cfg.trainer.max_steps, cfg.trainer.epochs, cfg.trainer.update_epochs_per_batch],
-        "seed": cfg.trainer.seed,
-        "packing": cfg.trainer.use_sample_packing,
-        "order": [cfg.data.shuffle, cfg.data.sampling.kind],
-        "checkpoints": [list(cfg.trainer.checkpoint_steps), list(cfg.trainer.optimizer_checkpoint_steps)],
-        "router_telemetry": cfg.trainer.router_telemetry.enabled,
-        "strategy": cfg.trainer.strategy,
-        "env_class": cfg.environment.env_class,
-        "resume": [cfg.trainer.resume_mode, cfg.trainer.resume_path],
-    }
-
-print(json.dumps([matched(path) for path in sys.argv[1:]]))
-"""
 
 
 @pytest.mark.timeout(300)  # A cold cache installs the independently locked launcher.

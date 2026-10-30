@@ -97,6 +97,8 @@ BATCH_NOISE_CONTROLS = (Condition.X_PRIME, Condition.R_PRIME)
 def condition_seeds(condition: Condition) -> tuple[int, ...]:
     """The seeds one condition's cells run: seed 0 only for the batch-noise controls."""
     return (SEEDS[0],) if condition in BATCH_NOISE_CONTROLS else SEEDS
+
+
 # Phase 0c sweeps {0.5, 1, 2, 4} x 1e-6 over M1 and M4 on theta_X (control C10).
 LR_SWEEP = (5e-7, 1e-6, 2e-6, 4e-6)
 

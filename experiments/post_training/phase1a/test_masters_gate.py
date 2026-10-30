@@ -9,8 +9,8 @@ from marin.execution.build_context import BuildContext, VersionCodex, build_cont
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 
+from experiments.post_training.phase1a.launch_test_support import COMPOSE
 from experiments.post_training.phase1a.masters_gate import gate_step, reload_recipe, save_recipe
-from experiments.post_training.phase1a.test_phase1a import COMPOSE
 
 
 @pytest.mark.timeout(300)  # A cold cache installs the independently locked launcher.
