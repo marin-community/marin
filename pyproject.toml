@@ -91,6 +91,7 @@ prerelease = "explicit"
 constraint-dependencies = [
     "aiohttp>=3.14.4",
     "fsspec>=2026.6.0",
+    "joserfc>=1.7.6",
     "multidict>=6.9.1",
     "oauthlib>=4.0.0",
     "opentelemetry-api>=1.45.1",
