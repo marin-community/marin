@@ -470,7 +470,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         answers = [
             _answer(
                 f"task-{i}",
-                float(attempt < (0, 4, 8)[i % 3]),
+                0.5 if (i, attempt) == (0, 0) else float(attempt < (0, 4, 8)[i % 3]),
                 error="GraderUnavailable" if (i, attempt) == (1, 7) else None,
             )
             for i in range(910)
@@ -484,6 +484,7 @@ def test_built_gate_and_rescore_share_inputs_and_status(recorded_runs, tmp_path,
         assert {row["task_id"]: (row["passed"], row["samples"]) for row in rates} == {
             f"task-{i}": ((0, 4, 8)[i % 3], 7 if i == 1 else 8) for i in range(910)
         }
+        assert next(row["mean_score"] for row in rates if row["task_id"] == "task-0") == 0.0625
         init = ArtifactStep.adopt(
             "users/test/initializer", presets.PRESET_REVISION, str(tmp_path / "initializer"), kind=LevanterCheckpoint
         )
