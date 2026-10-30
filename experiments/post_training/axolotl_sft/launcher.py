@@ -8,8 +8,8 @@ JSON payload per run: the fork's training YAML with the shared chat template inl
 the pins, and the object-storage locations of the CL12 data, the init checkpoint and
 the output. The job runs in the pinned Axolotl task image, where
 :mod:`experiments.post_training.axolotl_sft.pod_runner` (standard library only)
-clones the fork, stages the inputs, trains through ``torchrun`` with FSDP2 on one
-8-GPU node, checks the saved tokenizer embeds the template, and uploads the output.
+clones the fork, stages the inputs, trains through ``torchrun`` with FSDP2 on the
+configured GPU nodes, checks the saved tokenizer embeds the template, and uploads the output.
 
 Launch one stage (``--dry-run`` prints the Iris command without submitting)::
 

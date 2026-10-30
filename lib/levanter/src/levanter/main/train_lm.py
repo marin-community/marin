@@ -69,6 +69,8 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_save_chat_template: Optional[str] = None
+    """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
     hf_generation_eos_token_ids: Optional[list[int]] = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
@@ -386,6 +388,7 @@ def main(config: TrainLmConfig):
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                chat_template=config.hf_save_chat_template,
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,
                 merged_hf_save_path=config.merged_hf_save_path,
