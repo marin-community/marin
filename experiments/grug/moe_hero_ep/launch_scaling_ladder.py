@@ -34,6 +34,10 @@ Changelog:
         hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
     2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
         hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
+    2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step;
+        the narrower rungs stay unclipped.
+        hero-gradclip-stepREPLACE_BEFORE_DEPLOYMENTk forks hero-ctx16k-step257k at permanent step
+        REPLACE_BEFORE_DEPLOYMENT (see ``trigger_hero.sh``).
 """
 
 import dataclasses
