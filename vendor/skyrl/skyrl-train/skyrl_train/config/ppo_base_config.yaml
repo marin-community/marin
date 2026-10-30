@@ -481,7 +481,8 @@ generator:
 
   trajectory_reward_shaping:
     schema_version: 2
-    enabled: false
+    # On for the reasoning-span penalty; every other penalty and loop credit below is zero by default.
+    enabled: true
     loop:
       max_period_tokens: 64
       tail_tokens: 256
@@ -497,14 +498,15 @@ generator:
     overlong:
       l_max: ${generator.sampling_params.max_generate_length}
       l_cache: 0
-      penalty_scale: 1.0
+      # The context budget sets l_cache for every launch, so a recipe opts in to the DAPO penalty here.
+      penalty_scale: 0.0
     successful_length:
       free_tokens: 0
       penalty_per_token: 0.0
       max_penalty: 0.2
     reasoning_span:
       # Charged for a malformed reasoning span in any chat turn.
-      penalty: 0.0
+      penalty: 0.1
       # `rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token
       # where each span goes wrong, or charges the reward when a violation has no such token.
       target: rollout
@@ -519,7 +521,8 @@ generator:
     sample_fraction: 0.0
     always_retain_failures: true
     always_retain_non_terminating: true
-    always_retain_loops: true
+    # Loop spans come from reward shaping's detector; a recipe that charges loop credit can retain them.
+    always_retain_loops: false
     accepted_stop_reasons: ${generator.trajectory_reward_shaping.non_termination.accepted_stop_reasons}
     reward_below: null
     reward_above: null

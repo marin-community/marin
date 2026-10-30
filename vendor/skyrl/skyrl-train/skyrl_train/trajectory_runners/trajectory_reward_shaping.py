@@ -70,8 +70,8 @@ class OverlongPenaltyConfig:
     l_cache: int = 0
     """Penalty-window width below ``l_max``; zero disables the component."""
 
-    penalty_scale: float = 1.0
-    """Maximum penalty magnitude, scaled to the optimization reward range."""
+    penalty_scale: float = 0.0
+    """Maximum penalty magnitude, scaled to the optimization reward range; zero disables the component."""
 
 
 @dataclass(frozen=True)
