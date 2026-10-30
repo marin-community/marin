@@ -257,6 +257,17 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
     return default
 
 
+class AttentionFp32SavedOutput(StrEnum):
+    """Which layers keep the pre-cast FP32 attention output for the backward's D term."""
+
+    NONE = "none"
+    ALL = "all"
+    GLOBAL = "global"
+
+
+FP32_SAVED_OUTPUT_ATTENTION = "gpu_fa4_cute_sm100_fp32o"
+
+
 class QbEstimator(StrEnum):
     """How the QB router estimates each expert's threshold beta (the (1-K/E) upper quantile of the
     logit margins ``score - alpha``).
@@ -308,6 +319,9 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
+    attention_fp32_saved_output: AttentionFp32SavedOutput = AttentionFp32SavedOutput.NONE
+    """Layers whose attention backward forms D = rowsum(dO * O) from the FP32 output. Requires
+    ``gpu_fa4_cute_sm100``; the forward output is unchanged."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
@@ -328,6 +342,11 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if (
+            self.attention_fp32_saved_output != AttentionFp32SavedOutput.NONE
+            and self.attention_implementation != "gpu_fa4_cute_sm100"
+        ):
+            raise ValueError("attention_fp32_saved_output requires attention_implementation='gpu_fa4_cute_sm100'")
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
         if (self.local_kv_heads is None) != (self.global_kv_heads is None):
@@ -722,7 +741,18 @@ class CausalSelfAttention(eqx.Module):
             q = _reshard_sequence_axis(q, seq_axis)
             k = _reshard_sequence_axis(k, None)
             v = _reshard_sequence_axis(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        fp32_saved_output = self.cfg.attention_fp32_saved_output
+        if fp32_saved_output == AttentionFp32SavedOutput.ALL:
+            attn_out = attention(q, k, v, mask, implementation=FP32_SAVED_OUTPUT_ATTENTION)
+        elif fp32_saved_output == AttentionFp32SavedOutput.GLOBAL:
+            attn_out = jax.lax.cond(
+                jnp.asarray(is_global, dtype=jnp.bool_),
+                lambda qkv: attention(*qkv, mask, implementation=FP32_SAVED_OUTPUT_ATTENTION),
+                lambda qkv: attention(*qkv, mask, implementation=self.cfg.attention_implementation),
+                (q, k, v),
+            )
+        else:
+            attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.

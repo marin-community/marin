@@ -1222,6 +1222,8 @@ def segmented_flash_attention_forward_sm100_launcher(
         mask_mod=_native_segment_mask_mod(modules),
         has_aux_tensors=True,
     )
+    if config.overlap_output_with_query:
+        forward.overlap_sO_sQ = True
 
     _broadcast_heads = _native_broadcast_heads(modules)
 

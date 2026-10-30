@@ -32,6 +32,7 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
+    "gpu_fa4_cute_sm100_fp32o",  # gpu_fa4_cute_sm100 with the backward's D from the FP32 output.
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
 ]
 
@@ -452,6 +453,10 @@ def attention(
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
         return gpu_fa4_cute_sm100_attention(q, k, v, mask)
+    if implementation == "gpu_fa4_cute_sm100_fp32o":
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_fp32o_attention  # noqa: PLC0415
+
+        return gpu_fa4_cute_sm100_fp32o_attention(q, k, v, mask)
     if implementation == "gpu_pallas_triton_flash":
         from levanter.grug.attention._amd_pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
 

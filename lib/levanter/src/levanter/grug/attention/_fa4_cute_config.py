@@ -16,6 +16,12 @@ class Flash4CuteSm100ForwardConfig:
 
     tile: tuple[int, int]
     q_stage: int
+    # Keep the pre-cast FP32 attention output for the backward's D = rowsum(dO * O) term instead
+    # of the rounded BF16 output. The returned forward output stays BF16.
+    fp32_saved_output: bool = False
+    # Alias the output staging buffer with the query buffer. Lets an FP32 output keep two query
+    # stages and the KV pipeline depth; the upstream kernel does this for D192.
+    overlap_output_with_query: bool = False
 
 
 @dataclass(frozen=True)

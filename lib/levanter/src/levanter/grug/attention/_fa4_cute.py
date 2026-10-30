@@ -16,6 +16,10 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
+from levanter.grug.attention._fa4_cute_saved_output import (
+    fp32_saved_output_attention_forward,
+    fp32_saved_output_kernel_config,
+)
 from levanter.grug.attention._fa4_cute_config import (
     SM100_GQA_RATIOS,
     SM100_HEAD_DIM,
@@ -223,9 +227,14 @@ def _fa4_cute_attention_forward_sharded(
     # Check global lengths before shard_map replaces Q with one rank's query slice.
     if q.shape[1] != k.shape[1]:
         raise ValueError(f"FA4/CuTe self-attention requires q_len == k_len globally, got q={q.shape}, k={k.shape}")
+    attention_forward = (
+        fp32_saved_output_attention_forward
+        if kernel_config.sm100_forward is not None and kernel_config.sm100_forward.fp32_saved_output
+        else fa4_cute_attention_forward
+    )
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
-        return fa4_cute_attention_forward(
+        return attention_forward(
             q,
             k,
             v,
@@ -251,7 +260,7 @@ def _fa4_cute_attention_forward_sharded(
         # The 64x64 segmented path handles the query offset used by context parallelism.
         kernel_config = replace(kernel_config, sm90_backward=None)
     if not any(q_dims):
-        return fa4_cute_attention_forward(
+        return attention_forward(
             q,
             k,
             v,
@@ -280,7 +289,7 @@ def _fa4_cute_attention_forward_sharded(
     )
     def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
         def _run(q_rows, lower_bounds_rows, valid_rows, first_position):
-            return fa4_cute_attention_forward(
+            return attention_forward(
                 q_rows,
                 k_local,
                 v_local,
@@ -411,6 +420,22 @@ def gpu_fa4_cute_sm100_attention(
     if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
         raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
     config = sm100_flash4_cute_kernel_config()
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
+
+
+def gpu_fa4_cute_sm100_fp32o_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """``gpu_fa4_cute_sm100`` whose backward forms D from the pre-cast FP32 output."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_sm100_fp32o_attention requires the JAX GPU backend.")
+    _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100_fp32o")
+    if gpu_compute_capability() != 100 or q.dtype != jnp.bfloat16 or q.shape[-1] != SM100_HEAD_DIM:
+        raise ValueError(f"gpu_fa4_cute_sm100_fp32o requires SM100 with BF16 and D == Dv == {SM100_HEAD_DIM}.")
+    config = fp32_saved_output_kernel_config(sm100_flash4_cute_kernel_config())
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 
 
