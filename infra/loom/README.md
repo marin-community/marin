@@ -13,7 +13,10 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 `Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
 the production stack explicitly.
 
-The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
+The `loom-oa-dev` GitHub App must be public and installed on the repositories
+Loom serves and on the `Open-Athena` organization used for admission. A private
+App owned by `marin-community` rejects OAuth authorization by users outside that
+organization, even when they belong to `Open-Athena`.
 Its private key, webhook secret, and client secret belong only in the
 `LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
 `https://loom.oa.dev`. Its organization permissions must grant **Members:
@@ -37,6 +40,36 @@ rather than stalling while `gcloud` generates and propagates a new key.
 ```sh
 gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
 ```
+
+## Repair organization sign-in
+
+For an existing App, changing Loom's registration manifest does not change its
+GitHub settings. A GitHub App owner must perform these steps:
+
+1. Open the [App registration](https://github.com/organizations/marin-community/settings/apps/loom-oa-dev).
+   In **Advanced**, change its visibility to **Public** so accounts outside
+   `marin-community` can authorize it and `Open-Athena` can install it.
+2. In **Permissions & events**, set **Organization permissions → Members** to
+   **Read-only** and save. Approve the updated permissions on the existing
+   `marin-community` installation.
+3. [Install the App](https://github.com/apps/loom-oa-dev/installations/new) on
+   `Open-Athena` and approve **Members: Read-only**. Membership checks need an
+   installation on the admission organization, even when Loom's repositories
+   belong to another organization. Select only repositories Loom should serve.
+4. Sign in at `https://loom.oa.dev` with an active `Open-Athena` member who is
+   outside `marin-community`. Confirm **People & security** shows organization
+   authorization and that access renews after one hour.
+
+These changes retain the App ID, OAuth credentials, and webhook secret. They
+require no Secret Manager version change or Loom rollout. Public visibility
+allows GitHub authorization and installation; Loom still requires manual
+approval or active membership in its configured organization.
+
+Existing manually approved accounts with only a GitHub login must still have
+their verified numeric GitHub ID bound in **People & security**. Accounts that
+completed GitHub sign-in while profile recording was enabled already have that
+ID. A login-only row is rejected before organization admission to prevent a
+reclaimed GitHub username from inheriting the previous account's access.
 
 ## Deploy
 
