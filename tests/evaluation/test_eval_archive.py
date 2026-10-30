@@ -541,7 +541,10 @@ def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
         rows.append(row)
     source = _write_jsonl(results, rows)
 
-    assert export_lm_eval_samples(str(results)).samples == 3
+    exported = export_lm_eval_samples(str(results))
+    assert exported.samples == 3
+    assert exported.coverage["gsm8k_5shot"].n_scored == 3
+    assert exported.coverage["gsm8k_5shot"].n_attempted is None
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 3
 
@@ -591,7 +594,7 @@ def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
     assert sample.grading is None
     assert sample.correct is None
     assert coverage == {
-        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+        "gsm8k_5shot": TaskCoverage(n_attempted=None, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
     }
 
 
@@ -1073,7 +1076,7 @@ def test_rebuild_reads_sandbox_pass_rates_for_declared_pass_at_one(tmp_path, met
 
     assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 2
     samples = [sample_from_archive_row(row) for row in ReadView(str(results)).scan("samples").to_pylist()]
-    coverage = task_coverage(samples, n_benchmark=2, n_attempted=2)
+    coverage = task_coverage([(sample, "") for sample in samples], n_benchmark=2, n_attempted=2)
     assert coverage == TaskCoverage(n_benchmark=2, n_attempted=2, n_scored=2, n_correct=1, n_unanswered=0)
     assert [sample.correct for sample in samples] == [True, False]
     assert all(sample.grading.metric == "pass_rate" for sample in samples)
@@ -1450,3 +1453,56 @@ def test_fleet_smoke_preserves_partial_results_when_validation_fails(tmp_path):
 
     assert destination.exists()
     assert (destination / "_fleet.json").exists()
+
+
+@pytest.mark.parametrize("benchmark", ["GPQADiamond", "AIME24", "OlympiadBench"])
+@pytest.mark.parametrize("observed_repetitions", [2, 3])
+def test_native_coverage_counts_trials_and_keeps_missing_repetitions(tmp_path, benchmark, observed_repetitions):
+    root = str(tmp_path)
+    contract = _result_contract(benchmark, "accuracy_avg", "accuracy", 0.5, n_benchmark=2, n_attempted=2)
+    document = {
+        "results": {benchmark: {"accuracy_avg": 0.5}},
+        **contract,
+        "task_outcomes": {
+            benchmark: {
+                "status": "succeeded" if observed_repetitions == 3 else "failed",
+                "failure": {"category": "model_transport"},
+                "expected_count": 2,
+                "scored_count": 2,
+                "expected_sample_count": 6,
+                "scored_sample_count": 2 * observed_repetitions,
+            }
+        },
+    }
+    data = DataStore.open(root, writer_id="evalchemy")
+    with EvaluationStore(data) as store:
+        data.table("evalchemy_results", primary_key=("source_prefix",)).append(
+            {
+                "source_prefix": benchmark,
+                "document": json.dumps(document),
+                "scored": observed_repetitions == 3,
+            }
+        )
+        for doc in range(2):
+            for trial in range(observed_repetitions):
+                for extraction in ("strict-match", "flexible-extract"):
+                    score = float((doc + trial) % 2) if extraction == "flexible-extract" else 0.0
+                    store.add_sample(
+                        EvalSample(
+                            task=benchmark,
+                            doc_id=str(doc),
+                            kind=SampleKind.GENERATION,
+                            extracted="answer",
+                            correct=bool(score),
+                            grading=Grading(method="judge", metric="accuracy", filter=extraction, score=score),
+                        ),
+                        trial_id=str(trial),
+                    )
+        store.seal()
+    summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig(benchmark, 0, task_alias=benchmark),))
+    coverage = summary.coverage[benchmark]
+    assert (coverage.n_benchmark, coverage.n_attempted) == (6, 6)
+    assert coverage.n_scored == 2 * observed_repetitions
+    assert coverage.n_correct == observed_repetitions
+    assert summary.scored_counts[benchmark] == coverage.n_scored
+    assert summary.tasks[0].benchmark.n_attempted == 6

@@ -30,7 +30,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from starlette.testclient import TestClient
 
-DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-app"
 
 
 class PageLinks(HTMLParser):
@@ -108,7 +108,7 @@ def test_directory_lists_all_apps_and_paginates_sorted_releases(tmp_path: Path, 
 
 @pytest.mark.parametrize("invalid_graph", ["duplicate_id", "missing_parent", "cycle", "cooldown_mismatch"])
 def test_snowball_release_rejects_invalid_lineage_and_preserves_local_output(tmp_path: Path, invalid_graph: str) -> None:
-    source = Path(__file__).parents[1] / "applets" / "snowball_family_tree"
+    source = Path(__file__).parents[1] / "apps" / "snowball_family_tree"
     applet = tmp_path / "snowball"
     shutil.copytree(source, applet, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     valid_release = CliRunner().invoke(cli, ["release", str(applet), "--dry-run", "--json"])
@@ -1288,7 +1288,7 @@ def test_mode_cli_updates_current_revision(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("marina.client.requests.request", http_request)
     result = CliRunner().invoke(
         cli,
-        ["applets", "mode", "example", "public", "--url", "http://localhost:8080"],
+        ["apps", "mode", "example", "public", "--url", "http://localhost:8080"],
     )
 
     assert result.exit_code == 0

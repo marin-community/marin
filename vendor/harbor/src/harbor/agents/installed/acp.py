@@ -1215,8 +1215,8 @@ rm -f "$tmp_archive"
         }
         if self._authenticate_method_id:
             env["HARBOR_ACP_AUTHENTICATE_METHOD_ID"] = self._authenticate_method_id
-        if self.model_name:
-            env["HARBOR_ACP_REQUESTED_MODEL"] = self.model_name
+        if model := self.acp_session_model():
+            env["HARBOR_ACP_REQUESTED_MODEL"] = model
         env.update(self.acp_env())
 
         command = f"""

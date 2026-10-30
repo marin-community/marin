@@ -78,6 +78,7 @@ from experiments.evaluation.evals import (
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
+from experiments.evaluation.policy_finalization import POLICY_JUDGED_BENCHMARKS, PolicyFinalization, policy_executor
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -149,6 +150,7 @@ class LaunchSpec:
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
+    policy_finalization: PolicyFinalization | None = None
 
 
 def _git_sha() -> str:
@@ -221,6 +223,7 @@ class _ResolvedDefinition:
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
+    egress_allow: tuple[str, ...]
 
 
 def _resolve_definitions(
@@ -267,6 +270,7 @@ def _resolve_definitions(
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
+                        egress_allow=definition.egress_allow_for(config),
                     ),
                 )
             )
@@ -291,6 +295,7 @@ def _resolve_definitions(
                     ),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
+                    egress_allow=definition.egress_allow_for(config),
                 ),
             )
         )
@@ -392,14 +397,47 @@ def build_evaluation_batch(
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
+    if spec.policy_finalization is not None:
+        definitions = tuple(
+            (
+                (
+                    name,
+                    replace(
+                        definition,
+                        secret_env={
+                            key: value for key, value in definition.secret_env.items() if key != "JUDGE_API_KEY"
+                        },
+                    ),
+                )
+                if definition.record_ref.name in POLICY_JUDGED_BENCHMARKS
+                else (name, definition)
+            )
+            for name, definition in definitions
+        )
     secret_env: dict[str, SecretSpec] = {}
     for _, definition in definitions:
         for name, spec_value in definition.secret_env.items():
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
+    policy_judge = None
+    if spec.policy_finalization is not None and any(
+        definition.record_ref.name in POLICY_JUDGED_BENCHMARKS for _, definition in definitions
+    ):
+        policy_judge = _resolve_hosted_judge(
+            replace(spec, judge_model=spec.policy_finalization.judge, judge_accelerator="H100x8"), accelerator
+        )
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
+        if spec.policy_finalization is not None:
+            executor, reference = policy_executor(
+                definition.executor,
+                definition.record_ref,
+                spec.policy_finalization,
+                policy_judge.accelerator if policy_judge is not None else None,
+                spec.priority_band,
+            )
+            definition = replace(definition, executor=executor, record_ref=reference)
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
@@ -451,6 +489,7 @@ def build_evaluation_batch(
         instances=spec.instances,
         judge=judge,
         secret_env=secret_env,
+        egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,
     )
 
@@ -551,6 +590,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
+        egress_allow=batch.egress_allow,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )

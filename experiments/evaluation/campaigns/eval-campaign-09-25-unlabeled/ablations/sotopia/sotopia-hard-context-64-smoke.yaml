@@ -34,3 +34,32 @@ verifier:
   override_timeout_sec: 300
   env:
     TOGETHER_API_KEY: ${TOGETHER_API_KEY}
+sotopia_cohort:
+  version: policy-10197-v1
+  models:
+  - model: Aleph-Alpha/Kolibri-1
+    results_path: s3://marin-us-east-02a/marin/evals/20261004-091419-Aleph-Alpha-Kolibri-1-sotopia-hard-94c0/results
+  - model: IFM/K2-Horizon-MoVA-36B-A4B
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-174658-K2-Horizon-campaign-sotopia-hard-7381/results
+  - model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-193429-Qwen-Qwen3-Coder-30B-A3B-Instruct-sotopia-hard-a69a/results
+  - model: Qwen/Qwen3-Next-80B-A3B-Instruct
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-202922-Qwen-Qwen3-Next-80B-A3B-Instruct-sotopia-hard-0281/results
+  - model: Qwen/Qwen3.6-35B-A3B
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-193328-Qwen-Qwen3.6-35B-A3B-sotopia-hard-4484/results
+  - model: arcee-ai/Trinity-Mini
+    results_path: s3://marin-us-east-02a/marin/evals/20261004-091216-arcee-ai-Trinity-Mini-sotopia-hard-25af/results
+  - model: google/gemma-4-26B-A4B-it
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-193930-google-gemma-4-26B-A4B-it-sotopia-hard-ae96/results
+  - model: inclusionAI/Ling-lite-1.5
+    results_path: s3://marin-us-east-02a/marin/evals/20261005-145957-inclusionAI-Ling-lite-1.5-sotopia-hard-0007/results
+  - model: moonshotai/Kimi-Linear-48B-A3B-Instruct
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-194458-moonshotai-Kimi-Linear-48B-A3B-Instruct-sotopia-hard-cbf0/results
+  - model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-194428-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-sotopia-hard-9da5/results
+  - model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-194024-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-sotopia-hard-1f0b/results
+  - model: openai/gpt-oss-20b
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-194224-openai-gpt-oss-20b-sotopia-hard-2788/results
+  - model: zai-org/GLM-4.7-Flash
+    results_path: s3://marin-us-east-02a/marin/evals/20261003-204411-zai-org-GLM-4.7-Flash-sotopia-hard-477c/results

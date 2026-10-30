@@ -5,16 +5,17 @@ import json
 
 import pytest
 from aiohttp import ClientResponseError, ClientSession, web
+from eval.chat_benchmarks.FinanceBench.eval_instruct import FinanceBenchBenchmark
 from eval.chat_benchmarks.MixEval.eval_instruct import MixEvalBenchmark
 from eval.chat_benchmarks.WildBench import eval_instruct as wildbench_source
-from eval.contracts.eval_spec import ModelRequest, RequestKind
+from eval.contracts.eval_spec import ModelRequest, RequestKind, SourceRef
 from eval.contracts.lm_eval_normalization import sample_from_lm_eval
 from eval.execution.backend import LMBackend
 from eval.execution.engine import CollectSamples, Evaluator
 from eval.execution.grading import Graders
 from eval.execution.judge import JudgeBackend
 from eval.execution.metrics import SourceMetrics
-from eval.graders.answer_equivalence import JudgeConfig
+from eval.graders.answer_equivalence import JudgeConfig, JudgeProtocol
 from eval.graders.specs import GRADERS
 from eval.runtime import pool as runtime_pool
 from eval.sample_logging import canonicalize_samples
@@ -366,3 +367,43 @@ def test_local_api_budget_exhaustion_remains_infrastructure_error(monkeypatch):
     assert clock.now == 20
     assert record["failure_category"] == "model_transport"
     assert sample.output == "[EVALCHEMY_INFRASTRUCTURE_ERROR] model_transport"
+
+
+@pytest.mark.parametrize("label,accuracy", [("correct", 1.0), ("incorrect", 0.0), ("not_attempted", 0.0)])
+def test_policy_finance_first_pass_escalates_empty_judgments_and_preserves_verdict(tmp_path, label, accuracy):
+    data = tmp_path / "finance.jsonl"
+    data.write_text(json.dumps({"id": "revenue", "question": "Revenue?", "answer": "$10", "evidence_text": "$10"}) + "\n")
+    source = FinanceBenchBenchmark(data_file=str(data))
+    requests = []
+
+    async def handler(request):
+        payload = await request.json()
+        requests.append(payload)
+        assert payload["model"] == "MiniMax"
+        assert payload["temperature"] == 0
+        assert payload["structured_outputs"] == {"choice": ["correct", "incorrect", "not_attempted"]}
+        content = label if payload["max_tokens"] == 2048 else ""
+        return web.json_response({"choices": [{"message": {"content": content}, "finish_reason": "stop"}]})
+
+    async def run():
+        runner, base_url = await _endpoint(handler)
+        grading = Graders(GRADERS)
+        candidate = FixedEndpoint("Ten dollars")
+        sink = CollectSamples()
+        metrics = SourceMetrics(repeated=False, policy=source.REDUCER)
+        try:
+            async with ClientSession() as session:
+                judge = JudgeBackend(JudgeConfig("MiniMax", base_url, "test-key", JudgeProtocol.MARIN_POLICY), session)
+                engine = Evaluator(candidate, grading, sink, workers=1, judges={"FinanceBench": judge})
+                async for completed in engine.run(source.iter_specs(SourceOptions("FinanceBench", SourceRef(str(data))))):
+                    assert completed.error is None
+                    metrics.add(completed.result)
+            assert metrics.finish("FinanceBench")["results"]["FinanceBench"]["accuracy"] == accuracy
+            assert sink.samples["FinanceBench"][0]["judge_label"] == label
+            assert len(candidate.requests) == 1
+        finally:
+            grading.close()
+            await runner.cleanup()
+
+    asyncio.run(run())
+    assert [request["max_tokens"] for request in requests] == [128, 512, 2048]

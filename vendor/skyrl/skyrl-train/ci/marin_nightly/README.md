@@ -103,4 +103,4 @@ python3 skyrl-train/ci/marin_nightly/gate.py \
 The Grug lane runs `tests/gpu/test_grug_megatron.py`, the Levanter parity oracle
 and the two-GPU CP2
 FlashAttention forward/backward smoke with the frozen Megatron runtime closure;
-see `docs/grug-megatron-training.md` for the Grug tests.
+see [SkyRL CI checks](../../../../../docs/dev-guide/skyrl.md#ci-checks) for the Grug tests.

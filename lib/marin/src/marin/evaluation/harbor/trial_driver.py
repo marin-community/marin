@@ -71,6 +71,7 @@ class RuntimeOverlay(BaseModel):
     dataset_path: str | None
     endpoint_url: str
     served_model: str
+    model_identity: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
     verifier_env: dict[str, str]
@@ -271,6 +272,7 @@ def _agent_config(
     *,
     endpoint_url: str,
     served_model: str,
+    model_identity: str,
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
@@ -282,7 +284,8 @@ def _agent_config(
     configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
-            "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
+            "model_name": f"{_HOSTED_VLLM_PROVIDER}/{model_identity}",
+            "model_alias": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
             "env": runtime_env,
         },
@@ -308,6 +311,7 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
         agent,
         endpoint_url=overlay.endpoint_url,
         served_model=overlay.served_model,
+        model_identity=overlay.model_identity,
         kwargs=kwargs,
     )
 
@@ -318,6 +322,7 @@ def _stable_agent(agent: AgentConfig) -> AgentConfig:
         agent,
         endpoint_url=_STABLE_ENDPOINT,
         served_model=_STABLE_MODEL,
+        model_identity=_STABLE_MODEL,
         kwargs=agent.kwargs,
     )
 
@@ -441,6 +446,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                 dataset_path=dataset_path,
                 endpoint_url=_STABLE_ENDPOINT,
                 served_model=_STABLE_MODEL,
+                model_identity=_STABLE_MODEL,
                 task_limit=None,
                 model_agent_kwargs=dict(model_agent_kwargs),
                 verifier_env={},
@@ -455,6 +461,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                     AgentName.PI,
                     logs_dir=Path(jobs_dir) / "agent",
                     model_name=effective_agent.model_name,
+                    model_alias=effective_agent.model_alias,
                     **effective_agent.kwargs,
                 )
             except ValueError as exc:

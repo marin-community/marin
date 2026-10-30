@@ -12,6 +12,13 @@ updates:
   - package-ecosystem: "uv"
     directories:
       - "/"
+      - "/config/external/evalchemy-olympiadbench-judge-ablation"
+      - "/experiments/mlx_export"
+      - "/infra/grafana"
+      - "/lib/finelog/rust"
+      - "/vendor/evalchemy"
+      - "/vendor/harbor"
+      - "/vendor/skyrl"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
@@ -23,15 +30,39 @@ updates:
 
   - package-ecosystem: "npm"
     directories:
+      - "/infra/grafana/marin-infra-panel"
+      - "/infra/marina/apps/echo/web"
+      - "/infra/marina/apps/evaldash/web"
+      - "/infra/marina/apps/filer"
+      - "/infra/marina/apps/python_playground"
+      - "/infra/marina/apps/tasktrove/web"
+      - "/infra/marina/apps/zephyr/web"
+      - "/infra/marina/examples/vue-app"
+      - "/lib/ducky/dashboard"
       - "/lib/iris"
       - "/lib/iris/dashboard"
       - "/lib/finelog"
       - "/lib/finelog/dashboard"
+      - "/lib/marin/src/marin/inference/dashboard"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
     groups:
       npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directories:
+      - "/lib/dupekit/rust"
+      - "/lib/finelog/rust"
+      - "/lib/iris/rust"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      cargo-security:
         applies-to: security-updates
         patterns:
           - "*"

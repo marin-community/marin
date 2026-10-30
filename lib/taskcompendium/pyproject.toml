@@ -19,7 +19,7 @@ dependencies = [
 pipeline = [
     "ijson>=3.3",
     "tiktoken>=0.8",
-    "datasets>=3.1.0,<5.0.0",
+    "datasets>=5.0.1,<6",
     "marin-zephyr",
     "marin-finestore",
     "numpy>=1.26",

@@ -37,7 +37,8 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
+sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
@@ -73,6 +74,7 @@ requires = ["uv_build>=0.8.4,<0.9.0"]
 build-backend = "uv_build"
 
 [tool.uv]
+constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.0"]
 # Mini-SWE's unused default model declares LiteLLM; our model uses OpenAI directly.
 exclude-dependencies = ["litellm"]
 default-groups = []

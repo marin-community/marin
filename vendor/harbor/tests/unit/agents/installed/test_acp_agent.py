@@ -716,11 +716,13 @@ class TestAcpAgentRun:
     """Test ACP runtime env wiring."""
 
     @pytest.mark.asyncio
-    async def test_run_passes_auth_policy_and_requested_model(self, temp_dir):
+    @pytest.mark.parametrize("model_alias, expected_model", [(None, "openai/gpt-5.4"), ("hosted_vllm/resumed-endpoint", "hosted_vllm/resumed-endpoint")])
+    async def test_run_passes_auth_policy_and_requested_model(self, temp_dir, model_alias, expected_model):
         agent = AcpAgent(
             logs_dir=temp_dir,
             registry_entry=REGISTRY_ENTRY,
             model_name="openai/gpt-5.4",
+            model_alias=model_alias,
             auth_policy="explicit",
             authenticate_method_id="openai-api-key",
         )
@@ -732,7 +734,8 @@ class TestAcpAgentRun:
         env = mock_env.exec.await_args.kwargs["env"]
         assert env["HARBOR_ACP_AUTH_POLICY"] == "explicit"
         assert env["HARBOR_ACP_AUTHENTICATE_METHOD_ID"] == "openai-api-key"
-        assert env["HARBOR_ACP_REQUESTED_MODEL"] == "openai/gpt-5.4"
+        assert env["HARBOR_ACP_REQUESTED_MODEL"] == expected_model
+        assert agent.to_agent_info().model_info.model_dump() == {"name": "gpt-5.4", "provider": "openai"}
         assert "HARBOR_ACP_TERMINAL_OUTPUT_BYTE_LIMIT" not in env
 
     @pytest.mark.asyncio

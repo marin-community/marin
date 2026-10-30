@@ -77,6 +77,32 @@ see [the workflow](https://github.com/marin-community/marin/blob/main/.github/wo
 for the selected tests. `Marin - SkyRL CPU Nightly` runs CatCount
 learning and checkpoint/resume gates at 06:00 UTC using the nested lock.
 
+## Grug training communication
+
+Batch-invariant workers inherit vLLM's one-channel NCCL limit. Megatron policies
+with TP1 and expert TP1 can set a separate training limit:
+
+```text
+trainer.algorithm.batch_invariant=true
+trainer.policy.megatron_config.tensor_model_parallel_size=1
+trainer.policy.megatron_config.expert_tensor_parallel_size=1
+trainer.policy.megatron_config.nccl_max_channels=8
+generator.weight_sync_transport=broadcast
+```
+
+The default `nccl_max_channels=null` preserves existing behavior. Broadcast
+publication keeps vLLM's channel limit on both ends; `expert_block` requires
+`null` or `1`. Leave `NCCL_MAX_CTAS` unset when using this option.
+
+Eight channels is a tested starting point for Hero on 192 H100s at 65K, not a
+universal setting. More channels consume GPU memory: automatic selection ran
+out on its second update, while eight completed eight updates. See the
+[paired measurements](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-auto-01a13c0f/reports/HERO-NCCL-AUTOMATIC-SELECTION.md).
+One and eight channels produced identical scores and expert choices at each
+tested batch shape, but both retained existing batch-shape sensitivity. This
+option does not establish exact batch invariance; see the
+[numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
+
 ## Train, resume, and evaluate through Marin
 
 The artifact smoke uses Qwen2.5-0.5B-Instruct, procedural CatCount training

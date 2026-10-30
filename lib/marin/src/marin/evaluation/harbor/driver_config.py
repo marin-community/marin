@@ -173,6 +173,7 @@ class HarborRuntimeOverlay:
     dataset_path: str | None
     endpoint_url: str
     served_model: str
+    model_identity: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
     verifier_env: Mapping[str, str]

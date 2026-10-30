@@ -73,8 +73,8 @@ a searchable dialog; Escape and the close button return focus to the launcher.
 App navigation stays in a separate row that scrolls horizontally on narrow
 screens. App names and descriptions come from the manifests and published registry.
 
-Use `AppBar.vue` directly when an app needs only navigation, including applets
-on the isolated applet origin:
+Use `AppBar.vue` directly when an app needs only navigation, including apps
+on the isolated app origin:
 
 ```vue
 <AppBar title="Filer" home="https://marina.oa.dev/" />
@@ -84,11 +84,11 @@ It accepts `title`, `home`, an optional current `app` name, and an optional
 `apps` array with the directory shape above. Its `nav` and `actions` slots hold
 app links and controls. With no directory supplied, its drawer links to Marina's
 app directory. It performs no fetches and does not require the global token
-stylesheet. Configure the `@marina` and `vue` aliases as above; Vite applets can
+stylesheet. Configure the `@marina` and `vue` aliases as above; Vite apps can
 use `new URL('../../web', import.meta.url).pathname` for the shared kit.
 
-Keep uploaded applets on their own origin. Do not fetch the private directory
-from a public applet or add cross-origin access to the kernel API for navigation.
+Keep uploaded apps on their own origin. Do not fetch the private directory
+from a public app or add cross-origin access to the kernel API for navigation.
 
 Shared browser code is bundled into each application package at release time.
 Changes here require releasing consuming applications with `marina release`;

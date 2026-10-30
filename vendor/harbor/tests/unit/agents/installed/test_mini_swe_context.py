@@ -11,9 +11,40 @@ from harbor.environments.base import ExecResult
 from harbor.literal.proxy import LITERAL_LOG_FILENAME
 from harbor.models.agent.context import AgentContext
 from minisweagent.run.mini import app
+from openai import OpenAI
 from openai.resources.chat.completions import Completions
 from openai.types.chat import ChatCompletion
 from typer.testing import CliRunner
+
+
+def test_openai_adapter_accepts_litellm_drop_params_option(monkeypatch):
+    _compacting_model_class(monkeypatch)
+    module = importlib.import_module("mini_swe_model")
+    requests = []
+
+    def completion(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_tool_response().model_dump())
+
+    def client(**kwargs):
+        return OpenAI(
+            http_client=httpx.Client(transport=httpx.MockTransport(completion)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(module, "OpenAI", client)
+    model = module.OpenAIModel(
+        model_name="hosted_vllm/served-model",
+        api_base="http://model/v1",
+        cost_tracking="ignore_errors",
+        model_kwargs={"drop_params": True, "temperature": 0.25, "max_tokens": 16},
+    )
+    model.query([{"role": "user", "content": "Run echo ready"}])
+    [request] = requests
+    assert request["model"] == "served-model"
+    assert request["temperature"] == 0.25
+    assert request["max_tokens"] == 16
+    assert "drop_params" not in request
 
 
 def _compacting_model_class(monkeypatch):
@@ -317,23 +348,6 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     tokenization_trial_ids = []
     completions = []
 
-    def tokenizer(request):
-        assert str(request.url) == "http://model/tokenize"
-        tokenized.append(json.loads(request.content))
-        tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
-        return httpx.Response(
-            200, json={"count": next(counts), "max_model_len": server_context}
-        )
-
-    client_type = httpx.Client
-    monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: client_type(
-            transport=httpx.MockTransport(tokenizer), **kwargs
-        ),
-    )
-
     def completion(**kwargs):
         completions.append(kwargs)
         (tmp_path / LITERAL_LOG_FILENAME).write_text(
@@ -382,8 +396,22 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             },
         )
 
+    def transport(request):
+        payload = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            tokenized.append(payload)
+            tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
+            return httpx.Response(
+                200, json={"count": next(counts), "max_model_len": server_context}
+            )
+        assert request.url.path == "/v1/chat/completions"
+        assert "drop_params" not in payload
+        # Keep the real SDK signature and serialization in the tested path.
+        payload["extra_headers"] = dict(request.headers)
+        return httpx.Response(200, json=completion(**payload).model_dump())
+
     monkeypatch.setattr(
-        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
     )
     config = tmp_path / "custom.yaml"
     config.write_text(
