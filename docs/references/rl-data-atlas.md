@@ -86,21 +86,21 @@ visible; source details contain the remaining fields.
 
 ## Updating Atlas
 
-Source code lives in `infra/marina/applets/rl_data_catalog/`. Its migration
+Source code lives in `infra/marina/apps/rl_data_catalog/`. Its migration
 creates the SQL tables; it does not read object storage or run curation.
 Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
-uv run marina validate infra/marina/applets/rl_data_catalog
-uv run marina release-status infra/marina/applets/rl_data_catalog --json
-uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
-uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
+uv run marina validate infra/marina/apps/rl_data_catalog
+uv run marina release-status infra/marina/apps/rl_data_catalog --json
+uv run marina apps versions fb11c931-5861-4878-8bb5-a964d652b45f --json
+uv run marina release infra/marina/apps/rl_data_catalog --base-version CURRENT_VERSION
 
-uv run python infra/marina/applets/rl_data_catalog/load.py \
-  --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
+uv run python infra/marina/apps/rl_data_catalog/load.py \
+  --app-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-`applet.toml` declares the existing applet's UUID. Any authenticated internal
+`applet.toml` declares the existing app's UUID. Any authenticated internal
 Marina user can release an update. By default, source must be a clean
 checkout at the current remote main. A Marina image deployment does not publish Atlas. A
 default release records its source commit and subtree hash in the immutable package;
@@ -174,13 +174,13 @@ cloud reads, background refresh or inference. Request/response traces remain
 archival references in the assessment record.
 
 For a local preview, start disposable Marina and Postgres, then run the same
-loader against a local curation cache using the printed applet ID and origin:
+loader against a local curation cache using the printed app ID and origin:
 
 ```bash
-uv run marina release infra/marina/applets/rl_data_catalog --local --json
-uv run python infra/marina/applets/rl_data_catalog/load.py \
+uv run marina release infra/marina/apps/rl_data_catalog --local --json
+uv run python infra/marina/apps/rl_data_catalog/load.py \
   --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
-  --applet-id PRINTED_ID --url PRINTED_ORIGIN
+  --app-id PRINTED_ID --url PRINTED_ORIGIN
 ```
 
 Inspect the inventory, an assessment and its task evidence. Stop the local stack
@@ -237,10 +237,10 @@ statistics, bounded example Parquet and `coverage.json` without rerunning
 embeddings or matching. Load both manifests:
 
 ```bash
-uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
+uv run python -m infra.marina.apps.rl_data_catalog.load_curriculum \
   --release IMMUTABLE_RELEASE_ROOT/release.json \
   --coverage IMMUTABLE_COVERAGE_ROOT/coverage.json \
-  --applet-id APPLET_ID --url MARINA_ORIGIN
+  --app-id APP_ID --url MARINA_ORIGIN
 ```
 
 The loader reads statistics and sampled task files. It checks sample lineage,
@@ -248,7 +248,7 @@ training/evaluation use, curriculum references and sample counts. It reconciles
 statistics against complete-population totals in the task release manifest before atomically selecting
 the release. Byte-bounded SQL requests keep import work proportional to the
 compact export. Failed loads preserve the selected release; the current and
-previous releases are retained. Run one curriculum loader per applet at a time.
+previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
 
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the

@@ -384,10 +384,11 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      # TaskCompendium supplies the locked Shellbox base package. Backend extras
-      # remain optional; tests skip the SDK-dependent adapters when absent.
+      # The Iris adapter tests use the locked Shellbox Iris extra.
+      - name: Install Shellbox test environment
+        run: uv sync --package marin-taskcompendium --package marin-shellbox --extra iris --group test --frozen
       - name: Test Shellbox
-        run: uv run --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+        run: uv run --no-sync --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
   taskcompendium:
     name: taskcompendium-unit
@@ -541,7 +542,8 @@ jobs:
         working-directory: vendor/skyrl
         run: |
           uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py \
+            skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py
 
   unit_tests:
     name: unit-tests

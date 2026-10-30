@@ -718,11 +718,8 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
-        # Docker's embedded resolver forwards to the VM's resolver, the metadata
-        # server the filter blocks, and relies on NAT rules gVisor's network stack
-        # does not apply. The bootstrap-written resolv.conf names public resolvers.
-        if config.network_mode == EGRESS_NETWORK:
-            cmd.extend(["-v", f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro"])
+        if config.resolv_conf is not None:
+            cmd.extend(["-v", f"{config.resolv_conf}:/etc/resolv.conf:ro"])
 
         # Network sysctl tuning for containers with own network namespace (#3066).
         # Host-network containers inherit host settings from VM bootstrap, a

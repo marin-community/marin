@@ -34,6 +34,8 @@ Changelog:
         hero-ragged_a2a-nccl2307-ep-step81k restarts that fork on the NCCL 2.30.7 PJRT wheel (#9062).
     2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
         hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
+    2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step.
+        hero-gradclip-step356k forks hero-ctx16k-step257k at permanent step 356531 (see ``trigger_hero.sh``).
 """
 
 import dataclasses
@@ -71,6 +73,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -297,6 +300,7 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        max_grad_norm=HERO_MAX_GRAD_NORM if size == "d6144" else None,
         gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(

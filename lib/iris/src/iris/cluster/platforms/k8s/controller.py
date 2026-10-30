@@ -56,6 +56,7 @@ from iris.cluster.platforms.k8s.constants import (
     STORAGE_SECRET_NAME,
     STORAGE_SECRETS_DIR,
 )
+from iris.cluster.platforms.k8s.egress_allowlist import allowlist_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
@@ -152,6 +153,23 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 # ============================================================================
 # Controller Deployment manifest builder
 # ============================================================================
+
+
+# The writes the controller makes to per-attempt Cilium policies (server-side apply).
+_CILIUM_POLICY_WRITE_VERBS = frozenset({"create", "patch"})
+
+
+def _grants_cilium_policy_writes(rules: list[dict]) -> bool:
+    """Whether ClusterRole ``rules`` together grant create and patch on any cilium.io CiliumNetworkPolicy."""
+    verbs: set[str] = set()
+    for rule in rules:
+        if rule.get("resourceNames"):
+            continue
+        if {"cilium.io", "*"} & set(rule.get("apiGroups", [])) and {"ciliumnetworkpolicies", "*"} & set(
+            rule.get("resources", [])
+        ):
+            verbs.update(rule.get("verbs", []))
+    return "*" in verbs or _CILIUM_POLICY_WRITE_VERBS <= verbs
 
 
 class PrerequisitesNotProvisionedError(InfraError):
@@ -911,8 +929,14 @@ class K8sControllerProvider:
         if self._kubectl.get_json(K8sResource.SERVICE_ACCOUNTS, "iris-controller") is None:
             missing.append(f"ServiceAccount/{self._namespace}/iris-controller")
         role_name = self.rbac_cluster_role_name()
-        if self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name) is None:
+        role = self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name)
+        if role is None:
             missing.append(f"ClusterRole/{role_name}")
+        elif config.kubernetes_provider.cilium is not None and not _grants_cilium_policy_writes(role.get("rules", [])):
+            missing.append(
+                f"ClusterRole/{role_name} rule granting create and patch on cilium.io ciliumnetworkpolicies "
+                "(kubernetes_provider.cilium)"
+            )
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
             missing.append(f"ClusterRoleBinding/{role_name}")
         if self._kubectl.get_json(K8sResource.ROLES, TASK_SECRET_ROLE_NAME) is None:
@@ -1034,14 +1058,24 @@ class K8sControllerProvider:
         )
 
     def ensure_egress_network_policies(self, config: IrisClusterConfig) -> None:
-        """Create the NetworkPolicies for pods off the cluster network, one per egress policy.
+        """Create the policies for pods off the cluster network, one per egress policy.
 
+        INTERNET and NONE get NetworkPolicies. ALLOWLIST gets the namespace-wide
+        CiliumNetworkPolicy when ``kubernetes_provider.cilium`` is set.
         Never deleted on stop: they select only labeled pods, and removing one
-        while such a pod runs would reconnect it to the controller.
+        while such a pod runs would reconnect it to the controller or, for
+        ALLOWLIST, cut it off from everything.
         """
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
+        cilium = config.kubernetes_provider.cilium
+        if cilium is not None:
+            self._kubectl.apply_json(
+                allowlist_policy_manifest(
+                    self._namespace, config.defaults.egress_allowlist.allow, cilium.egress_endpoints
+                )
+            )
 
     # -- Deployment readiness --------------------------------------------------
 
