@@ -152,7 +152,10 @@ def validate_run_config(logged: dict, expected) -> None:
         "crash_on_inf",
     )
     for key in top_fields:
-        actual, target = logged[key], expected[key]
+        # W&B omits the top-level adapter mapping when it is empty.
+        # Preserve strict checks for nonempty adapters and every other field.
+        actual = logged.get(key, {}) if key == "adapter" else logged[key]
+        target = expected[key]
         if key == "data":
             # The pod wrapper can turn cache construction off after artifacts resolve.
             actual = {k: v for k, v in actual.items() if k != "auto_build_caches"}
@@ -160,7 +163,11 @@ def validate_run_config(logged: dict, expected) -> None:
         if actual != target:
             raise ValueError(f"Run differs from protocol: {key}")
     for key in trainer_fields:
-        if logged["trainer"][key] != expected["trainer"][key]:
+        actual, target = logged["trainer"][key], expected["trainer"][key]
+        if key == "mesh":
+            # The API also omits this empty mapping inside the mesh config.
+            actual = {"shared_mapping": {}, **actual}
+        if actual != target:
             raise ValueError(f"Run differs from protocol: trainer.{key}")
 
 

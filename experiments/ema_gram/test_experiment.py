@@ -191,6 +191,25 @@ def test_report_rejects_mismatched_training_controls(section, key, value):
         validate_run_config(logged, cfg)
 
 
+def test_report_accepts_wandb_omitted_empty_mappings_only():
+    cfg = materialized_config(build_training_step(Cell(0.25, 1e-4, 0.01), "test-dev"), "/tmp/ema-test").train_config
+    logged = json_friendly_val(asdict(cfg))
+    del logged["adapter"]
+    del logged["trainer"]["mesh"]["shared_mapping"]
+    validate_run_config(logged, cfg)
+    logged["adapter"] = {"unexpected": True}
+    with pytest.raises(ValueError, match="differs from protocol: adapter"):
+        validate_run_config(logged, cfg)
+    del logged["adapter"]
+    logged["trainer"]["mesh"]["shared_mapping"] = {"embed": "model"}
+    with pytest.raises(ValueError, match=r"differs from protocol: trainer\.mesh"):
+        validate_run_config(logged, cfg)
+    del logged["trainer"]["mesh"]["shared_mapping"]
+    del logged["model"]
+    with pytest.raises(KeyError, match="model"):
+        validate_run_config(logged, cfg)
+
+
 def test_attempt_metrics_preserve_incremental_chunks_and_final_tail(tmp_path):
     artifact = StoragePath(str(tmp_path / "artifact"))
     artifact.mkdirs()
