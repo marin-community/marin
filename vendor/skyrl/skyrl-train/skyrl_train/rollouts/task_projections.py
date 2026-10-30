@@ -24,7 +24,6 @@ from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.metric_names import TASK_ROLLOUT_METRIC_PREFIX
 from skyrl_train.trajectory_runners.trajectory_processing import (
-    apply_overlong_filtering,
     get_batch_failure_metrics,
     get_rollout_metrics,
     scalar_reward_token_credit,
@@ -40,7 +39,7 @@ from skyrl_train.trajectory_runners.types import (
 from skyrl_train.utils.harbor_errors import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
-    classify_exception_type,
+    resolve_error_treatment,
     passthrough_logprob_error_type,
     treatment_excludes_from_baseline,
 )
@@ -99,11 +98,7 @@ def _failure_policy(
     logprobs_required: bool,
 ) -> tuple[ErrorTreatment, str | None]:
     assert rollout.failure is not None
-    treatment = (
-        classify_exception_type(rollout.failure.exception_type, error_handling)
-        if error_handling.enable_error_classification
-        else ErrorTreatment.MASK
-    )
+    treatment = resolve_error_treatment(rollout.failure.exception_type, error_handling)
     return (
         treatment,
         passthrough_logprob_error_type(
@@ -118,7 +113,6 @@ def _rollout_rewards(rollout: TrainingRollout) -> RewardResult:
     graded = rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
     skipped = grade_skipped(rollout.grade)
     token_rewards = None
-    token_credit = None
     components = {}
     optimization_reward = rollout.grade.reward if graded else 0.0
     if any(step.transition.reward is not None for step in rollout.steps):
@@ -135,18 +129,10 @@ def _rollout_rewards(rollout: TrainingRollout) -> RewardResult:
                 for name, value in step.transition.reward_components.items():
                     components[name] = components.get(name, 0.0) + value
         token_rewards = tuple(rewards)
-    if any(step.transition.token_credit is not None for step in rollout.steps):
-        credit = [0.0] * len(rollout.response_token_ids)
-        for step in rollout.steps:
-            if (graded or skipped) and step.transition.token_credit is not None:
-                start = step.response_end + 1 - len(step.turn.response_token_ids)
-                credit[start : step.response_end + 1] = step.transition.token_credit
-        token_credit = tuple(credit)
     return RewardResult(
         unshaped_reward=rollout.grade.reward,
         optimization_reward=optimization_reward,
         token_rewards=token_rewards,
-        token_credit=token_credit,
         components=components,
     )
 
@@ -228,7 +214,6 @@ def _training_decision(
                 reward,
                 optimization_reward=0.0,
                 token_rewards=None if reward.token_rewards is None else (0.0,) * len(reward.token_rewards),
-                token_credit=None if reward.token_credit is None else (0.0,) * len(reward.token_credit),
                 components={},
             )
     return _TrainingDecision(verification, reward, disposition, error_treatment)
@@ -254,8 +239,6 @@ class WholeTaskProjection:
             rollouts,
             decisions,
             required,
-            self.runner_config,
-            self.tokenizer,
             [row.metadata.metric_class for row in request.rows],
         )
         _merge_task_metrics(batch, rollouts, request)
@@ -301,7 +284,7 @@ class StepTaskProjection:
                 projected_id.step = index
                 projected_ids.append(projected_id)
                 final_steps.append(last)
-        batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, None)
+        batch = _training_batch(samples, decisions, required, None)
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
         _merge_task_metrics(batch, rollouts, request)
@@ -319,8 +302,6 @@ def _training_batch(
     rollouts: Sequence[TrainingRollout],
     decisions: Sequence[_TrainingDecision],
     logprobs_required: bool,
-    runner_config: DictConfig,
-    tokenizer: PreTrainedTokenizerBase,
     env_metric_classes: Sequence[str] | None,
 ) -> TrajectoryBatch:
     responses = [list(rollout.response_token_ids) or [MASKED_TOKEN_ID] for rollout in rollouts]
@@ -336,8 +317,6 @@ def _training_batch(
         else [0] * len(response)
         for rollout, decision, response in zip(rollouts, decisions, responses, strict=True)
     ]
-    if runner_config.apply_overlong_filtering:
-        masks = apply_overlong_filtering(masks, responses, tokenizer.eos_token_id)
     logprobs = [
         _row_logprobs(rollout, decision, logprobs_required)
         for rollout, decision in zip(rollouts, decisions, strict=True)
@@ -394,11 +373,6 @@ def _attach_reward_channels(batch: TrajectoryBatch, decisions: Sequence[_Trainin
     availability = [decision.reward.unshaped_reward is not None for decision in decisions]
     if not all(availability):
         batch["unshaped_reward_available"] = availability
-    if any(decision.reward.token_credit is not None for decision in decisions):
-        batch["token_level_shaping"] = [
-            list(decision.reward.token_credit) if decision.reward.token_credit is not None else [0.0] * len(response)
-            for decision, response in zip(decisions, batch["response_ids"], strict=True)
-        ]
 
 
 def _attach_failure_channels(batch: TrajectoryBatch, decisions: Sequence[_TrainingDecision]) -> None:

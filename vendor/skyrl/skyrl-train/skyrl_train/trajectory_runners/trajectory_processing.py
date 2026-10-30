@@ -339,25 +339,6 @@ def concatenate_trajectory_batches(
                 for response_ids in output["response_ids"]:
                     rollout_routed_experts_concat.append(_re_sentinel_rows(len(response_ids), _concat_sentinel_row))
 
-    # Loop-behavior reward shaping (Stage B / F5 + F4): mix the per-token shaping
-    # channel + span tags the same way as routed_experts — sentinel-fill (zeros)
-    # any batch that lacks them so the concatenated list stays 1:1 with
-    # response_ids. When the channel is off NO batch carries the keys (the
-    # runner omits them), so these stay None and the result is byte-identical.
-    has_token_shaping = [
-        "token_level_shaping" in output and output.get("token_level_shaping") is not None
-        for output in trajectory_batches
-    ]
-    token_level_shaping_concat = None
-    if any(has_token_shaping):
-        token_level_shaping_concat = []
-        for output in trajectory_batches:
-            if "token_level_shaping" in output and output.get("token_level_shaping") is not None:
-                token_level_shaping_concat.extend(output["token_level_shaping"])
-            else:
-                for response_ids in output["response_ids"]:
-                    token_level_shaping_concat.append([0.0] * len(response_ids))
-
     has_span_tags = [
         "response_span_tags" in output and output.get("response_span_tags") is not None for output in trajectory_batches
     ]
@@ -399,8 +380,6 @@ def concatenate_trajectory_batches(
         result["behavior_topk_logprobs"] = behavior_topk_concat
     if data_sources_concat is not None:
         result["data_sources"] = data_sources_concat
-    if token_level_shaping_concat is not None:
-        result["token_level_shaping"] = token_level_shaping_concat
     if response_span_tags_concat is not None:
         result["response_span_tags"] = response_span_tags_concat
     if unshaped_rewards_concat is not None:
@@ -579,25 +558,6 @@ def validate_trajectory_batch(num_prompts: int, trajectory_batch: TrajectoryBatc
         assert all(not isinstance(reward, list) for reward in rewards), (
             "rewards must be `List[float]` or `List[List[float]]`"
         )
-
-
-def apply_overlong_filtering(
-    loss_masks: List[List[int]],
-    response_ids: List[List[int]],
-    eos_token_id: int,
-) -> List[List[int]]:
-    """
-    Implements DAPO Overlong Filtering: zero-out every token's mask whenever
-    the response does not end with the eos token id (i.e. truncated).
-
-    Returns:
-        - The loss masks with tokens zeroed out for truncated responses
-    """
-    assert len(loss_masks) == len(response_ids), "loss_masks and response_ids must have the same length"
-    return [
-        [0] * len(mask) if not response or response[-1] != eos_token_id else mask
-        for mask, response in zip(loss_masks, response_ids)
-    ]
 
 
 def get_rollout_metrics(
