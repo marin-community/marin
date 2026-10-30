@@ -41,7 +41,9 @@ def _campaign_config_names() -> set[str]:
     }
 
 
-def _evalchemy_metric(metric: PolicyMetric, custom: CustomTaskManager, lm_eval: LMEvalTaskManager) -> ResolvedMetric:
+def _evalchemy_metric(
+    metric: PolicyMetric, custom: CustomTaskManager, lm_eval: LMEvalTaskManager, selected_metric: str | None
+) -> ResolvedMetric:
     assert metric.task is not None
     if metric.task in SOURCES:
         benchmark = custom.get_benchmark(metric.task)
@@ -68,7 +70,7 @@ def _evalchemy_metric(metric: PolicyMetric, custom: CustomTaskManager, lm_eval: 
         kind_overrides = metadata.get("metric_kind_overrides")
     metrics, primary = resolve_metric_metadata(
         source_metrics,
-        primary_metric=primary_metric,
+        primary_metric=selected_metric or primary_metric,
         name_overrides=name_overrides,
         kind_overrides=kind_overrides,
     )
@@ -98,7 +100,8 @@ def main() -> None:
             config = yaml.safe_load((EVALCHEMY_CONFIGS / f"{name}.yaml").read_text())
             if config["tasks"] != [metric.task]:
                 raise ValueError(f"{name}: configured task differs from metric map")
-            resolved = _evalchemy_metric(metric, custom, lm_eval)
+            selected_metric = config.get("task_options", {}).get(metric.task, {}).get("primary_metric")
+            resolved = _evalchemy_metric(metric, custom, lm_eval, selected_metric)
             actual = resolved.evaluator_metric, resolved.record_metric
             if name != "cruxeval" and metric.published_metric not in resolved.available_source_names:
                 raise ValueError(f"{name}: publication metric {metric.published_metric!r} is not declared")

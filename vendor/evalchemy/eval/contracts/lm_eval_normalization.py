@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from finestore.eval import Choice, EvalSample, Grading, Message, SampleKind
 
 from eval.contracts.failures import FailureCategory
+from eval.contracts.benchmark_metadata import MetricKind, MetricMetadata
 from eval.contracts.sample_results import RESERVED_RECORD_FIELDS
 
 _PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1")
@@ -130,14 +131,21 @@ def _sample_metrics(raw: Mapping[str, object]) -> dict[str, float]:
     }
 
 
-def _grading(metrics: dict[str, float], extraction_filter: str | None, raw: Mapping[str, object]) -> Grading | None:
+def _grading(metrics: dict[str, float], extraction_filter: str | None, raw: Mapping[str, object], primary_metric: MetricMetadata | None = None) -> Grading | None:
     detail = json.dumps(
         {key: raw[key] for key in (
             "failure_category", "judge_error", "judge_label", "judge_raw", "report_outcome", "report_status", "report",
         ) if key in raw},
         ensure_ascii=False,
     )
-    picked = _primary_metric(metrics)
+    # Repeated-run reducers publish accuracy_avg from per-trial accuracy.
+    sample_metric = primary_metric.source_name.removesuffix("_avg") if primary_metric is not None else None
+    candidates = metrics if sample_metric is None else {
+        name: value for name, value in metrics.items() if _base_metric(name) == sample_metric
+    }
+    picked = _primary_metric(candidates)
+    if primary_metric is not None and picked is None and not raw.get("failure_category") and not metrics.get("judge_failed"):
+        raise ValueError(f"selected sample metric {primary_metric.source_name!r} is missing")
     if picked is None:
         if raw.get("failure_category") in _GENERATION_FAILURE_CATEGORIES:
             # Preserve the extraction key so a recovered score supersedes the
@@ -153,7 +161,7 @@ def _grading(metrics: dict[str, float], extraction_filter: str | None, raw: Mapp
         metric=name,
         filter=metric_filter,
         score=value,
-        passed=value >= 1.0,
+        passed=(value >= 1.0 if primary_metric is None or primary_metric.kind is MetricKind.BINARY else None),
         detail=detail,
     )
 
@@ -207,7 +215,7 @@ def _multiple_choice_fields(arguments: list, responses: list, doc: object, targe
     }
 
 
-def sample_from_lm_eval(task: str, raw: Mapping[str, object]) -> EvalSample:
+def sample_from_lm_eval(task: str, raw: Mapping[str, object], primary_metric: MetricMetadata | None = None) -> EvalSample:
     """Normalize one lm-eval sample filter row."""
     arguments = raw.get("arguments")
     responses = raw.get("resps")
@@ -215,7 +223,7 @@ def sample_from_lm_eval(task: str, raw: Mapping[str, object]) -> EvalSample:
     target = raw.get("target")
     metrics = _sample_metrics(raw)
     extraction_filter = raw.get("filter")
-    grading = _grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None, raw)
+    grading = _grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None, raw, primary_metric)
     common = {
         "task": task,
         "doc_id": str(raw.get("sample_id", raw.get("doc_id"))),
@@ -234,11 +242,11 @@ def sample_from_lm_eval(task: str, raw: Mapping[str, object]) -> EvalSample:
     return EvalSample(kind=SampleKind.GENERATION, **_generation_fields(arguments, responses, raw), **common)
 
 
-def samples_from_lm_eval(task: str, raw: Mapping[str, object]) -> list[EvalSample]:
+def samples_from_lm_eval(task: str, raw: Mapping[str, object], primary_metric: MetricMetadata | None = None) -> list[EvalSample]:
     """Normalize one Evalchemy record into all of its extraction-filter samples."""
     variants = raw.get("filter_variants")
     if not isinstance(variants, list) or not variants:
-        return [sample_from_lm_eval(task, raw)]
+        return [sample_from_lm_eval(task, raw, primary_metric)]
 
     samples = []
     for variant in variants:
@@ -256,6 +264,7 @@ def samples_from_lm_eval(task: str, raw: Mapping[str, object]) -> list[EvalSampl
                     "filter": variant.get("filter"),
                     "filtered_resps": variant.get("filtered_resps", []),
                 },
+                primary_metric,
             )
         )
     return samples

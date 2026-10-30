@@ -44,6 +44,7 @@ from eval.serve_eval.local_api import RetryingLocalChatCompletions, RetryingLoca
 from eval.constants import AUTO_ANNOTATOR_MODEL
 from eval.contracts.benchmark_metadata import (
     canonicalize_results,
+    select_primary_metric,
     describe_benchmarks,
     infer_benchmark_metadata,
 )
@@ -76,8 +77,13 @@ def _attach_benchmark_metadata(results: dict[str, Any], args: argparse.Namespace
             continue
         count = results["task_outcomes"].get(task, {}).get("expected_count")
         metadata.append(infer_benchmark_metadata(task, metrics, n_attempted=count))
+    metadata = select_primary_metric(metadata, getattr(args, "primary_metric", None))
     results["benchmark_metadata"] = {description.task: description.to_dict() for description in metadata}
     results["canonical_results"] = canonicalize_results(results["results"], metadata)
+    if getattr(args, "primary_metric", None) is not None:
+        for description in metadata:
+            if description.primary_metric not in results["canonical_results"][description.task]:
+                raise ValueError(f"{description.task}: selected primary metric has no result")
 
 
 def resolve_task_routes(
@@ -122,6 +128,7 @@ def setup_custom_parser():
     Create a custom argument parser that extends lm-eval-harness parser.
     """
     parser = setup_parser()
+    parser.add_argument("--primary-metric", type=str, help="Canonical metric to report for each requested task")
     parser.add_argument(
         "--dataset_cache",
         type=str,
@@ -335,6 +342,7 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         pretrain_task_manager,
         limit=getattr(args, "limit", None),
     )
+    benchmark_metadata = select_primary_metric(benchmark_metadata, args.primary_metric)
     args.resolved_benchmark_metadata = benchmark_metadata
 
     utils.eval_logger.info(f"Selected Tasks: {[task for task in task_list]}")
@@ -373,7 +381,11 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
     eval_logger.setLevel(getattr(logging, f"{args.verbosity}"))
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    with FineStoreOutput(args.finestore_output_path, args.finestore_output_prefix, task_list) as output_sink:
+    primary_metrics = {
+        description.task: next(metric for metric in description.metrics if metric.name == description.primary_metric)
+        for description in benchmark_metadata
+    } if args.primary_metric is not None else {}
+    with FineStoreOutput(args.finestore_output_path, args.finestore_output_prefix, task_list, primary_metrics=primary_metrics) as output_sink:
         results = evaluate(
             lm=lm,
             task_manager=task_manager,

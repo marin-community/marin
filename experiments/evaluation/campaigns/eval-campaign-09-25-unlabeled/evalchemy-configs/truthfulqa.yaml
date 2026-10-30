@@ -1,5 +1,6 @@
 tasks: [truthfulqa_mc2]
 task_options:
   truthfulqa_mc2:
+    primary_metric: accuracy
     num_fewshot: 0
     task_alias: truthfulqa_mc2_0shot

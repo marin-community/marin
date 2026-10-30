@@ -15,6 +15,7 @@ from finestore.shard_writer import ShardWriter
 from finestore.store import DataStore
 from sympy import Integer
 
+from eval.contracts.benchmark_metadata import MetricKind, MetricMetadata
 from eval.contracts.finestore_output import FineStoreOutput, completed_finestore_output, read_finestore_output
 from eval.contracts.finestore_resume import FineStoreResumeManager, ResumeRefused
 from eval.contracts.lm_eval_normalization import sample_from_lm_eval
@@ -523,7 +524,7 @@ def test_sample_normalization_failure_does_not_commit_success(tmp_path: Path, mo
     root = str(tmp_path / "archive")
     result = {"results": {"gsm8k": {"exact_match": 1.0}}}
 
-    def fail_normalization(task_name, record):
+    def fail_normalization(task_name, record, primary_metric=None):
         raise ValueError("invalid sample")
 
     monkeypatch.setattr("eval.contracts.finestore_output.samples_from_lm_eval", fail_normalization)
@@ -536,6 +537,7 @@ def test_sample_normalization_failure_does_not_commit_success(tmp_path: Path, mo
     ("changed_field", "changed_value", "message"),
     [
         ("model_args", "model=other", "fingerprint changed"),
+        ("primary_metric", "normalized_accuracy", "fingerprint changed"),
         ("gen_kwargs", "temperature=0.5", "fingerprint changed"),
         ("gen_kwargs", "top_k=50", "fingerprint changed"),
         ("resume_mode", "force-fresh", "already exists"),
@@ -723,3 +725,57 @@ def test_finestore_mode_writes_no_local_result_files(tmp_path: Path):
     assert loaded.model_name == "test-model"
     assert loaded.model_source == "local-completions"
     assert ReadView(str(archive_root)).read_blob("sources/evalchemy/gsm8k_0shot/native/samples_gsm8k_native.jsonl") is None
+
+
+@pytest.mark.parametrize("task,metric,raw,score,passed", [
+    ("piqa", MetricMetadata("normalized_accuracy", "acc_norm", MetricKind.BINARY, True),
+     {"acc": 0.0, "acc_norm": 1.0}, 1.0, True),
+    ("IFBench", MetricMetadata("strict_prompt_accuracy", "strict_prompt_accuracy", MetricKind.BINARY, True),
+     {"strict_prompt_accuracy": 0.0, "loose_prompt_accuracy": 1.0}, 0.0, False),
+    ("truthfulqa_mc2", MetricMetadata("accuracy", "acc", MetricKind.CONTINUOUS, True),
+     {"acc": 1.0}, 1.0, None),
+])
+def test_selected_primary_metric_controls_persisted_grade(tmp_path, task, metric, raw, score, passed):
+    root = str(tmp_path / "archive")
+    with FineStoreOutput(root, task, (task,), primary_metrics={task: metric}) as output:
+        output.write_sample(task, {
+            "doc_id": 0, "doc": {}, "target": "answer", "arguments": [["question", {}]],
+            "resps": [["answer"]], "filtered_resps": ["answer"], "filter": "none", **raw,
+        })
+        output.finish_task()
+        output.finish({"results": {task: raw}})
+    row = ReadView(root).scan(ARCHIVE_SAMPLES_TABLE).to_pylist(maps_as_pydicts="strict")[0]
+    sample = sample_from_archive_row(row)
+    assert sample.metrics == raw
+    assert sample.grading.metric == metric.source_name
+    assert sample.grading.score == score
+    assert sample.grading.passed is passed
+
+
+def test_selected_primary_metric_missing_from_sample_does_not_publish_result(tmp_path):
+    root = str(tmp_path / "archive")
+    metric = MetricMetadata("normalized_accuracy", "acc_norm", MetricKind.BINARY, True)
+    with pytest.raises(ValueError, match="selected sample metric"):
+        with FineStoreOutput(root, "piqa", ("piqa",), primary_metrics={"piqa": metric}) as output:
+            output.write_sample("piqa", {"doc_id": 0, "doc": {}, "acc": 1.0})
+    assert not completed_finestore_output(root, "piqa")
+
+
+@pytest.mark.parametrize("sample_score", [0.0, 1.0])
+def test_selected_repeated_accuracy_persists_underlying_sample_metric(tmp_path, sample_score):
+    root = str(tmp_path / "archive")
+    metric = MetricMetadata("accuracy", "accuracy_avg", MetricKind.BINARY, True)
+    with FineStoreOutput(root, "OlympiadBench", ("OlympiadBench",), primary_metrics={"OlympiadBench": metric}) as output:
+        output.write_sample("OlympiadBench", {
+            "doc_id": 0, "doc": {}, "target": "42", "resps": [["42"]],
+            "accuracy": sample_score,
+        })
+        output.finish_task()
+        output.finish({"results": {"OlympiadBench": {"accuracy_avg": sample_score}}})
+    row = ReadView(root).scan(ARCHIVE_SAMPLES_TABLE).to_pylist(maps_as_pydicts="strict")[0]
+    sample = sample_from_archive_row(row)
+    assert sample.metrics == {"accuracy": sample_score}
+    assert sample.grading.metric == "accuracy"
+    assert sample.grading.score == sample_score
+    assert sample.correct is (sample_score == 1.0)
+    assert completed_finestore_output(root, "OlympiadBench")

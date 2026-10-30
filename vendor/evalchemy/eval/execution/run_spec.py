@@ -31,6 +31,7 @@ class RunSpec:
     judge_model: str | None = None
     judge_protocol: JudgeProtocol = JudgeProtocol.DEFAULT
     model_name: str | None = None
+    primary_metric: str | None = None
 
     @classmethod
     def from_args(cls, args: Namespace) -> RunSpec:

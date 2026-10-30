@@ -41,7 +41,7 @@ from marin.evaluation.lm_eval_samples import (
     summarize_native_eval_samples,
     task_coverage,
 )
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, MetricKind, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import (
@@ -1506,3 +1506,14 @@ def test_native_coverage_counts_trials_and_keeps_missing_repetitions(tmp_path, b
     assert coverage.n_correct == observed_repetitions
     assert summary.scored_counts[benchmark] == coverage.n_scored
     assert summary.tasks[0].benchmark.n_attempted == 6
+
+
+def test_continuous_metric_endpoints_do_not_produce_correct_count():
+    coverage = task_coverage(
+        [(_mcq("0", correct=True), ""), (_mcq("1", correct=False), "")],
+        n_benchmark=2,
+        n_attempted=2,
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+    assert coverage.n_scored == 2
+    assert coverage.n_correct is None

@@ -47,7 +47,8 @@ produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judg
 Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
 The launch snapshot includes the finalization configuration and judge YAML.
 Harbor saves the resolved baseline cohort with the correction evidence in its job result.
-`record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
+`record.json` records the FinanceBench and OlympiadBench judge configuration in
+`eval.postprocessing`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
 absolute path to this YAML by default.
 

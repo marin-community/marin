@@ -20,6 +20,7 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 
 from eval.contracts.lm_eval_normalization import samples_from_lm_eval
+from eval.contracts.benchmark_metadata import MetricMetadata
 from eval.contracts.result_serialization import handle_non_serializable_extended
 
 RESULTS_TABLE = "evalchemy_results"
@@ -60,10 +61,11 @@ def completed_finestore_output(root: str, source_prefix: str) -> bool:
 class FineStoreOutput:
     """Stage scored samples during evaluation and publish the result last."""
 
-    def __init__(self, root: str, source_prefix: str, task_names: Sequence[str]) -> None:
+    def __init__(self, root: str, source_prefix: str, task_names: Sequence[str], *, primary_metrics: Mapping[str, MetricMetadata] | None = None) -> None:
         self.root = root
         self.source_prefix = source_prefix
         self.task_names = tuple(task_names)
+        self.primary_metrics = primary_metrics or {}
         self._store = DataStore.open(root, writer_id=f"evalchemy-{uuid.uuid4().hex}")
         self._sample_schema = samples_schema()
         self._sample_bytes = 0
@@ -90,7 +92,7 @@ class FineStoreOutput:
         )
         repeat = record.get("sample_repeat")
         trial_id = "" if repeat is None else str(repeat)
-        for sample in samples_from_lm_eval(normalized_task, dict(record)):
+        for sample in samples_from_lm_eval(normalized_task, dict(record), self.primary_metrics.get(task_name)):
             row = sample_to_archive_row(sample, trial_id=trial_id)
             row_bytes = pa.Table.from_pylist([row], schema=self._sample_schema).nbytes
             self._samples.append(row)

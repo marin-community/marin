@@ -199,6 +199,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
                     "generation": task.generation,
                     "unsafe_code": task.unsafe_code,
                     "completion_only": task.completion_only,
+                    "primary_metric": task.primary_metric,
                 }
                 for task in config.tasks
             ],

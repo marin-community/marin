@@ -74,6 +74,7 @@ class EvalchemyTaskOptions(BaseModel):
     generation: bool = False
     unsafe_code: bool = False
     completion_only: bool = False
+    primary_metric: str | None = None
 
 
 class EvalchemyConfig(BaseModel):

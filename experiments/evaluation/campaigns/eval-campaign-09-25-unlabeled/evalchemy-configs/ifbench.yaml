@@ -1,6 +1,7 @@
 tasks: [IFBench]
 task_options:
   IFBench:
+    primary_metric: strict_prompt_accuracy
     num_fewshot: 0
     task_alias: ifbench
     generation: true

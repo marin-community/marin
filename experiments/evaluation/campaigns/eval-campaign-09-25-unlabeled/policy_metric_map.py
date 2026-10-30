@@ -10,8 +10,8 @@ name a subgroup or a separate cohort statistic. Historical records retain their
 recorded benchmark metadata.
 CRUXEval's record metric combines directions while its published metric uses only
 output trials. Harbor reports SOTOPIA's cohort-corrected metric when the job completes.
-PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
-`acc`, while the publication policy uses the length-normalized `acc_norm`.
+PIQA's pinned task reports both `acc` and `acc_norm`; policy launches select
+the length-normalized `acc_norm` as the primary metric.
 """
 
 from collections.abc import Mapping
@@ -49,7 +49,7 @@ POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
         "mbppplus": _evalchemy("MBPPPlus", "pass@1", "pass_at_1"),
         "olympiadbench": _evalchemy("OlympiadBench", "accuracy_avg", "accuracy"),
         "gsm8k-0shot": _evalchemy("gsm8k", "exact_match", "accuracy"),
-        "piqa": _evalchemy("piqa", "acc", "accuracy", "acc_norm"),
+        "piqa": _evalchemy("piqa", "acc_norm", "normalized_accuracy"),
         "winogrande": _evalchemy("winogrande", "acc", "accuracy"),
         "boolq": _evalchemy("boolq", "acc", "accuracy"),
         "truthfulqa": _evalchemy("truthfulqa_mc2", "acc", "accuracy"),

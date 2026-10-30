@@ -40,3 +40,5 @@ metric_list:
     higher_is_better: true
 metadata:
   version: 3.1
+  metric_kind_overrides:
+    acc: continuous

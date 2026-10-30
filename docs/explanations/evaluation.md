@@ -63,8 +63,8 @@ configuration.
 
 A run is marked successful only after finalization succeeds. Its normalized samples and
 canonical metrics contain native judge accuracy or length-controlled SOTOPIA scores. Evalchemy
-preserves judge verdicts with each sample. SOTOPIA preserves raw rewards and cohort-fit evidence
-under `policy-10197/` in its FineStore archive. Failed SOTOPIA finalization is recorded as
+preserves judge verdicts with each sample. SOTOPIA preserves raw rewards in its FineStore
+archive and saves cohort-fit evidence under `metric_evidence` in Harbor's `result.json`. Failed SOTOPIA finalization is recorded as
 `artifact_failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
 baseline source changes invalidate only SOTOPIA.
 
@@ -232,6 +232,20 @@ inference session.
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.
 - Setup, examples, and environment requirements are documented in [Harbor Framework Integration](../harbor-integration.md).
+
+## Select the primary metric
+
+Set `primary_metric` under an Evalchemy task's `task_options` to choose a canonical
+metric, such as `normalized_accuracy` for PIQA. The launcher passes this name to
+Evalchemy. Evalchemy validates the name against the benchmark definition and saves
+the selected metric, whether it is binary or continuous, and matching sample grades.
+Raw metrics remain available. An unknown metric name fails validation. A selected
+metric absent from the evaluator results fails completion.
+
+The policy campaign selects normalized accuracy for PIQA, strict prompt accuracy
+for IFBench, and accuracy for TruthfulQA MC2. Evalchemy defines TruthfulQA MC2 as a
+continuous score, so it has no count of correct answers. The metric selection is
+part of the resume settings and the saved task configuration.
 
 ## Where to go next
 
