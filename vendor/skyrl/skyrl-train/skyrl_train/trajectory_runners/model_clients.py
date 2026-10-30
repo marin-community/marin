@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 from rolloutengine.models import RolloutContractError
+from taskcompendium.models import ENABLE_THINKING, ReasoningApplied, TurnEvidence
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
 
@@ -49,6 +50,7 @@ class ModelClientOutput(InferenceEngineOutput):
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    turn_evidence: NotRequired[list[TurnEvidence]]
 
 
 class ModelClient(Protocol):
@@ -112,8 +114,17 @@ class _ChatResult:
     stop_reason: str
     assistant_message: dict[str, Any]
     generation_token_budget: int | None
+    evidence: TurnEvidence
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+
+
+def template_reasoning_markers(chat_template: str | dict[str, str] | None) -> tuple[str, ...]:
+    """The reasoning delimiters that the pinned chat template itself uses."""
+    sources = chat_template.values() if isinstance(chat_template, dict) else (chat_template or "",)
+    return tuple(
+        marker for pair in REASONING_DELIMITERS for marker in pair if any(marker in source for source in sources)
+    )
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -138,6 +149,7 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         assistant_messages=[result.assistant_message for result in results],
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
+        turn_evidence=[result.evidence for result in results],
     )
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
@@ -239,6 +251,8 @@ class DirectModelClient:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
         text = output["responses"][0]
         message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        # The prompt is rendered without a generation prompt, so no reasoning setting is observable.
+        evidence = TurnEvidence(text, options, ReasoningApplied.UNVERIFIED, self._reasoning_markers())
         return _ChatResult(
             prompt_ids,
             output["response_ids"][0],
@@ -249,9 +263,28 @@ class DirectModelClient:
             output["stop_reasons"][0],
             message,
             token_budget,
+            evidence,
             (output.get("routed_experts") or [None])[0],
             (output.get("response_policy_steps") or [None])[0],
         )
+
+    def _reasoning_markers(self) -> tuple[str, ...]:
+        return template_reasoning_markers(self._client.tokenizer.chat_template)
+
+    async def _reasoning_applied(self, render_request: dict[str, Any]) -> ReasoningApplied:
+        """The requested reasoning setting, if flipping it changes the rendered prompt, else ``UNVERIFIED``."""
+        kwargs = render_request["json"].get("chat_template_kwargs") or {}
+        if ENABLE_THINKING not in kwargs:
+            return ReasoningApplied.UNVERIFIED
+        requested = bool(kwargs[ENABLE_THINKING])
+        flipped = deepcopy(render_request)
+        flipped["json"]["chat_template_kwargs"] = {**kwargs, ENABLE_THINKING: not requested}
+        rendered, alternative = await asyncio.gather(
+            self._client.tokenize(render_request), self._client.tokenize(flipped)
+        )
+        if rendered.get("tokens") == alternative.get("tokens"):
+            return ReasoningApplied.UNVERIFIED
+        return ReasoningApplied.ON if requested else ReasoningApplied.OFF
 
     @staticmethod
     def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
@@ -303,6 +336,7 @@ class DirectModelClient:
                 "headers": {},
             }
             with rollout_phase("tokenize"):
+                reasoning_applied = await self._reasoning_applied(render_request)
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
             requested_tokens = (
                 [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
@@ -402,6 +436,7 @@ class DirectModelClient:
                 stop_reason,
                 message,
                 token_budget,
+                TurnEvidence(decoded, chat_options, reasoning_applied, self._reasoning_markers()),
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
             )

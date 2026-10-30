@@ -43,6 +43,9 @@ flowchart LR
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
+| `turn_budget` | Optional model turn limit that replaces the runtime's. Omitted, the runtime's limit applies. |
+| `reasoning` | `on` or `off` sets the chat template's `enable_thinking`; the default, `model_default`, sends nothing. |
+| `protocol_check` | Optional structural check graded beside the answer. See [Protocol checks](#protocol-checks). |
 | `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
@@ -65,6 +68,29 @@ Conversation events preserve their declared roles. A runtime harness determines 
 An **answer** is the task’s semantic result, identified by `answer_type`. A **submission** is the typed value the task's answer format extracts from a completed attempt for grading. Different answer formats can yield the same submission and carry the same answer.
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a `numeric` grader that expects `12`. The `PlainText`, `JsonAnswer`, and `AnswerCall` formats carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same grader, which accepts both `12` and `12.0`. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its `final_tools` field describes the source functions. The grader and expected answer are never added to the model-visible input. Importers must make source output instructions agree with the task's answer format, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with `JsonAnswer` or `AnswerCall`; `answer_type=text` alone cannot detect that conflict in prose.
+
+## Protocol checks
+
+A `protocol_check` asks whether an attempt followed an agent protocol, separately from whether its
+answer is right. `grade_task` and RolloutEngine add the result to
+`GradeResult.diagnostics["protocol"]` without changing the reward. The result reports
+`protocol_compliance`, `submission_completeness`, and `answer_correctness` separately, plus a
+`label` naming what happened. A result the check does not assess is omitted. When the evidence
+cannot decide the check, the result carries `not_evaluable` with the reason instead.
+
+| Check | Requires | Labels |
+| --- | --- | --- |
+| `required_file` | A `file` answer and `output_paths` | `submitted`, `missing_file`, `empty_file` |
+| `tool_execution` | `tool` declared in `interaction_tools` | `executed`, `command_failed`, `no_invocation`, `markup_in_text`, `invalid_invocation`, `not_executed`, `executor_timeout`, `executor_failure` |
+| `thinking_disabled` | `reasoning=off` | `respected`, `reasoning_emitted` |
+| `url_loading` | `tool` declared in `interaction_tools`, and the `url` to load | `retrieved`, `http_error`, `network_error`, `not_attempted` |
+
+The required-file check reports only submission completeness, because writing the file is the
+protocol under test. A URL attempt that fails with an HTTP or network error still complies; the
+label records the failure. The thinking check reads `GradingAttempt.turns`: each turn records the
+raw decoded response, the request settings sent, whether the server applied the reasoning setting,
+and the template's reasoning delimiters. If any turn cannot show that reasoning was off, the check
+is not evaluable. `taskcompendium.examples.protocol_probes` builds one minimal task per check.
 
 ## What can a task represent?
 
@@ -396,3 +422,5 @@ uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
 preserving the normal answer presentation. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.
+The optional `turn_budget`, `reasoning`, and `protocol_check` fields are omitted from the
+serialized spec when unset, so tasks that do not use them keep their bytes and digests.

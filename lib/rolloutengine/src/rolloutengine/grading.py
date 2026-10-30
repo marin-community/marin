@@ -7,6 +7,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
@@ -17,10 +18,12 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     ScriptGrader,
+    TurnEvidence,
     VerifyitGrader,
     grades_with_judge,
     verifyit_spec,
 )
+from taskcompendium.protocol import with_protocol_assessment
 from taskcompendium.runtime.grading import grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import JudgeSpec
@@ -55,6 +58,7 @@ async def _grade_rollout(
     spec: TaskRolloutSpec,
     messages: tuple[dict[str, Any], ...],
     outputs: dict[str, bytes],
+    turns: tuple[TurnEvidence, ...],
     machine: Machine | None,
     factories: Mapping[str, MachineFactory],
     cleanup: _Cleanup,
@@ -62,21 +66,35 @@ async def _grade_rollout(
     *,
     stop_reason: str,
 ) -> GradeResult:
-    """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
+    """Grade the attempt, then add the task's protocol assessment when it declares a protocol check.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended, and
+    ``turns`` the serving evidence of each model turn.
     """
     task = spec.task
+    if isinstance(task.grader, NoGrader):
+        return GradeResult(Outcome.UNAVAILABLE, None, task.grader.reason)
+    attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason, turns=turns)
+    grade = await _answer_grade(spec, attempt, machine, factories, cleanup, resources)
+    return with_protocol_assessment(task, attempt, grade)
+
+
+async def _answer_grade(
+    spec: TaskRolloutSpec,
+    attempt: GradingAttempt,
+    machine: Machine | None,
+    factories: Mapping[str, MachineFactory],
+    cleanup: _Cleanup,
+    resources: AsyncExitStack,
+) -> GradeResult:
+    """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns."""
+    task = spec.task
     grader = task.grader
-    if isinstance(grader, NoGrader):
-        return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    conversation = chat_conversation(list(messages))
     if grades_with_judge(grader):
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
-    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
+        # In-process verifiers grade the conversation answer alone.
+        return await asyncio.to_thread(grade_answer, task, replace(attempt, files={}))
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = spec.verifier_machine
     assert selection is not None
