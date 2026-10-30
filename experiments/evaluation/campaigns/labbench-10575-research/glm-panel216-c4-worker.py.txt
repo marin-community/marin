@@ -1,0 +1,130 @@
+import hashlib
+import http.client
+import json
+import os
+import time
+import urllib.request
+import urllib.error
+from io import BytesIO
+from pathlib import Path
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pyarrow.parquet as pq
+from eval.sources.labbench import prepare_question, REVISION, DATASET, COMPONENTS
+from eval.completion_response import CompletionText, CompletionContentPolicy, completion_response_from_chat_choice
+from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
+from eval.graders.math_specs import letter_choice
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT='s3://marin-us-east-08a/marin/eval-validation/labbench-10575/glm-panel216-c4-20261030'
+COMMIT='6ae3623e76259a768314a440a4e9e7a43e87447c'
+p=Path(os.environ['IRIS_OUTPUT_DIR'])
+def save(name,value,local=False):
+ data=value if isinstance(value,bytes) else json.dumps(value,indent=2).encode()
+ fs,path=filesystem_for(ROOT+'/'+name)
+ if fs.exists(path): raise RuntimeError('Refusing overwrite: '+name)
+ fs.pipe_file(path,data)
+ assert fs.cat_file(path)==data
+ if local:(p/name).write_bytes(data)
+
+rows=[]
+for task,component in COMPONENTS.items():
+ with urllib.request.urlopen(f'https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}/{component.subset}/train-00000-of-00001.parquet',timeout=120) as result:
+  data=result.read()
+ dataset=pq.read_table(BytesIO(data)).to_pylist()
+ assert len(dataset)==component.count and len({r['id'] for r in dataset})==component.count
+ save(f'dataset-{component.subset}.json',{'revision':REVISION,'sha256':hashlib.sha256(data).hexdigest(),'count':len(dataset),'subtasks':dict(Counter(r['subtask'] for r in dataset))},True)
+ for r in dataset:
+  q=prepare_question(r,component.subset,42)
+  messages=[{'role':'user','content':q['prompt']}]
+  rows.append({'task':task,'subtask':r['subtask'],'doc_id':q['id'],'target':q['answer'],'messages':messages,'prompt_sha256':hashlib.sha256(json.dumps(messages,sort_keys=True).encode()).hexdigest()})
+assert len(rows)==741
+panel_root='s3://marin-us-east-08a/marin/eval-validation/labbench-10575/seq75-20261030'
+manifest_fs,manifest_path=filesystem_for(panel_root+'/manifest.json')
+manifest_bytes=manifest_fs.cat_file(manifest_path)
+assert hashlib.sha256(manifest_bytes).hexdigest()=='ac9d45e65cac3a2485d448b11b7ecba3da1ce02f11c5b1db18147aace1fd5c9b'
+manifest=json.loads(manifest_bytes)
+assert manifest['revision']==REVISION
+inputs_fs,inputs_path=filesystem_for(panel_root+'/inputs.json')
+inputs_bytes=inputs_fs.cat_file(inputs_path)
+assert hashlib.sha256(inputs_bytes).hexdigest()==manifest['selected_inputs_sha256']
+frozen=json.loads(inputs_bytes)
+by_id={row['doc_id']:row for row in rows}
+rows=[by_id[item['doc_id']] for item in manifest['items']]
+assert len(rows)==216 and len({row['doc_id'] for row in rows})==216
+assert [{key:row[key] for key in ('task','subtask','doc_id','target')} for row in rows]==manifest['items']
+assert all(row==saved for row,saved in zip(rows,frozen,strict=True)), 'Frozen prompts or targets changed'
+assert Counter(row['task'] for row in rows)=={'LABBenchProtocolQA':108,'LABBenchSeqQA':75,'LABBenchCloning':33}
+assert set(Counter(row['subtask'] for row in rows if row['task']=='LABBenchSeqQA').values())=={5}
+save('selection-manifest.json',manifest,True)
+save('inputs.json',rows,True)
+save('protocol.json',{'model':'glm-5.3','chat_template_kwargs':{'reasoning_effort':'medium'},'max_tokens':16384,'thinking_token_budget':8192,'seed':42,'temperature':0,'top_p':1,'concurrency':4,'request_timeout_seconds':1200,'automatic_retries':0,'tools':False,'dataset':DATASET,'revision':REVISION,'scorer_commit':COMMIT,'selection':'frozen seq75-20261030 manifest: all ProtocolQA and CloningScenarios; five per SeqQA subtask, seed 42 SHA-256 ranking','execution':'direct service requests using Evalchemy prompts and grading; diagnostic, not native EvalDash validation'},True)
+print('MANIFEST_VERIFIED',len(rows),dict(Counter(r['task'] for r in rows)),flush=True)
+
+def evaluate(i,row):
+ payload={'model':'glm-5.3','messages':row['messages'],'chat_template_kwargs':{'reasoning_effort':'medium'},'max_tokens':16384,'thinking_token_budget':8192,'temperature':0,'top_p':1,'seed':42}
+ save(f'request-{i}.json',payload)
+ request=urllib.request.Request(os.environ['LABBENCH_GLM_BASE']+'/chat/completions',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
+ begin=time.monotonic()
+ http_status=None
+ try:
+  try:
+   response=urllib.request.urlopen(request,timeout=1200)
+  except urllib.error.HTTPError as exc:
+   response=exc
+  with response:
+   http_status=response.status
+   headers={k:v for k,v in response.headers.items() if k.lower() in {'content-type','content-length','content-encoding','transfer-encoding','date','server','cf-ray','x-request-id','request-id','x-openrouter-request-id','x-generation-id'}}
+   save(f'http-{i}.json',{'status':http_status,'headers':headers})
+   try:
+    body=response.read()
+   except http.client.IncompleteRead as exc:
+    save(f'body-{i}.bin',exc.partial)
+    raise
+   save(f'body-{i}.bin',body)
+   if isinstance(response,urllib.error.HTTPError):raise response
+  raw=json.loads(body)
+ except (urllib.error.URLError,TimeoutError,http.client.HTTPException,json.JSONDecodeError,UnicodeDecodeError) as exc:
+  failure={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'request_failed','exception':type(exc).__name__,'http_status':http_status,'elapsed_seconds':time.monotonic()-begin}
+  if isinstance(exc,json.JSONDecodeError):
+   failure.update(json_error=exc.msg,error_position=exc.pos,error_line=exc.lineno,error_column=exc.colno)
+  if isinstance(exc,http.client.IncompleteRead):
+   failure.update(partial_body=True,captured_bytes=len(exc.partial),remaining_expected_bytes=exc.expected)
+  save(f'failure-{i}.json',failure)
+  return failure
+ elapsed=time.monotonic()-begin
+ save(f'response-{i}.json',{'input':row,'response':raw,'elapsed_seconds':elapsed,'request_sha256':hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()})
+ if raw.get('error') or not raw.get('choices'):
+  failure={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'provider_error','elapsed_seconds':elapsed}
+  save(f'failure-{i}.json',failure);return failure
+ completion=completion_response_from_chat_choice(raw,raw['choices'][0])
+ response=CompletionText(completion.normalized_content(),completion,CompletionContentPolicy.COMBINE)
+ spec=EvalSpec(task=row['task'],source=SourceRef(DATASET,'train',REVISION),source_id=row['doc_id'],ordinal=i,requests=(),grader=GraderSpec('letter_choice',reference={'extractor':'hle'}),target=row['target'])
+ grade=letter_choice(spec,[response])
+ scored={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'scored','prompt_sha256':row['prompt_sha256'],'response_sha256':hashlib.sha256(json.dumps(raw,sort_keys=True).encode()).hexdigest(),'target':row['target'],'extracted':grade.filtered_resps[0],'accuracy':grade.metrics['accuracy'],'classification':str(completion.classification),'finish_reason':completion.finish_reason,'elapsed_seconds':elapsed,'usage':raw.get('usage'),'model':raw.get('model'),'provider':raw.get('provider')}
+ save(f'grade-{i}.json',scored)
+ return scored
+
+prior_fs,prior_path=filesystem_for(ROOT+'/prior-attempt.json')
+prior_bytes=prior_fs.cat_file(prior_path)
+assert hashlib.sha256(prior_bytes).hexdigest()=='b4a3a4d2d61e1a029ed88fc909f47930a73584c48b2d33b43a0b5bc728f891ee'
+prior=json.loads(prior_bytes)
+assert all(rows[r['index']]['doc_id']==r['doc_id'] for r in prior['samples'])
+completed_indices={r['index'] for r in prior['samples']}
+assert prior['remaining_indices']==[i for i in range(len(rows)) if i not in completed_indices]
+started=time.monotonic();outcomes=list(prior['samples'])
+print('RESUME_VERIFIED',len(outcomes),'retained',len(prior['remaining_indices']),'remaining',flush=True)
+with ThreadPoolExecutor(max_workers=4) as pool:
+ futures=[pool.submit(evaluate,i,row) for i,row in enumerate(rows) if i not in completed_indices]
+ for future in as_completed(futures):
+  result=future.result();result['attempt_source']=ROOT;outcomes.append(result)
+  print(json.dumps({'completed':len(outcomes),'index':result['index'],'task':result['task'],'subtask':result['subtask'],'status':result['status'],'accuracy':result.get('accuracy'),'elapsed_seconds':result['elapsed_seconds']}),flush=True)
+scores=[r for r in outcomes if r['status']=='scored']
+def summarize(items,expected):
+ return {'expected':expected,'scored':len(items),'correct':sum(r['accuracy'] for r in items),'accuracy':sum(r['accuracy'] for r in items)/expected if len(items)==expected else None,'request_seconds_sum':sum(r['elapsed_seconds'] for r in items),'finish_reasons':dict(Counter(r['finish_reason'] for r in items))}
+components={t:summarize([r for r in scores if r['task']==t],sum(r['task']==t for r in rows)) for t in COMPONENTS}
+subtasks={s:summarize([r for r in scores if r['subtask']==s],n) for s,n in Counter(r['subtask'] for r in rows).items()}
+report={'status':'complete' if len(scores)==216 else 'partial','scorer_commit':COMMIT,'protocol':'marin-labbench-no-tools-v3','model':'glm-5.3','reasoning_effort':'medium','count':len(scores),'failure_count':216-len(scores),'components':components,'subtasks':subtasks,'reported_cost_usd':None,'continuation_seconds':time.monotonic()-started,'prior_attempt_root':prior['source_root'],'retained_count':len(prior['samples']),'interrupted_prior_requests':prior['interrupted'],'concurrency':4,'samples':sorted(outcomes,key=lambda r:r['index'])}
+save('graded.json',report,True)
+print('FINAL_REPORT_DURABLE',report['status'],len(scores),flush=True)
+if len(scores)!=216:raise SystemExit(2)

@@ -35,3 +35,15 @@ Source archives (Marin object-storage access required):
 - Frozen panel: `s3://marin-us-east-08a/marin/eval-validation/labbench-10575/seq75-20261030/manifest.json`, SHA-256 `ac9d45e65cac3a2485d448b11b7ecba3da1ce02f11c5b1db18147aace1fd5c9b`.
 
 Per-file SHA-256 values are in [SHA256SUMS](SHA256SUMS).
+
+## Four-worker continuation
+
+The [continuation worker](glm-panel216-c4-worker.py.txt) preserves 30 completed
+results from the single-worker attempt and evaluates only the 186 remaining
+questions with concurrency 4. Request index 30 was interrupted by the approved
+operator cancellation before its response was saved; the continuation retries
+that question with explicit attempt provenance. Output and reasoning budgets,
+prompts, targets and grading remain unchanged. The combined report retains the
+origin of each result and reports continuation runtime separately.
+
+Archive: `s3://marin-us-east-08a/marin/eval-validation/labbench-10575/glm-panel216-c4-20261030/launcher.tar.gz`, MD5 `4dff25fac324d94383ac7fdc2e0b37af`.
