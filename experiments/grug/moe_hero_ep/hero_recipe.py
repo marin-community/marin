@@ -53,8 +53,6 @@ HERO_QB_HIST_BINS = 10_000
 # stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
 HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
 HERO_WATCH_INTERVAL = 10
-# Global gradient-norm limit, about twice the hero's median norm, so only rare sequence-driven spikes are
-# clipped. The train step rescales the whole gradient before the optimizer.
 HERO_MAX_GRAD_NORM = 1.0
 HERO_MODEL_CONFIG = dataclasses.replace(
     HERO_MODEL,
