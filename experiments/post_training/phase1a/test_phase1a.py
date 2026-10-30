@@ -35,7 +35,9 @@ from experiments.post_training.phase1a.matrix import (
     LR_SWEEP,
     M4_POLICY_NODES,
     M4_ROLLOUT_ENGINES,
+    BATCH_NOISE_CONTROLS,
     PHASE1A_CONDITIONS,
+    SEEDS,
     POLICY_NODES,
     SAMPLES_PER_PROMPT,
     STEPS,
@@ -58,10 +60,17 @@ TEACHERS = {
 }
 
 
-def test_matrix_holds_thirty_cells_two_nulls_and_an_eight_run_sweep():
+def test_matrix_holds_twenty_two_cells_two_nulls_and_an_eight_run_sweep():
     runs = phase1a_runs(1e-6)
-    assert len(runs) == 32
+    assert len(runs) == 24
     assert sum(run.condition is Condition.PROCEDURE_NULL for run in runs) == 2
+    expected_cells = {
+        (method, condition, seed)
+        for method in Method
+        for condition in (Condition.X, Condition.R, Condition.XR)
+        for seed in SEEDS
+    } | {(method, condition, 0) for method in Method for condition in BATCH_NOISE_CONTROLS}
+    assert {(run.method, run.condition, run.seed) for run in runs if run.condition is not Condition.PROCEDURE_NULL} == expected_cells
     assert {run.learning_rate for run in runs} == {1e-6}
     sweep = phase0c_lr_sweep()
     assert len(sweep) == 8 and {run.condition for run in sweep} == {Condition.X}

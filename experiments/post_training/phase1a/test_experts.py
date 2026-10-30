@@ -30,7 +30,7 @@ def test_an_expert_trains_three_epochs_of_full_batches_and_saves_one_full_checkp
     recipe = expert_recipe(plan)
     trainer = recipe["trainer"]
     assert (trainer["epochs"], trainer["max_steps"]) == (3, 153)
-    assert trainer["checkpoint_steps"] == trainer["optimizer_checkpoint_steps"] == []
+    assert trainer["checkpoint_steps"] == trainer["optimizer_checkpoint_steps"] == trainer["hf_export_steps"] == [153]
     assert trainer["ckpt_interval"] == 153
     assert trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] == "dp_reshardable"
     assert trainer["policy"]["optimizer_config"]["lr"] == 1e-5
@@ -67,4 +67,4 @@ def test_expert_configs_compose_through_skyrls_launcher(tmp_path):
     assert x["steps"] == [240, 3, 1] and r["steps"] == [153, 3, 1]
     assert x["sequences_per_step"] == r["sequences_per_step"] == EXPERT_SEQUENCES_PER_STEP
     assert x["order"][0] is True and x["env_class"] == "fixed_completion"
-    assert x["checkpoints"] == [[], []] and r["response_caps"] == {"task_R": 16_384}
+    assert x["checkpoints"] == [[240], [240]] and r["response_caps"] == {"task_R": 16_384}
