@@ -123,3 +123,23 @@ def test_gsm8k_task_rejects_wrong_box_even_if_reasoning_contains_reference(predi
     extracted = extract_gsm8k_flexible_answer(response)
 
     assert process_results(doc, [extracted]) == {"exact_match": 0.0}
+
+
+@pytest.mark.parametrize(
+    ("prediction", "reference", "expected"),
+    [
+        (r"1/4", "1", 0.0),
+        (r"\frac{1}{4}", "1", 0.0),
+        (r"3 + 1", "3", 0.0),
+        (r"3 \text{onions} + 1 \text{potato}", "3", 0.0),
+        (r"11:30", "11", 0.0),
+        (r"\sqrt{4}", "4", 0.0),
+        (r"\sqrt{4}", "2", 1.0),
+        (r"answer = \sqrt{4}", "4", 0.0),
+    ],
+)
+def test_gsm8k_never_scores_an_operand_as_the_complete_box(prediction, reference, expected):
+    doc = {"question": "What is the answer?", "answer": f"reasoning\n#### {reference}"}
+    extracted = extract_gsm8k_flexible_answer(r"\boxed{" + prediction + "}")
+
+    assert process_results(doc, [extracted]) == {"exact_match": expected}

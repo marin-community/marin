@@ -11,11 +11,13 @@ _NUMBER = rf"\$?{_BARE_NUMBER}"
 _FINAL_ANSWER = re.compile(rf"(?i)\b(?:final\s+answer|answer)\s*(?:is|:|=)?\s*({_NUMBER})")
 _NUMERIC_CANDIDATE = re.compile(_NUMBER)
 _ANNOTATED_SCALAR = re.compile(
-    rf"^\s*(?:\\?\$)?(?P<number>{_BARE_NUMBER})"
-    r"(?:\s|[A-Za-z/.:_-]|%|\\[ ,;!%]|(?:\\text|\\mathrm|\\operatorname)\s*\{[^{}]*\})*$"
+    rf"^\s*(?:\\?\$|€|£)?\s*(?P<number>{_BARE_NUMBER})"
+    r"(?P<unit>\s+[A-Za-z]+(?:\s+[A-Za-z]+)*|\s*%|/(?:day|week|month|year|hour|minute|second)s?)?"
+    r"(?:\s*\(\s*=\s*(?:\d+(?:\.\d+)?\s+[A-Za-z]+\s*)+\))?\s*\.?\s*$"
 )
-_LEADING_SCALAR = re.compile(rf"^\s*(?:\\?\$|€|£)?\s*(?P<number>{_BARE_NUMBER})")
-_NUMERIC_TOKEN = re.compile(_BARE_NUMBER)
+_PROSE_SCALAR = re.compile(
+    rf"^[A-Za-z][A-Za-z\s]*\s+(?P<number>{_BARE_NUMBER})\s+[A-Za-z][A-Za-z\s]*\.?$"
+)
 _CLOCK_ANSWER = re.compile(
     r"^\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s*(?:a\.?m\.?|p\.?m\.?))?\s*$",
     re.IGNORECASE,
@@ -40,24 +42,23 @@ def extract_gsm8k_flexible_answer(response: str) -> str:
 
 def _gsm8k_equivalence_candidates(prediction: str, question: str) -> list[str]:
     candidates = [prediction]
-    annotated = _ANNOTATED_SCALAR.fullmatch(prediction)
-    if annotated is not None:
-        candidates.append(annotated.group("number"))
-
     scalar_text = prediction.replace("{,}", ",").replace(",\\!", ",").replace("\\,", "")
-    numeric_tokens = _NUMERIC_TOKEN.findall(scalar_text)
-    if len(numeric_tokens) == 1:
-        candidates.append(numeric_tokens[0])
-    leading = _LEADING_SCALAR.match(scalar_text)
-    if leading is not None:
-        candidates.append(leading.group("number"))
+    scalar_text = _TEXT_ANNOTATION.sub(r" \1 ", scalar_text)
+    scalar_text = scalar_text.replace(r"^\circ", " degrees ").replace(r"\%", "%")
+    scalar_text = re.sub(r"\\[ ,;!]", " ", scalar_text).strip()
+    scalar = _ANNOTATED_SCALAR.fullmatch(scalar_text)
+    if scalar is not None:
+        candidates.append(scalar.group("number"))
+    prose = _PROSE_SCALAR.fullmatch(scalar_text)
+    if prose is not None:
+        candidates.append(prose.group("number"))
 
     if "=" in scalar_text:
-        right_hand_tokens = _NUMERIC_TOKEN.findall(scalar_text.rsplit("=", 1)[-1])
-        if len(right_hand_tokens) == 1:
-            candidates.append(right_hand_tokens[0])
+        right_hand = _ANNOTATED_SCALAR.fullmatch(scalar_text.rsplit("=", 1)[-1].strip())
+        if right_hand is not None:
+            candidates.append(right_hand.group("number"))
 
-    arithmetic = _TEXT_BLOCK.sub("", scalar_text).replace("\\over", "/")
+    arithmetic = _TEXT_BLOCK.sub("", prediction).replace("\\over", "/")
     if not re.search(r"[A-Za-z]", arithmetic) and re.search(r"[+*/]", arithmetic):
         candidates.append(arithmetic)
 
