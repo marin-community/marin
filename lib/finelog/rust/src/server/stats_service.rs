@@ -10,20 +10,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use buffa::MessageField;
-use connectrpc::{ConnectError, RequestContext, ServiceResult};
+use connectrpc::{ConnectError, RequestContext, ServiceRequest, ServiceResult};
 use datafusion::error::DataFusionError;
 
 use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
-    AbortTableMigrationResponse, DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse,
-    ListNamespacesResponse, ListRelayStatusResponse, NamespaceInfo,
-    OwnedAbortTableMigrationRequestView, OwnedDropTableRequestView, OwnedGetTableSchemaRequestView,
-    OwnedGetTableStatusRequestView, OwnedListNamespacesRequestView,
-    OwnedListRelayStatusRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
-    OwnedReportRelayStatusRequestView, OwnedWriteRowsRequestView, QueryResponse,
-    RegisterTableResponse, ReportRelayNamespaceStatus, ReportRelayStatusRequest,
-    ReportRelayStatusResponse, StatsService, WriteRowsResponse,
+    AbortTableMigrationRequest, AbortTableMigrationResponse, DropTableRequest, DropTableResponse,
+    GetTableSchemaRequest, GetTableSchemaResponse, GetTableStatusRequest, GetTableStatusResponse,
+    ListNamespacesRequest, ListNamespacesResponse, ListRelayStatusRequest, ListRelayStatusResponse,
+    NamespaceInfo, QueryRequest, QueryResponse, RegisterTableRequest, RegisterTableResponse,
+    ReportRelayNamespaceStatus, ReportRelayStatusRequest, ReportRelayStatusResponse, StatsService,
+    WriteRowsRequest, WriteRowsResponse,
 };
 use crate::query::{
     make_ctx, query_namespaces, query_timeout, run_query_over, run_within_query_timeout,
@@ -164,7 +162,7 @@ impl StatsService for StatsServiceImpl {
     async fn register_table(
         &self,
         ctx: RequestContext,
-        request: OwnedRegisterTableRequestView,
+        request: ServiceRequest<'_, RegisterTableRequest>,
     ) -> ServiceResult<RegisterTableResponse> {
         let namespace = request
             .namespace
@@ -265,7 +263,7 @@ impl StatsService for StatsServiceImpl {
     async fn write_rows(
         &self,
         ctx: RequestContext,
-        request: OwnedWriteRowsRequestView,
+        request: ServiceRequest<'_, WriteRowsRequest>,
     ) -> ServiceResult<WriteRowsResponse> {
         let namespace = request
             .namespace
@@ -276,12 +274,13 @@ impl StatsService for StatsServiceImpl {
         let origin_cluster = write_origin_cluster(&ctx)?;
         let forwarded_telemetry =
             origin_cluster.is_some() && is_forwarded_telemetry_namespace(&namespace);
+        let request = request.to_owned_message();
 
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {
-            // The owned view keeps its backing bytes alive across the blocking hop.
-            let arrow_ipc = request.arrow_ipc.unwrap_or(&[]);
+            // The bytes field shares the decoded request body across this blocking hop.
+            let arrow_ipc = request.arrow_ipc.as_deref().unwrap_or(&[]);
             if forwarded_telemetry {
                 return store.write_forwarded_telemetry_rows(
                     &ns,
@@ -336,7 +335,7 @@ impl StatsService for StatsServiceImpl {
     async fn query(
         &self,
         ctx: RequestContext,
-        request: OwnedQueryRequestView,
+        request: ServiceRequest<'_, QueryRequest>,
     ) -> ServiceResult<QueryResponse> {
         let request_started = Instant::now();
         let sql = request.sql.unwrap_or("").to_string();
@@ -430,7 +429,7 @@ impl StatsService for StatsServiceImpl {
     async fn drop_table(
         &self,
         _ctx: RequestContext,
-        request: OwnedDropTableRequestView,
+        request: ServiceRequest<'_, DropTableRequest>,
     ) -> ServiceResult<DropTableResponse> {
         let namespace = request
             .namespace
@@ -448,7 +447,7 @@ impl StatsService for StatsServiceImpl {
     async fn list_namespaces(
         &self,
         _ctx: RequestContext,
-        _request: OwnedListNamespacesRequestView,
+        _request: ServiceRequest<'_, ListNamespacesRequest>,
     ) -> ServiceResult<ListNamespacesResponse> {
         let store = Arc::clone(&self.store);
         let entries = run_blocking(move || store.list_namespaces_with_stats()).await?;
@@ -478,7 +477,7 @@ impl StatsService for StatsServiceImpl {
     async fn get_table_schema(
         &self,
         _ctx: RequestContext,
-        request: OwnedGetTableSchemaRequestView,
+        request: ServiceRequest<'_, GetTableSchemaRequest>,
     ) -> ServiceResult<GetTableSchemaResponse> {
         let namespace = request
             .namespace
@@ -495,7 +494,7 @@ impl StatsService for StatsServiceImpl {
     async fn get_table_status(
         &self,
         _ctx: RequestContext,
-        request: OwnedGetTableStatusRequestView,
+        request: ServiceRequest<'_, GetTableStatusRequest>,
     ) -> ServiceResult<GetTableStatusResponse> {
         let namespace = request
             .namespace
@@ -527,7 +526,7 @@ impl StatsService for StatsServiceImpl {
     async fn abort_table_migration(
         &self,
         _ctx: RequestContext,
-        request: OwnedAbortTableMigrationRequestView,
+        request: ServiceRequest<'_, AbortTableMigrationRequest>,
     ) -> ServiceResult<AbortTableMigrationResponse> {
         let namespace = request
             .namespace
@@ -544,7 +543,7 @@ impl StatsService for StatsServiceImpl {
     async fn report_relay_status(
         &self,
         ctx: RequestContext,
-        request: OwnedReportRelayStatusRequestView,
+        request: ServiceRequest<'_, ReportRelayStatusRequest>,
     ) -> ServiceResult<ReportRelayStatusResponse> {
         let cluster = relay_cluster(&ctx)?;
         let namespaces = request
@@ -584,7 +583,7 @@ impl StatsService for StatsServiceImpl {
     async fn list_relay_status(
         &self,
         _ctx: RequestContext,
-        _request: OwnedListRelayStatusRequestView,
+        _request: ServiceRequest<'_, ListRelayStatusRequest>,
     ) -> ServiceResult<ListRelayStatusResponse> {
         connectrpc::Response::ok(ListRelayStatusResponse {
             senders: self.relay_status.list(),

@@ -89,7 +89,14 @@ fork-strategy = "fewest"
 # release).
 prerelease = "explicit"
 constraint-dependencies = [
+    "aiohttp>=3.14.4",
+    "fsspec>=2026.6.0",
+    "multidict>=6.9.1",
     "oauthlib>=4.0.0",
+    "opentelemetry-api>=1.45.1",
+    "soupsieve>=2.9.0",
+    "urllib3>=2.8.0",
+    "werkzeug>=3.1.9",
     # CVE-2026-111497: reject vulnerable transitive Brotli releases.
     "brotli>=1.2.1",
     # Reject affected transitive releases while retaining upstream requirements.
@@ -104,6 +111,8 @@ constraint-dependencies = [
     "opentelemetry-instrumentation>=0.41b0",
     "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.59b0",
+    "opentelemetry-exporter-http-transport>=0.66b0",
+    "opentelemetry-exporter-otlp-common>=0.66b0",
     "opentelemetry-util-http>=0.59b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
@@ -114,13 +123,13 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.27",
     "wheel>=0.46.2",
-    "datasets>=3.1.0,<5.0.0",
+    "datasets>=5.0.1,<6",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
     "authlib>=1.9.1",
     "cbor2>=6.0.1",
     "click>=8.3.1",
-    "gitpython>=3.2.0",
-    "gradio>=6.14.0",
+    "gitpython>=3.2.1",
+    "gradio>=6.16.0",
     "jupyter-server>=2.18.2",
     "jupyterlab>=4.6.4",
     "lxml>=6.1.0",
@@ -133,9 +142,9 @@ override-dependencies = [
     "python-dotenv>=1.1.1",
     "ray>=2.55.1",
     "rich>=14.1.0",
-    "setuptools>=82.0.1",
+    "setuptools>=84.1.0",
     "tiktoken>=0.12.0",
-    "tornado>=6.5.8",
+    "tornado>=6.6",
     "virtualenv>=21.14.13",
 ]
 conflicts = [

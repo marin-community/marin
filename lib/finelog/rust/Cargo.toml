@@ -53,10 +53,10 @@ name = "finelog"
 path = "src/lib.rs"
 
 [dependencies]
-connectrpc = { version = "0.6", features = ["axum", "gzip", "zstd"] }
+connectrpc = { version = "0.8.1", features = ["axum", "gzip", "zstd"] }
 zstd = "0.13"
-buffa = { version = "0.6", features = ["json"] }
-buffa-types = { version = "0.6", features = ["json"] }
+buffa = { version = "0.8.1", features = ["json"] }
+buffa-types = { version = "0.8.1", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # EdDSA (Ed25519) JWT verification for the authenticated ingress front. The
@@ -94,7 +94,7 @@ hyper-rustls = { version = "0.27", default-features = false, features = [
     "tls12",
     "ring",
 ] }
-rustls = { version = "0.23", default-features = false, features = [
+rustls = { version = "0.23.46", default-features = false, features = [
     "ring",
     "std",
     "tls12",
@@ -156,7 +156,8 @@ libc = "0.2"
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 
 [build-dependencies]
-connectrpc-build = "0.6"
+buffa-codegen = "0.8.1"
+connectrpc-build = "0.8.0"
 # Vendors a pinned protoc so the build needs no system protoc. connectrpc-build
 # shells out to protoc to parse the .proto files, and our protos use
 # `edition = "2023"`, which requires protoc >= 27.
