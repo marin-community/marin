@@ -27,7 +27,7 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, 
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates, save_checkpoint
+from levanter.checkpoint import save_checkpoint
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -42,7 +42,6 @@ from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
 from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
-from experiments.grug.moe_hero_ep import checkpoints as hero_checkpoints
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
@@ -1732,71 +1731,3 @@ def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, m
     assert jax.tree.structure(stepped.opt_state) == jax.tree.structure(written.opt_state)
     assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
     assert int(stepped.step) == 2
-
-
-def test_a_resumed_run_writes_one_permanent_checkpoint_at_the_restored_step(tmp_path):
-    """A handoff from a temporary checkpoint leaves a permanent copy in the new run's own root."""
-    handoff_root = tmp_path / "old-run-temp"
-    written = dataclasses.replace(_tiny_state(jnp.arange(4.0), None), step=jnp.array(7, dtype=jnp.int32))
-    save_checkpoint(written, step=7, checkpoint_path=str(handoff_root / "step-7"), is_temporary=True)
-    checkpointer = CheckpointerConfig(
-        base_path=str(tmp_path / "new-run"), save_interval=None, keep=None, append_run_id_to_base_path=False
-    ).create("new-run")
-
-    def restore():
-        return restore_grug_state_from_checkpoint(
-            _tiny_state(jnp.zeros(4), None),
-            checkpoint_search_paths=[str(tmp_path / "new-run"), str(handoff_root / "step-7")],
-            load_checkpoint_setting=True,
-            mesh=None,
-            allow_partial=False,
-        )
-
-    restored = restore()
-    assert train.save_permanent_checkpoint_on_resume(checkpointer, restored)
-    checkpointer.wait_until_finished()
-
-    (candidate,) = discover_checkpoint_candidates(str(tmp_path / "new-run"))
-    assert candidate.step == 7
-    assert candidate.metadata["is_temporary"] is False
-    # A retry restores the new run's own copy and does not write it again.
-    retried = restore()
-    np.testing.assert_array_equal(np.asarray(retried.params), np.arange(4.0))
-    assert int(retried.step) == 7
-    assert not train.save_permanent_checkpoint_on_resume(checkpointer, retried)
-
-
-def test_a_fresh_run_does_not_write_a_resume_checkpoint(tmp_path):
-    checkpointer = CheckpointerConfig(
-        base_path=str(tmp_path / "run"), save_interval=None, keep=None, append_run_id_to_base_path=False
-    ).create("run")
-
-    assert not train.save_permanent_checkpoint_on_resume(checkpointer, _tiny_state(jnp.zeros(4), None))
-    assert discover_checkpoint_candidates(str(tmp_path / "run")) == []
-
-
-def test_hero_lineage_accepts_a_temporary_handoff_and_lists_the_childs_permanent_copy(tmp_path):
-    temporary_handoff = (
-        "s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/"
-        "hero-parent/2026.08.19.2/checkpoints/step-12"
-    )
-    assert hero_checkpoints._parent_run_and_step({"hero_handoff_checkpoint": temporary_handoff}, "hero-child") == (
-        "hero-parent",
-        12,
-    )
-
-    parent_root = tmp_path / "parent" / "checkpoints"
-    child_root = tmp_path / "child" / "checkpoints"
-    for root, step, temporary in [(parent_root, 6, False), (parent_root, 11, True), (child_root, 12, False)]:
-        save_checkpoint(
-            {"x": jnp.zeros(1)}, step=step, checkpoint_path=str(root / f"step-{step}"), is_temporary=temporary
-        )
-
-    paths = hero_checkpoints._checkpoint_paths(
-        [
-            hero_checkpoints._HeroCheckpointRun("hero-child", str(child_root), start_step=12, end_step=None),
-            hero_checkpoints._HeroCheckpointRun("hero-parent", str(parent_root), start_step=0, end_step=12),
-        ]
-    )
-
-    assert [Path(path).name for path in paths] == ["step-6", "step-12"]

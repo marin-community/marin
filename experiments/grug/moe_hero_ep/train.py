@@ -34,7 +34,6 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import Checkpointer, discover_checkpoint_candidates
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
@@ -331,11 +330,6 @@ class GrugTrainerConfig:
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
     save_checkpoints: bool = False
-    # After a restore, write a permanent checkpoint at the restored step into this run's own
-    # permanent root if that root holds no complete checkpoint yet. A handoff from another run's
-    # expiring temporary checkpoint then leaves a durable copy in the new run's lineage; retries,
-    # which find that copy, do not write it again. Requires save_checkpoints.
-    permanent_checkpoint_on_resume: bool = False
 
     # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
@@ -356,8 +350,6 @@ class GrugTrainerConfig:
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
-        if self.permanent_checkpoint_on_resume and not self.save_checkpoints:
-            raise ValueError("permanent_checkpoint_on_resume requires save_checkpoints")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -703,19 +695,6 @@ def log_device_memory(step_info) -> None:
         },
         step=step_info.step,
     )
-
-
-def save_permanent_checkpoint_on_resume(checkpointer: Checkpointer, state: "GrugTrainState") -> bool:
-    """Force a permanent checkpoint at the restored step when the run's permanent root is empty.
-
-    Returns whether a save was started. A fresh run at step 0 has nothing to preserve.
-    """
-    step = int(state.step)
-    if step == 0 or discover_checkpoint_candidates(checkpointer.base_path):
-        return False
-    logger.info("Writing permanent resume checkpoint at step %d to %s", step, checkpointer.base_path)
-    checkpointer.on_step(tree=state, step=step, force=True)
-    return True
 
 
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
@@ -1176,10 +1155,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
-        if config.trainer.permanent_checkpoint_on_resume:
-            if checkpointer is None:
-                raise ValueError("permanent_checkpoint_on_resume requires a checkpointer")
-            save_permanent_checkpoint_on_resume(checkpointer, state)
 
         train_dataset = None
         train_loader = None
