@@ -381,9 +381,10 @@ def validate_batch_sizes(cfg: DictConfig):
         f"normalized policy_train_batch_size_per_gpu (train_batch_size * optimization_samples_per_prompt // policy_dp_size) {policy_train_batch_size_per_gpu} should be divisible by policy_mini_batch_size_per_gpu (policy_mini_batch_size * optimization_samples_per_prompt // policy_dp_size) {policy_mini_batch_size_per_gpu}"
     )
 
-    # Validate training batch size is larger than the least common multiple of the DP sizes of policy (and ref if used).
+    # Validate training batch size covers the least common multiple of the DP sizes of policy (and ref if used).
     lcm_dp_size = policy_dp_size
 
+    ref_dp_size = None
     use_ref_model = reference_model_required(cfg.trainer.algorithm)
     if use_ref_model:
         ref_world_size = cfg.trainer.placement.ref_num_nodes * cfg.trainer.placement.ref_num_gpus_per_node
@@ -397,12 +398,17 @@ def validate_batch_sizes(cfg: DictConfig):
         ref_dp_size = ref_world_size // (pp * cp * tp)
         lcm_dp_size = math.lcm(lcm_dp_size, ref_dp_size)
 
-    assert cfg.trainer.train_batch_size >= lcm_dp_size, (
-        f"train_batch_size ({cfg.trainer.train_batch_size}) should be larger than or equal to the least common multiple of the data parallel sizes of the enabled models: "
-        f"policy_dp_size={policy_dp_size}, "
-        f"ref_dp_size={ref_dp_size if use_ref_model else 'None'}, "
-        f"lcm_dp_size={lcm_dp_size}"
-    )
+    if cfg.trainer.train_batch_size < lcm_dp_size:
+        # Standing policy (2026-10-27, phase 0c): when a pre-registered batch is
+        # smaller than the geometry's data parallel size, relax the constraint
+        # here rather than by changing the batch. Ranks past the batch size idle
+        # for the step; the divisibility checks above stay binding.
+        logger.warning(
+            f"train_batch_size ({cfg.trainer.train_batch_size}) is smaller than the least common multiple of the data parallel sizes of the enabled models: "
+            f"policy_dp_size={policy_dp_size}, "
+            f"ref_dp_size={ref_dp_size}, "
+            f"lcm_dp_size={lcm_dp_size}; ranks past the batch size idle for the step"
+        )
 
 
 def validate_megatron_cfg(cfg: DictConfig):
