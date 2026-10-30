@@ -82,8 +82,9 @@ execution host. This initializes online W&B, logs the resolved config and a
 logging-check metric, prints the run URL, and performs no optimizer steps.
 Authentication errors must be resolved before training. `--run` submits the
 selected plan through Marin's StepRunner; it is separate from the logging check.
-The recipe requests v4-8, 120 CPU cores and 128 GiB of host RAM in us-central2,
-where its existing caches live. Host RAM is a scheduling reservation; TPU HBM,
+The recipe requests v4-8 and 120 CPU cores in us-central2, where its existing
+caches live. Host RAM is 64 GiB for 447M and 128 GiB for 998M, fixed across
+variants within each model size. Host RAM is a scheduling reservation; TPU HBM,
 batch size, model precision and all training controls stay fixed across cells.
 No job time limit or preemption-retry override is configured. Default
 concurrency is one; inspect capacity and per-step memory/time before a sweep.
