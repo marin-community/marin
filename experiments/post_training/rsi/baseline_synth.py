@@ -120,10 +120,16 @@ async def direct(client: GlmClient, idea: CapabilityIdea, count: int, concurrenc
     return [pair for pair in await asyncio.gather(*(one(k) for k in range(count))) if pair is not None]
 
 
-async def generator(client: GlmClient, idea: CapabilityIdea, count: int) -> list[tuple[str, dict]]:
+REASONING_GYM_ENTRY = "answer and metadata, in the exact form of the examples' entries"
+"""How the generator's prompt describes an entry of a Reasoning Gym type."""
+
+
+async def generator(
+    client: GlmClient, idea: CapabilityIdea, count: int, entry_form: str = REASONING_GYM_ENTRY
+) -> list[tuple[str, dict]]:
     """The instances of the first of ``GENERATOR_ATTEMPTS`` GLM-written programs that prints any."""
     for attempt in range(GENERATOR_ATTEMPTS):
-        pairs = await _generate_once(client, idea, count)
+        pairs = await _generate_once(client, idea, count, entry_form)
         if pairs:
             return pairs
         logger.warning("Generator %d of %s printed no instances", attempt + 1, idea.capability_id)
@@ -136,11 +142,11 @@ def program_source(text: str) -> str:
     return fenced.group(1) if fenced else text
 
 
-async def _generate_once(client: GlmClient, idea: CapabilityIdea, count: int) -> list[tuple[str, dict]]:
+async def _generate_once(client: GlmClient, idea: CapabilityIdea, count: int, entry_form: str) -> list[tuple[str, dict]]:
     request = (
         "Write a Python program that generates new tasks of the capability below, of the same kind and form as the "
         "examples. Run as `python program.py N SEED`, it prints N lines, each a JSON object with the keys question "
-        "and entry (answer and metadata, in the exact form of the examples' entries). Its parameters must span the "
+        f"and entry ({entry_form}). Its parameters must span the "
         "range of the examples, including their hardest instances. Use only the standard library.\n\n" + brief(idea)
     )
     result = await client.complete_structured([{"role": "user", "content": request}], Program, POLICY)

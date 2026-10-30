@@ -75,11 +75,13 @@ def idea(evidence: list[str]) -> CapabilityIdea:
 
 def test_both_reasoning_gym_row_forms_give_their_type_and_entry():
     examples = examples_by_type(EVALUATION)
+    nemotron = {"question": "Spell 'cat' backward", "answer": "tac", "metadata": NEMOTRON_TERMS["metadata"]}
     assert examples == {
-        "word_sorting": {"generated-0": GENERATED_ENTRY, "generated-1": GENERATED_ENTRY},
-        "spell_backward": {
-            "nemotron-0": {"question": "Spell 'cat' backward", "answer": "tac", "metadata": NEMOTRON_TERMS["metadata"]}
+        "word_sorting": {
+            "generated-0": ("Sort: b, A", GENERATED_ENTRY),
+            "generated-1": ("Sort: b, A", GENERATED_ENTRY),
         },
+        "spell_backward": {"nemotron-0": ("Spell 'cat' backward", nemotron)},
     }
 
 
