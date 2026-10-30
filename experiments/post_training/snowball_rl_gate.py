@@ -34,7 +34,7 @@ from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_scoring as scoring
 from experiments.post_training.snowball_rl_scoring import InvalidComparison
 
-GATE_REVISION = "2026.10.30.1"
+GATE_REVISION = "2026.10.30.2"
 
 
 @dataclass(frozen=True)
@@ -562,8 +562,8 @@ def _compare(
                 change=_change(row),
                 tasks=tasks,
                 initializer=initializer,
-                control_min=min(control_values) if control_values else None,
-                control_max=max(control_values) if control_values else None,
+                control_min=min(control_values) if row.control is not None else None,
+                control_max=max(control_values) if row.control is not None else None,
             )
         )
     return guards, reported[: len(declared)], reported[len(declared) :]
