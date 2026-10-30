@@ -50,6 +50,11 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
+    # A singleton batch cannot be physically partitioned. Remove its unit-mesh
+    # labels before slicing: JAX drops them on [1, 1] slices but retains them on
+    # [1, S] slices, otherwise making adjacent-position concatenation ill-typed.
+    if x.shape[0] == 1:
+        return _replicate_metadata(x)
     spec = partition_spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
