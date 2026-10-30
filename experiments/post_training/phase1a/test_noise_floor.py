@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import pytest
 
 from experiments.post_training.phase1a.noise_floor import SeedMetrics, gate_inputs, seed_metrics
@@ -73,3 +75,44 @@ def test_vocabulary_flips_do_not_satisfy_routing_measurement():
     assert result["metrics"]["token_flip_P_X"]["mean"] == pytest.approx(0.2)
     assert "flip_P_X" not in result["metrics"]
     assert result["routing_flip_status"] == "not_measured"
+
+    routed_records = []
+    for record in records:
+        routing = {}
+        for family, count in (("P_X", 1000), ("P_R", 1000), ("P_chat", 1500), ("P_think", 300)):
+            total = {"pairs": 4 * count, "flips": 2 * record.seed}
+            routing[family] = {
+                "complete": True,
+                "sequences": count,
+                "tokens": 2 * count,
+                "layers": [2, 7],
+                "base_model": "frozen-B",
+                "probe_identity": family,
+                **total,
+                "by_layer": {str(layer): {"pairs": 2 * count, "flips": record.seed} for layer in (2, 7)},
+                "base_margin_quartiles": {"0": total},
+                "buckets": {"answer": total},
+                "position_buckets": {"0": total},
+            }
+        routed_records.append(
+            seed_metrics(
+                dict(
+                    method=record.method,
+                    step=record.step,
+                    seed=record.seed,
+                    learning_rate=5e-7,
+                    summaries=summaries,
+                    routing=routing,
+                )
+            )
+        )
+    result = gate_inputs(routed_records, forward_baseline=0.9, reverse_baseline=0.7)[0]
+    assert result["routing_flip_status"] == "measured"
+    assert result["metrics"]["routing_flip_P_X"]["sample_std"] == pytest.approx(0.0005)
+    assert result["metrics"]["routing_flip_P_X"]["range"] == pytest.approx(0.001)
+    assert result["metrics"]["token_flip_P_X"]["mean"] == pytest.approx(0.2)
+    changed = dict(routed_records[-1].routing)
+    changed["P_X"] = replace(changed["P_X"], probe_identity="other-frozen-sequences")
+    routed_records[-1] = replace(routed_records[-1], routing=changed)
+    with pytest.raises(ValueError, match="same B, frozen probes"):
+        gate_inputs(routed_records, forward_baseline=0.9, reverse_baseline=0.7)

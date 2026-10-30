@@ -4,6 +4,7 @@
 """Compare selected expert sets on identical frozen token sequences."""
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -91,8 +92,13 @@ def compare_routes(base_path: Path, candidate_path: Path) -> dict:
                 destination[str(tag)].add(flipped[tags == tag])
     return {
         "definition": "Selected expert set differs from B at the same input token and layer",
-        "base_model": base["model_path"],
-        "candidate_model": candidate["model_path"],
+        "base_model": base["model_id"],
+        "probe_identity": (
+            hashlib.sha256(
+                json.dumps(sorted((row["sample_id"], row["probe_hash"]) for row in base_rows.values())).encode()
+            ).hexdigest()
+        ),
+        "candidate_model": candidate["model_id"],
         "complete": base["complete"] and candidate["complete"],
         "sequences": len(base_rows),
         "tokens": tokens,

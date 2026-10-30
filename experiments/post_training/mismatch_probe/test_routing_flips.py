@@ -21,7 +21,7 @@ def test_routing_flip_report_counts_sets_at_aligned_token_layer_pairs(tmp_path):
         (folder / "manifest.json").write_text(
             json.dumps(
                 {
-                    "model_path": name,
+                    "model_id": name,
                     "complete": True,
                     "records": [
                         {

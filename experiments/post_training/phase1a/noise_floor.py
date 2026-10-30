@@ -8,7 +8,7 @@ import json
 import math
 import statistics
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 SEEDS = (0, 1, 2)
@@ -18,11 +18,20 @@ FORWARD_POSITIONS = 1_702_261
 
 
 @dataclass(frozen=True)
+class RoutingProbe:
+    base_model: str
+    probe_identity: str
+    tokens: int
+    layers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class SeedMetrics:
     method: str
     step: int
     seed: int
     metrics: dict[str, float]
+    routing: dict[str, RoutingProbe] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -71,11 +80,36 @@ def seed_metrics(record: dict) -> SeedMetrics:
             metrics[f"{metric_name}/bucket/{bucket}"] = float(result[field])
         for quartile, result in summary.get("reference_margin_quartiles", {}).items():
             metrics[f"{metric_name}/margin/{quartile}"] = float(result[field])
+    routing = {}
+    if "routing" in record:
+        reports = record["routing"]
+        if set(reports) != set(COUNTS):
+            raise ValueError("Routing evaluation must cover X, R, chat, and thinking")
+        for family, report in reports.items():
+            if not report["complete"] or report["sequences"] != COUNTS[family]:
+                raise ValueError(f"{family}: incomplete routing evaluation")
+            pairs = report["pairs"]
+            if pairs != report["tokens"] * len(report["layers"]) or pairs <= 0:
+                raise ValueError(f"{family}: routing denominator does not cover tokens and layers")
+            routing[family] = RoutingProbe(
+                report["base_model"], report["probe_identity"], report["tokens"], tuple(report["layers"])
+            )
+            name = f"routing_flip_{family}"
+            metrics[name] = report["flips"] / pairs
+            for category in ("by_layer", "base_margin_quartiles", "buckets", "position_buckets"):
+                breakdown = report[category]
+                if (
+                    sum(row["pairs"] for row in breakdown.values()) != pairs
+                    or sum(row["flips"] for row in breakdown.values()) != report["flips"]
+                ):
+                    raise ValueError(f"{family}: routing {category} does not partition token-layer pairs")
+                for bucket, result in breakdown.items():
+                    metrics[f"{name}/{category}/{bucket}"] = result["flips"] / result["pairs"]
     if not all(math.isfinite(value) for value in metrics.values()):
         raise ValueError("Noise estimates require finite metrics")
     if float(record["learning_rate"]) != 5e-7:
         raise ValueError("Noise-floor records must use the chosen common LR 5e-7")
-    return SeedMetrics(record["method"], int(record["step"]), int(record["seed"]), metrics)
+    return SeedMetrics(record["method"], int(record["step"]), int(record["seed"]), metrics, routing)
 
 
 def gate_inputs(records: list[SeedMetrics], forward_baseline: float, reverse_baseline: float) -> list[dict]:
@@ -90,6 +124,9 @@ def gate_inputs(records: list[SeedMetrics], forward_baseline: float, reverse_bas
         groups[(record.method, record.step)].append(record)
     if set(groups) != {(method, step) for method in ("m1", "m4") for step in STEPS}:
         raise ValueError("Expected both methods at every scored step")
+    reference_routing = records[0].routing
+    if any(record.routing != reference_routing for record in records):
+        raise ValueError("Routing gate requires the same B, frozen probes, token coverage, and layers for every seed")
     output = []
     for (method, step), group in sorted(groups.items()):
         group.sort(key=lambda row: row.seed)
@@ -137,7 +174,8 @@ def gate_inputs(records: list[SeedMetrics], forward_baseline: float, reverse_bas
                 progress=progress,
                 metrics=comparisons,
                 unavailable_metrics=unavailable,
-                routing_flip_status="not_measured",
+                routing_flip_status="measured" if reference_routing else "not_measured",
+                routing_reference={key: asdict(value) for key, value in reference_routing.items()},
                 token_flip_definition="Next-token argmax disagreement; not selected-expert-set disagreement",
             )
         )
