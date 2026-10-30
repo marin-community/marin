@@ -160,7 +160,7 @@ def read_episodes(cell: SotopiaCell) -> list[EpisodeScore]:
                 episodes.append(EpisodeScore(cell.model, row["doc_id"], 0.0, None))
             continue
         summary_path = summary_paths.get(row["trial_id"])
-        if summary_path is None or summary_path not in payloads:
+        if summary_path is None:
             raise ValueError(
                 f"missing SOTOPIA summary for {cell.model} / {row['trial_id']}"
             )
