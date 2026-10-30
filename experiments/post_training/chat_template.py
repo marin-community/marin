@@ -18,6 +18,9 @@ The contract the template owns:
 - Tool results use bare ``<tool_response>`` without a ``name=`` attribute, so the
   marker stays one token wherever the vocabulary has one.
 - A system turn renders only when a system message is present; none is injected.
+- Each assistant turn after its header, through its end-of-turn token, sits in a
+  ``{% generation %}`` block: the completions-only training mask (Levanter and
+  ``return_assistant_tokens_mask``). The block renders no text.
 
 Every structural delimiter in a token map must encode to exactly one token of its
 pinned tokenizer (:func:`validate_token_map`), so masking, stop conditions and the
@@ -41,6 +44,7 @@ _BOS = "__BOS__"
 _TEMPLATE_SKELETON = """{%- if '__BOS__' -%}{{ '__BOS__' }}{%- endif -%}{%- for message in messages -%}
 {%- if message.role == 'assistant' -%}
 {{- '__TURN_OPEN_PREFIX__assistant__TURN_OPEN_SUFFIX__\n' -}}
+{%- generation -%}
 {%- if message.reasoning_content -%}
 {{- '__THINK_OPEN__' ~ message.reasoning_content ~ '__THINK_CLOSE__' -}}
 {%- endif -%}
@@ -54,6 +58,7 @@ _TEMPLATE_SKELETON = """{%- if '__BOS__' -%}{{ '__BOS__' }}{%- endif -%}{%- for 
 {{- '}\\n</tool_call>' -}}
 {%- endfor -%}
 {{- '__TURN_CLOSE__' -}}
+{%- endgeneration -%}
 {%- elif message.role == 'tool' -%}
 {{- '__TURN_OPEN_PREFIX__tool__TURN_OPEN_SUFFIX__\n<tool_response>\\n' -}}
 {{- message.content if message.content else '' -}}
@@ -116,6 +121,17 @@ FAMILY_TOKEN_MAPS: dict[str, ChatTokens] = {
     "qwen3_moe": QWEN_TOKENS,
     "qwen3_5_moe": QWEN_TOKENS,
     "nemotron_h": NEMOTRON_TOKENS,
+}
+
+# Each family's pinned tokenizer, as (repo id, revision): the same tokenizers the
+# token maps are validated against, reused wherever a token-exact count is needed
+# (trace caps, mask lengths). The pins are the single canonical copy; Stage 0's
+# length filter reads them from here.
+FAMILY_TOKENIZER_REVISIONS: dict[str, tuple[str, str]] = {
+    "grug": ("open-athena/snowball-67b-a2b-base-262k-qk175", "11c9430da3075ef4596f92ee0af142d9d08215c1"),
+    "qwen3_moe": ("Qwen/Qwen3-30B-A3B-Base", "1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9"),
+    "qwen3_5_moe": ("Qwen/Qwen3.5-35B-A3B-Base", "0f0813072d2358973511097385626f21fcb6d422"),
+    "nemotron_h": ("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16", "e0ac9ee3dfd02be21b5479edfc2f671ed269d0a2"),
 }
 
 

@@ -20,6 +20,8 @@ Expected text that math-verify cannot parse raises ``InvalidTask``.
 import math
 import re
 import threading
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -52,26 +54,158 @@ def _timeout() -> int:
     return TIMEOUT if threading.current_thread() is threading.main_thread() else 0
 
 
+_DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+
+
+def _math_verify_parse(text: str, extraction_config: Sequence[Any] | None = None, **kwargs: Any) -> list:
+    """math-verify's ``parse``, retried without unit stripping when stripping cut the answer.
+
+    Unit normalization deletes a trailing spaced single letter as a unit (``m``,
+    ``d``, ``s``), so ``p < q < r < s`` normalizes to ``p < q < r <``. A parse whose
+    normalized text ends in an operator lost a term that way; parsing again with
+    unit stripping off restores it, while ``5 \\text{ m}`` still loses its unit.
+    """
+    from math_verify import parse  # noqa: PLC0415
+    from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
+
+    configs = list(extraction_config or [LatexExtractionConfig(), ExprExtractionConfig()])
+    parsed = parse(text, extraction_config=configs, **kwargs)
+    if not any(isinstance(item, str) and _DANGLING_OPERATOR.search(item) for item in parsed):
+        return parsed
+    unitless = [
+        (
+            replace(config, normalization_config=replace(config.normalization_config, units=False))
+            if isinstance(config, LatexExtractionConfig)
+            else config
+        )
+        for config in configs
+    ]
+    return parse(text, extraction_config=unitless, **kwargs)
+
+
 def _parse(text: str) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
-    from math_verify import parse  # noqa: PLC0415
 
     timeout = _timeout()
-    return parse(f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True) or parse(
-        text, parsing_timeout=timeout, raise_on_error=True
-    )
+    return _math_verify_parse(
+        f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True
+    ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
+
+
+def _as_list(value: Any) -> list:
+    return value if isinstance(value, list) else [value]
+
+
+def _is_relation_chain(value: Any) -> bool:
+    from sympy import And  # noqa: PLC0415
+    from sympy.core.relational import Relational  # noqa: PLC0415
+
+    return isinstance(value, And) and all(isinstance(arg, Relational) for arg in value.args)
+
+
+def _is_undefined(value: Any) -> bool:
+    from sympy import Basic, S  # noqa: PLC0415
+
+    return isinstance(value, Basic) and value.has(S.NaN, S.ComplexInfinity)
 
 
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
-    from math_verify import verify  # noqa: PLC0415
+    """Whether any expected parse equals any candidate parse, as math-verify's ``verify``.
 
-    return verify(
-        expected,
-        candidate,
-        allow_set_relation_comp=allow_set_relation_comp,
-        timeout_seconds=_timeout(),
-        raise_on_error=True,
+    Pairs math-verify raises on get their own comparison here (see
+    ``_verify_pair``); its deadline, a ``BaseException``, still reaches
+    ``grade_math_candidate`` as an infrastructure failure.
+    """
+    return any(
+        _verify_pair(gold, target, allow_set_relation_comp)
+        for gold in _as_list(expected)
+        for target in _as_list(candidate)
     )
+
+
+def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
+    from math_verify import verify  # noqa: PLC0415
+    from sympy import Eq, Ne  # noqa: PLC0415
+
+    if _is_relation_chain(gold) or _is_relation_chain(target):
+        # A chain a < b < c parses as a conjunction of relations, which SymPy
+        # deduplicates (m < -n < n < -m keeps two: n < -m is m < -n) and orders.
+        # math-verify zips two conjunctions in order with strict=True and raises
+        # when their lengths differ (huggingface/Math-Verify#93). Two conjunctions
+        # state the same constraints when each relation of one matches one of the other.
+        gold_relations = gold.args if _is_relation_chain(gold) else (gold,)
+        target_relations = target.args if _is_relation_chain(target) else (target,)
+        return all(
+            any(_verify_pair(g, t, allow_set_relation_comp) for t in target_relations) for g in gold_relations
+        ) and all(any(_verify_pair(g, t, allow_set_relation_comp) for g in gold_relations) for t in target_relations)
+    if isinstance(gold, Ne) or isinstance(target, Ne):
+        # math-verify's relation table lacks Unequality. a != b holds exactly where
+        # a = b fails, so two unequalities match when their equations do.
+        if not (isinstance(gold, Ne) and isinstance(target, Ne)):
+            return False
+        gold, target = Eq(gold.lhs, gold.rhs, evaluate=False), Eq(target.lhs, target.rhs, evaluate=False)
+    if _is_undefined(gold):
+        raise InvalidTask(f"the reference parses to an undefined value: {gold}")
+    if _is_undefined(target):
+        # math-verify refuses to compare nan or zoo; a reference that is defined
+        # cannot equal it.
+        return False
+    try:
+        return verify(
+            gold,
+            target,
+            allow_set_relation_comp=allow_set_relation_comp,
+            timeout_seconds=_timeout(),
+            raise_on_error=True,
+        )
+    except Exception as error:
+        # A comparison failure not handled above: neither a verdict on the answer nor
+        # a property of the task, so it surfaces instead of scoring silently.
+        raise GradingInfraError(f"math-verify could not compare: {type(error).__name__}: {error}") from error
+
+
+_CLOCK_SPACING = re.compile(r"\\[!,;:]|\\(?:text|mathrm)\{([^}]*)\}|\s+")
+_CLOCK_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?(am|pm|a\.m\.|p\.m\.)?", re.IGNORECASE)
+
+
+def _clock_time(text: str) -> tuple[int, int, int, str | None] | None:
+    """(hour, minute, second, meridiem) when ``text`` reads as a clock time, else ``None``."""
+    raw = strip_math_delimiters(text.strip())
+    compact = re.sub(r"\s+", "", _CLOCK_SPACING.sub(lambda match: match.group(1) or "", raw))
+    match = _CLOCK_TIME.fullmatch(compact)
+    if match is None:
+        return None
+    hour, minute, second = int(match[1]), int(match[2]), int(match[3] or 0)
+    meridiem = match[4].lower().replace(".", "") if match[4] else None
+    if hour > 24 or minute > 59 or second > 59 or (meridiem and not 1 <= hour <= 12):
+        return None
+    return hour, minute, second, meridiem
+
+
+def _reference_clock_time(text: str) -> tuple[int, int, int, str | None] | None:
+    """The reference's clock time when math-verify would misread it, else ``None``.
+
+    That is a meridiem, LaTeX colon spacing (``10\\!:\\!00``), or a ``:00`` minute,
+    which math-verify parses as division by zero. Any other ``a:b`` stays a ratio.
+    """
+    time = _clock_time(text)
+    if time is None or time[3] is not None or "\\" in text or time[1] == 0:
+        return time
+    return None
+
+
+def _clock_times_match(expected: tuple[int, int, int, str | None], candidate: tuple[int, int, int, str | None]) -> bool:
+    """A reference with a meridiem fixes the 24-hour time; one without accepts either reading of its hour."""
+
+    def on_24_hours(time: tuple[int, int, int, str | None]) -> tuple[int, int, int]:
+        hour, minute, second, meridiem = time
+        if meridiem is not None:
+            hour = hour % 12 + (12 if meridiem == "pm" else 0)
+        return hour, minute, second
+
+    if expected[3] is not None:
+        return on_24_hours(expected) == on_24_hours(candidate)
+    return expected[:3] in (candidate[:3], on_24_hours(candidate))
 
 
 def _is_expression(parsed: list) -> bool:
@@ -118,7 +252,6 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
     variable expressions as raw text; undefined expressions never become literal tokens.
     """
     from latex2sympy2_extended import NormalizationConfig  # noqa: PLC0415
-    from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import LatexExtractionConfig  # noqa: PLC0415
     from sympy import Expr, Float, Rational, nan, oo, simplify, srepr, zoo  # noqa: PLC0415
 
@@ -144,7 +277,7 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
         else:
             parsed = [
                 value
-                for value in parse(
+                for value in _math_verify_parse(
                     f"${member}$", extraction_config=[strict_latex], parsing_timeout=_timeout(), raise_on_error=True
                 )
                 if not isinstance(value, str)
@@ -170,6 +303,21 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
             raise ValueError("math member cannot be normalized exactly")
         tokens.append(srepr(canonical).encode("utf-8").hex())
     return tuple(tokens)
+
+
+def _candidate_parse(parse: Callable[[], list]) -> list:
+    """A candidate's parse, empty when SymPy cannot even build its literal.
+
+    A candidate such as a 70,000-digit integer makes ``sympify`` raise (Python's
+    integer string limit) instead of returning an expression; that candidate is
+    unparsable, which grades zero, not a grader failure.
+    """
+    from sympy import SympifyError  # noqa: PLC0415
+
+    try:
+        return parse()
+    except (SympifyError, SyntaxError):
+        return []
 
 
 def _parsed_members(text: str) -> list[list]:
@@ -229,7 +377,6 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
-    from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
     from math_verify.utils import timeout  # noqa: PLC0415
 
@@ -243,12 +390,12 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
         boxed = extract_boxed(candidate)
         candidate = f"\\boxed{{{boxed}}}" if boxed else ""
     gold_text = f"\\boxed{{{spec.expected}}}"
-    expected = parse(
+    expected = _math_verify_parse(
         gold_text, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
     )
     if not _is_expression(expected):
         raise InvalidTask("raw math profile could not parse the reference")
-    parsed = parse(
+    parsed = _math_verify_parse(
         candidate,
         extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
         parsing_timeout=_timeout(),
@@ -264,7 +411,7 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
             prediction_strings[0],
         )
     if not match and spec.allow_additive_constant:
-        latex_prediction = parse(
+        latex_prediction = _math_verify_parse(
             candidate, extraction_config=[LatexExtractionConfig()], parsing_timeout=_timeout(), raise_on_error=True
         )
         match = _additive_constant_match(expected, latex_prediction)
@@ -276,20 +423,29 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
 
 
 def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
+    expected_time = _reference_clock_time(spec.expected) if spec.math_type is MathType.SCALAR else None
+    if expected_time is not None:
+        # math-verify reads 10:00 as 10/0; clock times compare as times.
+        if spec.profile is MathProfile.RAW and BOXED in candidate:
+            candidate = extract_boxed(candidate) or ""
+        candidate_time = _clock_time(candidate)
+        match = candidate_time is not None and _clock_times_match(expected_time, candidate_time)
+        return scored(float(match), extracted=candidate, expected=spec.expected, comparison="clock_time")
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
-        from math_verify import parse, verify  # noqa: PLC0415
 
         if spec.math_type is not MathType.SCALAR:
             raise InvalidTask("boxed math profile requires scalar math_type")
-        expected = parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
-        parsed = parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        parsed = _candidate_parse(
+            lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
-        match = bool(verify(gold=expected, target=parsed, timeout_seconds=_timeout(), raise_on_error=True))
+        match = bool(_verify(expected, parsed))
         if not match and spec.allow_additive_constant:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -298,7 +454,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    parsed = _parsed_members(candidate) if is_list else [_parse(candidate)]
+    parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 

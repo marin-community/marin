@@ -13,7 +13,7 @@ import gzip
 import json
 import os
 
-import jinja2
+from transformers.utils.chat_template_utils import _compile_jinja_template
 import pytest
 
 from experiments.post_training.chat_template import (
@@ -67,8 +67,8 @@ class StubTokenizer:
 
 
 def _render(messages: list[dict], tokens: ChatTokens, **kwargs) -> str:
-    template = jinja2.Environment().from_string(shared_template(tokens))
-    return template.render(messages=messages, **kwargs)
+    # transformers' environment: the template's {% generation %} masking tag needs its extension.
+    return _compile_jinja_template(shared_template(tokens)).render(messages=messages, **kwargs)
 
 
 def test_every_token_map_validates_against_a_single_token_vocabulary():
