@@ -431,7 +431,7 @@ class MachineRuntimeSpec(BaseModel):
 
 
 class RolloutLimits(BaseModel):
-    """Token and time limits for one attempt; the task's ``turn_budget`` is its turn limit.
+    """Turn, token, and time limits for one attempt; a task's ``turn_budget`` replaces ``max_turns``.
 
     ``max_total_tokens`` stops model requests when the tokens spent, plus the known part of the next
     prompt, reach the threshold. The known part is the last request's prompt and response. The new
@@ -441,6 +441,7 @@ class RolloutLimits(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
+    max_turns: int = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)

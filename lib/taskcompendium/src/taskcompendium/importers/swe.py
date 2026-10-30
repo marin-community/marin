@@ -12,7 +12,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     ExitCodeReward,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -38,9 +37,7 @@ class SWEInstance(BaseModel):
     eval_script: str = Field(min_length=1)
 
 
-def swe_task(
-    instance: SWEInstance, *, source: Source, environment: EnvironmentRequirements, turn_budget: int
-) -> TaskSpec:
+def swe_task(instance: SWEInstance, *, source: Source, environment: EnvironmentRequirements) -> TaskSpec:
     """Grade the submitted Git patch in a fresh machine from the same image."""
     if environment.docker_image is None or environment.tool_providers:
         raise ValueError("SWE tasks require a prebuilt, digest-pinned shell image")
@@ -78,6 +75,4 @@ def swe_task(
         grader=grader,
         resources=ResourceGroups(verifier=(inline_resource("evaluate.sh", instance.eval_script.encode()),)),
         source=source,
-        turn_budget=turn_budget,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )

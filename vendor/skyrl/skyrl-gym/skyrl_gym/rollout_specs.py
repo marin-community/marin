@@ -31,13 +31,8 @@ def rollout_spec(
     task_machine: MachineRuntimeSpec | None = None,
     verifier_machine: MachineRuntimeSpec | None = None,
 ) -> TaskRolloutSpec:
-    """Separate harness selection from rollout limits in the published task spec.
-
-    The task's ``turn_budget`` is the turn limit, so a session cannot set one.
-    """
+    """Separate harness selection from rollout limits in the published task spec."""
     settings = dict(session)
-    if "max_turns" in settings:
-        raise ValueError("The task's turn budget is the turn limit; the session cannot set max_turns")
     harness = settings.pop("task_session")
     shell_tool = settings.pop("shell_tool", {})
     command_timeout = settings.pop("command_timeout", None)

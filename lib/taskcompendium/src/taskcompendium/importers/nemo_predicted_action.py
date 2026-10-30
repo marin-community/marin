@@ -22,7 +22,6 @@ from taskcompendium.models import (
     FinalAction,
     FunctionCall,
     FunctionDefinition,
-    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -193,6 +192,4 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> TaskSpec:
             )
         ).grader,
         source=source,
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )

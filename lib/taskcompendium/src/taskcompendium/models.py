@@ -50,7 +50,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.29"
+SCHEMA_VERSION = "0.28"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -979,9 +979,13 @@ class TaskSpec(BaseModel):
     answer_format: AnswerFormat
     grader: Grader
     source: Source
-    turn_budget: PositiveInt
-    reasoning: ReasoningMode
-    protocol_check: ProtocolCheck | None = None
+    # A default protocol field is left out of the serialized spec, so tasks without one keep their digests.
+    turn_budget: PositiveInt | None = Field(default=None, exclude_if=lambda value: value is None)
+    """The model turns an attempt may take, replacing the runtime's turn limit; ``None`` keeps that limit."""
+    reasoning: ReasoningMode = Field(
+        default=ReasoningMode.MODEL_DEFAULT, exclude_if=lambda value: value == ReasoningMode.MODEL_DEFAULT
+    )
+    protocol_check: ProtocolCheck | None = Field(default=None, exclude_if=lambda value: value is None)
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()

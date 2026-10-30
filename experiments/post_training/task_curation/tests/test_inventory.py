@@ -21,7 +21,6 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -67,8 +66,6 @@ def source_task(identifier: str) -> TaskSpec:
             ),
         ),
         resources=ResourceGroups(verifier=(inline_resource("private.txt", identifier.encode()),)),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

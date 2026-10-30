@@ -33,7 +33,6 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     TaskResource,
     TaskSpec,
@@ -83,8 +82,6 @@ def answer_task(
         answer_type=answer_type,
         answer_format=PlainText(),
         grader=package.grader,
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

@@ -21,7 +21,6 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -192,8 +191,6 @@ class MathConverter:
             answer_format=PlainText(),
             grader=package.grader,
             tags=("math", "nemotron"),
-            turn_budget=1,
-            reasoning=ReasoningMode.MODEL_DEFAULT,
         )
         return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

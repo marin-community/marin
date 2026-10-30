@@ -43,10 +43,10 @@ flowchart LR
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `turn_budget` | The model turns an attempt may take. Every runtime uses it as the turn limit. |
-| `reasoning` | `on` or `off` sets the chat template's `enable_thinking`; `model_default` sends nothing. |
+| `turn_budget` | Optional model turn limit that replaces the runtime's. Omitted, the runtime's limit applies. |
+| `reasoning` | `on` or `off` sets the chat template's `enable_thinking`; the default, `model_default`, sends nothing. |
 | `protocol_check` | Optional structural check graded beside the answer. See [Protocol checks](#protocol-checks). |
-| `schema_version` | Version of the serialized spec: `0.29`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -419,6 +419,8 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.29` adds the required `turn_budget` and `reasoning` fields and the optional
-`protocol_check`. Reconvert older TaskSpecs before using the updated readers; no compatibility
-shim is supplied.
+Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
+preserving the normal answer presentation. Reconvert
+older TaskSpecs before using the updated readers; no compatibility shim is supplied.
+The optional `turn_budget`, `reasoning`, and `protocol_check` fields are omitted from the
+serialized spec when unset, so tasks that do not use them keep their bytes and digests.

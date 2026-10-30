@@ -177,12 +177,7 @@ def materialize_harbor_tasks(
     session: Mapping[str, Any],
     grader_override: NoGrader | None = None,
 ) -> Path:
-    """Combine Harbor packages and pre-lowered task Parquet for one worker pool.
-
-    The session's ``max_turns`` becomes each imported package's turn budget.
-    """
-    session = dict(session)
-    turn_budget = int(session.pop("max_turns"))
+    """Combine Harbor packages and pre-lowered task Parquet for one worker pool."""
     task_files = [source for source in data_files if isinstance(source, str) and source.endswith(".parquet")]
     sources = TerminalBenchTaskDataset([source for source in data_files if source not in task_files])
     if not len(sources) and not task_files:
@@ -211,7 +206,6 @@ def materialize_harbor_tasks(
                             row=uid,
                             importer_revision="skyrl-harbor-v1",
                         ),
-                        turn_budget=turn_budget,
                     )
                     if grader_override is not None:
                         if session["task_session"] == HARBOR_TRIAL_SESSION:

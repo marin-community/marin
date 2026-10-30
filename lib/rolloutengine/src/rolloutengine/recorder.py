@@ -186,7 +186,7 @@ class _Recorder:
     def __init__(self, model: Model, task: TaskSpec, limits: RolloutLimits, mode: TraceMode, events: EventSink):
         self.model = model
         self.limits = limits
-        self.max_turns = task.turn_budget
+        self.max_turns = limits.max_turns if task.turn_budget is None else task.turn_budget
         self.reasoning = task.reasoning
         self.mode = mode
         self.events = events

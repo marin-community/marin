@@ -27,7 +27,6 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
-    ReasoningMode,
     ResourceGroups,
     Source,
     TaskSpec,
@@ -172,8 +171,6 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=NoGrader(reason="The gate of the Taskforge tools decides which tasks the agent made"),
-        turn_budget=config.agent_turns,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
         source=Source(
             dataset="taskforge-agentic",
             revision=idea.catalog_version,

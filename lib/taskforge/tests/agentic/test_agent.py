@@ -42,7 +42,6 @@ SHELL_TASK = EXAMPLE_TASK.model_copy(
     }
 )
 TASK_JSON = SHELL_TASK.model_dump_json()
-THREE_TURN_TASK_JSON = SHELL_TASK.model_copy(update={"turn_budget": 3}).model_dump_json()
 CHANGED = "tasks/changed.json"
 GRADER = SHELL_TASK.grader
 assert isinstance(GRADER, VerifyitGrader)
@@ -56,8 +55,8 @@ IDEA = CapabilityIdea(
     prerequisite_edges=(),
     capability_hash="0",
 )
-AGENT_TURNS = 40
 LIMITS = RolloutLimits(
+    max_turns=40,
     max_total_tokens=None,
     model_turn_timeout=None,
     tool_turn_timeout=None,
@@ -210,7 +209,6 @@ def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], 
         judge_policy=LLMPolicy(),
         web=web,
         agent_limits=LIMITS,
-        agent_turns=AGENT_TURNS,
         solver_limits=LIMITS,
         gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
         budget=budget,
@@ -292,7 +290,7 @@ async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_conti
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     # An agent that ignores its empty budget and asks for a web search on every turn.
-    agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(AGENT_TURNS)))
+    agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(LIMITS.max_turns)))
     async with ParallelWeb("unused") as web:
         config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
@@ -303,7 +301,7 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
 
 
 async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
-    script = tuple(call("shell", command="echo still working") for _ in range(AGENT_TURNS))
+    script = tuple(call("shell", command="echo still working") for _ in range(LIMITS.max_turns))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
@@ -385,16 +383,16 @@ async def test_the_tools_refuse_environment_variables_and_setup_commands():
 
 async def test_a_solver_that_runs_out_of_turns_fails_its_run():
     script = (
-        call(
-            "shell",
-            command=f"mkdir -p tasks; printf '%s' {shlex.quote(THREE_TURN_TASK_JSON)} > {TASK}",
-        ),
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
         call("rollout", paths=[TASK], n=1, role="solver"),
         call("finish", report="done"),
     )
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=LoopingSolver()))
+        solver_limits = LIMITS.model_copy(update={"max_turns": 3})
+        result = await generate_tasks(
+            IDEA, 1, dataclasses.replace(config, solver_model=LoopingSolver(), solver_limits=solver_limits)
+        )
 
     [rollout] = tool_replies(result, "call-2")
     evidence = rollout["results"][TASK]["evidence"]

@@ -47,7 +47,6 @@ from taskcompendium.models import (
     JsonAnswer,
     MissingArtifactPolicy,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -127,8 +126,6 @@ def arithmetic_task(grader: Grader) -> TaskSpec:
         answer_format=PlainText(),
         grader=grader,
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

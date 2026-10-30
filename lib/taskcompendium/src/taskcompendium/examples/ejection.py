@@ -16,7 +16,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -72,8 +71,6 @@ def ejection_examples(pairs_per_family: int, normal_submission: AnswerFormat) ->
                     answer_format=normal,
                     grader=verifyit_package(ExactSpec(expected=(answer,))).grader,
                     source=Source(dataset="ejection-poc", revision="1", row=task_id, importer_revision="1"),
-                    turn_budget=1,
-                    reasoning=ReasoningMode.MODEL_DEFAULT,
                 )
                 specification = enable_ejection(specification)
                 if not is_solvable:

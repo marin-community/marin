@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, JsonValue
 from taskcompendium.chat import chat_input
 from taskcompendium.grader import grader_config
-from taskcompendium.models import ReasoningMode
 from taskcompendium.models import (
     AnswerType,
     EnvironmentRequirements,
@@ -37,7 +36,6 @@ def source_task(
     config: dict[str, Any],
     source: Source,
     *,
-    turn_budget: int,
     environment: EnvironmentRequirements | None = None,
 ) -> TaskSpec:
     """Preserve source semantics without selecting a session or machine backend."""
@@ -51,6 +49,4 @@ def source_task(
         grader=NoGrader(reason="SkyRL grades each task turn", contract=parameters.model_dump()),
         resources=ResourceGroups(verifier=(inline_resource("config.json", parameters.model_dump_json().encode()),)),
         source=source,
-        turn_budget=turn_budget,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )

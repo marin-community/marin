@@ -22,6 +22,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     ReasoningApplied,
+    ReasoningMode,
     TaskSpec,
     TextMessage,
     ToolResult,
@@ -242,3 +243,12 @@ def test_a_golden_control_that_breaks_the_protocol_fails():
     [result] = report.checks
     assert (result.check, result.status) == ("golden", CheckStatus.FAIL)
     assert "protocol_compliance" in (result.detail or "")
+
+
+def test_a_task_without_protocol_fields_serializes_without_them():
+    plain = TOOL.model_copy(
+        update={"turn_budget": None, "reasoning": ReasoningMode.MODEL_DEFAULT, "protocol_check": None}
+    )
+    serialized = json.loads(plain.model_dump_json())
+    assert {"turn_budget", "reasoning", "protocol_check"}.isdisjoint(serialized)
+    assert TaskSpec.model_validate(serialized) == plain

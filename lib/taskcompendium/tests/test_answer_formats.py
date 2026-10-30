@@ -33,7 +33,6 @@ from taskcompendium.models import (
     JsonAnswer,
     JsonValueAnswer,
     PlainText,
-    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -71,8 +70,6 @@ def specification() -> TaskSpec:
         answer_format=PlainText(),
         grader=verifyit_package(NumericSpec("12.0", tolerance_abs=0.0, tolerance_rel=0.0)).grader,
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

@@ -21,7 +21,6 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
-    ReasoningMode,
     TaskSpec,
     TextMessage,
 )
@@ -144,8 +143,6 @@ def convert_calendar(row: RawRow, context: ConversionContext) -> TaskSpec | Norm
         answer_format=PlainText(),
         grader=grader,
         tags=("tool-use", "calendar", "scheduling", "state-tracking", "nemotron"),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

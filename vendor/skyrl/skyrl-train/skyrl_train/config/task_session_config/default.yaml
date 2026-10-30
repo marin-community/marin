@@ -22,6 +22,7 @@ task_spec:
   harness_by_dataset:
     structure-closure: assistant_prefix
   session:
+    max_turns: 1
     max_total_tokens: null
     model_turn_timeout: 1800
     tool_turn_timeout: 90
@@ -38,26 +39,6 @@ task_spec:
     storage_mb: 10240
     gpus: 0
     network: allow
-    user: null
-    startup_timeout: 600
-    cleanup_timeout: 60
-  image_task_machine:
-    backend: daytona
-    cpus: 2
-    memory_mb: 4096
-    storage_mb: 10240
-    gpus: 0
-    network: deny
-    user: null
-    startup_timeout: 600
-    cleanup_timeout: 60
-  package_task_machine:
-    backend: local
-    cpus: null
-    memory_mb: null
-    storage_mb: null
-    gpus: 0
-    network: deny
     user: null
     startup_timeout: 600
     cleanup_timeout: 60

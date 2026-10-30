@@ -117,7 +117,7 @@ class MathTaskSession:
         parameters = session_parameters(task)
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.task.turn_budget
+        self.max_turns = lowered.limits.max_turns
         self.grades: list[GradeResult] = []
 
     async def prepare(self) -> Prompt:
@@ -161,7 +161,7 @@ class SearchTaskSession:
         config = parameters.config
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.task.turn_budget
+        self.max_turns = lowered.limits.max_turns
         self.blocking = BlockingOperations(executor)
         self.tool = SearchClient(**{key: config[key] for key in ("search_url", "topk", "timeout", "log_requests")})
         self.transcript: list[str] = []
@@ -280,7 +280,7 @@ class SearchCodeTaskSession:
         parameters = session_parameters(task)
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.task.turn_budget
+        self.max_turns = lowered.limits.max_turns
         self.blocking = BlockingOperations(executor)
         self.search = SearchClient(**parameters.config.get("search", {}))
         self.python = PythonKernel(machine)

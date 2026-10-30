@@ -32,7 +32,6 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -588,8 +587,6 @@ def test_exact_controls_accept_the_complete_reference_without_changing_list_scor
         answer_format=PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
     candidates = [("\n".join(references), 1.0)]
@@ -955,8 +952,6 @@ def conversation_task(row: RawRow, prompt: str, grader: NoGrader) -> TaskSpec:
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=grader,
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

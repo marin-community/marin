@@ -22,7 +22,6 @@ from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ReasoningMode
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -58,8 +57,6 @@ def task_inputs():
         answer_format=PlainText(),
         grader=verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0)).grader,
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     config = OmegaConf.create(
         {
@@ -112,7 +109,7 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             "grader": package.grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix")),))
+    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
     observed = []
 
     class Engine:
@@ -222,7 +219,7 @@ async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw
     # Both admission and inference render the unfinished message, excluding its
     # template closer and a new assistant generation prompt, including tool schemas.
     assert output["prompt_ids"] == [[5, 1, 2, 3, 4]]
-    lowered = lowered_task(task, "assistant_prefix")
+    lowered = lowered_task(task, "assistant_prefix", max_turns=1)
     assert task_prompt_token_count(tokenizer, {"task_rollout_spec": lowered.model_dump_json()}, "prompt") == 5
     assert observed[0]["sampling_params"]["max_tokens"] == 3
     assert observed[0]["sampling_params"]["skip_special_tokens"] is False
@@ -324,7 +321,7 @@ async def test_assistant_prefix_admission_and_transport_share_configured_templat
     task = text_task("configured-assistant_prefix").model_copy(
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix"),))}
     )
-    spec = lowered_task(task, "assistant_prefix")
+    spec = lowered_task(task, "assistant_prefix", max_turns=1)
     panel_path = tmp_path / "panel.parquet"
     write_tasks(panel_path, [spec])
     dataset = TaskDataset(
@@ -380,7 +377,7 @@ def test_assistant_prefix_dataset_counts_effective_continuation_without_new_gene
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix " * 20),))}
     )
     path = tmp_path / "assistant_prefix.parquet"
-    write_tasks(path, [lowered_task(task, "assistant_prefix") for task in (short, long)])
+    write_tasks(path, [lowered_task(task, "assistant_prefix", max_turns=1) for task in (short, long)])
     dataset = TaskDataset([str(path)], tokenizer, 6, num_workers=1)
     (selected,) = dataset.collate_fn(list(dataset))
     spec = selected["input"].spec

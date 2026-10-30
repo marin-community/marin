@@ -24,7 +24,6 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
-    ReasoningMode,
     TaskSpec,
     TextMessage,
 )
@@ -96,7 +95,6 @@ def converted_workspace_task(
         environment=environment,
         grader_environment=grader_environment,
         output_paths=output_paths,
-        turn_budget=1,
         verifier=tuple(verifier),
         worker=tuple(worker),
         oracle=tuple(oracle),
@@ -203,6 +201,4 @@ def swe_task(row: RawRow, *, workspace: str) -> TaskSpec | ImportRejection:
         answer_type=AnswerType.STATE,
         answer_format=PlainText(),
         grader=grader,
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )

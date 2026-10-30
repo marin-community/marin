@@ -19,7 +19,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, PositiveInt
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.structure_closure import structure_closure_task
-from taskcompendium.models import SCHEMA_VERSION, ReasoningMode, Source, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, Source, TaskSpec
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.models import IntendedUse, NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -122,10 +122,7 @@ def validation_task(row: dict[str, Any]) -> TaskSpec:
         if not isinstance(converted, NormalizedTask):
             raise ValueError(f"Native structure-closure import failed for {original['id']}: {converted}")
         return converted.task
-    # The held-out source runs one-turn Shellbox sessions with the template's default reasoning.
-    task = TaskSpec.model_validate(
-        {**original, "schema_version": SCHEMA_VERSION, "turn_budget": 1, "reasoning": ReasoningMode.MODEL_DEFAULT}
-    )
+    task = TaskSpec.model_validate({**original, "schema_version": SCHEMA_VERSION})
     if document["runtime"]["task_machine"] is not None:
         raise ValueError("Heldout source machine contract changed")
     if document["session"]["task_session"] != "shellbox" or document["session"]["max_turns"] != 1:

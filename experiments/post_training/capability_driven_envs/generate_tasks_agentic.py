@@ -74,6 +74,7 @@ JUDGE_TEMPERATURE = 0.7
 MAX_CONCURRENT_ROLLOUTS = 8
 """Solver rollouts of one session at a time."""
 SOLVER_LIMITS = RolloutLimits(
+    max_turns=30,
     max_total_tokens=None,
     model_turn_timeout=900,
     tool_turn_timeout=120,
@@ -94,16 +95,18 @@ def tool_budget(tasks: int) -> ToolBudget:
     )
 
 
-AGENT_LIMITS = RolloutLimits(
-    max_total_tokens=None,
-    model_turn_timeout=1800,
-    # A turn can hold several tool calls, each with its own deadline, and attempt_timeout bounds the session.
-    tool_turn_timeout=None,
-    total_turn_timeout=None,
-    attempt_timeout=6 * 3600,
-    verifier_timeout=None,
-    cleanup_timeout=60,
-)
+def agent_limits(turns: int) -> RolloutLimits:
+    return RolloutLimits(
+        max_turns=turns,
+        max_total_tokens=None,
+        model_turn_timeout=1800,
+        # A turn can hold several tool calls, each with its own deadline, and attempt_timeout bounds the session.
+        tool_turn_timeout=None,
+        total_turn_timeout=None,
+        attempt_timeout=6 * 3600,
+        verifier_timeout=None,
+        cleanup_timeout=60,
+    )
 
 
 def workspace_factory() -> LocalMachineFactory:
@@ -186,8 +189,7 @@ async def generate_all(
             judge=judge,
             judge_policy=LLMPolicy(temperature=JUDGE_TEMPERATURE),
             web=web,
-            agent_limits=AGENT_LIMITS,
-            agent_turns=turns,
+            agent_limits=agent_limits(turns),
             solver_limits=SOLVER_LIMITS,
             gate=GATE,
             budget=tool_budget(tasks),

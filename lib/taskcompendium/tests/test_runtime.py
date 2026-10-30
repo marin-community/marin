@@ -53,7 +53,6 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     PlainText,
-    ReasoningMode,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -106,8 +105,6 @@ def shell_task():
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
         grader=NoGrader(reason="Test overrides the grader where needed"),
-        turn_budget=1,
-        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
