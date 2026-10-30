@@ -138,7 +138,11 @@ def _grading(metrics: dict[str, float], extraction_filter: str | None, raw: Mapp
         ) if key in raw},
         ensure_ascii=False,
     )
-    candidates = metrics if primary_metric is None else {name: value for name, value in metrics.items() if _base_metric(name) == primary_metric.source_name}
+    # Repeated-run reducers publish accuracy_avg from per-trial accuracy.
+    sample_metric = primary_metric.source_name.removesuffix("_avg") if primary_metric is not None else None
+    candidates = metrics if sample_metric is None else {
+        name: value for name, value in metrics.items() if _base_metric(name) == sample_metric
+    }
     picked = _primary_metric(candidates)
     if primary_metric is not None and picked is None and not raw.get("failure_category") and not metrics.get("judge_failed"):
         raise ValueError(f"selected sample metric {primary_metric.source_name!r} is missing")
