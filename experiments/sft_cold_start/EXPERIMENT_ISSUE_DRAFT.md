@@ -79,4 +79,18 @@ The data audit sampled 921 documents across all 216 supervised sources (12.6M to
 
 - [GLM cleaning and instruction-following follow-up #10788](https://github.com/marin-community/marin/issues/10788)
 
-Reference PR and compact extraction PR links are added below as publication completes.
+- [Reference-only draft PR #10789](https://github.com/marin-community/marin/pull/10789), closed as requested because the full archival diff exceeds 1,000 lines. The branch preserves all code/config snapshots with original hashes and a restore command; it is not intended to merge.
+
+Compact extractions:
+
+- [Corrected four-model eval profiles #10791](https://github.com/marin-community/marin/pull/10791)
+
+- [Preserve BF16 checkpoint payloads #10792](https://github.com/marin-community/marin/pull/10792)
+- [Preserve integral mixture allocations #10793](https://github.com/marin-community/marin/pull/10793)
+- [Bound pending replay-cache batches #10794](https://github.com/marin-community/marin/pull/10794)
+- [Handle singleton FA4 metadata sharding #10796](https://github.com/marin-community/marin/pull/10796)
+- [Serialize tokenizer staging across processes #10797](https://github.com/marin-community/marin/pull/10797)
+- [Preserve reference generation config during HF export #10798](https://github.com/marin-community/marin/pull/10798)
+- [Existing multipart-copy fix #10639](https://github.com/marin-community/marin/pull/10639), reused rather than duplicated
+
+The library fixes received independent subagent review before publication. Their PRs record focused regression checks, broader test results, and failures independently reproduced on unchanged main. Nothing has been merged by this experiment publication.

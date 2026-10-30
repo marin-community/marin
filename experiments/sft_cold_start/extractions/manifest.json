@@ -52,5 +52,14 @@
     "patch": "coldstart-tokenizer.patch.source.gz",
     "sha256": "2c73e2a0cd74ef44b62480704e2a3497d8abff02d0fb89b6340647569a79d190",
     "encoding": "gzip"
+  },
+  {
+    "name": "cold-start-generation-config",
+    "head": "e2184080a43e0d851de3deebb672ffe68200c8a5",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10798",
+    "patch": "cold-start-generation-config.patch.source.gz",
+    "sha256": "25b3f1d9b5f7c3fa6d1b8be7868d71e8ec8c7e1622088f5b43f81e8a650c78bf",
+    "encoding": "gzip"
   }
 ]
