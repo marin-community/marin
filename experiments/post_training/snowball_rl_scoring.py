@@ -26,11 +26,13 @@ EVAL_SCORE_SCHEMA = pa.schema(
         ("attempt", pa.int32()),
         ("family", pa.string()),
         ("aaii_category", pa.string()),
+        ("agentic", pa.bool_()),
         ("score", pa.float64()),
         ("scored", pa.bool_()),
     ]
 )
 PASS_RATES_NAME = f"rl-data/snowball-pass-rates/{presets.MODEL_REVISION}"
+PASS_RATE_REVISION = "2026.10.30"
 PASS_RATE_EVALUATION = replace(presets.EVALUATIONS["panel-910"], name="pass-rates-910x8", answers=8, post_run=False)
 
 
@@ -95,6 +97,7 @@ def panel_scores(
                 "attempt": attempts[step, item],
                 "family": metadata.get("family"),
                 "aaii_category": metadata.get("aaii_category"),
+                "agentic": metadata.get("agentic"),
                 "score": score,
                 "scored": not row.get("exception_type") and not row.get("error_treatment"),
             }
@@ -103,11 +106,47 @@ def panel_scores(
     return pa.Table.from_pylist(rows, schema=EVAL_SCORE_SCHEMA)
 
 
-def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
+def score_slices(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, list[dict]]:
+    pass_rates = (
+        {row["task_id"]: row["passed"] / row["samples"] for row in rates.to_pylist()} if rates is not None else {}
+    )
+    groups = defaultdict(list)
+    for row in scores.to_pylist():
+        if not row["scored"]:
+            continue
+        evaluation = row["evaluation"]
+        keys = [f"{evaluation}/mean"]
+        rate = pass_rates.get(row["item"])
+        band = "hard" if rate is not None and rate < 0.1 else "easy" if rate is not None and rate > 0.7 else "learnable"
+        for column in ("family", "aaii_category", "agentic"):
+            value = row[column]
+            if value is not None:
+                value = str(value).lower() if column == "agentic" else value
+                key = f"{evaluation}/{column}/{value}"
+                keys.append(key + "/mean")
+                if rate is not None and column != "agentic":
+                    keys.append(f"{key}/difficulty/{band}/mean")
+        if rate is not None:
+            keys.append(f"{evaluation}/difficulty/{band}/mean")
+        for key in keys:
+            groups[key].append(row)
+    return dict(groups)
+
+
+def evaluation_statistics(scores: pa.Table, rates: pa.Table | None = None) -> dict[str, float]:
     sessions = defaultdict(list)
     for row in scores.to_pylist():
         sessions[row["evaluation"]].append(row)
     result = {}
+    for key, rows in score_slices(scores, rates).items():
+        tasks = defaultdict(list)
+        for row in rows:
+            tasks[row["item"]].append(row["score"])
+        result[key] = (
+            math.fsum(row["score"] for row in rows) / len(rows)
+            if key.count("/") == 1
+            else math.fsum(math.fsum(values) / len(values) for values in tasks.values()) / len(tasks)
+        )
     for evaluation, rows in sessions.items():
         if len({row["step"] for row in rows}) != 1:
             raise ValueError(f"select one weight step before aggregating {evaluation}")
@@ -115,7 +154,6 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
         result[f"{evaluation}/scored_fraction"] = len(scored) / len(rows)
         if not scored:
             continue
-        result[f"{evaluation}/mean"] = math.fsum(row["score"] for row in scored) / len(scored)
         tasks = defaultdict(list)
         for row in scored:
             tasks[row["item"]].append(row)
@@ -125,17 +163,13 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
             ("all_right", lambda right, n: right == n),
             ("all_wrong", lambda right, n: right == 0),
         ):
-            result[f"{evaluation}/{name}_fraction"] = sum(accepts(right, n) for right, n in counts) / len(counts)
-        for column in ("family", "aaii_category"):
-            groups = defaultdict(list)
-            for group in tasks.values():
-                category = group[0][column]
-                if category is not None:
-                    groups[category].append(math.fsum(row["score"] for row in group) / len(group))
-            means = {category: math.fsum(values) / len(values) for category, values in groups.items()}
-            result.update({f"{evaluation}/{column}/{category}/mean": mean for category, mean in means.items()})
-            if column == "family" and means:
-                result[f"{evaluation}/family_mean"] = math.fsum(means.values()) / len(means)
+            if name == "all_right" or any(n > 1 for n in Counter(row["item"] for row in rows).values()):
+                result[f"{evaluation}/{name}_fraction"] = sum(accepts(right, n) for right, n in counts) / len(counts)
+        families = [
+            value for key, value in result.items() if key.startswith(f"{evaluation}/family/") and key.count("/") == 3
+        ]
+        if families:
+            result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)
     return result
 
 
@@ -153,6 +187,8 @@ def read_pass_rates(path: str) -> pa.Table:
             row["model_revision"] != presets.MODEL_REVISION
             or not 1 <= row["samples"] <= PASS_RATE_EVALUATION.answers
             or not 0 <= row["passed"] <= row["samples"]
+            or not math.isfinite(row["mean_score"])
+            or not 0 <= row["mean_score"] <= 1
             for row in rows
         )
     ):

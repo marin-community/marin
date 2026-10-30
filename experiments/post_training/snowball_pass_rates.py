@@ -5,6 +5,7 @@
 
 from collections import defaultdict
 from dataclasses import replace
+from statistics import mean
 
 import click
 import pyarrow as pa
@@ -36,11 +37,18 @@ def _write_pass_rates(run_output: str, output: str) -> Artifact:
                 "model_revision": presets.MODEL_REVISION,
                 "passed": sum(row["scored"] and row["score"] == 1 for row in group),
                 "samples": sum(row["scored"] for row in group),
+                "mean_score": mean(row["score"] for row in group if row["scored"]),
             }
             for task, group in sorted(tasks.items())
         ],
         schema=pa.schema(
-            [("task_id", pa.string()), ("model_revision", pa.string()), ("passed", pa.int32()), ("samples", pa.int32())]
+            [
+                ("task_id", pa.string()),
+                ("model_revision", pa.string()),
+                ("passed", pa.int32()),
+                ("samples", pa.int32()),
+                ("mean_score", pa.float64()),
+            ]
         ),
     )
     fs, key = filesystem_for(str(StoragePath(output) / "pass_rates.parquet"))
@@ -56,7 +64,7 @@ def _write_pass_rates(run_output: str, output: str) -> Artifact:
 def main() -> tuple[ArtifactStep, ...]:
     run = snowball.build_run(PRESET).runs[0]
     summary = apply(
-        scoring.PASS_RATES_NAME, _write_pass_rates, version=presets.PRESET_REVISION, run_output=run, output=OUT
+        scoring.PASS_RATES_NAME, _write_pass_rates, version=scoring.PASS_RATE_REVISION, run_output=run, output=OUT
     )
     click.echo(f"Pass rates: {summary.name}@{summary.version}/pass_rates.parquet")
     return (summary,)

@@ -340,8 +340,10 @@ def build_run(
     evaluations: tuple[str, ...] = (),
     replicates: int = 1,
     control: bool = False,
+    requirements: tuple[str, ...] = (),
 ) -> SnowballRun:
     """Construct the complete Snowball experiment and its terminal evaluation dependencies."""
+    snowball_rl_gate.check_requirements(preset, requirements, control=control)
     settings = tuple(leaf for setting in settings for leaf in presets.setting_leaves(setting))
     if not 1 <= replicates <= 5:
         raise click.BadParameter("replicates must be between 1 and 5")
@@ -436,7 +438,9 @@ def build_run(
         for evaluation in post:
             post_runs.append(_post_evaluation(run, evaluation, default, preset, config))
     gate = (
-        snowball_rl_gate.gate_step(preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init))
+        snowball_rl_gate.gate_step(
+            preset, tuple(runs), inputs=snowball_rl_gate.gate_inputs(settings, tasks, init, requirements)
+        )
         if preset.name in snowball_rl_gate.CONTROLS and not control
         else None
     )
@@ -551,6 +555,7 @@ def main(
     evaluations: tuple[str, ...],
     replicates: int,
     control: bool,
+    requirements: tuple[str, ...],
 ) -> tuple[ArtifactStep, ...]:
     if init_name and "@" not in init_name:
         raise click.BadParameter("use NAME@VERSION for initializer models", param_hint="--init")
@@ -566,6 +571,7 @@ def main(
         evaluations=evaluations,
         replicates=replicates,
         control=control,
+        requirements=requirements,
     )
     if resume_name and (presets.REPO_ROOT / ".git").exists():
         source_tree = presets.run_tree_hash(resume_name)
