@@ -58,8 +58,6 @@ FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
 ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
 # Packed conversations isolated in attention; see packed_attention.py.
 PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
-# A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
-PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
 CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
 # Per-architecture load-time checks shipped next to the pod runner (see nemotron_h_checks.py).
