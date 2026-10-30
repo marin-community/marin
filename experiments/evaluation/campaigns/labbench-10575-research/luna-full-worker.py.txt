@@ -1,0 +1,88 @@
+import hashlib
+import json
+import os
+import time
+import urllib.request
+import urllib.error
+from io import BytesIO
+from pathlib import Path
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pyarrow.parquet as pq
+from eval.sources.labbench import prepare_question, REVISION, DATASET, COMPONENTS
+from eval.completion_response import CompletionText, CompletionContentPolicy, completion_response_from_chat_choice
+from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
+from eval.graders.math_specs import letter_choice
+from rigging.filesystem.buckets import filesystem_for
+
+ROOT='s3://marin-us-east-08a/marin/eval-validation/labbench-10575/luna-full-20261026'
+COMMIT='6ae3623e76259a768314a440a4e9e7a43e87447c'
+p=Path(os.environ['IRIS_OUTPUT_DIR'])
+def save(name,value,local=False):
+ data=json.dumps(value,indent=2).encode()
+ fs,path=filesystem_for(ROOT+'/'+name)
+ if fs.exists(path): raise RuntimeError('Refusing overwrite: '+name)
+ fs.pipe_file(path,data)
+ assert fs.cat_file(path)==data
+ if local:(p/name).write_bytes(data)
+
+rows=[]
+for task,component in COMPONENTS.items():
+ with urllib.request.urlopen(f'https://huggingface.co/datasets/{DATASET}/resolve/{REVISION}/{component.subset}/train-00000-of-00001.parquet',timeout=120) as result:
+  data=result.read()
+ dataset=pq.read_table(BytesIO(data)).to_pylist()
+ assert len(dataset)==component.count and len({r['id'] for r in dataset})==component.count
+ save(f'dataset-{component.subset}.json',{'revision':REVISION,'sha256':hashlib.sha256(data).hexdigest(),'count':len(dataset),'subtasks':dict(Counter(r['subtask'] for r in dataset))},True)
+ for r in dataset:
+  q=prepare_question(r,component.subset,42)
+  messages=[{'role':'user','content':q['prompt']}]
+  rows.append({'task':task,'subtask':r['subtask'],'doc_id':q['id'],'target':q['answer'],'messages':messages,'prompt_sha256':hashlib.sha256(json.dumps(messages,sort_keys=True).encode()).hexdigest()})
+assert len(rows)==741
+with urllib.request.urlopen('https://openrouter.ai/api/v1/models',timeout=30) as result:catalog=json.load(result)
+model=next(m for m in catalog['data'] if m['id']=='openai/gpt-6-luna')
+assert 'high' in model['reasoning']['supported_efforts']
+assert model['top_provider']['max_completion_tokens']>=128000
+save('model.json',model,True)
+save('inputs.json',rows,True)
+save('protocol.json',{'model':'openai/gpt-6-luna','reasoning':{'effort':'high'},'max_tokens':128000,'seed':42,'temperature':'omitted: unsupported','top_p':'omitted: unsupported','concurrency':8,'request_timeout_seconds':1200,'job_timeout_seconds':86400,'automatic_retries':0,'tools':False,'dataset':DATASET,'revision':REVISION,'scorer_commit':COMMIT,'scope':'all 108 ProtocolQA, 600 SeqQA, 33 CloningScenarios; fresh standard requests','execution':'direct OpenRouter requests with Evalchemy prompt builder and shared grader; not native launcher validation'},True)
+print('MANIFEST_VERIFIED',len(rows),dict(Counter(r['task'] for r in rows)),flush=True)
+
+def evaluate(i,row):
+ payload={'model':'openai/gpt-6-luna','messages':row['messages'],'reasoning':{'effort':'high'},'max_tokens':128000,'seed':42,'provider':{'require_parameters':True,'allow_fallbacks':False}}
+ save(f'request-{i}.json',payload)
+ request=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+os.environ['OPENROUTER_API_KEY'],'Content-Type':'application/json'})
+ begin=time.monotonic()
+ try:
+  with urllib.request.urlopen(request,timeout=1200) as response:raw=json.load(response)
+ except (urllib.error.URLError,TimeoutError,json.JSONDecodeError) as exc:
+  failure={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'request_failed','exception':type(exc).__name__,'http_status':getattr(exc,'code',None),'elapsed_seconds':time.monotonic()-begin}
+  save(f'failure-{i}.json',failure)
+  return failure
+ elapsed=time.monotonic()-begin
+ save(f'response-{i}.json',{'input':row,'response':raw,'elapsed_seconds':elapsed,'request_sha256':hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()})
+ if raw.get('error') or not raw.get('choices'):
+  failure={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'provider_error','elapsed_seconds':elapsed}
+  save(f'failure-{i}.json',failure);return failure
+ completion=completion_response_from_chat_choice(raw,raw['choices'][0])
+ response=CompletionText(completion.normalized_content(),completion,CompletionContentPolicy.COMBINE)
+ spec=EvalSpec(task=row['task'],source=SourceRef(DATASET,'train',REVISION),source_id=row['doc_id'],ordinal=i,requests=(),grader=GraderSpec('letter_choice',reference={'extractor':'hle'}),target=row['target'])
+ grade=letter_choice(spec,[response])
+ scored={'index':i,'task':row['task'],'subtask':row['subtask'],'doc_id':row['doc_id'],'status':'scored','prompt_sha256':row['prompt_sha256'],'response_sha256':hashlib.sha256(json.dumps(raw,sort_keys=True).encode()).hexdigest(),'target':row['target'],'extracted':grade.filtered_resps[0],'accuracy':grade.metrics['accuracy'],'classification':str(completion.classification),'finish_reason':completion.finish_reason,'elapsed_seconds':elapsed,'usage':raw.get('usage'),'model':raw.get('model'),'provider':raw.get('provider')}
+ save(f'grade-{i}.json',scored)
+ return scored
+
+started=time.monotonic();outcomes=[]
+with ThreadPoolExecutor(max_workers=8) as pool:
+ futures=[pool.submit(evaluate,i,row) for i,row in enumerate(rows)]
+ for future in as_completed(futures):
+  result=future.result();outcomes.append(result)
+  print(json.dumps({'completed':len(outcomes),'index':result['index'],'task':result['task'],'subtask':result['subtask'],'status':result['status'],'accuracy':result.get('accuracy'),'elapsed_seconds':result['elapsed_seconds']}),flush=True)
+scores=[r for r in outcomes if r['status']=='scored']
+def summarize(items,expected):
+ return {'expected':expected,'scored':len(items),'correct':sum(r['accuracy'] for r in items),'accuracy':sum(r['accuracy'] for r in items)/expected if len(items)==expected else None,'request_seconds_sum':sum(r['elapsed_seconds'] for r in items),'finish_reasons':dict(Counter(r['finish_reason'] for r in items))}
+components={t:summarize([r for r in scores if r['task']==t],c.count) for t,c in COMPONENTS.items()}
+subtasks={s:summarize([r for r in scores if r['subtask']==s],n) for s,n in Counter(r['subtask'] for r in rows).items()}
+report={'status':'complete' if len(scores)==741 else 'partial','scorer_commit':COMMIT,'protocol':'marin-labbench-no-tools-v3','model':'openai/gpt-6-luna','reasoning_effort':'high','count':len(scores),'failure_count':741-len(scores),'components':components,'subtasks':subtasks,'reported_cost_usd':sum((r['usage'].get('cost') or 0) for r in scores),'total_seconds':time.monotonic()-started,'samples':sorted(outcomes,key=lambda r:r['index'])}
+save('graded.json',report,True)
+print('FINAL_REPORT_DURABLE',report['status'],len(scores),flush=True)
+if len(scores)!=741:raise SystemExit(2)

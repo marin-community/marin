@@ -1,0 +1,8 @@
+import os
+import subprocess
+from rigging.secrets import require_secret
+env=dict(os.environ)
+env.pop('UV_PROJECT_ENVIRONMENT',None)
+for name in ['CW_KEY_ID','CW_KEY_SECRET','OPENROUTER_API_KEY']:
+ env[name]=require_secret(name)
+raise SystemExit(subprocess.run(['uv','run','--directory','vendor/evalchemy','--frozen','--all-extras','python','/app/_labbench_lunafull_worker.py'],env=env).returncode)

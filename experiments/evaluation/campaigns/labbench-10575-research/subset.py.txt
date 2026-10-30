@@ -1,0 +1,96 @@
+"""Freeze a score-independent LAB-Bench panel, then aggregate saved Luna grades."""
+
+import argparse
+import hashlib
+import json
+from collections import Counter, defaultdict
+from pathlib import Path
+
+REVISION = "5c77cec648430f30611808808861eb86f81d5eaa"
+METHOD = "sha256-seed-subtask-id-v1"
+COUNTS = {"LABBenchProtocolQA": 108, "LABBenchSeqQA": 600, "LABBenchCloning": 33}
+
+
+def select_panel(rows: list[dict], per_subtask: int, seed: int) -> list[dict]:
+    """Select SeqQA by hash rank within subtask, retaining other components in full."""
+    assert Counter(row["task"] for row in rows) == COUNTS
+    assert len({row["doc_id"] for row in rows}) == len(rows)
+    groups = defaultdict(list)
+    for row in rows:
+        if row["task"] == "LABBenchSeqQA":
+            groups[row["subtask"]].append(row)
+    assert len(groups) == 15 and all(len(group) == 40 for group in groups.values())
+    assert 1 <= per_subtask <= 40
+    chosen = set()
+    for subtask, group in sorted(groups.items()):
+        ranked = sorted(group, key=lambda row: (
+            hashlib.sha256(f"{seed}:{subtask}:{row['doc_id']}".encode()).hexdigest(), row["doc_id"]
+        ))
+        chosen.update(row["doc_id"] for row in ranked[:per_subtask])
+    return sorted(
+        (row for row in rows if row["task"] != "LABBenchSeqQA" or row["doc_id"] in chosen),
+        key=lambda row: (row["task"], row["subtask"], row["doc_id"]),
+    )
+
+
+def write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    select = commands.add_parser("select")
+    select.add_argument("--inputs", type=Path, required=True)
+    select.add_argument("--output", type=Path, required=True)
+    select.add_argument("--per-subtask", type=int, default=5)
+    select.add_argument("--seed", type=int, default=42)
+    score = commands.add_parser("score")
+    score.add_argument("--manifest", type=Path, required=True)
+    score.add_argument("--grades", type=Path, required=True)
+    score.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if args.command == "select":
+        raw = args.inputs.read_bytes()
+        rows = json.loads(raw)
+        selected = select_panel(rows, args.per_subtask, args.seed)
+        # The same IDs and prompts must survive input reordering.
+        assert selected == select_panel(list(reversed(rows)), args.per_subtask, args.seed)
+        args.output.mkdir(parents=True, exist_ok=True)
+        write_json(args.output / "inputs.json", selected)
+        write_json(args.output / "manifest.json", {
+            "dataset": "futurehouse/lab-bench", "revision": REVISION,
+            "protocol": "marin-labbench-no-tools-v3", "selection_method": METHOD,
+            "selection_seed": args.seed, "per_seqqa_subtask": args.per_subtask,
+            "source_inputs_sha256": hashlib.sha256(raw).hexdigest(),
+            "selected_inputs_sha256": hashlib.sha256((args.output / "inputs.json").read_bytes()).hexdigest(),
+            "items": [{key: row[key] for key in ("task", "subtask", "doc_id", "target")} for row in selected],
+        })
+        return
+    manifest = json.loads(args.manifest.read_text())
+    raw = args.grades.read_bytes()
+    saved = json.loads(raw)
+    grades = {row["doc_id"]: row for row in saved["samples"]}
+    assert len(grades) == len(saved["samples"]) == 741
+    samples = []
+    groups = defaultdict(list)
+    for item in manifest["items"]:
+        grade = grades[item["doc_id"]]
+        assert grade["task"] == item["task"] and grade["accuracy"] in (0, 1)
+        sample = {**item, "accuracy": grade["accuracy"], "attempt": grade["attempt"]}
+        samples.append(sample)
+        groups[item["task"]].append(sample)
+    write_json(args.output, {
+        "kind": "offline selection and aggregation of saved grades; no new generation",
+        "model": "openai/gpt-6-luna", "reasoning_effort": "high", "max_tokens": 128000,
+        "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
+        "source_grades_sha256": hashlib.sha256(raw).hexdigest(),
+        "components": {task: {"count": len(items), "correct": sum(x["accuracy"] for x in items),
+            "accuracy": sum(x["accuracy"] for x in items) / len(items),
+            "attempts": dict(Counter(x["attempt"] for x in items))} for task, items in groups.items()},
+        "samples": samples,
+    })
+
+
+if __name__ == "__main__":
+    main()
