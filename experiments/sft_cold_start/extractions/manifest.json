@@ -1,0 +1,56 @@
+[
+  {
+    "name": "cold-start-mixture",
+    "head": "c11221d75bc21c46a092e3404020b307d6e822a0",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10793",
+    "patch": "cold-start-mixture.patch.source.gz",
+    "sha256": "86757776d29c69e12237438deffc28204e9e6eaf091ce7fc2232cc1c074fde8f",
+    "encoding": "gzip"
+  },
+  {
+    "name": "cold-start-fa4",
+    "head": "fcbf84cb00aa37136ab47ccd0f0cfd8e0cc7eb73",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10796",
+    "patch": "cold-start-fa4.patch.source.gz",
+    "sha256": "3a67d44647c99894dce0364d87a7e3d61c07c3bab146adab4c2b197efb39e779",
+    "encoding": "gzip"
+  },
+  {
+    "name": "cold-start-replay",
+    "head": "a70312d75fadc638d0bdf4e772b5f102d2c94df0",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10794",
+    "patch": "cold-start-replay.patch.source.gz",
+    "sha256": "320c60b3f770519bf5c2edabb37319b18aff2ba1aa5d8a079905753528082b57",
+    "encoding": "gzip"
+  },
+  {
+    "name": "cold-start-eval-profiles",
+    "head": "4405f03962bab7fee4cd3a6095d2cd487265d7b3",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10791",
+    "patch": "cold-start-eval-profiles.patch.source.gz",
+    "sha256": "4cfad799424f07c05f492e0dabcb0cb0bf45c97d29c881e9a58d20936e41bdb4",
+    "encoding": "gzip"
+  },
+  {
+    "name": "coldstart-tensorstore",
+    "head": "d835782ae2893b306524eb3fbba2adcff06005fa",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10792",
+    "patch": "coldstart-tensorstore.patch.source.gz",
+    "sha256": "0ea362d895c66d6728f90015158608123a30400b8ded1032bc9446775b77db8b",
+    "encoding": "gzip"
+  },
+  {
+    "name": "coldstart-tokenizer",
+    "head": "093efe154ef1a3f54f099fba4a065af801a45e03",
+    "base": "671c7bcf784abda1a3996a73062e408e2dbb8f5d",
+    "pr": "https://github.com/marin-community/marin/pull/10797",
+    "patch": "coldstart-tokenizer.patch.source.gz",
+    "sha256": "2c73e2a0cd74ef44b62480704e2a3497d8abff02d0fb89b6340647569a79d190",
+    "encoding": "gzip"
+  }
+]

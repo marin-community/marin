@@ -15,3 +15,15 @@ uv run --no-project python experiments/sft_cold_start/restore_reference.py /tmp/
 The restore command verifies every digest and refuses an existing destination. `training-worktree.patch.source.gz` is the complete tracked change from the training base. The restored `training-worktree/` directory contains the changed Python files and campaign modules; `artifacts/` contains the scripts and immutable launch configs. Existing absolute local paths and cluster/object-store paths are preserved as historical inputs. Do not execute restored launch, cleanup, upload, or watcher scripts without reviewing their pinned targets and the experiment policy.
 
 Separate compact changes should carry reusable fixes to main after focused review and validation. In particular, the reproduced optimizer and precision settings differ from the original 10-05 run; this reference does not establish numerical or quality equivalence.
+
+## Compact follow-up PRs
+
+`extractions/manifest.json` records exact base/head commits and SHA-256 digests for independently reviewed follow-up patches. Decompress each `.patch.source.gz` file and apply it with `git apply` separately to its recorded base; these are reviewable alternatives to importing the historical snapshot wholesale.
+
+- [Corrected thinking-mode evaluation profiles](https://github.com/marin-community/marin/pull/10791)
+- [Owned TensorStore BF16 writes](https://github.com/marin-community/marin/pull/10792)
+- [Exact mixture allocations](https://github.com/marin-community/marin/pull/10793)
+- [Bounded whole-document replay cache](https://github.com/marin-community/marin/pull/10794)
+- [Singleton FA4 metadata replication](https://github.com/marin-community/marin/pull/10796)
+- [Concurrent tokenizer staging](https://github.com/marin-community/marin/pull/10797)
+- [Existing multipart promotion verification](https://github.com/marin-community/marin/pull/10639)
