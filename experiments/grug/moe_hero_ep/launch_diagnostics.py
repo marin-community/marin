@@ -48,6 +48,8 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -88,6 +90,25 @@ def validated_batch_axis_size(
             f"data ({data}) * expert ({expert}) = {batch_axes}"
         )
     return batch_axes
+
+
+def _diagnostic_optimizer(
+    model: GrugModelConfig, *, schedule_steps: int, batch_size: int, lr_scale: float
+) -> GrugMoeMuonHConfig:
+    """The heuristic optimizer for ``batch_size`` sequences, with both learning rates times ``lr_scale``."""
+    if lr_scale <= 0:
+        raise ValueError(f"lr_scale must be positive, got {lr_scale}")
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=schedule_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    return dataclasses.replace(
+        optimizer,
+        learning_rate=optimizer.learning_rate * lr_scale,
+        adam_lr=optimizer.adam_lr * lr_scale,
+    )
 
 
 def build_diagnostic_run(
@@ -193,18 +214,11 @@ def build_diagnostic_run(
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
-    if lr_scale <= 0:
-        raise ValueError(f"lr_scale must be positive, got {lr_scale}")
-    optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=total_schedule_steps,
+    optimizer = _diagnostic_optimizer(
+        model,
+        schedule_steps=total_schedule_steps,
         batch_size=optimizer_batch_size if optimizer_batch_size is not None else batch_size,
-        hidden_dim=model.hidden_dim,
-        seq_len=model.max_seq_len,
-    )
-    optimizer = dataclasses.replace(
-        optimizer,
-        learning_rate=optimizer.learning_rate * lr_scale,
-        adam_lr=optimizer.adam_lr * lr_scale,
+        lr_scale=lr_scale,
     )
     batch_axes = validated_batch_axis_size(
         device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
