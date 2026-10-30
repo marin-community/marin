@@ -283,7 +283,7 @@ def test_policy_judge_rejects_incompatible_placement_before_submission(
     assert submitted_batches == []
 
 
-def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_path):
+def test_policy_snapshot_uses_project_python_and_preserves_judge_configuration(tmp_path):
     campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
