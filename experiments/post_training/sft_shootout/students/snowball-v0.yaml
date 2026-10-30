@@ -1,0 +1,30 @@
+# Snowball v0 (open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12 @ 4eeb756b), served from the
+# regional merge output: every file's size matches the Hub at 4eeb756b and the weight shards' bytes hash to the
+# Hub's LFS sha256. (.marinskyrl-model-manifest.json and .cache_metadata.json there are the merge base's, not v0's.)
+# 4eeb756b has the same weights as the campaign config's 271c4b3c; the later commit only corrects the card.
+name: open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12
+location: s3://marin-us-east-02a/marin/weight-merging/campaign3-20261011/dare-linear-02/model
+revision: null
+tokenizer: open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12
+tokenizer_revision: 4eeb756b404db25bc04e4daf49dfb9817bceb741
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
