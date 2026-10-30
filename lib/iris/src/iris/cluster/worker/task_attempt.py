@@ -26,6 +26,7 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.egress import rule_domains
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
@@ -61,6 +62,7 @@ from iris.cluster.secrets import (
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
+from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
@@ -158,13 +160,15 @@ class _TaskOutcome:
 def docker_network_mode(network: TaskNetwork) -> str:
     """The Docker network mode for a task's network.
 
-    INTERNET runs on the bridge network whose host filter worker bootstrap
-    installs. A bridge container without that filter reaches the VPC and the
-    metadata server through the VM's routes, so the worker refuses INTERNET
-    unless bootstrap has written ``EGRESS_RESOLV_CONF``, which it does only
-    after the filter is in place.
+    CLUSTER and ALLOWLIST share the host's network; an ALLOWLIST task's DNS
+    goes through a worker-run filter instead (see ``egress_dns``). INTERNET
+    runs on the bridge network whose host filter worker bootstrap installs. A
+    bridge container without that filter reaches the VPC and the metadata
+    server through the VM's routes, so the worker refuses INTERNET unless
+    bootstrap has written ``EGRESS_RESOLV_CONF``, which it does only after the
+    filter is in place.
     """
-    if network is TaskNetwork.CLUSTER:
+    if network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST):
         return NETWORK_MODE_HOST
     if network is TaskNetwork.NONE:
         return NETWORK_MODE_NONE
@@ -254,6 +258,7 @@ class TaskAttempt:
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
+        egress_dns: EgressDnsFilters | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -281,6 +286,8 @@ class TaskAttempt:
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
+            egress_dns: The worker's DNS filters for ALLOWLIST tasks; None leaves
+                their DNS unfiltered.
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
@@ -292,6 +299,7 @@ class TaskAttempt:
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
+        self._egress_dns = egress_dns
         self._poll_interval_seconds = poll_interval_seconds
         self._task_outputs = task_outputs.model_copy(deep=True) if task_outputs is not None else None
         self._log_client = log_client
@@ -358,6 +366,7 @@ class TaskAttempt:
         poll_interval_seconds: float = 5.0,
         task_outputs: TaskOutputPolicy | None = None,
         task_env: dict[str, str] | None = None,
+        egress_dns: EgressDnsFilters | None = None,
     ) -> "TaskAttempt":
         """Create a TaskAttempt that adopts an already-running container.
 
@@ -398,6 +407,7 @@ class TaskAttempt:
             task_outputs=task_outputs,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
+            egress_dns=egress_dns,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
@@ -410,6 +420,9 @@ class TaskAttempt:
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
         port_allocator.reserve(list(discovered.ports.values()))
+        # The previous worker's DNS filter died with it; the container's resolv.conf still names its address.
+        if egress_dns is not None and instance.workdir is not None:
+            egress_dns.restore(instance.workdir.name)
         return instance
 
     def resume_monitoring(self) -> None:
@@ -832,6 +845,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             network_mode=docker_network_mode(isolation.network),
+            resolv_conf=self._prepare_resolv_conf(isolation.network),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             secret_host_path=self._secret_dir,
@@ -847,6 +861,22 @@ class TaskAttempt:
         chaos_raise("worker.create_container")
         self._container_handle = self._runtime.create_container(config)
         logger.info("Container handle created for task %s", self.task_id)
+
+    def _prepare_resolv_conf(self, network: TaskNetwork) -> Path | None:
+        """Return the resolv.conf to mount over the container's, if any.
+
+        Starts the DNS filter of an ALLOWLIST task. Without a filter manager,
+        as in local process runtimes, an ALLOWLIST task resolves every name.
+        """
+        if network is TaskNetwork.INTERNET:
+            # Docker's embedded resolver on the bridge forwards to the metadata
+            # server, which the host filter blocks, and relies on NAT rules
+            # gVisor does not apply. Bootstrap's file names public resolvers.
+            return Path(EGRESS_RESOLV_CONF)
+        if network is TaskNetwork.ALLOWLIST and self._egress_dns is not None:
+            assert self.workdir is not None
+            return self._egress_dns.start(self.workdir.name, rule_domains(self.request.egress_allow))
+        return None
 
     def _capture_outputs(self) -> None:
         if self._task_outputs is None:
@@ -1148,6 +1178,12 @@ class TaskAttempt:
                 shutil.rmtree(self._secret_dir)
             except OSError:
                 logger.exception("Failed to remove secret files for task %s", self.task_id)
+
+        if self._egress_dns is not None and self.workdir is not None:
+            try:
+                self._egress_dns.stop(self.workdir.name)
+            except Exception as e:
+                logger.warning("Failed to stop DNS filter for task %s: %s", self.task_id, e)
 
         # Release ports
         try:
