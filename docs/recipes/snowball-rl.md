@@ -1,5 +1,41 @@
 # Snowball RL experiments
 
+## September 21 lineage on the d512 Snowflake
+
+The [d512 Snowflake SFT](https://huggingface.co/open-athena/Snowflake-d512-Datakit-SFT-262K-2026.10.22)
+can enter the four RL stages that followed the September 21 Snowball SFT:
+
+```bash
+uv run python -m experiments.post_training.snowflake_0921 \
+  --version 2026.10.30 --stage reference-kl
+```
+
+This prints the complete artifact graph. Add `--run` to submit its Iris coordinator.
+Choose an immutable version for a real run. `--stage` can stop at `ftpo-math`,
+`ftpo-full-window`, or `rlvr`; each selection includes its upstream stages.
+
+| stage | input | terminal update | training data |
+|---|---|---:|---|
+| FTPO math | d512 SFT | 35 | Antidoom DAPO math |
+| FTPO full window | FTPO math optimizer checkpoint | 45, cumulative | Antidoom DAPO math |
+| Antidoom RLVR | FTPO step 45 policy | 12 | Snowball Ultra RLVR1 ordinary tasks |
+| reference/KL RLVR | RLVR step 12 policy | 20 | Snowball Ultra RLVR1 ordinary tasks |
+
+These are the selected release handoffs in the [Snowball family tree](../references/snowball-family-tree.md).
+The first FTPO handoff restores the native optimizer and data-loader state;
+later handoffs start fresh optimizers from durable HF policy exports. The
+Snowflake keeps these update counts and the original prompt/sample batch sizes.
+Its policy and rollout roles each use one eight-H100 node in `cw-us-east-02a`.
+The 67B EAGLE draft is omitted because it is not a draft for the d512 model.
+
+The branch uses the historical [FTPO settings](https://gist.github.com/benfeuer/d95902fe16b07ce40831658e4a62d49d)
+and [RLVR settings](https://gist.github.com/benfeuer/1eb3aa510ce7870bb22e7bef10b8d940).
+Its four stages require the original S3 task directories, Together judging
+credentials, the Snowball skills sandbox, and W&B credentials. The FTPO optimizer
+checkpoint has a 14-day temporary-storage lifetime, so the full-window stage
+must run before it expires. The graph has been validated locally; no GPU run or
+quality comparison has been made for the d512 model.
+
 Run a Snowball experiment from a named preset. The command binds the versioned
 curation selection, pinned Datakit SFT weights and tokenizer, GPU layout,
 evaluation schedule and measurement window into an artifact graph.
