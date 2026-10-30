@@ -132,8 +132,9 @@ def feedback_options(function):
             click.option(
                 "--synthesis-replaces",
                 help=(
-                    "A seed stratum whose tasks the synthesized tasks replace, so that the other strata keep their "
-                    "share; the synthesized share stays a share of all training tasks and must be below the stratum's."
+                    "Comma-separated seed strata whose tasks the synthesized tasks replace, so that the other strata "
+                    "keep their share; the synthesized share stays a share of all training tasks and must be below "
+                    "theirs."
                 ),
             ),
             click.option(
@@ -524,28 +525,31 @@ async def _skyrl_run(
             if feedback.synthesis_replaces is None:
                 stream = rsi_loop(seed_tasks, boxes, config)
             else:
-                replaced, kept = _split_stratum(pool, feedback, options.seed, strata, written)
-                weight = pool.weights[feedback.synthesis_replaces]
+                names = frozenset(feedback.synthesis_replaces.split(","))
+                replaced, kept, weight = _split_strata(
+                    pool, names, feedback.synthesized_share, options.seed, strata, written
+                )
                 config = replace(config, synthesized_share=feedback.synthesized_share / weight)
                 stream = rsi_loop(replaced, boxes, config, untouched=Source(kept, share=1 - weight))
         await _record_groups(stream, strata, output)
 
 
-def _split_stratum(
-    pool: TaskPool, feedback: FeedbackOptions, seed: int, strata: dict[str, str], written: Collection[str]
-) -> tuple[AsyncIterator[TaskSpec], AsyncIterator[TaskSpec]]:
-    """The seed tasks of the stratum that synthesized tasks replace, and those of the other strata, each in the seed's
-    order."""
-    name = feedback.synthesis_replaces
-    if name not in pool.weights:
-        raise ValueError(f"no seed stratum {name!r}; the strata are {sorted(pool.weights)}")
-    if feedback.synthesized_share >= pool.weights[name]:
-        raise ValueError(f"the synthesized share must be below the {name} share of the seed, {pool.weights[name]:.3f}")
-    replaced = (task for task in pool.stream(seed) if task.stratum == name)
-    kept = (task for task in pool.stream(seed) if task.stratum != name)
+def _split_strata(
+    pool: TaskPool, names: frozenset[str], share: float, seed: int, strata: dict[str, str], written: Collection[str]
+) -> tuple[AsyncIterator[TaskSpec], AsyncIterator[TaskSpec], float]:
+    """The seed tasks of the strata that synthesized tasks replace, those of the other strata, each in the seed's
+    order, and the replaced strata's share of the seed."""
+    if unknown := names - pool.weights.keys():
+        raise ValueError(f"no seed strata {sorted(unknown)}; the strata are {sorted(pool.weights)}")
+    weight = sum(pool.weights[name] for name in names)
+    if share >= weight:
+        raise ValueError(f"the synthesized share must be below the {sorted(names)} share of the seed, {weight:.3f}")
+    replaced = (task for task in pool.stream(seed) if task.stratum in names)
+    kept = (task for task in pool.stream(seed) if task.stratum not in names)
     return (
         from_iterable(_remember_stratum(replaced, strata, written=written)),
         from_iterable(_remember_stratum(kept, strata, written=written)),
+        weight,
     )
 
 
