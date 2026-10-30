@@ -20,8 +20,8 @@ from experiments.post_training.phase1a.experts import (
     expert_topology,
 )
 from experiments.post_training.phase1a.launch import execution
+from experiments.post_training.phase1a.launch_test_support import COMPOSE
 from experiments.post_training.phase1a.matrix import Task
-from experiments.post_training.phase1a.test_phase1a import COMPOSE
 
 
 def test_an_expert_trains_three_epochs_of_full_batches_and_saves_one_full_checkpoint_at_the_end():

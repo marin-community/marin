@@ -626,7 +626,6 @@ def parse_checkpoint_export_config(
 
 _OPTIONAL_HYDRA_PATTERNS = {
     ".distillation",
-    ".max_generate_length_by_data_source",
     ".domain_weights",
     ".max_generate_length_by_data_source",
     ".engine_init_kwargs",
