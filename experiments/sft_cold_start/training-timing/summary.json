@@ -1,0 +1,40 @@
+{
+  "128H100": {
+    "url": "https://wandb.ai/nyu-dice-lab/sft-pipe-repro/runs/snowball-sft-production-128h100-20261024b",
+    "steady_window": [
+      10,
+      480
+    ],
+    "iteration_mean_seconds": 157.15188664047088,
+    "iteration_median_seconds": 153.60377988102846,
+    "iteration_p10_seconds": 144.9846648729872,
+    "iteration_p90_seconds": 167.51731423503952,
+    "elapsed_seconds_per_update": 157.08107127646605,
+    "first_50_loss_mean": 0.6667908847332,
+    "last_50_loss_mean": 0.5811824345588684
+  },
+  "256H100": {
+    "url": "https://wandb.ai/nyu-dice-lab/sft-pipe-repro/runs/snowball-sft-production-256h100-20261027c",
+    "steady_window": [
+      481,
+      2339
+    ],
+    "iteration_mean_seconds": 87.80053087313377,
+    "iteration_median_seconds": 83.79666376300156,
+    "iteration_p10_seconds": 78.35464205802418,
+    "iteration_p90_seconds": 93.68420563905966,
+    "elapsed_seconds_per_update": 87.77566754715856,
+    "first_50_loss_mean": 0.5936683773994446,
+    "last_50_loss_mean": 0.5474078530073165
+  },
+  "256H100_budget_projections": {
+    "0.05": {
+      "updates": 238,
+      "hours": 5.80294691006215
+    },
+    "0.1": {
+      "updates": 475,
+      "hours": 11.581511690250087
+    }
+  }
+}

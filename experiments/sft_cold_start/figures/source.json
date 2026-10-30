@@ -1,0 +1,27 @@
+{
+  "tracker": "/Users/benfeuer/Documents/experiments/complete/eval-policy-09-25/TRACKER.md",
+  "tracker_sha256": "fe26792f72cbd9092f0f33fa416213a80b4b4303f89472d743aa65e71f93d3b1",
+  "models": [
+    "open-athena/snowball-67b-a2b-base-262k-qk175-skew8",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step222-2026.10.25",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step471-2026.10.25",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step1024-2026.10.28",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-Repro-262K-Step2048-2026.10.29",
+    "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
+  ],
+  "stage_filter_pp": 5.0,
+  "stages": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      1,
+      5
+    ]
+  ]
+}

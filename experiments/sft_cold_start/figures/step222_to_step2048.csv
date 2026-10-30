@@ -1,0 +1,9 @@
+rank,benchmark,start_score,end_score,change_pp
+1,bfclparity-pi,0.398,0.667,+26.9
+2,gsm8k-0shot,0.719,0.616,-10.3
+3,financebench,0.640,0.540,-10.0
+4,swebench-verified,0.115,0.188,+7.3
+5,humanevalplus,0.744,0.683,-6.1
+6,NUPA,0.117,0.060,-5.7
+7,gpqa-diamond,0.614,0.670,+5.6
+8,aime24,0.723,0.777,+5.4

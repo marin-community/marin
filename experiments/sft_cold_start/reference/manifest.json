@@ -2698,6 +2698,30 @@
       "sha256": "d09f819a00afbd4ecf413cda6e566c4a31028e09b820d618dae6108813431829",
       "bytes": 1709,
       "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/training_timing.py",
+      "restore_path": "artifacts/publication/training_timing.py",
+      "snapshot": "artifacts/publication/training_timing.py.source",
+      "sha256": "1004e110f25898c889b3b9aabc34f45e91f036460ba4a7dd5ade49be854a4bfe",
+      "bytes": 2035,
+      "encoding": "utf-8"
+    },
+    {
+      "original": "artifacts/publication/training-timing-evidence.json",
+      "restore_path": "artifacts/publication/training-timing-evidence.json",
+      "snapshot": "artifacts/publication/training-timing-evidence.json.source.gz",
+      "sha256": "1710905bb91b09d535350fd47a6bc887cfd18d8f22f9674adde9419aee58b771",
+      "bytes": 560240,
+      "encoding": "gzip"
+    },
+    {
+      "original": "artifacts/publication/training-timing-summary.json",
+      "restore_path": "artifacts/publication/training-timing-summary.json",
+      "snapshot": "artifacts/publication/training-timing-summary.json.source",
+      "sha256": "7556468c56a14ffac124b5829926f67ec030db3ba1efa58a043bcc800d822279",
+      "bytes": 1225,
+      "encoding": "utf-8"
     }
   ],
   "training_patch_sha256": "ddffb62bdc165387144b92080a4753a37492d722d26610f884414b19a29bb242"

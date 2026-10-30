@@ -1,0 +1,22 @@
+import json,statistics,math
+from pathlib import Path
+import wandb
+R=Path(__file__).resolve().parent
+api=wandb.Api(timeout=60)
+report={}
+for label,runid,start in [('128H100','snowball-sft-production-128h100-20261024b',0),('256H100','snowball-sft-production-256h100-20261027c',471)]:
+ run=api.run('nyu-dice-lab/sft-pipe-repro/'+runid)
+ rows=list(run.scan_history(keys=['global_step','_timestamp','throughput/iteration_time','throughput/duration','train/loss'],page_size=1000))
+ vals=list(run.scan_history(keys=['global_step','eval/loss','eval/sft/loss','eval/replay/loss'],page_size=1000))
+ steady=[x for x in rows if x['global_step']>=start+10]
+ iterations=sorted(x['throughput/iteration_time'] for x in steady)
+ elapsed=(rows[-1]['_timestamp']-rows[0]['_timestamp'])/(rows[-1]['global_step']-rows[0]['global_step'])
+ result={'url':run.url,'training_rows':rows,'validation_rows':vals,'steady_window':[steady[0]['global_step'],steady[-1]['global_step']],'iteration_mean_seconds':statistics.mean(iterations),'iteration_median_seconds':statistics.median(iterations),'iteration_p10_seconds':iterations[int(.1*(len(iterations)-1))],'iteration_p90_seconds':iterations[int(.9*(len(iterations)-1))],'elapsed_seconds_per_update':elapsed,'first_50_loss_mean':statistics.mean(x['train/loss'] for x in rows[:50]),'last_50_loss_mean':statistics.mean(x['train/loss'] for x in rows[-50:])}
+ report[label]=result
+summary={k:{a:b for a,b in v.items() if a not in ['training_rows','validation_rows']} for k,v in report.items()}
+rate=report['256H100']['elapsed_seconds_per_update']
+summary['256H100_budget_projections']={str(frac):{'updates':math.ceil(4750*frac),'hours':math.ceil(4750*frac)*rate/3600} for frac in [.05,.1]}
+(R/'training-timing-evidence.json').write_text(json.dumps(report,indent=2)+'\n')
+(R/'training-timing-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+print(json.dumps(summary,indent=2))
+print('validation endpoints',json.dumps({k:[v['validation_rows'][0],v['validation_rows'][-1]] for k,v in report.items()},indent=2))

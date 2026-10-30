@@ -28,3 +28,7 @@ Separate compact changes should carry reusable fixes to main after focused revie
 - [Concurrent tokenizer staging](https://github.com/marin-community/marin/pull/10797)
 - [Existing multipart promotion verification](https://github.com/marin-community/marin/pull/10639)
 - [Preserve generation settings during HF export](https://github.com/marin-community/marin/pull/10798)
+
+## Original evaluation figures
+
+The [figures](figures/README.md) preserve the original learning curves and their frozen score tables. These plots include the evaluation configuration confound discussed in the [experiment draft](EXPERIMENT_ISSUE_DRAFT.md); they are diagnostic historical results, not the corrected rerun scores. The corrected partial scores are linked separately in that draft.

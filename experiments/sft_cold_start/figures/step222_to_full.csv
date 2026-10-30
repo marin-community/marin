@@ -1,0 +1,16 @@
+rank,benchmark,start_score,end_score,change_pp
+1,swebench-verified,0.115,0.394,+27.9
+2,ot-tblite-recovery,0.014,0.256,+24.2
+3,financebench,0.640,0.420,-22.0
+4,ds-1000-local,0.055,0.271,+21.6
+5,triviaqa,0.403,0.587,+18.4
+6,NUPA,0.117,0.295,+17.8
+7,bfclparity-pi,0.398,0.525,+12.7
+8,tb2-recovery,0.008,0.124,+11.6
+9,cruxeval,0.564,0.662,+9.8
+10,aime24,0.723,0.810,+8.7
+11,bixbench-pi,0.063,0.142,+7.9
+12,gpqa-diamond,0.614,0.692,+7.8
+13,humanevalplus,0.744,0.677,-6.7
+14,mbppplus,0.611,0.672,+6.1
+15,gsm8k-0shot,0.719,0.776,+5.7

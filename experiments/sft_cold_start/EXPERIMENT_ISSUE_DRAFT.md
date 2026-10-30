@@ -1,12 +1,10 @@
-# SFT Cold Start Subsampling: H100 reproduction and a cheaper ablation baseline
-
-Agent-authored experiment draft. Results below are provisional as of October 30, 2026; corrected evals are still running.
+# [SFT] Cold Start Subsampling: H100 reproduction and a cheaper ablation baseline
 
 ## TL;DR
 
-We successfully reproduced the SFT cold-start workflow on a new H100 cluster: import the base, stage the mixture, train, resume at a different GPU count, and export verified checkpoints. The first corrected agentic evals look good. Roughly 10% of the full cold-start training budget may be enough to recover most of the useful performance, which would make ablations much cheaper.
+We successfully reproduced the SFT cold-start workflow on a new H100 cluster: import the base, stage the mixture, train, resume at a different GPU count, and export verified checkpoints. Agentic evals look good (provisionally, they're not quite finished yet). Roughly 10% of the full cold-start training budget may be enough to recover most of the useful performance, which would make ablations much cheaper.
 
-We initially thought the reproduction had a large agentic capability gap. A major confound was in serving: exported checkpoints were missing the original model's second stop token, and thinking was not reliably enabled. We fixed the generation configs on Hugging Face and explicitly enabled thinking in the rerun configs. On the same SWE task, step 222 went from batches of up to 33 tool calls to at most two. The corrected partial evals are much stronger. We do not currently have a reason to launch another training run; finish these evals first.
+We initially thought the reproduction had a large agentic capability gap. A major confound was in serving: exported checkpoints were missing the original model's second stop token, and thinking was not reliably enabled. We fixed the generation configs on Hugging Face and explicitly enabled thinking in the rerun configs. On the same SWE task, step 222 went from batches of up to 33 tool calls to at most two. The corrected partial evals are much stronger.
 
 ## Experiment
 
@@ -33,7 +31,67 @@ Training runs: [128 H100](https://wandb.ai/nyu-dice-lab/sft-pipe-repro/runs/snow
 
 ## Findings so far
 
-At 16:00 UTC, these were the raw partial means. The standalone tracker linked below carries denominators, source records, provisional snapshots and audited final columns.
+### 1. Training: throughput, loss and replay
+
+The new cluster ran the full 262k-context recipe with the same global batch at both GPU counts. Moving from 128 to 256 H100s reduced accumulation from eight microsteps to four and made each update about 1.8× faster.
+
+| Training run | Mean seconds / update | Median seconds / update | Middle 80% of update times |
+|---|---:|---:|---:|
+| [128 H100](https://wandb.ai/nyu-dice-lab/sft-pipe-repro/runs/snowball-sft-production-128h100-20261024b) | 157.2 | 153.6 | 145.0–167.5 s |
+| [256 H100, resumed from step 471](https://wandb.ai/nyu-dice-lab/sft-pipe-repro/runs/snowball-sft-production-256h100-20261027c) | 87.8 | 83.8 | 78.4–93.7 s |
+
+At the observed 256-H100 rate, **5% of the 4,750-update schedule takes about 5 hours 48 minutes** (238 updates), and **10% takes about 11 hours 35 minutes** (475 updates). These are steady training-time projections, excluding setup, compilation and failed launch attempts. We actually trained the first 471 steps on 128 H100s; we did not measure a fresh 256-H100 run from step zero. The exported step-222 and step-471 checkpoints are the nearby 4.7% and 9.9% points.
+
+[Timing summary](https://github.com/marin-community/marin/blob/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/training-timing/summary.json) and [logged timing/loss evidence (compressed JSON)](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/training-timing/evidence.json.gz).
+
+Loss dropped sharply early and then improved more slowly:
+
+| Held-out loss | Initialization | 450 updates (logged step 449) | 2300 updates (logged step 2299) |
+|---|---:|---:|---:|
+| Combined | 0.966 | 0.510 | 0.488 |
+| SFT | 1.000 | 0.366 | 0.336 |
+| Pretraining replay | 0.886 | 0.846 | 0.842 |
+
+The resumed run's first and last 50 logged training losses averaged 0.594 and 0.547. That is consistent with continued learning, but held-out loss is the cleaner comparison because the training mixture changes over the schedule. These losses do not establish downstream quality parity with the original run. The [original 10-05 W&B run](https://wandb.ai/marin-community/marin_moe_sft/runs/grug-67b-sft-20260929-special-token-lr-full-ab-4750-grouped) is linked for comparison.
+
+We slightly varied the replay recipe to reuse data already available in S3. The supervised side uses the same 216-source catalog, apart from 88 packed validation sequences. Replay still accounts for about **20.35% of scheduled positions**, with **8× long-document weighting**, but we reused Datakit cache `store_4d2e363d` with Harrier main-phase weights instead of reconstructing the original `replay_skew8.json` selection. That changes replay source selection and weights, so this is a close recipe reproduction rather than an identical data stream. The [training confound audit](https://gist.github.com/penfever/dfb8550a3643849dfea701df44050757) records the differences.
+
+### 2. Learning curves, and the agentic outliers that exposed the serving issue
+
+These figures preserve the **historical evals, before the serving correction**. They show why we investigated; they should not be read as corrected performance estimates. Each plot includes benchmarks whose endpoint change exceeds five percentage points, so the plots deliberately omit smaller movements.
+
+![Base to step 222: broad early benchmark gains](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/base_to_step222.png)
+
+The first 222 updates produced broad gains: 17 of 26 benchmarks moved by more than five points, all upward. MATH-500 rose from 10.4% to 93.0%, AIME from 13.0% to 72.3%, and HumanEval+ from 17.7% to 74.4%. A small cold start changes what the base model can demonstrate, especially on the non-agentic benchmarks.
+
+![Step 222 through step 2048: gains, plateaus and declines](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_step2048_all.png)
+
+After that, the curves looked like a plausible mixture of gains, plateaus and tradeoffs. Eighteen of 26 benchmarks stayed within five points between steps 222 and 2048. Four improved by more than five points, including BFCL-Parity (39.8% → 66.7%) and SWE-bench (11.5% → 18.8%); four declined, including GSM8K (71.9% → 61.6%). This alone would not suggest a broken experiment.
+
+![Reproduction checkpoints compared with the separate original 10-05 release](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_full_all.png)
+
+The suspicious part was the persistent agentic gap. At step 2048, OT-TBLite was still 3.2% versus the original release's 25.6%, Terminal-Bench was 0.8% versus 12.4%, and DS-1000 was 7.0% versus 27.1%. The dashed segments end at the **separately trained original 10-05 release**, not a later checkpoint of our run. They made the gap conspicuous, but did not prove that more training caused it.
+
+Those outliers prompted manual trace comparisons. We found oversized native tool-call batches and then audited the serving configs: the exported models lacked the original second EOS token, and thinking was not reliably enabled. Correcting those settings substantially changed the smoke trace and improved the partial rerun scores below. The curves helped us find the problem; the trace and config checks supplied the evidence.
+
+<details>
+<summary>Additional figure splits and source data</summary>
+
+![Step 222 to 2048: gains](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_step2048_gains.png)
+
+![Step 222 to 2048: declines](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_step2048_declines.png)
+
+![Original-release comparison: largest changes](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_full_largest.png)
+
+![Original-release comparison: other changes](https://raw.githubusercontent.com/marin-community/marin/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures/step222_to_full_other.png)
+
+[All figures, CSVs and provenance](https://github.com/marin-community/marin/tree/codex/sft-cold-start-reference-20261030/experiments/sft_cold_start/figures). The historical “Terminal-Bench 2” plot label refers to the audited 2.1 v6 benchmark. Historical step-2048 SWE coverage was 453/500; these plots preserve that snapshot rather than silently replacing it with corrected scores.
+
+</details>
+
+### 3. Corrected agentic evals: provisional means
+
+At 16:00 UTC on October 30, these were the raw partial means. The standalone tracker linked below carries denominators, source records, provisional snapshots and audited final columns.
 
 | Checkpoint | Fraction of 4,750 updates | SWE-bench mean (scored / 500) | OT-TBLite mean (scored / 300) |
 |---|---:|---:|---:|
