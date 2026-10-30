@@ -89,9 +89,7 @@ def build_training_step(cell: Cell, version: str):
     caches = reference.build(((cell.slug, 42),))[0].deps
     base = reference._training_step(cell.slug, cell.seed, caches)
     spec = reference.MODELS[cell.slug]
-    resources = reference.ResourceConfig.with_tpu(
-        spec.tpu_type, regions=["us-central2"], ram="64g" if cell.slug == "3e18" else "128g"
-    )
+    resources = reference.ResourceConfig.with_tpu(spec.tpu_type, regions=["us-central2"], ram="128g")
     steps = (
         math.ceil(PILOT_TOKENS / (spec.batch_size * reference.SEQUENCE_LENGTH))
         if cell.phase == PILOT
