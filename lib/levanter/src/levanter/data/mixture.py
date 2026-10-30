@@ -19,6 +19,7 @@ from levanter.schedule import BatchSchedule
 from levanter.utils.thread_utils import blocking_wait, future_from_value
 
 logger = logging.getLogger(__name__)
+_INTEGER_ALLOCATION_TOLERANCE = 1e-9
 
 
 T = TypeVar("T")
@@ -153,9 +154,15 @@ class MixtureDataset(AsyncDataset[T]):
         return counts_per_block_per_stage, counts_after_stage, unpermuted_ids_per_stage
 
     def _compute_expected_counts_per_block(self, weights: dict[str, float], block_size: int):
-        _expected_values_per_block = np.zeros(len(self.datasets), dtype=np.int32)
-        for i, dsname in enumerate(self.dataset_index):
-            _expected_values_per_block[i] = weights.get(dsname, 0) * block_size
+        expected = np.array([weights.get(name, 0) * block_size for name in self.dataset_index])
+        # Normalizing integer allocations can put an exact count just below its
+        # integer (e.g. 1001 / 64000 * 64000). Preserve those allocations before
+        # truncating genuinely fractional counts and assigning the remainder.
+        nearest = np.rint(expected)
+        expected = np.where(
+            np.isclose(expected, nearest, rtol=0, atol=_INTEGER_ALLOCATION_TOLERANCE), nearest, expected
+        )
+        _expected_values_per_block = expected.astype(np.int32)
 
         # handle remainder by adding to the largest dataset
         largest_dataset = np.argmax(_expected_values_per_block)
