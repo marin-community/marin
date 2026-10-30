@@ -56,7 +56,7 @@ def select_replay_rows(config: ReplaySubsetConfig) -> list[SelectedRows]:
     remaining_short, remaining_long = config.short_tokens, config.long_tokens
     selected = []
     for source in config.source_shards:
-        store = JaggedArrayStore.open(source + "/input_ids", mode="r", dtype=np.int32)
+        store = JaggedArrayStore.open(str(StoragePath(source) / "input_ids"), mode="r", dtype=np.int32)
         count = len(store)
         offsets = np.asarray(store.offsets[: count + 1].read().result())
         lengths = np.diff(np.concatenate((np.array([0], dtype=np.int64), offsets[1:])))
@@ -80,7 +80,7 @@ def _records(selected: list[SelectedRows], *, long_documents: bool) -> Iterator[
         indices = shard.long if long_documents else shard.short
         if len(indices) == 0:
             continue
-        store = JaggedArrayStore.open(shard.source + "/input_ids", mode="r", dtype=np.int32)
+        store = JaggedArrayStore.open(str(StoragePath(shard.source) / "input_ids"), mode="r", dtype=np.int32)
         # A long row can contain hundreds of millions of tokens. Keep at most
         # one such document in each read/write batch without changing its data.
         batch_rows = 1 if long_documents else READ_BATCH_ROWS
@@ -103,7 +103,7 @@ def prepare_replay_subset(config: ReplaySubsetConfig) -> dict[str, str]:
     ):
         if budget == 0:
             continue
-        output = f"{config.output_path}/{name}"
+        output = str(StoragePath(config.output_path) / name)
         write_levanter_cache(
             _records(selected, long_documents=long_documents),
             output,
@@ -125,5 +125,5 @@ def prepare_replay_subset(config: ReplaySubsetConfig) -> dict[str, str]:
         }
         for shard in selected
     ]
-    StoragePath(config.output_path + "/selection.json").write_text(json.dumps(audit, indent=2) + "\n")
+    (StoragePath(config.output_path) / "selection.json").write_text(json.dumps(audit, indent=2) + "\n")
     return outputs
