@@ -595,9 +595,9 @@ def test_host_arrays_without_a_sharding_roundtrip():
     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
 
 
-def test_large_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
-    # This size reproduces the referenced-source write path silently saving fill values.
-    shape = (26, 256, 64, 64)
+def test_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
+    # This 2.5 MiB shape reproduces referenced-source writes persisting fill values.
+    shape = (5, 64, 64, 64)
     source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
 
     tree_serialize_leaves_tensorstore(str(tmp_path), source)
