@@ -30,7 +30,7 @@ from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
@@ -97,6 +97,10 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
+# Logged on every step, unlike the watch's grad/norm/total, which logs every watch interval.
+GRAD_NORM_METRIC = "train/grad_norm"
+# 1.0 on steps where the global-norm clip rescaled the gradient; absent when clipping is off.
+GRAD_CLIPPED_METRIC = "train/grad_clipped"
 DEFAULT_SLOP_FACTOR = 85
 # With the carry offload, host memory offloading (below) lets rematerialization count the offloaded
 # carry as host memory. Rematerialization and the scheduler both work within
@@ -309,6 +313,9 @@ class GrugTrainerConfig:
     gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    # Rescale the whole gradient to this global L2 norm when it is larger; None disables clipping.
+    # The clip runs in the train step before the optimizer, so it adds no optimizer state.
+    max_grad_norm: float | None = None
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
@@ -921,12 +928,25 @@ def _make_diagnostic_watch_step(
     return diagnostic_watch_step
 
 
+def clip_by_total_norm(grads: PyTree, max_norm: float) -> tuple[PyTree, jax.Array, jax.Array]:
+    """Rescale ``grads`` to global L2 norm ``max_norm`` when their norm exceeds it.
+
+    Returns the clipped gradients, the pre-clip global norm, and whether the clip fired. At or below
+    ``max_norm`` every leaf is multiplied by exactly 1, so the gradients pass through bitwise.
+    """
+    norm = optax.global_norm(grads)
+    clipped = norm > max_norm
+    scale = jnp.where(clipped, max_norm / norm, 1.0)
+    return jax.tree.map(lambda g: g * scale.astype(g.dtype), grads), norm, clipped
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    max_grad_norm: float | None = None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
@@ -957,6 +977,13 @@ def _make_train_step(
             batch = balance_attention_rows(batch)
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
+        # The watch below reads the unclipped gradients, so grad/norm/* keep their pre-clip meaning.
+        raw_grads = grads
+        if max_grad_norm is None:
+            metrics[GRAD_NORM_METRIC] = optax.global_norm(grads)
+        else:
+            grads, metrics[GRAD_NORM_METRIC], clipped = clip_by_total_norm(grads, max_grad_norm)
+            metrics[GRAD_CLIPPED_METRIC] = clipped.astype(jnp.float32)
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
             if state.master_params is None:
@@ -993,7 +1020,7 @@ def _make_train_step(
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
                 params=qb_params,
-                grads=grads,
+                grads=raw_grads,
                 updates=updates,
                 opt_state=opt_state_in,
                 model_tree_type=type(state.params),
@@ -1050,6 +1077,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
+        max_grad_norm=config.trainer.max_grad_norm,
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
         balance_rows=config.trainer.balance_attention_rows,
@@ -1367,6 +1395,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
+                    levanter.tracker.log(
+                        {key: metrics[key] for key in (GRAD_NORM_METRIC, GRAD_CLIPPED_METRIC) if key in metrics},
+                        step=step,
+                    )
                     if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
                             metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],

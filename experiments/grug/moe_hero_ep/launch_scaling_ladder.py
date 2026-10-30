@@ -71,6 +71,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -297,6 +298,8 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        # The narrow rungs keep the unclipped recipe they were trained with.
+        max_grad_norm=HERO_MAX_GRAD_NORM if size == "d6144" else None,
         gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(

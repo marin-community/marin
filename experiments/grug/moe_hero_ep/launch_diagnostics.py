@@ -32,6 +32,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -109,6 +110,9 @@ def build_diagnostic_run(
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
+    max_grad_norm: float | None = HERO_MAX_GRAD_NORM,
+    optimizer_batch_size: int | None = None,
+    lr_scale: float = 1.0,
     moe_implementation: str | None = None,
     ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
@@ -135,6 +139,9 @@ def build_diagnostic_run(
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+    ``optimizer_batch_size`` sizes the heuristic from another global batch instead, so a one-rack run
+    can reuse the multi-rack hero's beta2 and epsilon, and ``lr_scale`` multiplies both learning rates.
+    ``max_grad_norm`` is the train step's global gradient-norm clip; ``None`` disables it.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -185,11 +192,18 @@ def build_diagnostic_run(
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
+    if lr_scale <= 0:
+        raise ValueError(f"lr_scale must be positive, got {lr_scale}")
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=total_schedule_steps,
-        batch_size=batch_size,
+        batch_size=optimizer_batch_size if optimizer_batch_size is not None else batch_size,
         hidden_dim=model.hidden_dim,
         seq_len=model.max_seq_len,
+    )
+    optimizer = dataclasses.replace(
+        optimizer,
+        learning_rate=optimizer.learning_rate * lr_scale,
+        adam_lr=optimizer.adam_lr * lr_scale,
     )
     batch_axes = validated_batch_axis_size(
         device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
@@ -235,6 +249,7 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
+        max_grad_norm=max_grad_norm,
         gc_interval=gc_interval,
         master_param_mode=master_param_mode,
     )
@@ -576,6 +591,26 @@ def build_diagnostic_run(
     help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
 )
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
+@click.option(
+    "--max-grad-norm",
+    type=click.FloatRange(min=0),
+    default=HERO_MAX_GRAD_NORM,
+    show_default=True,
+    help="Clip the global gradient norm to this value in the train step. 0 disables clipping.",
+)
+@click.option(
+    "--optimizer-batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Global batch that sizes the optimizer heuristic (LR, beta2, epsilon). Defaults to --batch-size.",
+)
+@click.option(
+    "--lr-scale",
+    type=click.FloatRange(min=0, min_open=True),
+    default=1.0,
+    show_default=True,
+    help="Multiply both the MuonH and the Adam learning rates.",
+)
 @build_options
 def main(
     run_id: str,
@@ -611,6 +646,9 @@ def main(
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
+    max_grad_norm: float,
+    optimizer_batch_size: int | None,
+    lr_scale: float,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -631,6 +669,9 @@ def main(
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
+        max_grad_norm=max_grad_norm or None,
+        optimizer_batch_size=optimizer_batch_size,
+        lr_scale=lr_scale,
         moe_implementation=moe_implementation,
         ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),

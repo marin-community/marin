@@ -1622,3 +1622,112 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
             kept = flat_keep[group]
             # A prefix: every kept entry precedes every dropped one within the group.
             assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
+
+
+def test_total_norm_clip_passes_small_gradients_through_bitwise():
+    grads = {"a": jnp.array([0.3, -0.4]), "b": jnp.array([[0.1, 0.2]])}
+
+    clipped, norm, fired = train.clip_by_total_norm(grads, 1.0)
+
+    np.testing.assert_allclose(norm, math.sqrt(0.09 + 0.16 + 0.01 + 0.04), rtol=1e-6)
+    assert not bool(fired)
+    for want, have in zip(jax.tree.leaves(grads), jax.tree.leaves(clipped), strict=True):
+        np.testing.assert_array_equal(np.asarray(have), np.asarray(want))
+
+
+def test_total_norm_clip_rescales_the_whole_gradient_to_the_limit():
+    # The leaves have norms 5 and 12, total 13: one global scale, not a per-leaf or per-group clip.
+    grads = {"a": jnp.array([3.0, 4.0]), "b": jnp.array([[12.0]])}
+
+    clipped, norm, fired = train.clip_by_total_norm(grads, 1.0)
+
+    np.testing.assert_allclose(norm, 13.0)
+    assert bool(fired)
+    np.testing.assert_allclose(optax.global_norm(clipped), 1.0, rtol=1e-6)
+    np.testing.assert_allclose(clipped["a"], np.array([3.0, 4.0]) / 13.0, rtol=1e-6)
+    np.testing.assert_allclose(clipped["b"], np.array([[12.0]]) / 13.0, rtol=1e-6)
+
+
+def test_clipped_train_step_updates_with_the_clipped_gradient_and_logs_the_raw_norm(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        loss = current_params.weight**2
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        return (loss, {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        max_grad_norm=1.0,
+        watch_config=WatchConfig(interval=10),
+    )
+
+    state, metrics, watch_stats = train_step(state, jnp.array(0))
+
+    # Raw gradient 4 is clipped to 1, so SGD moves the weight by 0.1 instead of 0.4.
+    np.testing.assert_allclose(state.params.weight, 1.9, rtol=1e-6)
+    np.testing.assert_allclose(metrics[train.GRAD_NORM_METRIC], 4.0)
+    assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
+    assert watch_stats is not None
+    np.testing.assert_allclose(watch_stats["grad/norm/total"], 4.0)
+
+
+def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, monkeypatch):
+    """The clip lives in the train step, not the optimizer, so the saved optimizer state still matches."""
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    mp = jmp.get_policy("f32")
+    optimizer = optax.adam(1e-3)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+
+    def large_gradients(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        grads = jax.tree.map(lambda p: jnp.full_like(p, 10.0), current_params)
+        return (jnp.array(0.0), {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+
+    monkeypatch.setattr(train, "_loss_and_grads", large_gradients)
+
+    def build(key):
+        with set_mesh(mesh):
+            return train.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.key(key), ema_beta=None)
+
+    unclipped_step = train._make_train_step(optimizer, mp, z_loss_weight=0, ema_beta=None)
+    with set_mesh(mesh):
+        written, _, _ = unclipped_step(build(17), jnp.array(0))
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+
+    clipped_step = train._make_train_step(optimizer, mp, z_loss_weight=0, ema_beta=None, max_grad_norm=1.0)
+    with set_mesh(mesh):
+        restored = restore_grug_state_from_checkpoint(
+            build(23),
+            checkpoint_search_paths=[str(checkpoint_root)],
+            load_checkpoint_setting=True,
+            mesh=None,
+            allow_partial=False,
+        )
+        assert int(restored.step) == 1
+        for want, have in zip(jax.tree.leaves(written), jax.tree.leaves(restored), strict=True):
+            np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+        # The step donates its input state, so compare before stepping.
+        stepped, metrics, _ = clipped_step(restored, jnp.array(0))
+
+    assert jax.tree.structure(stepped.opt_state) == jax.tree.structure(written.opt_state)
+    assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
+    assert int(stepped.step) == 2
