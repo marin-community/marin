@@ -90,14 +90,23 @@ def iris_vllm_launch(
     pipeline_parallel_size: int,
     tensor_parallel_size: int,
     data_parallel_size: int,
+    data_parallel_size_local: int | None = None,
 ) -> Iterator[IrisVllmLaunch]:
-    """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
+    """Bootstrap native vLLM pipeline stages or a distributed data-parallel group."""
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
-    if job_info.num_tasks != pipeline_parallel_size:
+    local_dp = data_parallel_size if data_parallel_size_local is None else data_parallel_size_local
+    if local_dp < 1 or data_parallel_size % local_dp:
+        raise ValueError("Local data parallel size must evenly divide the full data parallel size")
+    dp_hosts = data_parallel_size // local_dp
+    if pipeline_parallel_size > 1 and dp_hosts > 1:
+        raise ValueError("A task gang may distribute pipeline stages or data-parallel ranks, not both")
+    task_count = pipeline_parallel_size * dp_hosts
+    if job_info.num_tasks != task_count:
         raise ValueError(
-            f"vLLM PP={pipeline_parallel_size} requires {pipeline_parallel_size} Iris tasks, got {job_info.num_tasks}"
+            f"vLLM PP={pipeline_parallel_size}, DP={data_parallel_size}, local DP={local_dp} "
+            f"requires {task_count} Iris tasks, got {job_info.num_tasks}"
         )
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
@@ -134,6 +143,7 @@ def iris_vllm_launch(
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=data_parallel_size,
+            data_parallel_size_local=local_dp,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
         )
@@ -215,7 +225,9 @@ def _build_task_launch(
     data_parallel_size: int,
     master_addr: str,
     coordinator_name: str,
+    data_parallel_size_local: int | None = None,
 ) -> IrisVllmLaunch:
+    local_dp = data_parallel_size if data_parallel_size_local is None else data_parallel_size_local
     args = (
         "--tensor-parallel-size",
         str(tensor_parallel_size),
@@ -224,9 +236,9 @@ def _build_task_launch(
         "--data-parallel-size",
         str(data_parallel_size),
         "--data-parallel-size-local",
-        str(data_parallel_size),
+        str(local_dp),
         "--nnodes",
-        str(pipeline_parallel_size),
+        str(job_info.num_tasks),
         "--node-rank",
         str(job_info.task_index),
         "--master-addr",
@@ -234,9 +246,21 @@ def _build_task_launch(
         "--master-port",
         str(_MASTER_PORT),
         "--device-ids",
-        ",".join(str(index) for index in range(tensor_parallel_size * data_parallel_size)),
+        ",".join(str(index) for index in range(tensor_parallel_size * local_dp)),
     )
-    if data_parallel_size > 1:
+    if local_dp != data_parallel_size:
+        # Native --nnodes/--node-rank infer each host's DP rank. Leaving the
+        # start-rank unset keeps rank zero's internal load balancer global.
+        args = (
+            *args,
+            "--data-parallel-address",
+            master_addr,
+            "--data-parallel-rpc-port",
+            str(_MASTER_PORT + 1),
+            "--data-parallel-backend",
+            "mp",
+        )
+    elif data_parallel_size > 1:
         args = (*args, "--data-parallel-start-rank", "0")
     if job_info.task_index != 0:
         args = (*args, "--headless")

@@ -1,0 +1,7 @@
+annotated-types==0.8.0
+infx @ git+https://github.com/SemiAnalysisAI/InferenceX.git@80dff120d27fd6092210f4546b8faa5e6c9723ac#subdirectory=inferencex-e2e
+pydantic==2.12.5
+pydantic-core==2.41.5
+pyyaml==6.0.3
+typing-extensions==4.16.0
+typing-inspection==0.4.4

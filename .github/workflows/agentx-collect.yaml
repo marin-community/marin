@@ -1,0 +1,62 @@
+name: Marin - AgentX Collection
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      result_uri:
+        description: Completed result descriptor URI; omit for the next undelivered result
+        type: string
+  workflow_call:
+    inputs:
+      state_root: {type: string, default: ''}
+      result_uri: {type: string, default: ''}
+
+concurrency:
+  group: agentx-artifact-delivery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: github.repository == 'marin-community/marin' && (inputs.state_root != '' || vars.AGENTX_STATE_ROOT != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
+      RESULT_URI: ${{ inputs.result_uri }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
+      - name: Export completed results without submitting or observing Iris jobs
+        id: collect
+        run: |
+          set -euo pipefail
+          result_args=()
+          if [[ -n "$RESULT_URI" ]]; then result_args=(--result-uri "$RESULT_URI"); fi
+          uv run --no-sync python -m experiments.evaluation.agentx.control export \
+            --root "$STATE_ROOT" --work "$RUNNER_TEMP/agentx-collection" "${result_args[@]}"
+      - uses: actions/upload-artifact@v7
+        id: upload
+        if: steps.collect.outputs.bundle != ''
+        with:
+          name: agentx-results-${{ steps.collect.outputs.source_run_id }}-${{ steps.collect.outputs.source_run_attempt }}
+          path: ${{ steps.collect.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record delivery after GitHub accepts the artifact
+        if: steps.upload.outcome == 'success'
+        env:
+          RESULT_URI: ${{ steps.collect.outputs.result_uri }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control ack \
+            --root "$STATE_ROOT" --result-uri "$RESULT_URI" --artifact-url "$ARTIFACT_URL"

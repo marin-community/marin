@@ -1,0 +1,73 @@
+series: "hero144k-native-256k-1h-v1"
+model: "marin-community/Hero-535B-step144000"
+model_prefix: "hero144k"
+# Identity of the immutable BF16 export manifest, including all 49 shard digests.
+model_revision: "b20fdd303eb6ff8993ae5b5d7add14d65787e70981c056fea6de9dea62acfae1"
+checkpoint:
+  uri: "s3://marin-us-east-02a/marin/users/romain/hero-vllm-rl/hero-535b-step144000-bf16-split-v1"
+  config_sha256: "4cf93824957296e3b36c458ab4ae598bb7616f202a74687a3a8ed64dac9a9ebf"
+tokenizer: "marin-community/marin-tokenizer"
+tokenizer_revision: "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
+harness_version: "1.0.12"
+harness_source: "e4bb2f835ffedbbe6b76252ea5c93caec68c5faf"
+dataset: "semianalysisai/cc-traces-weka-062126-256k"
+dataset_loader: "semianalysis_cc_traces_weka_062126_256k"
+dataset_revision: "8fecd2fc56694469f758f0afbbb6335ad3043740"
+dataset_sha256: "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef"
+sessions: 393
+max_context: 262144
+duration: 3600
+max_profiling_error_ratio: 0.01
+random_seed: 42
+server_seed: 42
+warmup_grace_period: 1800
+trace_idle_gap_cap_seconds: 300
+# Recorded sixteen-GB200 context-fit recipe; performance only, no quality claim.
+max_num_seqs: 64
+max_num_batched_tokens: 512
+gpu_memory_utilization: 0.9
+tensor_parallel: 1
+precision: "bf16"
+cache: "native"
+enable_prefix_caching: false
+hf_overrides: {max_seq_len: 262144, max_position_embeddings: 262144}
+collect_marin_metrics: false
+collect_nccl: false
+ready_timeout: 4200
+prepare_timeout: 1800
+task_timeout: 18000
+scheduling_timeout: 172800
+max_retries_failure: 1
+max_retries_preemption: 3
+task_image: "ghcr.io/marin-community/iris-task@sha256:b66c48a1caca212d2fa970f9fb4d1e0685ab27be9014f335687b1031244f0467"
+vllm_manifest_sha256: e8a9e8e11781e0c1021783c5b559b9de4f82d0b90ca496de48b208d81baeeb82
+vllm_constraints_sha256: b0e4e774c46cd6d6b77f7ed9c97cbcb84066c4bdc8b7361cdc3ad80316aa4771
+vllm_release:
+  release_tag: marin-vllm-gpu-20261012-3a054c458ca8
+  source_commit: 3a054c458ca8a32609ba2bc578c4d9b93eabb395
+  version: 0.0.0.dev20261012+marin.3a054c458ca8.cu132
+  torch_backend: cu132
+  torch_version: 2.14.1+cu132
+  wheels:
+  - architecture: aarch64
+    sm_targets:
+    - '10.0'
+    url: https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012+marin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_aarch64.whl
+    sha256: e8520d4493e5a60f9f6aa96ea3bc80c42e45258e4d2c45882869fc5921df3e15
+  - architecture: x86_64
+    sm_targets:
+    - '9.0'
+    url: https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261012-3a054c458ca8/vllm-0.0.0.dev20261012+marin.3a054c458ca8.cu132-cp38-abi3-manylinux_2_28_x86_64.whl
+    sha256: bd4d3d58d831dffd2a831ee1e39e9a9a8b181610ea77067c0ab620cdc9b270a3
+processor_source: "80dff120d27fd6092210f4546b8faa5e6c9723ac"
+profiles:
+  gb200:
+    gpu: "GB200"
+    hosts: 4
+    gpus: 4
+    cpu: 32
+    memory: "768GB"
+    disk: "1TB"
+    cluster: "cw-us-east-08a"
+    # Retained development grid; Hero weekly-load selection is deferred.
+    concurrencies: [8, 32]

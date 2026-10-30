@@ -523,6 +523,36 @@ def test_serves_when_startup_succeeds():
         assert environment.model_id == "fake-model"
 
 
+@pytest.mark.parametrize("collect_metrics", [False, True])
+def test_environment_controls_metrics_without_changing_readiness(tmp_path, monkeypatch, collect_metrics):
+    telemetry.shutdown(0.01)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    scrape_log = tmp_path / "scrapes"
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        launcher=FakeVllmLauncher("serve-metrics", str(scrape_log)),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        collect_metrics=collect_metrics,
+        collect_nccl=False,
+        wait_for_ready=False,
+    )
+    try:
+        with environment:
+            _wait_until_ready(environment)
+            assert environment.model_id == "fake-model"
+            if collect_metrics:
+                transport.wait_for_value("num_requests_running", {}, 7)
+        assert scrape_log.exists() is collect_metrics
+        assert (
+            bool([record for record in transport.records if record["name"] == "num_requests_running"]) is collect_metrics
+        )
+    finally:
+        telemetry.shutdown(0.1)
+
+
 @pytest.mark.parametrize(
     "error",
     [

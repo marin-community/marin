@@ -1,0 +1,102 @@
+name: Marin - AgentX Performance
+
+on:
+  schedule:
+    - cron: '23 10 * * 0'
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [both, h100, gb200]
+        default: h100
+      concurrency:
+        description: Concurrent AgentX users, or all weekly loads
+        type: string
+        default: all
+      target_cluster:
+        type: choice
+        options: [cw-rno2a, cw-us-east-02a]
+        default: cw-rno2a
+      priority:
+        description: Interactive is for explicitly requested development/validation
+        type: choice
+        options: [batch, interactive]
+        default: batch
+      placement_uri:
+        description: Verified GB200 spare-node receipt in object storage
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      state_root: {type: string, default: ''}
+      profile: {type: string, default: h100}
+      concurrency: {type: string, default: all}
+      target_cluster: {type: string, default: cw-rno2a}
+      priority: {type: string, default: batch}
+      placement_uri: {type: string, default: ''}
+
+concurrency:
+  group: agentx-submission
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  submit:
+    if: >-
+      github.repository == 'marin-community/marin' &&
+      (github.event_name != 'schedule' || vars.AGENTX_WEEKLY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
+      PROFILE: ${{ inputs.profile || 'h100' }}
+      POINT: ${{ inputs.concurrency || 'all' }}
+      TARGET_CLUSTER: ${{ inputs.target_cluster || 'cw-rno2a' }}
+      PRIORITY: ${{ inputs.priority || 'batch' }}
+      PLACEMENT_URI: ${{ inputs.placement_uri }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - name: Install CPU control tools
+        run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
+      - name: Submit Iris CPU coordinators
+        id: submit
+        run: |
+          set -eo pipefail
+          test -n "$STATE_ROOT"
+          point_args=()
+          if [[ "$POINT" != all ]]; then point_args=(--concurrency "$POINT"); fi
+          uv run --no-sync python -m experiments.evaluation.agentx.control submit \
+            --root "$STATE_ROOT" --profile "$PROFILE" --cluster "$TARGET_CLUSTER" \
+            --priority "$PRIORITY" --placement-uri "$PLACEMENT_URI" \
+            --work "$RUNNER_TEMP/agentx-submission" "${point_args[@]}"
+      - name: Observe Iris progress for a bounded window
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control observe \
+            --root "$STATE_ROOT" --profile "$PROFILE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --observe-seconds 300
+      - name: Cancel owned coordinators and children on explicit workflow cancellation
+        if: cancelled()
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control cancel \
+            --root "$STATE_ROOT" --profile "$PROFILE" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: agentx-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agentx-submission
+          if-no-files-found: ignore
+          retention-days: 90
