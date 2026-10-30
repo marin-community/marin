@@ -90,7 +90,8 @@ from experiments.grug.moe_hero_ep.train import (
 logger = logging.getLogger(__name__)
 
 HERO_CHECKPOINT = "s3://marin-us-east-02a/marin/grug/hero-ctx16k-step257k/2026.08.19.2/checkpoints/step-324000"
-OUTPUT_ROOT = "s3://marin-us-east-08a/tmp/ttl=30d/hero-spike-replay"
+SCRATCH_PREFIX = "s3://marin-us-east-08a/tmp/ttl="
+OUTPUT_ROOT = f"{SCRATCH_PREFIX}30d/hero-spike-replay"
 HERO_DATA_CONFIG_JSON = Path(__file__).with_name("spike_probe_hero_data_config.json")
 HERO_SCHEDULE_STEPS = 390_251
 HERO_GLOBAL_BATCH = 2816
@@ -310,6 +311,19 @@ class Probe:
         return arrays
 
 
+def _shape_template(tree):
+    return jax.tree.map(
+        lambda leaf: (
+            jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
+        ),
+        tree,
+    )
+
+
+def _delete_arrays(tree) -> None:
+    jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, tree)
+
+
 def _layer_summary(norms: dict[str, float]) -> dict[str, float]:
     per_layer: dict[str, float] = {}
     for key, value in norms.items():
@@ -461,13 +475,16 @@ class Runner:
         # template that names only the leaves we want; None fields are skipped.
         template = GrugTrainState(
             step=jax.ShapeDtypeStruct((), jnp.int32, sharding=NamedSharding(probe.mesh, P())),
-            params=restore_template_from(probe.params),
+            params=_shape_template(probe.params),
             master_params=None,
             opt_state=None,
             ema_params=None,
-            pending_qb_betas=restore_template_from(probe.pending_qb_betas),
+            pending_qb_betas=_shape_template(probe.pending_qb_betas),
         )
+        # Keep the current weights alive until the new ones are read, so a missing checkpoint
+        # (temp checkpoints rotate hourly) leaves the probe usable.
         loaded = load_checkpoint(template, path, mesh=probe.mesh)
+        _delete_arrays((probe.params, probe.pending_qb_betas))
         probe.params = loaded.params
         probe.pending_qb_betas = loaded.pending_qb_betas
         probe.restored_step = int(loaded.step)
@@ -605,10 +622,11 @@ def _run_probe_local(config: SpikeProbeConfig) -> None:
 @click.option("--run-id", required=True, help="Probe run id; results go under the output root.")
 @click.option("--checkpoint", default=HERO_CHECKPOINT, show_default=True, help="Hero checkpoint to read.")
 @click.option("--commands", default=None, help="JSON list of initial commands; default runs the spike plan.")
+@click.option("--output-root", default=OUTPUT_ROOT, show_default=True, help="Scratch prefix for results.")
 @click.option("--idle-timeout", default=3 * 3600.0, show_default=True, help="Seconds to wait for queued commands.")
-def main(run_id: str, checkpoint: str, commands: str | None, idle_timeout: float) -> None:
-    output_path = f"{OUTPUT_ROOT}/{run_id}"
-    if checkpoint.startswith(output_path) or not output_path.startswith(OUTPUT_ROOT):
+def main(run_id: str, checkpoint: str, commands: str | None, output_root: str, idle_timeout: float) -> None:
+    output_path = f"{output_root}/{run_id}"
+    if checkpoint.startswith(output_path) or not output_root.startswith(SCRATCH_PREFIX):
         raise ValueError("output path must be our own scratch prefix")
     model = with_transport_remat_mode(HERO_MODEL_CONFIG)
     data = draccus.decode(LmDataConfig, json.loads(HERO_DATA_CONFIG_JSON.read_text()))
