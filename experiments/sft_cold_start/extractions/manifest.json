@@ -33,7 +33,9 @@
     "pr": "https://github.com/marin-community/marin/pull/10791",
     "patch": "cold-start-eval-profiles.patch.source.gz",
     "sha256": "4cfad799424f07c05f492e0dabcb0cb0bf45c97d29c881e9a58d20936e41bdb4",
-    "encoding": "gzip"
+    "encoding": "gzip",
+    "publication": "https://huggingface.co/datasets/open-athena/sft-cold-start-eval-configs-20261030/tree/dda3a39a36ebf099b0534168843d8365107cf65e",
+    "status": "PR closed; configs published as immutable Hugging Face archive"
   },
   {
     "name": "coldstart-tensorstore",

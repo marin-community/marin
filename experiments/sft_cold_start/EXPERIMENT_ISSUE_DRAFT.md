@@ -119,7 +119,7 @@ The same-task step-222 SWE smoke changed from seven assistant responses with 166
 3. Clean the cold-start data with GLM: schema inconsistencies, invented arguments, repetitive repair churn, and other structural flaws. Repair a trace only when the correction can be grounded and verified; otherwise drop it. Keep the unchanged corpus as a control.
 4. Improve instruction-following SFT for the [behaviors observed in our eval trace review](https://gist.github.com/penfever/dfb8550a3643849dfea701df44050757): claiming work that never happened, inventing conversation history or environment state, and substituting invented measurements for supplied data. Teach the model to use the supplied facts, ask for missing inputs, verify its actions, and distinguish attempted from completed work.
 5. Carry over the lessons from the [earlier Snowball/R2E-Gym report](https://claude.ai/artifact/TefbJfphaTBsYFtFgrNgMY): do not transfer patch-file conventions into a harness that cannot consume them; edit the actual source, test it, stop, and recover from a busy terminal without repeating commands forever. That report concerns a separate Stage-3 checkpoint, so recheck its source attributions against this mixture. Excessive retained reasoning and unfinished demonstrations also deserve attention.
-6. Try [laion/calibforge-relay-traces](https://huggingface.co/datasets/laion/calibforge-relay-traces) after decontamination against the eval suite and holdouts. Preserve its teacher-only `trained=true` supervision masks; do not feed it unchanged into an all-token-loss loader. Match trained-token budgets and test the addition separately from cleaning.
+6. CalibForge relay data is now available in Datakit: [merged PR #10027](https://github.com/marin-community/marin/pull/10027) registers the `terminus2_relay_sft` configuration of [laion/calibforge-relay-traces](https://huggingface.co/datasets/laion/calibforge-relay-traces), pinned at `66feab4`, as `calibforge-relay/terminus2`. Try adding it after decontamination against the eval suite and holdouts. The adapter preserves source training-turn metadata, but the renderer and trainer do not apply it as a loss mask; using the rendered text as-is would also supervise student turns. Preserve teacher-only supervision for a recipe-matched experiment, match trained-token budgets, and test the addition separately from cleaning.
 
 The data audit sampled 921 documents across all 216 supervised sources (12.6M tokens). It found specific schema/grounding problems, but did not find counterparts to the huge native tool-call batches. That distinction matters: fix the serving confound in serving, and clean data defects on their own evidence.
 
@@ -131,6 +131,7 @@ The data audit sampled 921 documents across all 216 supervised sources (12.6M to
 - [Grounding audit, scanner, calibration and review ledger](https://gist.github.com/penfever/7350eef547e078ddace6880ae6e05217)
 - [Recovery/schema audit, scanner and review ledger](https://gist.github.com/penfever/b28df7784c3da6ffb95d6ca546be0325)
 - [Consolidated reference branch](https://github.com/marin-community/marin/tree/codex/sft-cold-start-reference-20261030)
+- [Corrected four-model eval configs on Hugging Face](https://huggingface.co/datasets/open-athena/sft-cold-start-eval-configs-20261030/tree/dda3a39a36ebf099b0534168843d8365107cf65e): all 15 YAML profiles, source/runtime revisions, usage instructions, and SHA-256 manifest; downloaded anonymously and verified byte for byte against PR #10791’s source snapshot. The config archive replaces that PR.
 
 - [Standalone provisional and audited-final score tracker](https://gist.github.com/penfever/33f9c55379bd33eae6709687ec1c251f)
 - [Trace diagnostics and training/serving confound audit](https://gist.github.com/penfever/dfb8550a3643849dfea701df44050757)
@@ -140,8 +141,6 @@ The data audit sampled 921 documents across all 216 supervised sources (12.6M to
 - [Reference-only draft PR #10789](https://github.com/marin-community/marin/pull/10789), closed as requested because the full archival diff exceeds 1,000 lines. The branch preserves all code/config snapshots with original hashes and a restore command; it is not intended to merge.
 
 Compact extractions:
-
-- [Corrected four-model eval profiles #10791](https://github.com/marin-community/marin/pull/10791)
 
 - [Preserve BF16 checkpoint payloads #10792](https://github.com/marin-community/marin/pull/10792)
 - [Preserve integral mixture allocations #10793](https://github.com/marin-community/marin/pull/10793)

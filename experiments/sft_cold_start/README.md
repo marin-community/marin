@@ -20,7 +20,7 @@ Separate compact changes should carry reusable fixes to main after focused revie
 
 `extractions/manifest.json` records exact base/head commits and SHA-256 digests for independently reviewed follow-up patches. Decompress each `.patch.source.gz` file and apply it with `git apply` separately to its recorded base; these are reviewable alternatives to importing the historical snapshot wholesale.
 
-- [Corrected thinking-mode evaluation profiles](https://github.com/marin-community/marin/pull/10791)
+- [Corrected thinking-mode evaluation profiles on Hugging Face](https://huggingface.co/datasets/open-athena/sft-cold-start-eval-configs-20261030/tree/dda3a39a36ebf099b0534168843d8365107cf65e) (replaces closed PR #10791)
 - [Owned TensorStore BF16 writes](https://github.com/marin-community/marin/pull/10792)
 - [Exact mixture allocations](https://github.com/marin-community/marin/pull/10793)
 - [Bounded whole-document replay cache](https://github.com/marin-community/marin/pull/10794)
