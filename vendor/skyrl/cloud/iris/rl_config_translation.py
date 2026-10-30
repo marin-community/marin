@@ -354,20 +354,11 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "bundle_indices",  # Calculated from parallelism config
         "num_gpus",  # Ray resource allocation
         "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # SGLang-specific (if using SGLang backend)
-        "model_path",  # Set from trainer.policy.model.path
-        "tp_size",  # Alias for tensor_parallel_size
-        "mem_fraction_static",  # Alias for gpu_memory_utilization
-        "random_seed",  # Alias for seed
-        "disable_radix_cache",  # Inverse of enable_prefix_caching
-        "max_prefill_tokens",  # Alias for max_num_batched_tokens
-        "max_running_requests",  # Alias for max_num_seqs
-        "mm_attention_backend",  # Hardcoded "fa3"
-        "attention_backend",  # Hardcoded "fa3"
-        "enable_memory_saver",  # Set from inference_engine_enable_sleep
-        "tokenizer",  # Passed from external tokenizer
-        "custom_weight_loader",  # Hardcoded SkyRL path
-        "skip_tokenizer_init",  # Hardcoded True for SGLang
+        # Reserved engine aliases and worker-owned configuration
+        "model_path",
+        "tp_size",
+        "attention_backend",
+        "tokenizer",
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
@@ -377,14 +368,7 @@ def validate_engine_init_kwargs(
     engine_init_kwargs: Dict[str, Any],
     config_path: Optional[Path] = None,
 ) -> None:
-    """Fail fast if ``engine_init_kwargs`` contains SkyRL-internal keys.
-
-    SkyRL sets certain vLLM/SGLang engine kwargs internally; specifying them in
-    the YAML config causes "duplicate keyword argument" errors at runtime.
-
-    Raises:
-        ValueError: If any forbidden keys are found in engine_init_kwargs.
-    """
+    """Reject engine kwargs reserved by the SkyRL launcher."""
     if not engine_init_kwargs:
         return
 
@@ -426,15 +410,6 @@ class ParsedRLConfig:
     # RLVR: an HF id / .parquet is passed through to PromptDataset, NOT task-extracted).
     # Launcher-only (popped out of the `data` section so it never reaches Hydra).
     data_kind: str = "tasks"
-
-
-@dataclass(frozen=True)
-class ParsedCheckpointExportConfig:
-    """Policy configuration needed to reconstruct a checkpoint for conversion."""
-
-    config_path: Path
-    config_groups: Dict[str, str]
-    trainer: Dict[str, Any]
 
 
 def validate_tp_divides_heads(
@@ -605,25 +580,6 @@ def parse_rl_config(
     )
 
 
-def parse_checkpoint_export_config(
-    config_path: str,
-    model_override: str,
-) -> ParsedCheckpointExportConfig:
-    """Read policy configuration without validating or materializing rollout settings."""
-    path = resolve_rl_config_path(config_path)
-    raw = OmegaConf.to_container(OmegaConf.load(path), resolve=False) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: RL config must contain a mapping at the document root")
-
-    trainer = resolve_paths_in_dict(copy.deepcopy(raw.get("trainer", {})), skip_keys=TRAINER_NON_PATH_KEYS)
-    trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override
-    return ParsedCheckpointExportConfig(
-        config_path=path,
-        config_groups=dict(raw.get("config_groups", {})),
-        trainer=trainer,
-    )
-
-
 _OPTIONAL_HYDRA_PATTERNS = {
     ".distillation",
     ".domain_weights",
@@ -699,25 +655,6 @@ TASK_LOCAL_SKYRL_PATHS = MappingProxyType(
         "draft_model_uri": ("generator.speculative_decoding.model.source_uri",),
     }
 )
-
-
-def _checkpoint_export_trainer(
-    parsed: ParsedCheckpointExportConfig,
-    exp_args: Mapping[str, Any],
-    hpc: HPCGeometry,
-) -> Dict[str, Any]:
-    trainer = copy.deepcopy(parsed.trainer)
-    placement = trainer.setdefault("placement", {})
-    num_nodes = int(exp_args.get("num_nodes", 1))
-    gpus_per_node = int(exp_args.get("gpus_per_node", hpc.gpus_per_node))
-    placement["policy_num_nodes"] = num_nodes
-    placement["policy_num_gpus_per_node"] = _role_gpus_per_node(
-        placement,
-        "policy_num_gpus_per_node",
-        gpus_per_node,
-    )
-    _apply_policy_model_source(trainer, dict(exp_args))
-    return trainer
 
 
 def _data_override(value: Any) -> Any:
@@ -891,20 +828,6 @@ def compose_skyrl_config(
     validate_objective(config)
     return CompiledSkyRLConfig(
         entrypoint=registered_rl_entrypoint_module(parsed.entrypoint),
-        config=config,
-    )
-
-
-def compose_checkpoint_export_config(
-    parsed: ParsedCheckpointExportConfig,
-    exp_args: Mapping[str, Any],
-    hpc: HPCGeometry,
-) -> CompiledSkyRLConfig:
-    """Compose the policy-only checkpoint-export SkyRL subtree."""
-    config = _compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
-    _merge_config_mapping(config, {"trainer": _checkpoint_export_trainer(parsed, exp_args, hpc)})
-    return CompiledSkyRLConfig(
-        entrypoint=CHECKPOINT_EXPORT_ENTRYPOINT,
         config=config,
     )
 

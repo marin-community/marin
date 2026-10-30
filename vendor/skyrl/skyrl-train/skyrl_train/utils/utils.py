@@ -5,7 +5,6 @@ import time
 import sys
 import logging
 import math
-import socket
 
 import ray
 import torch
@@ -50,7 +49,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport
+from marinskyrl.runtime_options import R3Transport
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -66,25 +65,6 @@ from .placement_geometry import validate_colocated_engine_geometry
 
 def moe_router_replay_requested(cfg: DictConfig, role: str = "policy") -> bool:
     return bool(cfg.trainer[role].megatron_config.get("moe_router_replay", False))
-
-
-def policy_strict_spread_eligible(cfg: DictConfig) -> bool:
-    """Whether to reserve policy nodes before inference engines start.
-
-    Pure (Ray-free) predicate so it is unit-testable. Eligible only when ALL of:
-      - `trainer.placement.policy_strict_spread_pg` is enabled (opt-in; default
-        false, so every existing run is byte-for-byte unchanged),
-      - the run is disaggregated (`colocate_all=false`), and
-      - a reference model, when used, shares the policy placement group.
-    """
-    placement = cfg.trainer.placement
-    if not bool(getattr(placement, "policy_strict_spread_pg", False)):
-        return False
-    if placement.colocate_all:
-        return False
-    algo = cfg.trainer.algorithm
-    use_ref_model = reference_model_required(algo)
-    return not use_ref_model or bool(placement.colocate_policy_ref)
 
 
 def resolve_pinned_local_rank(
@@ -199,9 +179,7 @@ def policy_force_cvd_mask_enabled(cfg: DictConfig) -> bool:
 def policy_per_gpu_bundles_enabled(cfg: DictConfig) -> bool:
     """Whether the dedicated policy PG should use per-GPU {GPU:1} bundles.
 
-    Pure (Ray-free) predicate. Only meaningful when the dedicated STRICT_SPREAD
-    policy PG is itself eligible (see `policy_strict_spread_eligible`); this just
-    reads the opt-in sub-flag. Default false → legacy whole-node {GPU:4} bundles.
+    Export and explicitly supplied policy placement groups select per-GPU bundles.
     """
     return bool(getattr(cfg.trainer.placement, "policy_per_gpu_bundles", False))
 
@@ -512,8 +490,6 @@ def validate_cfg(cfg: DictConfig):
         raise ValueError(
             f"generator.r3_transport must be one of by_value, resident, decentral; got {cfg.generator.r3_transport!r}"
         )
-    if cfg.generator.gdn_backend not in set(GDNBackend):
-        raise ValueError(f"generator.gdn_backend must be one of torch, flashqla; got {cfg.generator.gdn_backend!r}")
     available_policy_losses = PolicyLossRegistry.list_available()
     assert available_policy_losses != [], "Policy loss registry is not populated."
     assert cfg.trainer.algorithm.policy_loss_type in available_policy_losses, (
@@ -529,12 +505,6 @@ def validate_cfg(cfg: DictConfig):
         resolve_grug_query_bias_update(cfg.trainer.policy)
     except ValueError as error:
         raise AssertionError(str(error)) from error
-
-    # if advantage estimator is GAE, then critic path should be provided
-    if cfg.trainer.algorithm.advantage_estimator == "gae":
-        assert cfg.trainer.critic.model.path, (
-            "`trainer.critic.model.path` should be provided for PPO training, got `None`"
-        )
 
     assert not (cfg.trainer.algorithm.use_kl_in_reward and cfg.trainer.algorithm.use_kl_loss), (
         "use_kl_in_reward and use_kl_loss should be mutually exclusive"
@@ -582,8 +552,6 @@ def validate_cfg(cfg: DictConfig):
                 "The selected objective requires rollout logprobs; setting generator.sampling_params.logprobs=0."
             )
             cfg.generator.sampling_params.logprobs = 0
-        if cfg.generator.backend == "sglang":
-            raise NotImplementedError("Behavior-logprob objectives require the vLLM generator backend")
         configure_behavior_logprob_sampling(cfg.generator)
 
     if cfg.trainer.policy.model.lora.rank > 0:
@@ -653,15 +621,7 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
 
 
 def validate_generator_cfg(cfg: DictConfig):
-    """Validates the correctness of generator-related config.
-
-    Args:
-        cfg (DictConfig): config to validate
-
-    Raises:
-        NotImplementedError: if feature is not supported, such as sglang for multiturn generation
-        ValueError: when cfg.generator.sampling_params.logprobs > 0
-    """
+    """Validate generation limits, sampling and trajectory settings."""
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))
@@ -685,56 +645,21 @@ def validate_generator_cfg(cfg: DictConfig):
         require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":
-        if cfg.generator.backend == "vllm" and not cfg.generator.run_engines_locally:
+        if not cfg.generator.run_engines_locally:
             # remote engines can be launched separately so we `enable` by default
             cfg.generator.override_existing_update_group = "enable"
         else:
-            # for local engines or sglang, we disable
+            # Local engines manage their update group lifecycle.
             cfg.generator.override_existing_update_group = "disable"
-
-    # TODO: fix once we support these features with SGLang
-    if cfg.generator.backend == "sglang" and cfg.generator.run_engines_locally:
-        assert cfg.generator.inference_engine_tensor_parallel_size == 1, (
-            "As of now, We do not support tensor parallel inference engine with SGLang when running engines locally. "
-            "Please set `inference_engine_tensor_parallel_size` to 1."
-        )
 
     validate_generation_logprobs(cfg)
 
     validate_megatron_cfg(cfg)
-    if cfg.generator.backend == "sglang":
-        # Some sampling parameters are not supported in SGLang when `skip_tokenizer_init` is True.
-        if cfg.generator.sampling_params.stop is not None or cfg.generator.eval_sampling_params.stop is not None:
-            raise ValueError(
-                "`sampling_params.stop` and `eval_sampling_params.stop` are not supported for SGLang backend "
-                "since we always set `skip_tokenizer_init` to True. If you have to use these parameters, you can switch to vLLM. "
-                "See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087"
-            )
-        if "min_new_tokens" in cfg.generator.sampling_params or "min_new_tokens" in cfg.generator.eval_sampling_params:
-            raise ValueError(
-                "`sampling_params.min_new_tokens` and `eval_sampling_params.min_new_tokens` are not "
-                "supported for SGLang backend since we always set `skip_tokenizer_init` to True. "
-                "If you have to use these parameters, you can switch to vLLM. "
-                "See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087"
-            )
-
-    if cfg.generator.enable_http_endpoint:
-        if cfg.generator.backend == "sglang":
-            # TODO(Charlie): sglang_server.py not supported for /chat/completion yet because we have
-            # skip_tokenizer_init=True in engine creation. Fix by getting tokens via return logprobs
-            # instead. sglang_engine.py not supported yet because we still need to figure out how
-            # to make SGLang Python engine take OAI request.
-            raise ValueError(
-                'generator.enable_http_endpoint is not supported for SGLang backend yet. Please set generator.backend="vllm".'
-            )
 
     # Validate inference engine parallelism.
     ep_size = cfg.generator.inference_engine_expert_parallel_size
     dp_size = cfg.generator.inference_engine_data_parallel_size
     tp_size = cfg.generator.inference_engine_tensor_parallel_size
-    if cfg.generator.backend == "sglang":
-        assert dp_size == 1, "Inference data parallelism is not yet supported for SGLang backend."
-        assert ep_size == 1, "Inference expert parallelism is not yet supported for SGLang backend."
     if ep_size > 1:
         assert dp_size * tp_size == ep_size, (
             f"If inference expert parallel is enabled, data parallel size * tensor parallel size must equal expert parallel size. "
@@ -847,7 +772,7 @@ def _validate_dcp_cfg(cfg: DictConfig):
           merely duplicated and there is no non-attention work to shard (doc :27,29).
           Resolved model-aware from the HF config; degrades to the cheap dcp<=tp bound +
           a warning when the config is not offline-resolvable.
-      (c) backend == "vllm" (SGLang has no DCP knob),
+      (c) backend == "vllm",
       (e) NOT R3 router capture (vLLM rejects DCP + enable_return_routed_experts;
           vllm/config/vllm.py:1939-1944),
       (f) the arch is DCP-capable (GQA via FlashAttention, or MLA via FlashMLA).
@@ -880,7 +805,7 @@ def _validate_dcp_cfg(cfg: DictConfig):
         f"inference_engine_decode_context_parallel_size must satisfy 1 <= dcp <= "
         f"inference_engine_tensor_parallel_size; got dcp={dcp}, tp={tp}"
     )
-    # (c) SGLang has no DCP knob.
+    # DCP uses the vLLM backend.
     assert gen.backend == "vllm", (
         f"decode context parallel (inference_engine_decode_context_parallel_size={dcp}) "
         f"is only supported with generator.backend='vllm', got '{gen.backend}'"
@@ -1079,7 +1004,6 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
 
     # NOTE (charlie): See https://github.com/vllm-project/vllm/blob/c6b0a7d3ba03ca414be1174e9bd86a97191b7090/vllm/worker/worker_base.py#L445
     # and https://docs.vllm.ai/en/v0.9.2/usage/troubleshooting.html?h=nccl_cumem_enable#known-issues
-    # Same for SGLang as we set `NCCL_CUMEM_ENABLE` to 0 in `sglang_engine.py`'s _patched_set_envs_and_config
     if cfg.generator.weight_sync_backend == "nccl":
         env_vars["NCCL_CUMEM_ENABLE"] = "0"
 
@@ -1090,37 +1014,36 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         # TransformerEngine otherwise overrides the FlashAttention choice on Hopper+.
         env_vars["NVTE_FUSED_ATTN"] = "0"
 
-    if cfg.generator.backend == "vllm":
-        env_vars["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "true"
+    env_vars["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] = "true"
 
-        # NOTE (sumanthrh): In vllm >= 0.9.0, we need to explicitly allow for serialization via pickle for collective RPCs.
-        # During weight transfer, we use IPC handles, which contains a `function` object and requires pickling.
-        env_vars["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
+    # NOTE (sumanthrh): In vllm >= 0.9.0, we need to explicitly allow for serialization via pickle for collective RPCs.
+    # During weight transfer, we use IPC handles, which contains a `function` object and requires pickling.
+    env_vars["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
-        # NOTE (sumanthrh): In vLLM >= 0.9.0, we've observed compilatiion failures with torch compile. removing the compilation directory and trying
-        # again does not fix the issue. Temporarily we disable compilation cache, which seems to fix the issue.
-        # This should not have any effect on performance - compilation will still happen, it's just not cached
-        # TODO (sumanthrh): remove this once vLLM fixes the issue
-        env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
+    # NOTE (sumanthrh): In vLLM >= 0.9.0, we've observed compilatiion failures with torch compile. removing the compilation directory and trying
+    # again does not fix the issue. Temporarily we disable compilation cache, which seems to fix the issue.
+    # This should not have any effect on performance - compilation will still happen, it's just not cached
+    # TODO (sumanthrh): remove this once vLLM fixes the issue
+    env_vars["VLLM_DISABLE_COMPILE_CACHE"] = "1"
 
-        if not os.environ.get("VLLM_USE_V1", False):
+    if not os.environ.get("VLLM_USE_V1", False):
+        logger.info(
+            "`VLLM_USE_V1` is not specified, setting `VLLM_USE_V1` to 1. To override, set `VLLM_USE_V1` explicitly"
+        )
+        env_vars["VLLM_USE_V1"] = "1"
+        # The `mp` executor backend (Qwen3-Next R3 capture path, opt-in
+        # generator.inference_engine_mp_backend) REQUIRES v1 multiprocessing to
+        # spawn its TP worker subprocesses; forcing it to 0 here (the default,
+        # for scheduling determinism) cancels the mp executor's shm message
+        # queue at warm-up. Keep it ON (unset => vLLM default 1) for mp.
+        mp_backend = bool(getattr(cfg.generator, "inference_engine_mp_backend", False))
+        if not mp_backend:
+            env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+        else:
             logger.info(
-                "`VLLM_USE_V1` is not specified, setting `VLLM_USE_V1` to 1. To override, set `VLLM_USE_V1` explicitly"
+                "inference_engine_mp_backend=true: NOT setting VLLM_ENABLE_V1_MULTIPROCESSING=0 "
+                "(the mp executor needs v1 multiprocessing to spawn TP workers)."
             )
-            env_vars["VLLM_USE_V1"] = "1"
-            # The `mp` executor backend (Qwen3-Next R3 capture path, opt-in
-            # generator.inference_engine_mp_backend) REQUIRES v1 multiprocessing to
-            # spawn its TP worker subprocesses; forcing it to 0 here (the default,
-            # for scheduling determinism) cancels the mp executor's shm message
-            # queue at warm-up. Keep it ON (unset => vLLM default 1) for mp.
-            mp_backend = bool(getattr(cfg.generator, "inference_engine_mp_backend", False))
-            if not mp_backend:
-                env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-            else:
-                logger.info(
-                    "inference_engine_mp_backend=true: NOT setting VLLM_ENABLE_V1_MULTIPROCESSING=0 "
-                    "(the mp executor needs v1 multiprocessing to spawn TP workers)."
-                )
 
     # Use max of available GPU counts, defaulting to 1 if none found
     gpu_counts = []
@@ -1337,9 +1260,7 @@ def get_reordered_bundle_indices(pg: PlacementGroup):
     return pg_reordered_bundle_indices
 
 
-# NOTE (sumanthrh): For SGLang, the string representations here should also match those used by (and supported by) SGLang.
-# This is because we do not control the update weight implementation with SGLang backend.
-# With VLLM, we use a custom Worker extension to have a custom update weight implementation.
+# Weight updates use the dtype names accepted by the vLLM worker extension.
 def torch_dtype_to_str(dtype: torch.dtype) -> str:
     if dtype == torch.bfloat16:
         return "bfloat16"
@@ -1444,11 +1365,3 @@ def get_tcp_url(host: str, port: int) -> str:
         # not a literal IP, probably a hostname
         pass
     return f"tcp://{host}:{port}"
-
-
-def get_free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port

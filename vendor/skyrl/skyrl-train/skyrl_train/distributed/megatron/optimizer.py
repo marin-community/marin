@@ -255,10 +255,3 @@ def get_megatron_optimizer_param_scheduler(
     )
 
     return opt_param_scheduler
-
-
-def get_megatron_last_lr(optimizer):
-    """
-    Get the last learning rate from the optimizer parameter scheduler.
-    """
-    return optimizer.param_groups[0]["lr"]

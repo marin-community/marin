@@ -38,7 +38,6 @@ from skyrl_train.utils.flash_attention import (
 
 
 GRUG_MOE_MODEL_TYPE = "grug_moe"
-GRUG_EP_COMM_BACKEND = "torch"
 GRUG_ROUTER_BIAS_SUFFIX = ".mlp.router.bias"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ATTENTION_MODE = "production"
@@ -94,32 +93,6 @@ def _validate_flash_attention_mask(attention_mask: torch.Tensor) -> None:
         (span_starts == 1).all(),
         "Grug FlashAttention requires valid tokens to form one contiguous span in each attention-mask row",
     )
-
-
-def validate_grug_expert_parallel_options(
-    model_type: str | None,
-    *,
-    expert_model_parallel_size: int,
-    use_grouped_mm: bool,
-    ep_comm_backend: str,
-) -> None:
-    """Reject unsupported execution choices when native Grug EP is enabled."""
-
-    if model_type != GRUG_MOE_MODEL_TYPE or expert_model_parallel_size <= 1:
-        return
-    validate_grug_expert_parallel_runtime(
-        use_grouped_mm=use_grouped_mm,
-        ep_comm_backend=ep_comm_backend,
-    )
-
-
-def validate_grug_expert_parallel_runtime(*, use_grouped_mm: bool, ep_comm_backend: str) -> None:
-    """Validate the execution choices required by native Grug expert sharding."""
-
-    if not use_grouped_mm:
-        raise ValueError("Grug expert_model_parallel_size>1 requires use_grouped_mm=true")
-    if ep_comm_backend != GRUG_EP_COMM_BACKEND:
-        raise ValueError(f"Grug expert parallelism supports only ep_comm_backend={GRUG_EP_COMM_BACKEND}")
 
 
 def jax_top_k(values: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -417,12 +390,6 @@ class GrugMoeExperts(nn.Module, ExpertGradientAveraging):
         self.use_grouped_mm = False
         self.ep_size = 1
         self._grouped_mm_logged = False
-
-    def validate_expert_parallel_runtime(self, ep_comm_backend: str) -> None:
-        validate_grug_expert_parallel_runtime(
-            use_grouped_mm=self.use_grouped_mm,
-            ep_comm_backend=ep_comm_backend,
-        )
 
     def forward_eager(
         self,

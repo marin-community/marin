@@ -40,37 +40,10 @@ def get_vllm_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
     return vllm_sampling_params
 
 
-def get_sglang_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
-    # `min_tokens` in vllm is equivalent to `min_new_tokens` in sglang. However `min_new_tokens` and
-    # `stop` are not supported when `skip_tokenizer_init` is True, which we need for token-in-token-out.
-    # See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087
-    sglang_sampling_params = {
-        "skip_special_tokens": True,
-        "no_stop_trim": True,  # equivalent to include_stop_str_in_output=True
-        "max_new_tokens": sampling_params.max_generate_length,
-        "temperature": sampling_params.temperature,
-        "top_p": sampling_params.top_p,
-        "top_k": sampling_params.top_k,
-        "min_p": sampling_params.min_p,
-    }
-    # logprobs not supported with sglang for now
-    exclude_keys = ["max_generate_length", "logprobs"]
-    for key, value in sampling_params.items():
-        if key not in sglang_sampling_params and key not in exclude_keys:
-            # Convert OmegaConf ListConfig to regular list if needed
-            if isinstance(value, ListConfig):
-                value = list(value)
-            sglang_sampling_params[key] = value
-    return sglang_sampling_params
-
-
 def get_sampling_params_for_backend(backend: str, sampling_params: DictConfig) -> Dict[str, Any]:
-    if backend == "vllm":
-        return get_vllm_sampling_params(sampling_params)
-    elif backend == "sglang":
-        return get_sglang_sampling_params(sampling_params)
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported generation backend: {backend}")
+    return get_vllm_sampling_params(sampling_params)
 
 
 def hash_with_sha256(x: Union[int, str]) -> int:
@@ -203,27 +176,21 @@ def aggregate_completion_usage_info(
     are still compatible with newer vllm versions can be checked in our GPU tests, where we explicitly
     check the dictionary with `CompletionResponse.model_validate()`.
     """
-    if backend == "vllm":
-        # required fields
-        usage_info = {
-            "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
-            "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
-        }
-        # optional fields
-        if results[0]["usage"].get("completion_tokens") is not None:
-            usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
-        if results[0]["usage"].get("prompt_tokens_details") is not None:
-            if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
-                usage_info["prompt_tokens_details"] = {
-                    "cached_tokens": sum(
-                        result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results
-                    )
-                }
-        return usage_info
-    elif backend == "sglang":
-        raise NotImplementedError("SGLang is not supported yet")
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported backend: {backend}")
+    usage_info = {
+        "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
+        "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
+    }
+    # optional fields
+    if results[0]["usage"].get("completion_tokens") is not None:
+        usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
+    if results[0]["usage"].get("prompt_tokens_details") is not None:
+        if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
+            usage_info["prompt_tokens_details"] = {
+                "cached_tokens": sum(result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results)
+            }
+    return usage_info
 
 
 _RENDEZVOUS_PORT_START = 20_000

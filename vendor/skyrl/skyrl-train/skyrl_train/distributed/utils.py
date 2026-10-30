@@ -13,7 +13,6 @@ sourced from PyTorch:
 from __future__ import annotations
 
 import os
-import socket
 from datetime import timedelta
 from typing import Any, Optional, Union, Tuple
 
@@ -85,12 +84,6 @@ def init_worker_process_group_with_device(timeout_seconds: int, backend: str = "
             timeout=timedelta(seconds=timeout_seconds),
             device_id=torch.device("cuda", local_rank),
         )
-
-
-def get_free_port():
-    with socket.socket() as sock:
-        sock.bind(("", 0))
-        return sock.getsockname()[1]
 
 
 # Copy from pytorch to allow creating multiple main groups.
@@ -210,32 +203,6 @@ def init_custom_process_group(
     _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
 
     return pg
-
-
-def get_optimizer_grouped_parameters(
-    model,
-    weight_decay,
-    no_decay_name_list=["bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"],
-):
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (not any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
-    return optimizer_grouped_parameters
 
 
 class CUDAIPCHandle:

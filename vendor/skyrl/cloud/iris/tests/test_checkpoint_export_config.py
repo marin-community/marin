@@ -72,35 +72,6 @@ def _spec(request: HFExportRequest) -> ExportJobSpec:
     )
 
 
-def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
-    request = _request()
-    config = checkpoint_export_launch_config(_training_config(), request, _spec(request))
-
-    assert config.run.mode == "checkpoint_export"
-    assert config.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
-    assert config.runtime.profile == "megatron-export"
-    assert config.iris.timeout == 7200
-    assert config.iris.allocation.gpu_variant == "H100"
-    assert config.skyrl.trainer.placement.policy_num_nodes == 1
-    assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
-    assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
-    assert config.skyrl.checkpoint_export.export_root == request.export_path
-
-
-def test_checkpoint_export_config_preserves_federated_routing() -> None:
-    request = _request()
-    spec = replace(
-        _spec(request),
-        target_cluster="cw-rno2a",
-        parent_cluster_config="/tmp/marin.yaml",
-    )
-
-    config = checkpoint_export_launch_config(_training_config(), request, spec)
-
-    assert config.iris.target_cluster == "cw-rno2a"
-    assert config.iris.parent_cluster_config == "/tmp/marin.yaml"
-
-
 def test_checkpoint_export_config_preserves_saved_policy_geometry_on_whole_nodes() -> None:
     request = _request()
     spec = replace(_spec(request), allocation_gpus_per_node=8)

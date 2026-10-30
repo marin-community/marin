@@ -14,12 +14,11 @@ import torch.distributed
 from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from omegaconf import OmegaConf
 from skyrl_train.distributed.dispatch import MeshRank
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
     get_model_config,
@@ -64,7 +63,6 @@ from skyrl_train.workers.megatron.router_replay_install import install_megatron_
 from skyrl_train.workers.megatron.output_projection_layout import install_dpo_batch_major_output_projection
 from skyrl_train.workers.megatron.weight_extractor import BucketedMegatronWeightExtractor, mapping_hf_names
 from skyrl_train.workers.worker import (
-    CriticWorkerBase,
     PolicyWorkerBase,
     RefWorkerBase,
     log_r3_resident_set,
@@ -831,23 +829,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.cuda.empty_cache()
         torch.distributed.barrier()
 
-    def grug_optimizer_route_snapshot(self):
-        """Return this rank and the optimizer route for each named parameter."""
-        if str(self.cfg.trainer.policy.optimizer_config.optimizer).lower() != "muonh":
-            raise ValueError("Optimizer route snapshot requires Grug MuonH")
-        names = {id(parameter): name for chunk in self.actor_module for name, parameter in chunk.named_parameters()}
-        optimizers = (
-            self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
-        )
-        routes = {}
-        for wrapped in optimizers:
-            default_route = "grug_muonh" if isinstance(wrapped.optimizer, MegatronGrugMuonH) else "adam"
-            for index, group in enumerate(wrapped.optimizer.param_groups):
-                route = group.get("optimizer", default_route)
-                for parameter in (*wrapped.float16_groups[index], *wrapped.fp32_from_fp32_groups[index]):
-                    routes[names[id(parameter)]] = route
-        return {"rank": torch.distributed.get_rank(), "routes": routes}
-
     def grug_validation_snapshot(self, names=()):
         """Return the calling rank and requested Grug weights in HF layout, gathered on rank 0.
 
@@ -895,10 +876,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             attention_backend=str(self.provider.attention_backend),
             weights=weights,
         )
-
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
 
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
@@ -988,20 +965,10 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
         )
         self._maybe_install_router_replay("ref")
 
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
-
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
         pass
 
 
-class MegatronCriticWorkerBase(MegatronWorker, CriticWorkerBase):
-    def __init__(self, **kwargs):
-        raise NotImplementedError()
-
-
 PolicyWorker = ray.remote(num_gpus=1)(MegatronPolicyWorkerBase)
 RefWorker = ray.remote(num_gpus=1)(MegatronRefWorkerBase)
-CriticWorker = ray.remote(num_gpus=1)(MegatronCriticWorkerBase)

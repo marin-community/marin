@@ -522,7 +522,7 @@ def create_ray_wrapped_inference_engines(
     nccl_buffer_size_bytes: int | None = None,
 ) -> List[InferenceEngineInterface]:
     """
-    Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
+    Create vLLM Ray actors; tokenizer is unused.
 
     mp_backend: opt-in. When True (and TP>1 / PP>1 and NOT colocated), run each vLLM
         inference engine with the `mp` (multiprocessing) executor backend instead of `ray`.
@@ -539,19 +539,15 @@ def create_ray_wrapped_inference_engines(
     # Direct factory callers bypass generator config validation.
     validate_weight_sync_pause_backend(weight_sync_pause_policy, backend=backend, run_engines_locally=True)
     model_metadata_path = engine_init_kwargs.pop(MODEL_METADATA_PATH_KEY, pretrain)
-    if backend == "vllm":
-        import vllm
-        from skyrl_train.inference_engines.vllm.vllm_engine import AsyncVLLMRayActor
-
-        # if a dev version is being used, skip the version check
-        if "dev" not in vllm.__version__:
-            assert version.parse(vllm.__version__) >= version.parse("0.8.3"), "SkyRL-Train only supports vLLM >= 0.8.3"
-        _validate_installed_vllm_for_model(model_metadata_path)
-    elif backend == "sglang":
-        # We import SGLang later to avoid importing vllm. See `get_sglang_engine` for more.
-        pass
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported backend: {backend}")
+    import vllm
+    from skyrl_train.inference_engines.vllm.vllm_engine import AsyncVLLMRayActor
+
+    # if a dev version is being used, skip the version check
+    if "dev" not in vllm.__version__:
+        assert version.parse(vllm.__version__) >= version.parse("0.8.3"), "SkyRL-Train only supports vLLM >= 0.8.3"
+    _validate_installed_vllm_for_model(model_metadata_path)
 
     inference_engine_actors = []
     weight_sync_relative_rank_offsets = []
@@ -561,7 +557,7 @@ def create_ray_wrapped_inference_engines(
     # Do NOT clobber an explicit ++generator.engine_init_kwargs.language_model_only.
     vlm_engine_kwargs = (
         _qwen3_5_vlm_engine_kwargs(model_metadata_path, revision=engine_init_kwargs.get("revision"))
-        if backend == "vllm" and "language_model_only" not in engine_init_kwargs
+        if "language_model_only" not in engine_init_kwargs
         else {}
     )
     # Forward managed environment and the policy's NCCL buffer size into engine workers.
@@ -593,8 +589,7 @@ def create_ray_wrapped_inference_engines(
         )
     # Expert-block publication needs checked receivers even for a single serving rank.
     verify_workers = (
-        backend == "vllm"
-        and tensor_parallel_size == 1
+        tensor_parallel_size == 1
         and (data_parallel_size > 1 or require_verified_placements)
         and not (use_hybrid_engine or use_mp_backend or inference_engine_enable_sleep)
     )
@@ -748,203 +743,137 @@ def create_ray_wrapped_inference_engines(
             data_parallel_rpc_port, *data_parallel_master_ports = rendezvous.ports
             rendezvous_reservation = rendezvous.reservation
 
-        if backend == "vllm":
-            lora_kwargs = {
-                "enable_lora": enable_lora,
-                "max_lora_rank": max_lora_rank,
-                "max_loras": max_loras,
-                "fully_sharded_loras": fully_sharded_loras,
-            }
+        lora_kwargs = {
+            "enable_lora": enable_lora,
+            "max_lora_rank": max_lora_rank,
+            "max_loras": max_loras,
+            "fully_sharded_loras": fully_sharded_loras,
+        }
 
-            rope_engine_kwargs = {}
-            if rope_scaling:
-                rope_engine_kwargs["rope_scaling"] = rope_scaling
-                if "max_model_len" not in engine_init_kwargs:
-                    rope_engine_kwargs["max_model_len"] = resolve_engine_max_model_len(engine_init_kwargs, rope_scaling)
-            if rope_theta is not None:
-                rope_engine_kwargs["rope_theta"] = rope_theta
+        rope_engine_kwargs = {}
+        if rope_scaling:
+            rope_engine_kwargs["rope_scaling"] = rope_scaling
+            if "max_model_len" not in engine_init_kwargs:
+                rope_engine_kwargs["max_model_len"] = resolve_engine_max_model_len(engine_init_kwargs, rope_scaling)
+        if rope_theta is not None:
+            rope_engine_kwargs["rope_theta"] = rope_theta
 
-            # Launch one actor per DP rank
-            for dp_rank in range(data_parallel_size):
-                # TP*PP slice reserved for a single DP rank.
-                base_dp_pg_index = dp_rank_bundle_indices[dp_rank]
-                dp_rank_bundles = (
-                    list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
+        # Launch one actor per DP rank
+        for dp_rank in range(data_parallel_size):
+            # TP*PP slice reserved for a single DP rank.
+            base_dp_pg_index = dp_rank_bundle_indices[dp_rank]
+            dp_rank_bundles = list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
+            if use_mp_backend:
+                # The mp executor's single actor reserves the whole TP*PP GPU slice itself
+                # (vLLM forks its workers locally, no per-worker Ray actors). It must land
+                # in ONE bundle holding tp_pp_size GPUs, so the mp PACK PG (built above) is
+                # one {GPU: tp_pp_size} bundle per (engine, DP-rank) and this actor is pinned
+                # to its own dedicated bundle. The
+                # whole-slice bundle keeps all TP workers co-located on one node. bundle_indices
+                # stays None so vLLM does not attempt ray per-worker placement.
+                dp_rank_bundles = None
+                dp_rank_sched = PlacementGroupSchedulingStrategy(
+                    placement_group=engine_pg,
+                    placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=base_dp_pg_index,
                 )
-                if use_mp_backend:
-                    # The mp executor's single actor reserves the whole TP*PP GPU slice itself
-                    # (vLLM forks its workers locally, no per-worker Ray actors). It must land
-                    # in ONE bundle holding tp_pp_size GPUs, so the mp PACK PG (built above) is
-                    # one {GPU: tp_pp_size} bundle per (engine, DP-rank) and this actor is pinned
-                    # to its own dedicated bundle. The
-                    # whole-slice bundle keeps all TP workers co-located on one node. bundle_indices
-                    # stays None so vLLM does not attempt ray per-worker placement.
-                    dp_rank_bundles = None
-                    dp_rank_sched = PlacementGroupSchedulingStrategy(
-                        placement_group=engine_pg,
-                        placement_group_capture_child_tasks=True,
-                        placement_group_bundle_index=base_dp_pg_index,
-                    )
-                else:
-                    if use_hybrid_engine:
-                        dp_rank_bundles = colocated_engine_bundles[i * data_parallel_size + dp_rank]
-                    dp_rank_sched = PlacementGroupSchedulingStrategy(
-                        placement_group=engine_pg,
-                        placement_group_capture_child_tasks=True,
-                        placement_group_bundle_index=base_dp_pg_index,
-                    )
-
-                dp_kwargs = (
-                    {
-                        "data_parallel_backend": data_parallel_backend,
-                        "data_parallel_size": data_parallel_size,
-                        "data_parallel_rank": dp_rank,
-                        "data_parallel_address": data_parallel_address,
-                        "data_parallel_rpc_port": data_parallel_rpc_port,
-                    }
-                    if data_parallel_size > 1
-                    else {}
-                )
-                if data_parallel_size > 1:
-                    dp_kwargs["data_parallel_master_ports"] = data_parallel_master_ports
-                if dp_rank == 0 and rendezvous_reservation is not None:
-                    dp_kwargs["rendezvous_port_reservation"] = rendezvous_reservation
-
-                # The mp executor's TP workers exchange custom-all-reduce IPC handles
-                # under the Ray-actor placement + remapped CUDA_VISIBLE_DEVICES; vLLM's
-                # custom all-reduce fails there with a CUDA "invalid argument" at
-                # custom_all_reduce.cuh (worker dies at warm-up). Disable it for mp so
-                # NCCL handles the TP all-reduce (correctness-equal, slightly slower).
-                # Do NOT clobber an explicit engine_init_kwargs override: the de-risk /
-                # long-ctx configs already pass `disable_custom_all_reduce=true` through
-                # `++generator.engine_init_kwargs.disable_custom_all_reduce`, and emitting
-                # it here too makes both expand into .remote() -> "got multiple values for
-                # keyword argument 'disable_custom_all_reduce'" (TypeError, crashes engine
-                # creation before any PG/training; confirmed de-risk 925650-925654).
-                mp_extra_kwargs = (
-                    {"disable_custom_all_reduce": True}
-                    if (use_mp_backend and "disable_custom_all_reduce" not in engine_init_kwargs)
-                    else {}
-                )
-
-                # vLLM Decode Context Parallel (DCP): only forward the kwarg when enabled
-                # (> 1). decode_context_parallel_size is a native vLLM EngineArgs field, so
-                # it flows straight through **kwargs into vllm.LLM / AsyncEngineArgs with no
-                # new vLLM call site. When == 1 the kwarg is ABSENT, making the engine init
-                # byte-identical to today (G1). DCP rides the TP GPUs and does NOT touch
-                # per_engine_gpu_count or the PACK PG bundle math above (G4).
-                dcp_kwargs = (
-                    {"decode_context_parallel_size": decode_context_parallel_size}
-                    if decode_context_parallel_size > 1
-                    else {}
-                )
-                attention_backend_kwargs = (
-                    {"attention_backend": vllm_attention_backend} if vllm_attention_backend is not None else {}
-                )
-
-                # #232 FIX B: attach runtime_env only when FR vars are present, so
-                # actor creation is byte-identical for every non-#232 run.
-                engine_options = dict(
-                    num_cpus=num_gpus_per_actor,
-                    num_gpus=num_gpus_per_actor,
-                    scheduling_strategy=dp_rank_sched,
-                )
-                if inference_engine_runtime_env is not None:
-                    engine_options["runtime_env"] = inference_engine_runtime_env
-                engine = AsyncVLLMRayActor.options(**engine_options).remote(
-                    model=pretrain,
-                    enforce_eager=enforce_eager,
-                    worker_extension_cls="skyrl_train.inference_engines.vllm.vllm_engine.WorkerWrap",
-                    tensor_parallel_size=tensor_parallel_size,
-                    pipeline_parallel_size=pipeline_parallel_size,
-                    enable_expert_parallel=expert_parallel_size > 1,
-                    distributed_executor_backend=distributed_executor_backend,
-                    seed=seed + i * data_parallel_size + dp_rank,
-                    enable_prefix_caching=enable_prefix_caching,
-                    dtype=model_dtype,
-                    trust_remote_code=True,
-                    vllm_v1_disable_multiproc=vllm_v1_disable_multiproc,
-                    weight_sync_pause_policy=weight_sync_pause_policy,
-                    gpu_memory_utilization=gpu_memory_utilization,
-                    bundle_indices=dp_rank_bundles,
-                    num_gpus=0.2 if use_hybrid_engine else 1,
-                    enable_sleep_mode=inference_engine_enable_sleep,
-                    noset_visible_devices=noset_visible_devices,
-                    max_num_batched_tokens=max_num_batched_tokens,
-                    max_num_seqs=max_num_seqs,
-                    max_logprobs=max_logprobs,
-                    **dp_kwargs,
-                    **mp_extra_kwargs,
-                    **dcp_kwargs,
-                    **attention_backend_kwargs,
-                    **vlm_engine_kwargs,
-                    **engine_init_kwargs,
-                    **lora_kwargs,
-                    **rope_engine_kwargs,
-                )
-                inference_engine_actors.append(engine)
-                weight_sync_relative_rank_offsets.append(i * per_engine_gpu_count)
-        elif backend == "sglang":
-            # NOTE: there is no async / sync engine distinction in SGLang
-
-            sglang_base_index = dp_rank_bundle_indices[0]
-            bundle_indices = None
-            if per_engine_gpu_count > 1:
+            else:
                 if use_hybrid_engine:
-                    bundle_indices = colocated_engine_bundles[i * data_parallel_size]
-                else:
-                    bundle_indices = list(range(sglang_base_index, sglang_base_index + per_engine_gpu_count))
+                    dp_rank_bundles = colocated_engine_bundles[i * data_parallel_size + dp_rank]
+                dp_rank_sched = PlacementGroupSchedulingStrategy(
+                    placement_group=engine_pg,
+                    placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=base_dp_pg_index,
+                )
 
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=engine_pg,
-                placement_group_capture_child_tasks=True,
-                placement_group_bundle_index=sglang_base_index,
+            dp_kwargs = (
+                {
+                    "data_parallel_backend": data_parallel_backend,
+                    "data_parallel_size": data_parallel_size,
+                    "data_parallel_rank": dp_rank,
+                    "data_parallel_address": data_parallel_address,
+                    "data_parallel_rpc_port": data_parallel_rpc_port,
+                }
+                if data_parallel_size > 1
+                else {}
+            )
+            if data_parallel_size > 1:
+                dp_kwargs["data_parallel_master_ports"] = data_parallel_master_ports
+            if dp_rank == 0 and rendezvous_reservation is not None:
+                dp_kwargs["rendezvous_port_reservation"] = rendezvous_reservation
+
+            # The mp executor's TP workers exchange custom-all-reduce IPC handles
+            # under the Ray-actor placement + remapped CUDA_VISIBLE_DEVICES; vLLM's
+            # custom all-reduce fails there with a CUDA "invalid argument" at
+            # custom_all_reduce.cuh (worker dies at warm-up). Disable it for mp so
+            # NCCL handles the TP all-reduce (correctness-equal, slightly slower).
+            # Do NOT clobber an explicit engine_init_kwargs override: the de-risk /
+            # long-ctx configs already pass `disable_custom_all_reduce=true` through
+            # `++generator.engine_init_kwargs.disable_custom_all_reduce`, and emitting
+            # it here too makes both expand into .remote() -> "got multiple values for
+            # keyword argument 'disable_custom_all_reduce'" (TypeError, crashes engine
+            # creation before any PG/training; confirmed de-risk 925650-925654).
+            mp_extra_kwargs = (
+                {"disable_custom_all_reduce": True}
+                if (use_mp_backend and "disable_custom_all_reduce" not in engine_init_kwargs)
+                else {}
             )
 
-            # NOTE(Charlie): We need `torch.cuda.is_available()` to be True to import SGLang. Otherwise, it requires
-            # importing vllm. See https://github.com/sgl-project/sglang/blob/v0.4.8.post1/python/sglang/srt/layers/quantization/utils.py#L11-L17
-            @ray.remote
-            def get_sglang_engine():
-                # A workaround to avoid importing vllm is to give this task a GPU.
-                import os
+            # vLLM Decode Context Parallel (DCP): only forward the kwarg when enabled
+            # (> 1). decode_context_parallel_size is a native vLLM EngineArgs field, so
+            # it flows straight through **kwargs into vllm.LLM / AsyncEngineArgs with no
+            # new vLLM call site. When == 1 the kwarg is ABSENT, making the engine init
+            # byte-identical to today (G1). DCP rides the TP GPUs and does NOT touch
+            # per_engine_gpu_count or the PACK PG bundle math above (G4).
+            dcp_kwargs = (
+                {"decode_context_parallel_size": decode_context_parallel_size}
+                if decode_context_parallel_size > 1
+                else {}
+            )
+            attention_backend_kwargs = (
+                {"attention_backend": vllm_attention_backend} if vllm_attention_backend is not None else {}
+            )
 
-                before_cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-                os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-                from skyrl_train.inference_engines.sglang.sglang_engine import SGLangRayActor
-
-                os.environ["CUDA_VISIBLE_DEVICES"] = before_cuda_visible_devices
-
-                actor_class = SGLangRayActor
-                engine = actor_class.options(
-                    num_cpus=num_gpus_per_actor,
-                    num_gpus=num_gpus_per_actor,
-                    scheduling_strategy=scheduling_strategy,
-                ).remote(
-                    model_path=pretrain,
-                    tp_size=tensor_parallel_size,
-                    mem_fraction_static=gpu_memory_utilization,
-                    random_seed=seed + i,
-                    disable_radix_cache=not enable_prefix_caching,
-                    dtype=model_dtype,
-                    trust_remote_code=True,
-                    max_prefill_tokens=max_num_batched_tokens,
-                    max_running_requests=max_num_seqs,
-                    # Borrowed from veRL's SGLang rollout
-                    mm_attention_backend="fa3",
-                    attention_backend="fa3",
-                    enable_memory_saver=inference_engine_enable_sleep,
-                    # Will be popped before instantiating sgl.Engine
-                    distributed_executor_backend=distributed_executor_backend,
-                    noset_visible_devices=noset_visible_devices,
-                    bundle_indices=bundle_indices,
-                    num_gpus=0.2 if use_hybrid_engine else 1,
-                    tokenizer=tokenizer,
-                    **engine_init_kwargs,
-                )
-                return engine
-
-            engine = ray.get(get_sglang_engine.remote())
-
+            # #232 FIX B: attach runtime_env only when FR vars are present, so
+            # actor creation is byte-identical for every non-#232 run.
+            engine_options = dict(
+                num_cpus=num_gpus_per_actor,
+                num_gpus=num_gpus_per_actor,
+                scheduling_strategy=dp_rank_sched,
+            )
+            if inference_engine_runtime_env is not None:
+                engine_options["runtime_env"] = inference_engine_runtime_env
+            engine = AsyncVLLMRayActor.options(**engine_options).remote(
+                model=pretrain,
+                enforce_eager=enforce_eager,
+                worker_extension_cls="skyrl_train.inference_engines.vllm.vllm_engine.WorkerWrap",
+                tensor_parallel_size=tensor_parallel_size,
+                pipeline_parallel_size=pipeline_parallel_size,
+                enable_expert_parallel=expert_parallel_size > 1,
+                distributed_executor_backend=distributed_executor_backend,
+                seed=seed + i * data_parallel_size + dp_rank,
+                enable_prefix_caching=enable_prefix_caching,
+                dtype=model_dtype,
+                trust_remote_code=True,
+                vllm_v1_disable_multiproc=vllm_v1_disable_multiproc,
+                weight_sync_pause_policy=weight_sync_pause_policy,
+                gpu_memory_utilization=gpu_memory_utilization,
+                bundle_indices=dp_rank_bundles,
+                num_gpus=0.2 if use_hybrid_engine else 1,
+                enable_sleep_mode=inference_engine_enable_sleep,
+                noset_visible_devices=noset_visible_devices,
+                max_num_batched_tokens=max_num_batched_tokens,
+                max_num_seqs=max_num_seqs,
+                max_logprobs=max_logprobs,
+                **dp_kwargs,
+                **mp_extra_kwargs,
+                **dcp_kwargs,
+                **attention_backend_kwargs,
+                **vlm_engine_kwargs,
+                **engine_init_kwargs,
+                **lora_kwargs,
+                **rope_engine_kwargs,
+            )
             inference_engine_actors.append(engine)
             weight_sync_relative_rank_offsets.append(i * per_engine_gpu_count)
 
@@ -961,7 +890,7 @@ def create_ray_wrapped_inference_engines(
             )
         ]
 
-        if backend == "vllm" and (tensor_parallel_size > 1 or pipeline_parallel_size > 1):
+        if tensor_parallel_size > 1 or pipeline_parallel_size > 1:
             numa_refs = [engine.inference_engine_actor.initialize_worker_numa_affinity.remote() for engine in engines]
             wait_for_inference_engine_startup(
                 numa_refs,
@@ -970,36 +899,14 @@ def create_ray_wrapped_inference_engines(
                 kill_on_failure=False,
             )
 
-        # Readiness gate (DISAGGREGATED-mode init-deadlock fix): block until every engine
-        # actor has finished loading its model (weights + CUDA-graph capture) BEFORE the
-        # trainer opens the weight-sync NCCL group in init_weight_sync_state. In COLOCATED
-        # mode the bounded sleep barrier below already forces this wait; in
-        # DISAGGREGATED mode (inference_engine_enable_sleep=False) nothing otherwise waits,
-        # so a slow-loading engine (e.g. Qwen3.6-35B-A3B MoE) is still inside __init__ when
-        # the policy ranks post the default-group barrier (worker.py) -> the barrier ALLREDUCE
-        # hits the 20-min SKYRL_WORKER_NCCL_TIMEOUT_IN_S watchdog and SIGABRTs the job
-        # (init_weight_sync_state failed at Ray boundary). 30B loads fast enough to win the
-        # race; 35B loses it deterministically. report_engine_hosts fans a collective_rpc
-        # across every engine TP/EP worker, so the ray.get returns only once all workers are
-        # up (model fully loaded) -> closes the race for any model size / load time. It is a
-        # read-only probe (returns hostnames), no side effects. vLLM-only (collective_rpc);
-        # the colocated sleep barrier still covers the sglang/colocated paths unchanged.
+        # Wait for every engine worker before policy weight-sync initialization.
         startup_refs = []
-        if verify_workers:
-            # The placement report is also the readiness barrier.
+        if not inference_engine_enable_sleep:
             startup_refs = [engine.inference_engine_actor.report_engine_placement.remote() for engine in engines]
-        elif not inference_engine_enable_sleep and backend == "vllm":
-            startup_refs = [engine.inference_engine_actor.report_engine_hosts.remote() for engine in engines]
 
         if inference_engine_enable_sleep:
-            if backend == "vllm":
-                # NOTE(shu): set to 1 for LoRA
-                sleep_level = 1 if enable_lora else sleep_level
-                sleep_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
-            elif backend == "sglang":
-                # NOTE(Charlie): we always need to sync weights after waking up: https://github.com/sgl-project/sglang/issues/7939
-                assert sleep_level == 2, "SGLang always discards weights, so sleep_level is not applicable."
-                sleep_refs = [engine.inference_engine_actor.sleep.remote() for engine in engines]
+            sleep_level = 1 if enable_lora else sleep_level
+            sleep_refs = [engine.inference_engine_actor.sleep.remote(level=sleep_level) for engine in engines]
             startup_refs = sleep_refs
 
         if startup_refs:

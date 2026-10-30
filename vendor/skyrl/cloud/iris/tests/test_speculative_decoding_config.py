@@ -4,7 +4,6 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
-from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 import pytest
 import yaml
@@ -19,7 +18,6 @@ from marinskyrl.speculative_decoding import (  # noqa: E402
     SpeculativeDecodingConfigError,
     parse_speculative_decoding_config,
 )
-from skyrl_train.entrypoints.main_base import config_dir  # noqa: E402
 
 
 _DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
@@ -106,23 +104,6 @@ def test_local_speculator_uses_model_without_hub_resolution() -> None:
         "model": "/tmp/draft-model",
         "num_speculative_tokens": 3,
     }
-
-
-def test_null_speculator_keeps_the_default_disabled() -> None:
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name="ppo_base_config")
-
-    assert cfg.generator.speculative_decoding is None
-    assert (
-        parse_speculative_decoding_config(
-            None,
-            backend=cfg.generator.backend,
-            run_engines_locally=cfg.generator.run_engines_locally,
-            entrypoint="skyrl_train.entrypoints.main_base",
-            colocate_all=cfg.trainer.placement.colocate_all,
-        )
-        is None
-    )
 
 
 def test_frozen_object_store_speculator_is_supported(tmp_path: Path) -> None:

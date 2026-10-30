@@ -13,7 +13,6 @@ import os
 import shutil
 import tempfile
 from contextlib import contextmanager
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -42,37 +41,6 @@ class PendingDirectoryUpload:
                 shutil.rmtree(self.local_path)
             except OSError:
                 logger.exception(f"Failed to remove checkpoint staging directory {self.local_path}")
-
-
-class DeferredLocalWorkDir:
-    """Stage cloud output locally while leaving publication to the caller."""
-
-    def __init__(self, output_path: str) -> None:
-        self.output_path = output_path
-        self._local_path: str | None = None
-        self._cloud_backed = is_cloud_path(output_path)
-
-    def __enter__(self) -> str:
-        if self._cloud_backed:
-            self._local_path = tempfile.mkdtemp(prefix="skyrl-checkpoint-")
-        else:
-            makedirs(self.output_path, exist_ok=True)
-            self._local_path = self.output_path
-        return self._local_path
-
-    def __exit__(self, exc_type, _exc_value, _traceback) -> None:
-        if exc_type is not None and self._cloud_backed and self._local_path is not None:
-            shutil.rmtree(self._local_path, ignore_errors=True)
-
-    def pending_upload(self) -> PendingDirectoryUpload | None:
-        if not self._cloud_backed:
-            return None
-        assert self._local_path is not None
-        return PendingDirectoryUpload(self._local_path, self.output_path)
-
-    def discard(self) -> None:
-        if self._cloud_backed and self._local_path is not None:
-            shutil.rmtree(self._local_path, ignore_errors=True)
 
 
 def is_cloud_path(path: str) -> bool:
@@ -236,30 +204,6 @@ def download_file(cloud_path: str, local_path: str) -> None:
         if os.path.exists(partial_path):
             os.remove(partial_path)
     logger.info(f"Downloaded {cloud_path} to {local_path}")
-
-
-@contextmanager
-def local_read_files(input_paths: Sequence[str]):
-    """Stage an explicit set of cloud objects locally without reading sibling objects."""
-    paths = list(input_paths)
-    cloud_paths = [is_cloud_path(path) for path in paths]
-    if any(cloud_paths) and not all(cloud_paths):
-        raise ValueError("input_paths must be entirely local or entirely cloud-backed")
-
-    if not any(cloud_paths):
-        missing_paths = [path for path in paths if not exists(path)]
-        if missing_paths:
-            raise FileNotFoundError(f"Paths do not exist: {missing_paths}")
-        yield paths
-        return
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        local_paths = []
-        for index, input_path in enumerate(paths):
-            local_path = os.path.join(temp_dir, str(index), os.path.basename(input_path))
-            download_file(input_path, local_path)
-            local_paths.append(local_path)
-        yield local_paths
 
 
 @contextmanager

@@ -283,16 +283,8 @@ class InferenceEngineClient(InferenceEngineInterface):
         sampling_params = input_batch.get("sampling_params")
         per_prompt_sampling_params = input_batch.get("sampling_params_per_prompt")
 
-        if (prompts is None and prompt_token_ids is None) or (prompts is not None and prompt_token_ids is not None):
-            raise ValueError("Either `prompts` or `prompt_token_ids` must be provided, but not both.")
-        if prompt_token_ids is None:
-            prompt_token_ids = self.tokenizer.apply_chat_template(
-                prompts,
-                add_generation_prompt=True,
-                add_special_tokens=False,
-                return_dict=True,
-                tokenize=True,
-            )["input_ids"]
+        if prompt_token_ids is None or prompts is not None:
+            raise ValueError("prompt_token_ids must be provided without prompts.")
 
         num_prompts = len(prompt_token_ids)
         if per_prompt_sampling_params is not None and len(per_prompt_sampling_params) != num_prompts:
@@ -736,10 +728,9 @@ class InferenceEngineClient(InferenceEngineInterface):
                 finish_reason = ABORT_FINISH_REASON
                 continue
 
-            # 1.2.1. Check for error response from vLLM/sglang.
-            # Error responses have "error" key (vLLM) or "object"="error" (sglang), not "choices".
+            # Error responses have an error object instead of completion choices.
             if is_engine_error_response(partial_response):
-                error_info = partial_response.get("error", partial_response)
+                error_info = partial_response["error"]
                 error_msg = (
                     error_info.get("message", str(error_info)) if isinstance(error_info, dict) else str(error_info)
                 )
@@ -1350,14 +1341,10 @@ def _completion_response_was_aborted(response: Dict[str, Any]) -> bool:
 
 
 def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Wrap the first engine-side `/completions` error as a client-level error, else None.
-
-    There is no partial success: if any sub-request errored, the whole request errors, following
-    vLLM's and SGLang's behavior.
-    """
+    """Return the first vLLM completion error as a client error, or None."""
     for result in results:
         if is_engine_error_response(result):
-            error_details = result.get("error", result)
+            error_details = result["error"]
             return ErrorResponse(
                 error=ErrorInfo(
                     message=f"In one of the engines that SkyRL manages, an error occurred: {error_details['message']}",
