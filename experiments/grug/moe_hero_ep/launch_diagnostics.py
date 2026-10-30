@@ -32,6 +32,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
+    HERO_MAX_GRAD_NORM,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -235,6 +236,7 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
+        max_grad_norm=HERO_MAX_GRAD_NORM,
         gc_interval=gc_interval,
         master_param_mode=master_param_mode,
     )
