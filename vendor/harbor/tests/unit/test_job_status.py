@@ -5,7 +5,12 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from harbor.agents.nop import NopAgent
+
 import pytest
+
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 
 import harbor.utils.artifact_writer as artifact_writer
 from harbor.job import Job
@@ -177,7 +182,7 @@ async def test_explicit_task_source_preserves_completed_metrics(
             tasks=[TaskConfig(path=task_dir, source="named-dataset")],
             n_attempts=2,
             metrics=[] if metric_type is None else [MetricConfig(type=metric_type)],
-            agents=[AgentConfig(name="nop")],
+            agents=[AgentConfig(name="pi")],
             environment=EnvironmentConfig(
                 import_path="tests.unit.test_job_status:ScoredEnvironment"
             ),
@@ -547,3 +552,8 @@ async def test_job_resume_releases_persisted_trial_payloads_from_memory(
     assert persisted_child.verifier_result is not None
     assert persisted_child.verifier_result.stdout == trial_result.verifier_result.stdout
     assert persisted_child.verifier_result.stderr == trial_result.verifier_result.stderr
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, NopAgent)

@@ -190,9 +190,9 @@ class TestCreateRunAgentCommandsMCP:
     """Test that run() handles MCP servers correctly."""
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_still_writes_config(self, temp_dir):
+    async def test_no_mcp_servers_still_writes_config(self, temp_dir, mock_environment):
         agent = OpenCode(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
@@ -200,7 +200,7 @@ class TestCreateRunAgentCommandsMCP:
         assert "opencode.json" in exec_calls[0].kwargs["command"]
 
     @pytest.mark.asyncio
-    async def test_mcp_servers_adds_setup_command(self, temp_dir):
+    async def test_mcp_servers_adds_setup_command(self, temp_dir, mock_environment):
         servers = [
             MCPServerConfig(
                 name="mcp-server", transport="sse", url="http://mcp-server:8000/sse"
@@ -211,7 +211,7 @@ class TestCreateRunAgentCommandsMCP:
             model_name="anthropic/claude-sonnet-4-5",
             mcp_servers=servers,
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list

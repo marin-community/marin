@@ -35,8 +35,8 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
-from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
+from shellbox.lifecycle import CommandLifetime, finish_cleanup
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
     Backend,
@@ -50,20 +50,11 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process import CLEANUP_TIMEOUT, ProcessScope
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 logger = logging.getLogger(__name__)
-CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
-RUN_COMMAND = (
-    'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
-)
-STOP_COMMAND = (
-    "pidfile=$1; completed=$2; "
-    '[ ! -f "$completed" ] || exit 0; '
-    'if read -r pid < "$pidfile"; then '
-    'case "$pid" in ""|*[!0-9]*) exit 1;; esac; '
-    '[ "$pid" -gt 1 ] || exit 1; set -- "$pid"; ' + KILL_PROCESS_GROUP_COMMAND + ' && exit 0; fi; [ -f "$completed" ]'
-)
+CONTROL_PATH = "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 def _control_command(script: str) -> str:
@@ -137,7 +128,7 @@ async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapsho
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
-    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+    async with asyncio.timeout(CLEANUP_TIMEOUT):
         try:
             sandbox = await client.get(name)
         except DaytonaNotFoundError:
@@ -177,6 +168,7 @@ class DaytonaMachine:
         self.spec = spec
         self.resources = resources
         self._closed = False
+        self._commands = CommandLifetime()
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
         count = await self.sandbox.process.exec(_control_command(f"wc -c < {shlex.quote(path)}"))
@@ -201,6 +193,10 @@ class DaytonaMachine:
             await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"))
 
     async def run(self, command: Command) -> Result:
+        with self._commands.admit():
+            return await self._run(command)
+
+    async def _run(self, command: Command) -> Result:
         if self._closed:
             raise RuntimeError("Machine is closed")
         if not command.argv:
@@ -209,8 +205,9 @@ class DaytonaMachine:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
-        pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
+        scope = ProcessScope()
         started = False
+        interrupted = False
         primary_error = None
         response = None
         environment = {**self.spec.env, **command.env}
@@ -235,19 +232,7 @@ class DaytonaMachine:
                     if capabilities.exit_code or "--session-command" not in capabilities.result:
                         raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
                     argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
-                argv = (
-                    "/bin/sh",
-                    "-c",
-                    START_COMMAND,
-                    "shellbox-start",
-                    "/bin/sh",
-                    "-c",
-                    RUN_COMMAND,
-                    "shellbox-command",
-                    pidfile,
-                    completed_path,
-                    *argv,
-                )
+                argv = scope.command(argv, command.timeout)
                 script = (
                     f"{shlex.join(argv)} < {shlex.quote(stdin_path) if command.stdin else '/dev/null'} "
                     f"> {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}"
@@ -264,50 +249,51 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
+            async with asyncio.timeout(CLEANUP_TIMEOUT):
+                status = await self.sandbox.process.exec(_control_command(scope.status_command()))
+            if status.exit_code not in (0, 124):
+                await self.close()
+                raise RuntimeError("Daytona command teardown could not be confirmed")
+            timed_out = status.exit_code == 124
             return Result(
-                response.exit_code,
+                None if timed_out else response.exit_code,
                 stdout,
                 stderr,
                 stdout_truncated,
                 stderr_truncated,
-                ExitReason.EXITED,
+                ExitReason.TIMED_OUT if timed_out else ExitReason.EXITED,
             )
         except TimeoutError as error:
+            interrupted = True
             if response is not None:
                 primary_error = RuntimeError("Cannot collect Daytona command output")
+                await self.close()
                 raise primary_error from error
             if not deadline.expired():
                 primary_error = error
                 raise
             if not started:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-            try:
-                async with asyncio.timeout(INTERRUPT_TIMEOUT):
-                    stopped = await self.sandbox.process.exec(
-                        _control_command(
-                            shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))
-                        )
-                    )
-                    if stopped.exit_code:
-                        raise RuntimeError(stopped.result)
-            except Exception as error:
-                await self.close()
-                raise RuntimeError("Cannot stop the Daytona command process group") from error
+            await self._stop_command(scope)
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         except asyncio.CancelledError:
-            await self.close()
+            interrupted = True
+            if started:
+                await self._stop_command(scope)
             raise
         except BaseException as error:
             primary_error = error
+            if started:
+                await self.close()
             raise
         finally:
-            if not self._closed:
+            if not self._closed and not interrupted:
                 try:
-                    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                    async with asyncio.timeout(CLEANUP_TIMEOUT):
                         removed = await self.sandbox.process.exec(_control_command(f"rm -rf {shlex.quote(prefix)}"))
                         if removed.exit_code:
                             raise RuntimeError("Cannot remove Daytona command files")
@@ -319,6 +305,19 @@ class DaytonaMachine:
                     if primary_error is None:
                         raise RuntimeError("Cannot remove Daytona command files") from error
                     primary_error.add_note(f"Daytona command cleanup failed: {error}")
+
+    async def _stop_command(self, scope: ProcessScope) -> None:
+        try:
+            await finish_cleanup(self._cancel_remote(scope))
+        except Exception as error:
+            await self.close()
+            raise RuntimeError("Cannot confirm Daytona command teardown") from error
+
+    async def _cancel_remote(self, scope: ProcessScope) -> None:
+        async with asyncio.timeout(CLEANUP_TIMEOUT):
+            stopped = await self.sandbox.process.exec(_control_command(scope.cancel_command()))
+            if stopped.exit_code:
+                raise RuntimeError(stopped.result)
 
     async def upload(self, source: Path, target: str) -> None:
         if self._closed:
@@ -377,7 +376,10 @@ class DaytonaMachine:
         if self._closed:
             return
         self._closed = True
-        await self.resources.aclose()
+        try:
+            await self._commands.close()
+        finally:
+            await finish_cleanup(self.resources.aclose())
 
 
 class DaytonaMachineFactory:
@@ -470,9 +472,9 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            prepared = await sandbox.process.exec(_control_command("command -v setsid"), timeout=INTERRUPT_TIMEOUT)
+            prepared = await sandbox.process.exec(_control_command("command -v python3"), timeout=CLEANUP_TIMEOUT)
             if prepared.exit_code:
-                raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
+                raise UnsupportedMachineSpec("Daytona task images require Python 3 for command teardown")
             machine = DaytonaMachine(sandbox, spec, lifetime)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))

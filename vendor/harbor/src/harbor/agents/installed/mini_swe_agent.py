@@ -4,6 +4,7 @@ import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import Any, Literal
 
 from harbor.agents.installed.base import (
@@ -575,6 +576,11 @@ class MiniSweAgent(BaseInstalledAgent):
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
     ) -> None:
+        deadline = (
+            monotonic() + environment.agent_timeout_sec
+            if environment.agent_timeout_sec is not None
+            else None
+        )
         augmented_instruction = instruction
         if self.mcp_servers:
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available for this task.\n"
@@ -693,7 +699,7 @@ class MiniSweAgent(BaseInstalledAgent):
                 + " "
             )
 
-        await self.exec_as_agent(
+        await self.run_agent_command(
             environment,
             command=(
                 '. "$HOME/.local/bin/env"; '
@@ -703,4 +709,5 @@ class MiniSweAgent(BaseInstalledAgent):
                 f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"
             ),
             env=env,
+            deadline=deadline,
         )

@@ -7,6 +7,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-shellbox",
     "pydantic>=2.11.7",
     "shortuuid>=1.0.13",
     "typer>=0.16.0",
@@ -84,6 +85,7 @@ override-dependencies = ["marin-rigging"]
 module-name = ["harbor", "harbor_config"]
 
 [tool.uv.sources]
+marin-shellbox = { path = "../../lib/shellbox", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 

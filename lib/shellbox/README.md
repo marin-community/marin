@@ -1,6 +1,11 @@
 # Marin Shellbox (0.1)
 
-`marin-shellbox` provides three Harbor import paths:
+Shellbox machines serve the [RolloutEngine shell harness](../../docs/references/task-rollouts.md).
+The package also retains these adapters for upstream Harbor. Marin's vendored Harbor
+accepts only Pi, mini-swe-agent, Codex, OpenCode, terminus-2, and terminus-kira;
+it rejects `shellbox.agent:BashAgent` and other custom agents.
+
+The upstream Harbor adapter import paths are:
 
 - `shellbox.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
 - `shellbox.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
@@ -19,6 +24,22 @@ uv pip install 'marin-shellbox[gvisor]'
 The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [vendored Harbor project](../../vendor/harbor/README.md), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
+
+Docker (including gVisor) and Daytona use a shared Linux child subreaper for each
+`Machine.run()` command. Their task images must supply Python 3 and Linux procfs;
+creation fails if Python is absent. The supervisor reaps detached and orphaned
+children on completion, deadline, or cancellation. Cancellation uses an independent
+provider request and waits for teardown before returning. A late launch observes
+its cancellation marker before starting work. Failed cleanup closes the machine
+and prevents reuse. This process ownership mechanism is not a security boundary
+against code running with the supervisor's own privileges.
+
+Local bubblewrap commands use their existing PID namespace instead. Local, Docker,
+and Daytona machines reject new commands once close begins and drain active commands
+before releasing resources. Cleanup survives repeated caller cancellation. Successful
+command cleanup preserves files for the next command or verifier; closing the machine
+discards them. Control markers remain private to the command's execution user and are
+retained until machine disposal so a delayed submission cannot restart cancelled work.
 
 `factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
 
@@ -55,15 +76,11 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
-Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
-A failed stop without confirmed completion raises an infrastructure error and closes the machine.
-Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.
-
-Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
-Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
-Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
-Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
-Model commands that run as root can stop other root-owned processes.
+Docker and Daytona preserve the machine after confirmed command teardown, including
+caller cancellation. If teardown cannot be confirmed, they close the machine and
+raise an infrastructure error. Docker supervises and cancels as the execution user;
+Daytona supervises as root before switching to the command user. Non-root Daytona
+commands require a guest account and util-linux `su --session-command`.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
@@ -227,13 +244,6 @@ Agent shell state persists between Bash actions; setup and verifier commands use
 
 The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled memory, 512 MiB virtual disk, and 128 MiB cumulative output. `cpu_limit`, `memory_mb`, `disk_limit_bytes`, and `output_limit_bytes` configure them. An action that exhausts a ShellSim resource terminates the trial. These are ShellSim fuel and working-set limits, not host CPU or RSS limits. Tasks that request internet are rejected unless `network_policy: deny` explicitly runs them offline.
 
-Run the local Harbor smoke without QEMU:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[shellsim]' \
-  lib/shellbox/tests/harbor_smoke.py shellsim /tmp/shellsim-smoke-jobs
-```
-
 ## OCI image ingestion
 
 On a build machine, copy a prebuilt image into an OCI layout, then stage it. For example:
@@ -311,36 +321,8 @@ The microvm disables ACPI and explicitly loads the bundle's SeaBIOS `bios-microv
 
 Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable and writable by the Harbor process; QEMU falls back to TCG if KVM initialization fails. Set `environment.kwargs.acceleration: kvm` to require KVM or `tcg` to force software emulation. The environment logs the accelerator QEMU actually selected after startup. A host may have `/dev/kvm` but deny access to the current user; `auto` uses TCG in that case. The Python package cannot grant device access.
 
-The local smoke test uses a deterministic OpenAI-compatible server and a Harbor task. Supply a PTY-enabled OCI bundle with `/bin/bash`:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
-```
-
-For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
-  --task-path /path/to/task \
-  --image-cache /var/cache/marin-shellbox \
-  --qemu-assets-json /path/to/qemu-assets.json
-```
-
-The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, copied to an OCI layout, and staged with `--task-dockerfile` pointing to its extracted `environment/Dockerfile`. Its unchanged Harbor task passes with:
-
-```sh
-uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
-  lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
-  --task-path /path/to/extracted/nl2bash \
-  --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
-  --network-policy deny
-```
-
-This example uses a deterministic fake model to issue one Bash tool call. It exercises Harbor's external agent, task setup upload, QEMU command execution, and the real TaskTrove verifier; it does not evaluate model quality.
-
-`tests/harbor_smoke.py --commands-json /path/to/commands.json` sends successive Bash calls from a JSON list. For example, the first call can run `cd /tmp; export ANSWER='hello from qemu'`, and the second can use `$ANSWER` and `$PWD`. `tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive behavior without Harbor.
+`tests/manual/check_shell.py /opt/marin-shellbox/bash-image` checks interactive
+behavior directly, without Harbor.
 
 `benchmarks/tasktrove/sample.py` extracts a pinned 100-task TaskTrove Clean sample into a local directory. It needs `fsspec` and `pyarrow`:
 

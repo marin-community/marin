@@ -797,3 +797,31 @@ def test_every_symlink_in_a_python_environment_resolves_inside_its_root(python_e
     ]
     assert python_environment.python in links
     assert [link for link in links if not Path(os.path.realpath(link)).is_relative_to(root)] == []
+
+
+@pytest.mark.parametrize("ending", ["cancel", "close"])
+def test_local_machine_drains_active_namespace_before_releasing_files(factory, ending):
+    async def scenario():
+        machine = await factory.create(SPEC)
+        ready = machine.root / "tmp/ready"
+        command = asyncio.create_task(
+            machine.run(Command(("sh", "-c", "setsid sh -c 'touch /tmp/ready; sleep 3600' & wait")))
+        )
+        try:
+            async with asyncio.timeout(10):
+                while not ready.exists():
+                    await asyncio.sleep(0)
+            if ending == "close":
+                await machine.close()
+                assert not machine.root.exists()
+            else:
+                command.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await command
+            if ending == "cancel":
+                result = await machine.run(Command(("printf", "verifier-ready")))
+                assert (result.exit_code, result.stdout) == (0, b"verifier-ready")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())

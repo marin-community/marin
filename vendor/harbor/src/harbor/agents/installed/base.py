@@ -4,10 +4,14 @@ import shlex
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any, ClassVar, Literal
+
+from shellbox.process import FAILURE_MARKER, TIMEOUT_MARKER, ProcessScope
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.trial.errors import AgentTimeoutError, PhaseCancellationError
 from harbor.utils.env import parse_bool_env_value
 from harbor.utils.templating import render_prompt_template
 
@@ -16,24 +20,6 @@ REQUIRED_MODEL_PRICE_FIELDS = frozenset(
 )
 
 SERVER_TIMEOUT_GRACE = 15.0
-SERVER_TIMEOUT_KILL_DELAY = 5.0
-
-
-def sandbox_deadline_command(command: str, timeout: float | None) -> str:
-    """Bound a complete shell command before the caller's remaining deadline."""
-    if timeout is None:
-        return command
-    if timeout <= 0:
-        raise ValueError("Sandbox command deadline must be positive")
-    term_after = timeout - min(SERVER_TIMEOUT_GRACE, timeout / 2)
-    kill_after = min(SERVER_TIMEOUT_KILL_DELAY, timeout / 4)
-    # Keep the supervisor alive on TERM so timeout's later KILL reaches
-    # descendants that ignore TERM. A caught trap resets in external children.
-    supervised = f"trap ':' TERM; {command}"
-    return (
-        f"timeout -k {kill_after:g} -s TERM {term_after:g} "
-        f"bash -o pipefail -c {shlex.quote(supervised)}"
-    )
 
 
 class NonZeroAgentExitCodeError(RuntimeError):
@@ -339,7 +325,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command with logging, _extra_env merging, and error handling.
 
         Returns the ExecResult on success, raises RuntimeError on failure.
@@ -407,7 +393,7 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command as root (for system packages, symlinks, etc.)."""
         return await self._exec(
             environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
@@ -420,11 +406,49 @@ class BaseInstalledAgent(BaseAgent, ABC):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         timeout_sec: int | None = None,
-    ) -> Any:
+    ) -> ExecResult:
         """Execute a command as the default agent user."""
         return await self._exec(
             environment, command, env=env, cwd=cwd, timeout_sec=timeout_sec
         )
+
+    async def run_agent_command(
+        self,
+        environment: BaseEnvironment,
+        command: str,
+        *,
+        env: dict[str, str],
+        deadline: float | None,
+    ) -> ExecResult:
+        """Run an installed agent under shellbox's shared process ownership contract."""
+        remaining = deadline - monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise AgentTimeoutError("Agent setup exhausted its deadline")
+        budget = (
+            remaining - min(SERVER_TIMEOUT_GRACE, remaining / 2)
+            if remaining is not None
+            else None
+        )
+        scope = ProcessScope()
+        async with environment.scoped_command(scope.cancel_command()):
+            try:
+                return await self.exec_as_agent(
+                    environment,
+                    command=shlex.join(
+                        scope.command(("bash", "-o", "pipefail", "-c", command), budget)
+                    ),
+                    env=env,
+                )
+            except NonZeroAgentExitCodeError as error:
+                if error.result is not None:
+                    markers = (error.result.stderr or "").splitlines()
+                    if FAILURE_MARKER in markers:
+                        raise PhaseCancellationError(
+                            "Agent process teardown could not be confirmed"
+                        ) from error
+                    if error.result.return_code == 124 and TIMEOUT_MARKER in markers:
+                        raise AgentTimeoutError("Agent exceeded its deadline") from error
+                raise
 
     def render_instruction(self, instruction: str) -> str:
         """Render the instruction through the prompt template, if configured."""
@@ -447,6 +471,12 @@ class BaseInstalledAgent(BaseAgent, ABC):
         setup_dir = self.logs_dir / "setup"
         setup_dir.mkdir(parents=True, exist_ok=True)
 
+        await self.exec_as_root(
+            environment,
+            command="command -v python3 >/dev/null || "
+            "{ if command -v apt-get >/dev/null; then apt-get update && apt-get install -y python3; "
+            "else apk add --no-cache python3; fi; }",
+        )
         try:
             await self.install(environment)
         except RuntimeError:

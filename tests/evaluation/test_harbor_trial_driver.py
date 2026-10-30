@@ -278,7 +278,7 @@ def _run_single_turn_aime_agent(
 @pytest.fixture(scope="module")
 def checked_policies(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("harbor-policies")
-    paths = sorted(_POLICIES.glob("*.yaml"))
+    paths = [_POLICIES / "ot-tblite.yaml"]
     completed = _preflight(tmp_path, [(path, {}) for path in paths])
     return dict(zip((path.name for path in paths), json.loads(completed.stdout), strict=True))
 
@@ -302,21 +302,28 @@ def test_preflight_resolves_hugging_face_datasets_in_harbor(tmp_path):
     assert result["benchmark_metadata"]["n_benchmark"] == 100
 
 
-def test_preflight_accepts_pinned_harbor_acp_registry_agent(tmp_path):
-    policy_path = tmp_path / "acp.yaml"
+@pytest.mark.parametrize(
+    "agent",
+    [
+        {"name": "acp:pi-acp@0.0.33"},
+        {"name": "pi", "mode": "local"},
+        {"import_path": "shellbox.agent:BashAgent"},
+    ],
+)
+def test_preflight_rejects_unsupported_agents(tmp_path, agent):
+    policy_path = tmp_path / "unsupported.yaml"
     policy_path.write_text(
-        """
-environment:
-  type: daytona
-agents:
-  - name: acp:pi-acp@0.0.33
-datasets:
-  - name: aime
-"""
+        yaml.safe_dump(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [agent],
+                "datasets": [{"name": "aime"}],
+            }
+        )
     )
-
-    (result,) = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
-    assert json.loads(result["stable_policy_json"])["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+    completed = _preflight(tmp_path, [(policy_path, {})], check=False)
+    assert completed.returncode == 2
+    assert "not supported by Marin" in completed.stderr
 
 
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
@@ -390,57 +397,6 @@ def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_pa
     assert completed.returncode == 2
     assert "64512" in completed.stderr
     assert "32768" in completed.stderr
-
-
-@pytest.mark.parametrize(
-    ("setup_parameters", "run_parameters", "callback", "keywords"),
-    [
-        ("_environment", "instruction, environment, context", "setup", "environment"),
-        ("environment", "instruction, environment, _context", "run", "instruction, environment, context"),
-        (
-            "environment",
-            "instruction, environment, context, scratch_dir",
-            "run",
-            "instruction, environment, context",
-        ),
-    ],
-)
-def test_preflight_rejects_agent_callback_keyword_mismatch(
-    tmp_path,
-    setup_parameters,
-    run_parameters,
-    callback,
-    keywords,
-):
-    module_path = tmp_path / "keyword_mismatched_agent.py"
-    module_path.write_text(
-        textwrap.dedent(
-            f"""
-            class KeywordMismatchedAgent:
-                async def setup(self, {setup_parameters}):
-                    pass
-
-                async def run(self, {run_parameters}):
-                    pass
-            """
-        )
-    )
-    document = yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())
-    document["agents"][0]["import_path"] = "keyword_mismatched_agent:KeywordMismatchedAgent"
-    policy_path = tmp_path / "keyword-mismatched-agent.yaml"
-    policy_path.write_text(yaml.safe_dump(document))
-
-    completed = _preflight(
-        tmp_path,
-        [(policy_path, {})],
-        check=False,
-        extra_python_path=tmp_path,
-    )
-
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert f"keyword_mismatched_agent:KeywordMismatchedAgent.{callback}()" in completed.stderr
-    assert all(keyword in completed.stderr for keyword in keywords.split(", "))
 
 
 def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
@@ -633,82 +589,6 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
-def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
-    task_dir = tmp_path / "tasks" / "task-one"
-    task_dir.mkdir(parents=True)
-    (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "test/task-one"\n[environment]\n')
-    (task_dir / "instruction.md").write_text("Solve the task.")
-    (task_dir / "environment").mkdir()
-    (task_dir / "environment" / "Dockerfile").write_text("FROM python:3.12-slim\n")
-    (task_dir / "tests").mkdir()
-    (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
-    policy_path = tmp_path / "policy.json"
-    policy_path.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "daytona"},
-                "agents": [
-                    {
-                        "name": "acp:pi-acp@0.0.33",
-                        "env": {
-                            "OPENAI_API_KEY": "test-key",
-                            "OPENAI_BASE_URL": "https://stale.example/v1",
-                        },
-                    }
-                ],
-                "datasets": [{"path": "tasks"}],
-            }
-        )
-    )
-
-    preflight = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
-    assert preflight[0]["agent"] == "acp:pi-acp@0.0.33"
-
-    overlay_path = tmp_path / "overlay.json"
-    overlay_path.write_text(
-        json.dumps(
-            {
-                "job_name": "runtime-job",
-                "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": None,
-                "endpoint_url": "https://iris.example/capability/v1",
-                "served_model": "served-pi",
-                "task_limit": 1,
-                "model_agent_kwargs": {},
-                "archive_root": str(tmp_path / "archive"),
-                "archive_dataset": "tau3-pi",
-                "verifier_env": {},
-            }
-        )
-    )
-    script = (
-        "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        "print(config.model_dump_json())"
-    )
-    effective = json.loads(_external_python("-c", script).stdout)
-
-    assert effective["agents"][0]["name"] == "acp:pi-acp@0.0.33"
-    assert effective["agents"][0]["env"] == {
-        "OPENAI_API_KEY": "****",
-        "OPENAI_BASE_URL": "https://iris.example/capability/v1",
-    }
-
-
-def test_packaged_sotopia_agent_resolves_in_vendored_runtime():
-    script = (
-        "from harbor.agents.installed.sotopia import SotopiaAgent; "
-        "from marin.evaluation.harbor.trial_driver import _validate_agent_callbacks; "
-        '_validate_agent_callbacks(SotopiaAgent, "harbor.agents.installed.sotopia:SotopiaAgent"); '
-        "print(SotopiaAgent.name())"
-    )
-
-    completed = _external_python("-c", script)
-
-    assert completed.stdout.strip() == "sotopia"
-
-
 @pytest.mark.parametrize(
     ("agent_name", "policy_kwargs", "expected_policy_version", "expected_runtime_version", "user_agent", "user_version"),
     [
@@ -717,7 +597,7 @@ def test_packaged_sotopia_agent_resolves_in_vendored_runtime():
         ("pi", {"version": "0.87.0"}, "0.87.0", "0.87.0", None, None),
         ("terminus-2", {"version": "1.3.0"}, "1.3.0", "1.3.0", None, None),
         ("terminus-2", {}, None, "9.9.9", None, None),
-        ("acp:pi-acp@0.0.33", {}, None, "9.9.9", None, None),
+        ("codex", {}, None, "9.9.9", None, None),
         ("pi", {}, "0.87.0", "0.87.0", {"name": "pi", "kwargs": {}}, "0.87.0"),
         ("pi", {"version": "1.3.0"}, "0.87.0", "0.87.0", {"name": "pi", "kwargs": {"version": "1.3.0"}}, "0.87.0"),
         (
@@ -725,7 +605,7 @@ def test_packaged_sotopia_agent_resolves_in_vendored_runtime():
             {"version": "1.3.0"},
             "0.87.0",
             "0.87.0",
-            {"name": "gemini-cli", "kwargs": {"version": "1.3.0"}},
+            {"name": "codex", "kwargs": {"version": "1.3.0"}},
             "1.3.0",
         ),
         ("terminus-2", {"version": "1.3.0"}, "1.3.0", "1.3.0", {"name": "pi", "kwargs": {"version": "1.3.0"}}, "0.87.0"),

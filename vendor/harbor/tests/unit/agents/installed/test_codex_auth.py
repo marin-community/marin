@@ -112,7 +112,7 @@ class TestCodexRunAuth:
 
     @pytest.mark.asyncio
     async def test_uploads_auth_json_when_present(
-        self, tmp_path, monkeypatch, temp_dir
+        self, tmp_path, monkeypatch, temp_dir, mock_environment
     ):
         """When auth.json exists, it's uploaded to the container."""
         auth_file = tmp_path / "auth.json"
@@ -122,7 +122,7 @@ class TestCodexRunAuth:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.default_user = "agent"
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
@@ -142,7 +142,7 @@ class TestCodexRunAuth:
 
     @pytest.mark.asyncio
     async def test_skips_chown_when_no_default_user(
-        self, tmp_path, monkeypatch, temp_dir
+        self, tmp_path, monkeypatch, temp_dir, mock_environment
     ):
         """When default_user is None, skip chown."""
         auth_file = tmp_path / "auth.json"
@@ -152,7 +152,7 @@ class TestCodexRunAuth:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.default_user = None
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
@@ -169,7 +169,7 @@ class TestCodexRunAuth:
 
     @pytest.mark.asyncio
     async def test_uses_api_key_when_no_auth_json(
-        self, tmp_path, monkeypatch, temp_dir
+        self, tmp_path, monkeypatch, temp_dir, mock_environment
     ):
         """When no auth.json, uses OPENAI_API_KEY and writes synthetic auth.json."""
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -179,7 +179,7 @@ class TestCodexRunAuth:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.default_user = "agent"
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
@@ -198,7 +198,7 @@ class TestCodexRunAuth:
 
     @pytest.mark.asyncio
     async def test_uses_tmp_codex_home_and_syncs_sessions_to_agent_logs(
-        self, tmp_path, monkeypatch, temp_dir
+        self, tmp_path, monkeypatch, temp_dir, mock_environment
     ):
         """Codex state stays outside /logs/agent except copied session logs."""
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -208,7 +208,7 @@ class TestCodexRunAuth:
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.agent_timeout_sec = None
         mock_env.default_user = "agent"
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
