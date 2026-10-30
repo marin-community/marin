@@ -380,7 +380,8 @@ def _job_tail(handle: JobHandle) -> tuple[str, ...]:
         return ()
 
 
-def _job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+def job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """Collect job identities and available log tails for an inference role."""
     jobs = {_job_role(role, index): str(handle.job_id) for index, handle in enumerate(handles)}
     tails = {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(handles)}
     return jobs, tails
@@ -571,7 +572,7 @@ def _record_startup_failure(
     role: str,
     existing_jobs: Mapping[str, str] | None = None,
 ) -> NoReturn:
-    failed_jobs, tails = _job_diagnostics(exc.jobs, role)
+    failed_jobs, tails = job_diagnostics(exc.jobs, role)
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
     _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)

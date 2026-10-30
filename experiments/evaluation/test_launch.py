@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable identities across command-line evaluation relaunches."""
+"""Command-line evaluation launch and relaunch behavior."""
 
+import json
+import os
 import subprocess
 from contextlib import contextmanager
 from dataclasses import replace
@@ -14,10 +16,12 @@ from click.testing import CliRunner
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationBatch, _record
+from marin.evaluation.runner import EvaluationBatch, EvaluationError, _record
 from marin.execution.step_runner import StepRunner
+from marin.inference.iris import RemoteInferenceStartupError
 
 import experiments.evaluation.launch as launch_module
+import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
@@ -26,6 +30,8 @@ from experiments.evaluation.models import models
 
 @pytest.fixture
 def submitted_batches(monkeypatch):
+    monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -253,3 +259,130 @@ def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_c
     assert after.group_id == before.group_id
     assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
     assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+
+
+@pytest.mark.parametrize(
+    "benchmark,changed", [("financebench", False), ("olympiadbench", False), ("sotopia-hard", True)]
+)
+def test_policy_cohort_change_invalidates_only_sotopia(tmp_path, submitted_batches, benchmark, changed):
+    campaign = Path(__file__).parent / "campaigns" / "eval-campaign-09-25-unlabeled"
+    cohort = tmp_path / "cohort.json"
+    cohort.write_text((campaign / "sotopia-baselines.json").read_text())
+    config = tmp_path / "finalization.yaml"
+    judge = campaign / "ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"
+    config.write_text(f"judge_model_config: {judge.resolve()}\nsotopia_baselines: {cohort}\n")
+    command = _command(tmp_path)
+    index = command.index("--evals")
+    del command[index : index + 2]
+    command.extend(["--policy-finalization-config", str(config)])
+    if benchmark == "sotopia-hard":
+        command.extend(["--harbor-config", str(campaign / "harbor-configs/sotopia-hard.yaml")])
+    else:
+        command.extend(["--evals", benchmark])
+    runner = CliRunner()
+    first = runner.invoke(cli, command)
+    assert first.exit_code == 0, first.output
+    batch = submitted_batches[-1]
+    evaluation = batch.evaluations[0]
+    _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
+    original = json.loads(evaluation.identity.eval_ref.postprocessing["marin-10197"])
+    sources = json.loads(cohort.read_text())
+    sources["models"][0]["results_path"] += "-replacement"
+    cohort.write_text(json.dumps(sources))
+    second = runner.invoke(cli, command)
+    assert second.exit_code == 0, second.output
+    revised = submitted_batches[-1].evaluations[0]
+    assert (revised.identity.run_id != evaluation.identity.run_id) is changed
+    frozen = json.loads(revised.identity.eval_ref.postprocessing["marin-10197"])
+    assert (frozen != original) is changed
+    if benchmark != "sotopia-hard":
+        assert "JUDGE_API_KEY" not in revised.secret_env_keys
+
+
+@pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])
+def test_policy_judge_rejects_incompatible_placement_before_submission(
+    tmp_path, submitted_batches, platform, accelerator
+):
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command = [
+        *_command(tmp_path),
+        "--evals",
+        "financebench",
+        "--policy-finalization-config",
+        str(config),
+        "--platform",
+        platform,
+        "--accelerator",
+        accelerator,
+    ]
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert submitted_batches == []
+
+
+def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_path):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    system_python = bin_dir / "python3"
+    system_python.write_text("#!/bin/sh\necho 'system Python has no project dependencies' >&2\nexit 1\n")
+    system_python.chmod(0o755)
+    snapshots = tmp_path / "snapshots"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; CONFIG_SNAPSHOT_DIR="$2"; ' 'snapshot_launch_configs --policy-finalization-config "$3"',
+            "snapshot",
+            str(campaign / "common.sh"),
+            str(snapshots),
+            str(campaign / "finalization.yaml"),
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "UV_NO_SYNC": "1",
+            "MARIN_DIR": str(Path(__file__).resolve().parents[2]),
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    snapshot = snapshots / result.stdout.strip()
+    manifest = json.loads((snapshot / "launch.json").read_text())
+    assert {row["kind"] for row in manifest["files"]} == {
+        "policy-finalization-config",
+        "judge_model_config",
+        "sotopia_baselines",
+    }
+    saved_cohort = next(snapshot.glob("*-sotopia-baselines.json"))
+    assert saved_cohort.read_bytes() == (campaign / "sotopia-baselines.json").read_bytes()
+
+
+def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path, submitted_batches, monkeypatch):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    command = _command(tmp_path)
+    command[command.index("--evals") + 1] = "financebench"
+    command.extend(["--policy-finalization-config", str(campaign / "finalization.yaml")])
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code == 0, result.output
+    executor = submitted_batches[-1].evaluations[0].executor
+
+    class FailedJob:
+        job_id = "/test/policy-judge"
+
+        def logs(self, *, max_lines):
+            return ("endpoint registration failed",)
+
+    @contextmanager
+    def failed_inference(_config):
+        raise RemoteInferenceStartupError("endpoint registration failed", (FailedJob(),))
+        yield
+
+    monkeypatch.setattr(policy_module, "precache_inference_model", lambda _config: None)
+    monkeypatch.setattr(policy_module, "remote_inference", failed_inference)
+    with pytest.raises(EvaluationError) as caught:
+        executor(None, str(tmp_path / "output"), {}, backend_state=lambda: None)
+    assert caught.value.status is RunStatus.INFRA_FAILED
+    assert caught.value.jobs == {"policy-judge": "/test/policy-judge"}
+    assert caught.value.log_tails == {"policy-judge": ("endpoint registration failed",)}
