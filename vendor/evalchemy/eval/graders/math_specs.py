@@ -8,9 +8,10 @@ from dataclasses import replace
 import re
 from typing import Any
 
+from eval.completion_response import CompletionClassification, CompletionText
 from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, JudgePlan
 from eval.graders.answer_equivalence import math_answers_equivalent
-from eval.graders.answer_extraction import extract_final_boxed_answer
+from eval.graders.answer_extraction import extract_final_boxed_answer, final_response_text
 from eval.graders.mmlu import extract_answer as extract_mmlu_answer, grade_response as grade_mmlu_response
 from eval.chat_benchmarks.GPQADiamond.testing_utils import get_multiple_choice_answer
 from eval.lm_eval_tasks.gsm8k.utils import extract_gsm8k_flexible_answer
@@ -59,7 +60,16 @@ def letter_choice(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
     if _reference_option(spec, "extractor", "gpqa") == "hle":
         from eval.chat_benchmarks.HLE.testing_utils import get_multiple_choice_answer as extractor
 
-    answer = extractor(str(responses[-1]))
+    response = responses[-1]
+    if isinstance(response, CompletionText):
+        completion = response.response
+        if completion.content:
+            response = completion.content
+        elif completion.classification == CompletionClassification.REASONING_ONLY:
+            response = completion.reasoning_content or ""
+        else:
+            response = ""
+    answer = extractor(final_response_text(str(response)))
     return Grade({"accuracy": float(answer == spec.target)}, filtered_resps=[answer])
 
 def mmlu_choice(spec: EvalSpec, responses: Sequence[Any]) -> Grade:

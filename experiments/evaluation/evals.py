@@ -327,6 +327,9 @@ EvaluationDefinition = EvalchemyDefinition | HarborDefinition
 
 
 _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+    "lab-bench-protocolqa",
+    "lab-bench-seqqa",
+    "lab-bench-cloning",
     "mmlu",
     "arc-challenge",
     "hellaswag",

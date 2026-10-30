@@ -1,0 +1,14 @@
+tasks: [LABBenchCloning]
+task_options:
+  LABBenchCloning:
+    num_fewshot: 0
+    task_alias: lab-bench-cloning
+    generation: true
+apply_chat_template: true
+chat_tokenizer_backend: huggingface
+prompt_budget_preflight: true
+batch_size: 1
+seed: 42
+gen_kwargs: temperature=0
+chat_template_kwargs:
+  enable_thinking: true
