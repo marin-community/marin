@@ -89,6 +89,7 @@ def build_training_step(cell: Cell, version: str):
     caches = reference.build(((cell.slug, 42),))[0].deps
     base = reference._training_step(cell.slug, cell.seed, caches)
     spec = reference.MODELS[cell.slug]
+    resources = reference.ResourceConfig.with_tpu(spec.tpu_type, regions=["us-central2"], ram="128g")
     steps = (
         math.ceil(PILOT_TOKENS / (spec.batch_size * reference.SEQUENCE_LENGTH))
         if cell.phase == PILOT
@@ -137,7 +138,9 @@ def build_training_step(cell: Cell, version: str):
             checkpointer=replace(cfg.trainer.checkpointer, keep=[{"every": max(1, steps // 10)}]),
         )
         return replace(
-            pod, train_config=replace(cfg, optimizer=opt, trainer=trainer, data_seed=cell.seed, hf_save_steps=steps)
+            pod,
+            resources=resources,
+            train_config=replace(cfg, optimizer=opt, trainer=trainer, data_seed=cell.seed, hf_save_steps=steps),
         )
 
     return replace(
@@ -145,7 +148,7 @@ def build_training_step(cell: Cell, version: str):
         name=cell.name,
         version=version,
         build_config=build_config,
-        run=remote(run_training, resources=reference.ResourceConfig.with_tpu(spec.tpu_type, regions=["us-central2"])),
+        run=remote(run_training, resources=resources),
     )
 
 
