@@ -281,10 +281,9 @@ def _materialize_context_budget(
     generator["max_turns"] = budget.max_turns
     generator.setdefault("sampling_params", {})["max_generate_length"] = budget.max_new_tokens_per_turn
     generator.setdefault("engine_init_kwargs", {})["max_model_len"] = budget.serving_window_tokens
-    generator.setdefault("trajectory_reward_shaping", {})["overlong"] = {
-        "l_max": budget.generated_tokens_per_trajectory,
-        "l_cache": budget.overlong_cache_tokens,
-    }
+    # The budget owns the window; the recipe keeps the rest of the overlong settings.
+    overlong = generator.setdefault("trajectory_reward_shaping", {}).setdefault("overlong", {})
+    overlong.update(l_max=budget.generated_tokens_per_trajectory, l_cache=budget.overlong_cache_tokens)
 
     if terminal_bench is not None:
         harbor = terminal_bench.setdefault("harbor", {})

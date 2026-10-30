@@ -127,6 +127,26 @@ def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
     assert parsed.generator["trajectory_reward_shaping"]["overlong"] == {"l_max": 12288, "l_cache": 3072}
 
 
+def test_context_budget_keeps_the_recipe_overlong_penalty_scale(tmp_path):
+    config = tmp_path / "overlong.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "context_budget": {"request_window_tokens": 32768, "max_new_tokens_per_turn": 4096, "max_turns": 1},
+                "generator": {"trajectory_reward_shaping": {"overlong": {"penalty_scale": 0.0}}},
+            }
+        )
+    )
+
+    parsed = parse_rl_config(str(config))
+
+    assert parsed.generator["trajectory_reward_shaping"]["overlong"] == {
+        "penalty_scale": 0.0,
+        "l_max": 4096,
+        "l_cache": 1024,
+    }
+
+
 def test_resolved_context_budget_artifact_is_reproducible(tmp_path, context_config_path):
     parsed = parse_rl_config(str(context_config_path))
     artifact = write_resolved_context_budget(
