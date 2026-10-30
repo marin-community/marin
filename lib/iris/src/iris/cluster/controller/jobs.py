@@ -31,6 +31,7 @@ from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, 
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
     BackendCapability,
+    BackendKind,
     BackendObservation,
     EgressAllowlistMode,
     JobFeasibilityRequest,
@@ -813,6 +814,12 @@ def _prepare_job_slot(
             needs_drain = _replace_finished_job(cur, launch.job_id, record_tombstone=record_tombstone)
         elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
             if not is_job_finished(existing_state):
+                if dependencies.runtime.backend.descriptor.kind is BackendKind.KUBERNETES:
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Cannot recreate active Kubernetes job {launch.job_id}: cancel it, verify its pods have "
+                        "disappeared, then submit the replacement",
+                    )
                 ops.job.cancel(cur, job_id=launch.job_id, reason="Replaced by new submission")
                 needs_drain = True
             else:

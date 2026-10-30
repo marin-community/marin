@@ -203,6 +203,11 @@ iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
 iris job describe /user/job-name          # per-task state, exit, duration, peak memory
 ```
 
+Kubernetes controllers reject `EXISTING_JOB_POLICY_RECREATE` while the existing
+job is active. Cancel it, verify that all pods for its job ID have disappeared
+in Kubernetes, then submit the replacement. A terminal Iris job state alone does
+not confirm pod deletion. See [the RECREATE incident](https://github.com/marin-community/marin/issues/10712).
+
 The workload command hierarchy is:
 
 | Resource | Inspection | Actions |
