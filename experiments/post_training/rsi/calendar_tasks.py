@@ -28,6 +28,7 @@ SCORER_PATH = "skyrl_gym/envs/nemotron_ultra/calendar.py"
 SLOT_MINUTES = 5
 """The granularity at which ``schedule`` searches start times."""
 ROLES = ("system", "user", "assistant")
+NOON = 12 * 60
 
 
 def _verifier_file(payload: dict, path: str) -> str | None:
@@ -100,18 +101,39 @@ def schedule(expected: Mapping[str, dict], scorer: CalendarScorer) -> list[dict]
     return [entry for _, _, entry in placed] if place(0) else None
 
 
+def mentioned_times(text: str, scorer: CalendarScorer) -> set[int]:
+    """The clock times in ``text``, in minutes after midnight: 12-hour times with am or pm, 24-hour times, and noon."""
+    times = {
+        scorer.minutes(f"{hour}:{minute or '00'}{half.lower()}m")
+        for hour, minute, half in re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*([AaPp])\.?\s?[Mm]\b", text)
+        if 1 <= int(hour) <= 12
+    }
+    times |= {int(hour) * 60 + int(minute) for hour, minute in re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)}
+    return times | ({NOON} if re.search(r"\bnoon\b", text, re.IGNORECASE) else set())
+
+
+def constraint_times(constraint: str | None, scorer: CalendarScorer) -> set[int]:
+    """The times of a constraint such as "after 11:30am" or "between 1pm and 3pm", in minutes after midnight."""
+    found = re.findall(r"\d{1,2}(?::\d{2})?\s*[ap]m", constraint or "")
+    return {scorer.minutes(time.replace(" ", "")) for time in found}
+
+
 def valid_calendar(entry: Mapping, scorer: CalendarScorer) -> bool:
-    """Whether a generated entry is a conversation that ends with a user turn and names every expected event with its
-    duration, and whose expected state has a schedule that the calendar scorer accepts."""
+    """Whether a generated entry is a conversation that ends with a user turn, names every expected event with its
+    duration, and asks for each constraint's times, and whose expected state has a schedule that the calendar scorer
+    accepts. The user's turns must name the constraint times, so that the expected state is what the user asked for."""
     try:
         messages, expected = entry["messages"], entry["exp_cal_state"]
         if not messages or messages[-1]["role"] != "user" or any(m["role"] not in ROLES for m in messages):
             return False
         text = " ".join(str(m["content"]) for m in messages)
+        asked = mentioned_times(" ".join(str(m["content"]) for m in messages if m["role"] == "user"), scorer)
         for event_id, event in expected.items():
             if str(event["event_id"]) != str(event_id) or not re.search(rf"\b{event['duration']}\b", text):
                 return False
             if not re.search(rf"event[ _-]?id:?\s*{event_id}\b", text, re.IGNORECASE):
+                return False
+            if not constraint_times(event["constraint"], scorer) <= asked:
                 return False
         solution = schedule(expected, scorer)
         return solution is not None and scorer.reward(json.dumps(solution), expected) == 1.0

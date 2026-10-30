@@ -104,3 +104,13 @@ def test_a_generated_task_keeps_the_template_form_with_the_new_state():
     assert task.id == "calendar.generator-0"
     assert task.tags == ("synth", "capability:x")
     assert calendar_entry(task) == {"messages": MESSAGES, "exp_cal_state": moved}
+
+
+def test_a_constraint_that_the_user_never_asked_for_is_invalid(scorer):
+    # The state says 11:15, the conversation asks for 11:45: a program bug that would train a wrong answer.
+    unasked = {**STATE, "1": {**STATE["1"], "constraint": "at 11:45am"}}
+    assert schedule(unasked, scorer) is not None
+    assert not valid_calendar({"messages": MESSAGES, "exp_cal_state": unasked}, scorer)
+    noon = {**STATE, "2": {**STATE["2"], "constraint": "after 12pm"}}
+    by_noon = [*MESSAGES[:-1], {"role": "user", "content": MESSAGES[-1]["content"] + " Lunch starts at noon or later."}]
+    assert valid_calendar({"messages": by_noon, "exp_cal_state": noon}, scorer)
