@@ -71,7 +71,7 @@ revisions, context window and serving configuration. For example:
     "serving": {"backend": "vllm", "version": "0.25.1", "hardware": "H100x1"}
   },
   "max_tokens": 4096,
-  "concurrency": 4,
+  "concurrency": 64,
   "source_limit": 8,
   "seed": null,
   "limits": {
@@ -83,6 +83,7 @@ revisions, context window and serving configuration. For example:
 }
 ```
 
+`concurrency` defaults to 64 concurrent attempts, covering generation and grading.
 `max_tokens` is an explicit run ceiling, further bounded by the source protocol.
 The effective context window is the smaller of the served model's window and
 any protocol cap. MMLU-Pro retains its maintained 65,536-token cap; the NUPA5K

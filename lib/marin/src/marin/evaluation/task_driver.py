@@ -98,7 +98,7 @@ class JudgeIdentity(RunModel):
 class EvaluationRunConfig(RunModel):
     model: ModelIdentity
     max_tokens: int = Field(gt=0)
-    concurrency: int = Field(gt=0)
+    concurrency: int = Field(default=64, gt=0)
     limits: RolloutLimits
     source_limit: int | None = Field(default=None, gt=0)
     seed: int | None = None
