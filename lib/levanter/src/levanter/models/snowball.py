@@ -837,7 +837,8 @@ class SnowballAttention(eqx.Module):
             out_sharding=_activation_spec("model"),
         )
         if self.cfg.projection_implementation == "fixed_schedule":
-            return _fixed_schedule_projection(attn_out, self.w_o)
+            output = _fixed_schedule_projection(attn_out, self.w_o)
+            return _match_activation_layout(output, x)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
     @named_call

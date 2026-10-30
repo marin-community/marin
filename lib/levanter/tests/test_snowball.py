@@ -2041,7 +2041,9 @@ def test_snowball_four_device_decode_preserves_explicit_cache_sharding():
 
 
 @pytest.mark.timeout(120)
-def test_snowball_attention_project_output_matches_compatible_layout_on_explicit_mesh(monkeypatch):
+def test_snowball_fixed_attention_project_output_matches_caller_layout_on_explicit_mesh(monkeypatch):
+    """The fixed output contraction can feed the caller residual on an explicit mesh."""
+
     monkeypatch.delenv("JAX_NUM_CPU_DEVICES", raising=False)
     run_on_cpu_devices(
         """
@@ -2050,7 +2052,20 @@ def test_snowball_attention_project_output_matches_compatible_layout_on_explicit
         import jax.numpy as jnp
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.models import snowball as snowball_module
         from levanter.models.snowball import SnowballAttention, SnowballConfig
+
+        def reference_linear(x, weight):
+            # This is only the terminal contraction substitute on CPU. It leaves
+            # the input layout unchanged and does not prescribe an output layout.
+            return jax.lax.dot_general(
+                x,
+                weight,
+                (((1,), (0,)), ((), ())),
+                preferred_element_type=jnp.float32,
+            )
+
+        snowball_module.fixed_schedule_linear = reference_linear
 
         mesh = Mesh(
             np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
@@ -2059,9 +2074,6 @@ def test_snowball_attention_project_output_matches_compatible_layout_on_explicit
         )
         gate_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
         attention_sharding = NamedSharding(mesh, P(("replica_dcn", "data"), "expert", None, None))
-        compatible_attention_sharding = NamedSharding(
-            mesh, P(("replica_dcn", "data", "expert"), None, None, None)
-        )
         config = SnowballConfig(
             hidden_dim=128,
             num_heads=2,
@@ -2069,6 +2081,7 @@ def test_snowball_attention_project_output_matches_compatible_layout_on_explicit
             head_dim=128,
             max_seq_len=256,
             attention_implementation="reference",
+            projection_implementation="fixed_schedule",
         )
         x_host = jnp.linspace(-0.5, 0.5, 4 * 256 * 128, dtype=jnp.float32).reshape(4, 256, 128)
         attention_output_host = jnp.linspace(-0.25, 0.25, 4 * 256 * 2 * 128, dtype=jnp.float32).reshape(
@@ -2084,23 +2097,36 @@ def test_snowball_attention_project_output_matches_compatible_layout_on_explicit
             )
             x = jax.device_put(x_host, gate_sharding)
             attention_output = jax.device_put(attention_output_host, attention_sharding)
-            compatible_output = jax.device_put(jax.device_get(attention_output), compatible_attention_sharding)
             value = jax.device_put(value_host, attention_sharding)
 
-            project_actual = eqx.filter_jit(
+            project = eqx.filter_jit(
                 lambda value_x: attention._project_output(value_x, attention_output, value)
             )
-            project_reference = eqx.filter_jit(
-                lambda value_x: attention._project_output(value_x, compatible_output, value)
+            actual = project(x)
+            residual = eqx.filter_jit(
+                lambda value_x: value_x + attention._project_output(value_x, attention_output, value)
+            )(x)
+
+            aligned_value = np.broadcast_to(np.asarray(value_host), (4, 256, 2, 128))
+            attention_output_np = np.asarray(attention_output_host)
+            dot = np.sum(attention_output_np * aligned_value, axis=-1, keepdims=True)
+            norm = np.sum(aligned_value * aligned_value, axis=-1, keepdims=True)
+            xsa = attention_output_np - dot / (norm + 1e-6) * aligned_value
+            gate = 2 / (1 + np.exp(-np.asarray(x_host) @ np.full((128, 2), 0.01, dtype=np.float32)))
+            expected = np.einsum(
+                "bsh,hd->bsd",
+                (gate[..., None] * xsa).reshape(4, 256, 256),
+                np.asarray(attention.w_o),
             )
-            actual = project_actual(x)
-            reference = project_reference(x)
-            np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(np.asarray(residual), np.asarray(x_host) + expected, rtol=1e-5, atol=1e-5)
             assert actual.shape == (4, 256, 128)
-            assert bool(jnp.isfinite(actual).all())
+            assert actual.sharding.spec == x.sharding.spec
+            assert residual.sharding.spec == x.sharding.spec
+            assert bool(jnp.isfinite(residual).all())
 
             _, input_gradient = eqx.filter_jit(
-                jax.value_and_grad(lambda value_x: jnp.mean(project_actual(value_x)))
+                jax.value_and_grad(lambda value_x: jnp.mean(project(value_x)))
             )(x)
             assert input_gradient.sharding.spec == x.sharding.spec
             assert bool(jnp.isfinite(input_gradient).all())
