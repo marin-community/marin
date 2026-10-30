@@ -124,7 +124,7 @@ class HarborRunResult:
         return {self.dataset: metrics}
 
     def canonical_task_metrics(self) -> dict[str, dict[str, float]]:
-        """Canonical reward and its standard error, keyed by dataset."""
+        """Canonical reward, standard error, and native metrics, keyed by dataset."""
         return {self.dataset: {"reward": self.mean_reward, "reward_stderr": self.reward_stderr, **self.native_metrics}}
 
     def task_coverage(self) -> dict[str, TaskCoverage]:

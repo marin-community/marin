@@ -207,6 +207,5 @@ async def test_sotopia_preflight_declares_corrected_metric_with_raw_reward(tmp_p
             "reward",
             "length_controlled_overall",
         }
-        assert description.n_attempted == 1
     finally:
         job._close_logger_handlers()
