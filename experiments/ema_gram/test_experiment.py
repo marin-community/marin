@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import logging
 from dataclasses import asdict, replace
 
 import draccus
@@ -16,11 +18,13 @@ from levanter.optim.ema_gram import EmaGramConfig
 from levanter.optim.util import flatten_linear_layers
 from levanter.trainer_state import TrainerState
 from marin.execution.lazy import materialized_config
+from rigging.filesystem.storage_path import StoragePath
+from wandb.util import json_friendly_val
 
-from experiments.ema_gram.plan import ALPHAS, SEEDS, Result, confirmations, expand, lock_settings, pilots
+from experiments.ema_gram.plan import ALPHAS, SEEDS, Cell, Result, confirmations, expand, lock_settings, pilots
 from experiments.ema_gram.probe import loss_probes, norm_matched_direction
-from experiments.ema_gram.report import paired_differences, summarize_attempt
-from experiments.ema_gram.train import build_training_step
+from experiments.ema_gram.report import paired_differences, summarize_attempt, validate_run_config
+from experiments.ema_gram.train import AttemptLogHandler, build_training_step
 
 
 def pilot_results(cells):
@@ -142,3 +146,64 @@ def test_reporting_preserves_paired_curves_and_censors_restart_time():
     )
     assert restart.time_to_target is None
     assert restart.tokens_to_target is None
+
+
+@pytest.mark.parametrize("phase,slug", [("horizon", "3e18"), ("scale", "3e19")])
+def test_followups_pair_half_against_quarter_and_require_reference(phase, slug):
+    history = [{"global_step": 0, "_step": 0, "_runtime": 1, "eval/paloma/c4_en/loss": 3.0}]
+    runs = [
+        summarize_attempt(
+            Cell(a, 1e-4, 0.01, phase=phase, slug=slug),
+            history,
+            expected_steps=1,
+            tokens_per_step=32,
+            run_state="finished",
+            run_url="test",
+            loss_target=None,
+        )
+        for a in (0.25, 0.5)
+    ]
+    paired = paired_differences(runs)
+    assert len(paired) == 1
+    assert paired[0].reference_alpha == 0.25
+    assert paired[0].alpha == 0.5
+    with pytest.raises(ValueError, match="Missing completed reference"):
+        paired_differences(runs[1:])
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("trainer", "train_batch_size", 16),
+        (None, "train_seq_len", 2048),
+        ("model", "num_heads", 4),
+        ("optimizer", "weight_decay", 0.2),
+        ("optimizer", "adam_beta2", 0.99),
+        ("data", "tokenizer", "wrong-tokenizer"),
+    ],
+)
+def test_report_rejects_mismatched_training_controls(section, key, value):
+    cfg = materialized_config(build_training_step(Cell(0.25, 1e-4, 0.01), "test-dev"), "/tmp/ema-test").train_config
+    logged = json_friendly_val(asdict(cfg))
+    validate_run_config(logged, cfg)
+    (logged[section] if section else logged)[key] = value
+    with pytest.raises(ValueError, match="differs from protocol"):
+        validate_run_config(logged, cfg)
+
+
+def test_attempt_metrics_preserve_incremental_chunks_and_final_tail(tmp_path):
+    artifact = StoragePath(str(tmp_path / "artifact"))
+    artifact.mkdirs()
+    local = tmp_path / "metrics.jsonl"
+    handler = AttemptLogHandler(local, artifact)
+    try:
+        for step in range(105):
+            handler.emit(logging.LogRecord("test", logging.INFO, "", 0, json.dumps({"step": step}), (), None))
+        assert len(local.read_text().splitlines()) == 105
+        assert len((artifact / "metrics-000000.jsonl").read_text().splitlines()) == 100
+        assert not (artifact / "metrics-000001.jsonl").exists()
+    finally:
+        handler.close()
+    assert [json.loads(line)["step"] for line in (artifact / "metrics-000001.jsonl").read_text().splitlines()] == list(
+        range(100, 105)
+    )

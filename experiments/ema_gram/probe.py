@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from itertools import islice
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import draccus
 import equinox as eqx
@@ -62,6 +63,12 @@ class DecompositionDiagnostic:
     relative_error: float | None
 
 
+class MatrixCheckpoint(NamedTuple):
+    masked_model: Any
+    tree_definition: jax.tree_util.PyTreeDef
+    optimizer: EmaGramState
+
+
 def matrix_state(model, opt_state):
     states = [
         s
@@ -76,7 +83,7 @@ def matrix_state(model, opt_state):
     leaves, treedef = jax.tree.flatten(flattened)
     if len(leaves) != len(states[0].matrices):
         raise ValueError("Checkpoint matrix layout does not match the model")
-    return masked, treedef, states[0]
+    return MatrixCheckpoint(masked, treedef, states[0])
 
 
 def norm_matched_direction(model, opt_state, *, alpha: float, ridge: float, polar_steps: int):

@@ -90,7 +90,11 @@ Every training process gets a fresh online W&B ID, even after preemption.
 The stable trainer ID and checkpoint path let the native trainer restore
 complete state. A process restart alone does not establish checkpoint resume;
 inspect its restore logs. Incremental JSON metric logs and peak-memory snapshots
-are written to `logs/<trainer-id>/<attempt>/` and metrics also reach task logs.
+are written locally to `logs/<trainer-id>/<attempt>/`. Immutable metric chunks
+are also persisted every 100 records under `<output-path>/attempts/<attempt>/`,
+with the remaining tail and memory snapshot saved on normal exit. Abrupt worker
+loss can lose the last partial chunk; online W&B and task logs provide additional
+evidence. Upload errors fail visibly.
 W&B runs share `marin-community/marin` and group `ema-gram-<version>`.
 
 Create a JSON run manifest containing one selected attempt per cell:
@@ -181,7 +185,10 @@ The report retains unsampled W&B histories, configurations, summaries,
 individual seed curves, exact-token paired differences, and first observed
 crossings of the locked loss target. Crossings are discrete evaluation points,
 not interpolated estimates. Failed and incomplete attempts remain visible.
-Figures show loss versus tokens and elapsed time, and paired differences;
+Confirmations pair against alpha=0; horizon and scale comparisons pair alpha=1/2
+against alpha=1/4 at each seed and horizon. Missing completed references are errors.
+Reports verify the logged model, optimizer, data and training/evaluation controls
+before assigning token counts. Figures show loss versus tokens and elapsed time, and paired differences;
 no smoothing or seed aggregation is applied. A restarted attempt's elapsed
 time is excluded from full-run comparisons. Earlier attempts must be exported
 separately and joined only after checkpoint restoration and elapsed-time

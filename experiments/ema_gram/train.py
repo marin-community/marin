@@ -19,21 +19,52 @@ from marin.execution.lazy import materialized_config
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.training.training import run_levanter_train_lm
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.ema_gram.plan import HORIZON, PILOT, PILOT_TOKENS, SCALE, Cell, confirmations, read_lock
 from experiments.references import train_delphi_seeds as reference
 
 
+class AttemptLogHandler(logging.FileHandler):
+    """Flush every local metric and preserve immutable artifact chunks every 100 records."""
+
+    def __init__(self, local_path: Path, artifact_path: StoragePath):
+        super().__init__(local_path)
+        self.artifact_path = artifact_path
+        self.pending: list[str] = []
+        self.chunk = 0
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record):
+        super().emit(record)
+        self.pending.append(self.format(record))
+        if len(self.pending) >= 100:
+            self.persist()
+
+    def persist(self):
+        if self.pending:
+            (self.artifact_path / f"metrics-{self.chunk:06d}.jsonl").write_text("\n".join(self.pending) + "\n")
+            self.pending.clear()
+            self.chunk += 1
+
+    def close(self):
+        self.persist()
+        super().close()
+
+
 def run_training(config):
     """Keep a distinct online W&B run for each process, including preemption retries."""
+    if config.output_path is None:
+        raise ValueError("Training requires an artifact output path for attempt evidence")
     tracker = config.train_config.trainer.tracker
     attempt = uuid.uuid4().hex[:12]
     tracker = replace(tracker, id=f"{config.train_config.trainer.id}-{attempt}", resume="never", mode="online")
     log_dir = Path("logs") / config.train_config.trainer.id / attempt
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("ema_gram_metrics")
-    handler = logging.FileHandler(log_dir / "metrics.jsonl")
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    artifact_dir = StoragePath(config.output_path) / "attempts" / attempt
+    artifact_dir.mkdirs()
+    handler = AttemptLogHandler(log_dir / "metrics.jsonl", artifact_dir)
     logger.addHandler(handler)
     config = replace(
         config,
@@ -50,6 +81,7 @@ def run_training(config):
         logger.removeHandler(handler)
         handler.close()
         (log_dir / "memory.json").write_text(json.dumps(memory))
+        (artifact_dir / "memory.json").write_text(json.dumps(memory))
 
 
 def build_training_step(cell: Cell, version: str):

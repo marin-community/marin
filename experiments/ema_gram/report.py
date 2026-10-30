@@ -11,8 +11,11 @@ from pathlib import Path
 
 import wandb
 from marin.execution.lazy import materialized_config
+from wandb.util import json_friendly_val
 
 from experiments.ema_gram.plan import (
+    HORIZON,
+    SCALE,
     SELECTION_METRIC,
     Cell,
     Result,
@@ -52,6 +55,7 @@ class PairedDifference:
     alpha: float
     tokens: int
     delta_loss: float
+    reference_alpha: float
 
 
 def summarize_attempt(
@@ -104,25 +108,81 @@ def summarize_attempt(
     )
 
 
+def reference_alpha(cell: Cell) -> float:
+    return 0.25 if cell.phase in (HORIZON, SCALE) else 0.0
+
+
+def validate_run_config(logged: dict, expected) -> None:
+    """Require all training and evaluation controls to match before labeling run history."""
+    expected = json_friendly_val(asdict(expected))
+    top_fields = (
+        "model",
+        "optimizer",
+        "data",
+        "train_seq_len",
+        "data_seed",
+        "adapter",
+        "z_loss_weight",
+        "initialize_from_hf",
+        "use_hf_model_config",
+        "pad_tokenizer_to_match_model",
+        "initialize_from_checkpoint_path",
+        "initialize_model_from_checkpoint_path",
+        "labeled_eval",
+        "eval_harness",
+        "eval_harness_steps",
+    )
+    trainer_fields = (
+        "seed",
+        "mp",
+        "quantization",
+        "model_averaging",
+        "mesh",
+        "use_explicit_mesh_axes",
+        "train_batch_size",
+        "per_device_parallelism",
+        "allow_nondivisible_batch_size",
+        "num_train_steps",
+        "steps_per_eval",
+        "max_eval_batches",
+        "initialize_from",
+        "allow_partial_checkpoint",
+        "jax_config",
+        "crash_on_nan",
+        "crash_on_inf",
+    )
+    for key in top_fields:
+        actual, target = logged[key], expected[key]
+        if key == "data":
+            # The pod wrapper can turn cache construction off after artifacts resolve.
+            actual = {k: v for k, v in actual.items() if k != "auto_build_caches"}
+            target = {k: v for k, v in target.items() if k != "auto_build_caches"}
+        if actual != target:
+            raise ValueError(f"Run differs from protocol: {key}")
+    for key in trainer_fields:
+        if logged["trainer"][key] != expected["trainer"][key]:
+            raise ValueError(f"Run differs from protocol: trainer.{key}")
+
+
 def paired_differences(attempts: list[AttemptReport]) -> list[PairedDifference]:
-    """Pair complete runs by seed, model and horizon, at identical observed token counts."""
+    """Pair complete runs against the phase reference at identical observed token counts."""
     complete = [r for r in attempts if r.result.status == "completed"]
     controls = {}
     for run in complete:
         cell = run.cell
-        key = (cell.slug, cell.horizon, cell.seed)
-        if cell.alpha == 0:
+        key = (cell.phase, cell.slug, cell.horizon, cell.seed)
+        if cell.alpha == reference_alpha(cell):
             if key in controls:
-                raise ValueError("Multiple alpha=0 controls for one seed; select locked settings first")
+                raise ValueError("Multiple reference runs for one seed; select locked settings first")
             controls[key] = run
     rows = []
     for run in complete:
         cell = run.cell
-        if cell.alpha == 0:
+        if cell.alpha == reference_alpha(cell):
             continue
-        key = (cell.slug, cell.horizon, cell.seed)
+        key = (cell.phase, cell.slug, cell.horizon, cell.seed)
         if key not in controls:
-            continue
+            raise ValueError(f"Missing completed reference for {cell.name}")
         control = {p.tokens: p for p in controls[key].curve}
         for point in run.curve:
             if point.tokens in control:
@@ -133,6 +193,7 @@ def paired_differences(attempts: list[AttemptReport]) -> list[PairedDifference]:
                         alpha=cell.alpha,
                         tokens=point.tokens,
                         delta_loss=point.loss - control[point.tokens].loss,
+                        reference_alpha=reference_alpha(cell),
                     )
                 )
     return rows
@@ -173,7 +234,7 @@ def plot_curves(attempts: list[AttemptReport], paired: list[PairedDifference], o
             ax.set_axisbelow(True)
         axes[0].set(xlabel="Tokens (billions)", ylabel="Held-out C4-en loss (nats)")
         axes[1].set(xlabel="Elapsed time (hours)", ylabel="Held-out C4-en loss (nats)")
-        axes[2].set(xlabel="Tokens (billions)", ylabel="Paired loss difference vs alpha=0")
+        axes[2].set(xlabel="Tokens (billions)", ylabel="Paired loss difference vs phase reference")
         axes[2].axhline(0, color="black", linestyle="--", linewidth=0.8)
         axes[0].legend(fontsize=7)
         fig.savefig(output / "curves.svg")
@@ -200,22 +261,7 @@ def main():
             raise ValueError("Reported run differs from locked settings")
         run = api.run(entry["run_path"])
         cfg = materialized_config(build_training_step(cell, "report-dev"), "/tmp/ema-gram-report").train_config
-        # Verify run identity against logged settings before attaching a result to a cell.
-        for key, expected in (
-            ("alpha", cell.alpha),
-            ("ridge", cell.ridge),
-            ("learning_rate", cell.learning_rate),
-            ("gram_beta", cfg.optimizer.gram_beta),
-        ):
-            if run.config["optimizer"][key] != expected:
-                raise ValueError(f"Run {run.url} differs from cell: {key}")
-        for key in ("hidden_dim", "num_layers"):
-            if run.config["model"][key] != getattr(cfg.model, key):
-                raise ValueError(f"Run {run.url} uses a different model: {key}")
-        if run.config["trainer"]["num_train_steps"] != cfg.trainer.num_train_steps:
-            raise ValueError(f"Run {run.url} uses a different schedule horizon")
-        if run.config["trainer"]["seed"] != cell.seed or run.config["data_seed"] != cell.seed:
-            raise ValueError(f"Run {run.url} has unpaired seeds")
+        validate_run_config(dict(run.config), cfg)
         history = list(run.scan_history())
         (args.output / f"history-{run.id}.json").write_text(json.dumps(history, indent=2) + "\n")
         attempt = summarize_attempt(
