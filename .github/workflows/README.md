@@ -341,3 +341,21 @@ steps:
 ```
 
 The README is the source of truth — when fixing the recipe, fix it here. The spec.md copy is illustrative.
+
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` runs daily at 04:17 UTC when the repository
+variable `SNOWBALL_TREE_RELEASE` equals `enabled`, or by manual dispatch from main.
+`scripts/ci/snowball_release.py` skips unchanged source, validates changed
+source, and publishes once using the observed live version. It reuses Marina's
+clean-current-main checks and fails on conflicts. GitHub OIDC authenticates the
+main-only Cloud Run deployment identity; its IAP access is declared by the shared
+IAM stack. The command writes a publication record before verification. The job
+summary and artifact retain it even if verification fails.
+
+See the [tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+for bootstrap of legacy unrecorded releases. Preview with a synced Marina environment:
+
+```bash
+uv run --no-sync python scripts/ci/snowball_release.py --dry-run --record /tmp/snowball-release.json
+```
