@@ -749,6 +749,24 @@ def test_iap_assertion_resolver_is_the_role_policy():
     assert auth.role_policy.role_for("stranger@example.com") == DASHBOARD_ROLE
 
 
+@pytest.mark.parametrize("listed_admin", [False, True])
+def test_iap_user_role_override_preserves_other_admins(listed_admin):
+    collaborator = "collaborator@example.com"
+    auth = create_controller_auth(
+        AuthConfig(
+            iap=IapAuthConfig(signed_header_audience="/projects/1/global/backendServices/2", unprovisioned_role="admin"),
+            admin_users=[collaborator] if listed_admin else [],
+            user_roles={collaborator: "user"},
+        ),
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert auth.role_policy is not None
+    assert auth.role_policy.role_for(collaborator) == "user"
+    assert auth.role_policy.role_for("operator@example.com") == "admin"
+    assert auth.role_policy.role_for(WORKER_USER) == "worker"
+
+
 # -- require_persistent_signing_key --------------------------------------------
 
 

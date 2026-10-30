@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marina.apps import Services
+from marina.testing import SourceServices
 from tasktrove import app as tasktrove
 
 
@@ -68,7 +68,7 @@ def client(tmp_path) -> TestClient:
             }
         )
     )
-    services = Services(name="tasktrove", data_url=str(tmp_path), database=None)
+    services = SourceServices(name="tasktrove", data_url=str(tmp_path), database=None)
     api = cast(FastAPI, tasktrove.create_api(services).app)
     return TestClient(api)
 
@@ -127,6 +127,18 @@ def test_task_metadata_and_archive_are_served_by_row(tmp_path) -> None:
     assert archive.content == b"first-archive"
     assert archive.headers["content-type"] == "application/gzip"
     assert archive.headers["content-disposition"] == 'attachment; filename="task-0.tar.gz"'
+
+
+def test_filters_reuse_metadata_after_storage_becomes_unavailable(tmp_path) -> None:
+    api = client(tmp_path)
+    assert api.get("/tasks").json()["total"] == 3
+    (tmp_path / "tasks" / "part-00000.parquet").unlink()
+
+    response = api.get("/tasks", params={"tag": "calendar", "query": "002"})
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [row["path"] for row in response.json()["rows"]] == ["calendar-002"]
 
 
 def test_task_api_rejects_rows_outside_the_parquet(tmp_path) -> None:

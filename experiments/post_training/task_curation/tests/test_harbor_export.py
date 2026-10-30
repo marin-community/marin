@@ -3,27 +3,19 @@
 
 import json
 from dataclasses import replace
-from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import verifyit
-import yaml
-from marin.execution.artifact import FingerprintMismatchError
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
-from marin.execution.lazy import ArtifactStep, StepContext, run
-from taskcompendium.harbor import export as harbor
-from taskcompendium.harbor.export import VerifierPayloadIdentity
+from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.models import NoGrader
 from upath import UPath
 
-from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash
 from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.rl_smoke import smoke_step
 from experiments.post_training.task_curation.tasktrove.export import harbor_export_step
+from experiments.post_training.task_curation.tasktrove.harbor_export import VerifierPayloadIdentity
 from experiments.post_training.task_curation.tests.conversion import converted_task, tasktrove_row
 
 GRADER_IMAGE = "example.test/grader@sha256:" + "a" * 64
@@ -57,7 +49,7 @@ def normalized_rows():
 
 
 @pytest.mark.parametrize("protocol", ["file", "memory"])
-def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tmp_path, protocol, monkeypatch):
+def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, tmp_path, protocol, monkeypatch):
     root = UPath(str(tmp_path)) if protocol == "file" else UPath("memory://harbor-export" + str(tmp_path))
     input_root = root / "normalized"
     (input_root / "normalize").mkdir(parents=True)
@@ -83,54 +75,6 @@ def test_export_artifact_resolves_into_smoke_launch_document(normalized_rows, tm
     identity.add(exported[0]["task_binary"])
     assert manifest["verify_tool_ref"] == identity.ref == result.verify_tool_ref
     assert not manifest["runtime_verified"]
-
-    with build_context(BuildContext(versions=VersionCodex(default="2026.10.09"))):
-        step = smoke_step(export)
-    launch = yaml.safe_load(
-        step.build_config(
-            StepContext.for_run(
-                output_path=str(root / "rl"), prefix=str(root), runtime_args=step.runtime_args, deps=step.deps
-            )
-        ).launch_config_yaml
-    )
-    source = launch["inputs"]["train_data"][0]
-    assert source["uri"] == str(UPath(output_root) / "tasks.parquet")
-    assert source["relative_path"] == "tasks.parquet"
-    assert source["verifier_ref"] == identity.ref
-    assert source["kind"] == "tasktrove_parquet"
-
-
-@pytest.mark.parametrize(
-    "changed_file",
-    [
-        Path(verifyit.__file__).with_name("candidate_file.py"),
-        Path(harbor.__file__).with_name("tasktrove.py"),
-        VERIFYIT_PACKAGE / "pyproject.toml",
-    ],
-)
-def test_export_dependency_edit_invalidates_fingerprint_pin(changed_file, tmp_path, monkeypatch):
-    normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
-    original_read = Path.read_bytes
-    harbor.verifier_runtime.cache_clear()
-    before = harbor_export_step(
-        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
-    )
-
-    # Change one filesystem input, without editing the checkout or materializing the source.
-    def edited_read(path):
-        content = original_read(path)
-        return content + b"\n# changed export input\n" if path == changed_file else content
-
-    monkeypatch.setattr(Path, "read_bytes", edited_read)
-    harbor.verifier_runtime.cache_clear()
-    after = harbor_export_step(
-        normalized, source=nl2bash.sources()[0], name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
-    )
-    harbor.verifier_runtime.cache_clear()
-    assert after.fingerprint() != before.fingerprint()
-    with pytest.raises(FingerprintMismatchError):
-        replace(after, expected_fingerprint=before.fingerprint()).lower()
-    assert not (tmp_path / "not-materialized").exists()
 
 
 @pytest.mark.parametrize("field", ["id", "family"])

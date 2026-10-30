@@ -21,30 +21,22 @@ for declaration fields and artifact outputs.
    [skyrl/math.py](skyrl/math.py) is an example. Reuse
    `taskcompendium.convert` helpers where they fit. Inventory-only sources use
    `info.dataset=SourceReference(...)` and no pipeline. Use the `excluded` tag
-   when the entry should be hidden by default.
+   when the entry is deprecated or excluded from use.
 3. If adding a module, import it and include its `sources()` results in
    [all_sources()](../sources.py). Add a behavioral conversion test in the family
    test module, and run it with [test_catalog.py](../tests/test_catalog.py).
-4. Regenerate the Atlas JSON from the repository root:
+4. Run a SAMPLE or FULL campaign to publish the updated inventory. Any campaign
+   includes all source declarations; select the new source to also curate and
+   assess it. Inspect its records through `finestore.rl.curation.CurationCatalog`.
+   Commit the Python declarations. Update the dashboard with the
+   [Atlas loader](../../../../docs/references/rl-data-atlas.md#updating-atlas).
 
-   ```bash
-   uv run --with-editable './lib/taskcompendium[pipeline]' python \
-     -m experiments.post_training.task_curation.export_catalog \
-     --output infra/marina/applets/rl_data_catalog/dist/catalog.json
-   ```
-
-The export does not download data or run converters. Inspect the new row in the
-JSON; commit the Python declarations, not the generated file. The applet build
-regenerates this JSON automatically. To update the dashboard, follow
-[RL Data Atlas publishing](../../../../docs/references/rl-data-atlas.md).
-**Refresh sources** loads the published catalog; it does not rebuild it.
 See [offline parquet counts](../README.md#declaring-a-dataset) for count regeneration.
 
 ## Script graders
 
 If the grader needs a script, put it next to the module as `<name>_grade.py`;
-vendor an upstream scorer under `<family>/scorers/` and list that directory
-in the declaration's `ships`. Build the grader with `grade_script`,
+vendor an upstream scorer under `<family>/scorers/`. Build the grader with `grade_script`,
 `shipped_files` and `script_package` from
 `taskcompendium.convert.script_grader`, which ship the script, the scorer
 files and the row's `config.json` in the task's verifier resources. Set
@@ -53,9 +45,9 @@ packages every grade script in the catalog imports, and use
 `required_grader_environment(context)` as its environment. A script that
 needs more declares its own `Environment` (see
 [environment.py](../environment.py)), such as `COMPILER_GRADER_PACKAGES`,
-which adds a C++ toolchain. The packages live in [grader.in](grader.in) and
-its compiled lock [grader.lock](grader.lock); regenerate the lock after
-changing `grader.in`. For a new buildable environment, follow the
+which adds a C++ toolchain. The pinned requirements live in
+[environments.py](environments.py), grouped by the scorers that need them; the
+build compiles them to a hash lock. For a new buildable environment, follow the
 [registration instruction](../images/README.md#building).
 
 A rubric and controls can come later: without a rubric rows are kept
@@ -74,6 +66,7 @@ ones stay out of `final/`.
 | [nemotron_ultra/components.py](nemotron_ultra/components.py) | Nemotron RL Ultra blends: one `COMPONENTS` table over the mopd, rlvr1 and rlvr2 blends. [graders.py](nemotron_ultra/graders.py) converts the rows; a graded component ships a `*_grade.py` script with the vendored NeMo Gym scorer it calls, except the math components, which the verifyit math comparator grades in process. |
 | [arc/arc.py](arc/arc.py) | TaskTrove ARC-AGI tasks and the Ultra NVARC components' converter, graded by the vendored NVARC scorer through `arc_grade.py`. |
 | [reasoning_gym/tasks.py](reasoning_gym/tasks.py) | TaskTrove Reasoning Gym tasks, and entries generated from the pinned `reasoning_gym` wheel, which `reasoning_gym_grade.py` regenerates with the grader packages before scoring. |
+| [structure_closure.py](structure_closure.py) | Snowball v0.1 structural train and development-validation splits. Assistant text prefills use the serving model's tokenizer; verifyit grades the first completed outer region in process. |
 | [tasktrove/code.py](tasktrove/code.py) | TaskTrove competitive programming (Code Contests, Codeforces, Nemotron competitive coding, TACO), graded by stdio cases with `COMPILER_GRADER_PACKAGES`. |
 | [tasktrove/python_tests.py](tasktrove/python_tests.py) | TaskTrove Python unit-test sources as one table, graded by pytest. |
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |

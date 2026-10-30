@@ -1,0 +1,13 @@
+# @package trainer.algorithm
+policy_loss_type: ftpo
+advantage_estimator: uniform
+loss_reduction: token_mean
+advantage_batch_normalize: false
+think_token_weight: 1.0
+use_kl_in_reward: false
+use_kl_loss: false
+use_entropy_loss: false
+off_policy_correction: none
+dynamic_sampling:
+  type: null
+ftpo: {}

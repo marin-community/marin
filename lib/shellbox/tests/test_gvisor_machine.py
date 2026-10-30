@@ -4,7 +4,10 @@
 """Exercise file transfer without Docker's view of the container overlay."""
 
 import asyncio
+import io
+import os
 import subprocess
+import tarfile
 
 from shellbox.backends.docker.machine import DockerCommandResult
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
@@ -26,6 +29,9 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
         lookup = command[:2] == ("/bin/sh", "-c") and command[2].startswith("command -v ")
         if not lookup and ("--user" not in options or options[options.index("--user") + 1] != "0"):
             return DockerCommandResult(1, b"", b"Permission denied")
+        if stdin:
+            with tarfile.open(fileobj=io.BytesIO(stdin), mode="r:") as archive:
+                assert all((member.uid, member.gid) == (0, 0) for member in archive)
         result = subprocess.run(command, input=stdin, capture_output=True, timeout=30)
         return DockerCommandResult(result.returncode, result.stdout, result.stderr)
 
@@ -35,6 +41,8 @@ def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_p
     source.mkdir()
     (source / "answer").write_bytes(b"\x00\xffpayload")
     (source / "answer").chmod(0o755)
+    if os.geteuid() == 0:
+        os.chown(source / "answer", 12345, 12345)
     remote = tmp_path / "remote"
     target = tmp_path / "download"
     workdir = tmp_path / "workdir"

@@ -78,10 +78,16 @@
   .shard-tile { height: 19px; min-width: 0; padding: 0; border: 0; border-radius: 2px; background: var(--idle); }
   .shard-tile.succeeded { background: var(--good); }
   .shard-tile.running { background: var(--active); }
+  .shard-tile.running.unknown { background: repeating-linear-gradient(135deg, var(--active) 0 4px, var(--line) 4px 8px); }
   .shard-tile.stopped { background: var(--bad); }
   .shard-tile:focus-visible, .shard-tile.selected { outline: 2px solid var(--ink); outline-offset: 2px; }
   .shard-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
   .shard-controls input { width: 80px; }
+  .shard-detail { padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
+  .shard-detail .summary { margin-top: 12px; }
+  .shard-detail dd { font-size: 15px; }
+  progress { width: min(100%, 420px); accent-color: var(--active); height: 16px; display: block; margin: 10px 0; }
+  .stale { color: var(--bad); }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 18px; margin: 20px 0 0; }
   .summary div { min-width: 0; }
   dt { font-size: 12px; }
@@ -131,6 +137,7 @@ function startDashboard() {
   const maxHeatCells = 32;
   const refreshDelay = 5000;
   const requestTimeout = 15000;
+  const staleHeartbeatSeconds = 15;
   const chartLeft = 65;
   const colors = ['#4079c9', '#be6a28', '#40956d', '#a46cc2', '#cf556c', '#718d26'];
   const sortFields = {
@@ -146,6 +153,7 @@ function startDashboard() {
   let shardOffset = 0;
   let shardStage = '';
   let selectedShardIndex = null;
+  let shardFilter = '';
 
   function bytes(value) {
     const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -550,32 +558,95 @@ function startDashboard() {
 
   function renderShards(page) {
     const area = byId('shard-area');
+    if (!page.shards.length && shardOffset) {
+      shardOffset = page.matching ? Math.floor((page.matching - 1) / shardPageSize) * shardPageSize : 0;
+      void refresh();
+      return;
+    }
     if (!page.total) {
       area.replaceChildren(element('p', 'No shards in the current stage.'));
       return;
     }
-    const range = element('p', `${page.stage_name} · shards ${shardOffset + 1}–${shardOffset + page.shards.length} of ${page.total}`);
+    const filter = element('select');
+    filter.id = 'shard-state';
+    filter.setAttribute('aria-label', 'Shard state');
+    options(filter, [['', 'All shards'], ['running', 'Running'], ['pending', 'Pending'], ['succeeded', 'Complete'], ['stopped', 'Stopped']], shardFilter);
+    filter.onchange = () => { shardFilter = filter.value; shardOffset = 0; selectedShardIndex = null; void refresh(); };
+    const range = element('p', `${page.stage_name} · showing ${page.shards.length ? shardOffset + 1 : 0}–${shardOffset + page.shards.length} of ${page.matching} matching shards · ${page.total} total`);
     range.className = 'muted';
     const grid = element('div');
     grid.className = 'shard-grid';
-    const detail = element('p', 'Select a shard to see its status.');
-    detail.className = 'muted';
+    const detail = element('div');
+    detail.className = 'shard-detail';
+    const showDetail = (shard) => {
+      detail.replaceChildren(element('h3', `Shard ${shard.index} · ${shard.state}`));
+      const progress = shard.progress;
+      if (progress) {
+        const known = progress.input_rows_total !== null;
+        const consumed = progress.input_rows_completed ?? progress.records_in;
+        if (known) {
+          const total = progress.input_rows_total;
+          const percent = total ? Math.min(100, 100 * consumed / total) : 100;
+          const bar = element('progress');
+          bar.max = 100;
+          bar.value = percent;
+          bar.setAttribute('aria-label', `Current input: ${number(percent)}% consumed`);
+          detail.append(bar, element('p', `Current input: ${number(consumed)} / ${number(total)} rows consumed (${number(percent)}%)`));
+        } else detail.append(element('p', 'Input size unknown; a percentage is unavailable.'));
+        const list = element('dl');
+        list.className = 'summary';
+        const values = [
+          ['Elapsed', `${number(progress.elapsed_seconds)} s`],
+          [known ? 'Rows consumed' : 'Records read', number(consumed)],
+        ];
+        if (progress.records_in > 0 && progress.elapsed_seconds > 0) {
+          values.push(['Average read rate', `${number(progress.records_in / progress.elapsed_seconds)} records/s`]);
+        }
+        for (const [label, value] of values) {
+          const item = element('div');
+          item.append(element('dt', label), element('dd', value));
+          list.append(item);
+        }
+        detail.append(list);
+      } else if (shard.state === 'running') detail.append(element('p', 'Waiting for the first progress heartbeat.'));
+      if (shard.worker_id) {
+        const worker = element('p', `Worker ${shard.worker_id}`);
+        if (shard.task_id) worker.append(' · ', taskLink(shard.task_id, 'Open worker task'));
+        detail.append(worker);
+      }
+      if (shard.last_seen_age_seconds !== null) {
+        const age = element('p', `Worker heartbeat: ${number(shard.last_seen_age_seconds)} s ago`);
+        if (shard.last_seen_age_seconds > staleHeartbeatSeconds) { age.className = 'stale'; age.append(' · Progress may be stale'); }
+        detail.append(age);
+      }
+    };
+    const selected = page.shards.find((shard) => shard.index === selectedShardIndex);
+    if (selected) showDetail(selected);
+    else detail.append(element('p', 'Select a shard for input progress, timing, and worker details.'));
     for (const shard of page.shards) {
       const tile = element('button');
       tile.type = 'button';
       tile.id = `shard-${shard.index}`;
       tile.className = `shard-tile ${shard.state}`;
       tile.title = `Shard ${shard.index}: ${shard.state}`;
+      if (shard.state === 'running') {
+        const progress = shard.progress;
+        if (progress && progress.input_rows_total !== null) {
+          const fraction = progress.input_rows_total ? (progress.input_rows_completed || 0) / progress.input_rows_total : 1;
+          const percent = Math.max(0, Math.min(100, 100 * fraction));
+          tile.style.background = `linear-gradient(90deg, var(--active) ${percent}%, var(--line) ${percent}%)`;
+          tile.title += ` · current input ${number(percent)}%`;
+        } else { tile.classList.add('unknown'); tile.title += ' · input size unknown'; }
+      }
       tile.setAttribute('aria-label', tile.title);
       if (shard.index === selectedShardIndex) {
-        detail.textContent = tile.title;
         tile.classList.add('selected');
       }
       tile.onclick = () => {
         selectedShardIndex = shard.index;
         grid.querySelector('.selected')?.classList.remove('selected');
         tile.classList.add('selected');
-        detail.textContent = tile.title;
+        showDetail(shard);
       };
       grid.append(tile);
     }
@@ -588,7 +659,7 @@ function startDashboard() {
     }
     const controls = element('div');
     controls.className = 'shard-controls';
-    if (page.total > shardPageSize) {
+    if (page.matching > shardPageSize) {
       const previous = element('button', 'Previous');
       previous.type = 'button';
       previous.setAttribute('aria-label', 'Previous shard page');
@@ -597,7 +668,7 @@ function startDashboard() {
       const next = element('button', 'Next');
       next.type = 'button';
       next.setAttribute('aria-label', 'Next shard page');
-      next.disabled = shardOffset + page.shards.length >= page.total;
+      next.disabled = shardOffset + page.shards.length >= page.matching;
       next.onclick = () => { shardOffset += shardPageSize; void refresh(); };
       const jump = element('input');
       jump.type = 'number';
@@ -614,9 +685,12 @@ function startDashboard() {
         shardOffset = Math.floor(index / shardPageSize) * shardPageSize;
         void refresh();
       };
-      controls.append(previous, next, jump, go);
+      controls.append(previous, next);
+      if (!shardFilter) controls.append(jump, go);
     }
-    replaceContent(area, range, grid, detail, key, controls);
+    const note = element('p', 'Progress is approximate and resets per input file. Stripes indicate unknown input size.');
+    note.className = 'muted';
+    replaceContent(area, filter, range, grid, detail, key, note, controls);
   }
 
   function renderPage(data) {
@@ -687,7 +761,7 @@ function startDashboard() {
             byId('shard-area').replaceChildren(element('p', 'Finished execution: shard details were released; the summary and Finelog metrics remain available.'));
             shardsRequest = Promise.resolve();
           } else {
-            shardsRequest = get('shards', { execution_id: executionId, offset: shardOffset, limit: shardPageSize }).then(
+            shardsRequest = get('shards', { execution_id: executionId, offset: shardOffset, limit: shardPageSize, state: shardFilter }).then(
               (page) => { if (current === request) renderShards(page); },
               (error) => { if (current === request) byId('shard-area').textContent = `Shard status unavailable: ${error.message}`; },
             );

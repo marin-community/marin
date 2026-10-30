@@ -6,6 +6,7 @@
 import json
 from dataclasses import asdict, replace
 from functools import partial
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -24,6 +25,7 @@ from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry
 from taskcompendium.pipeline.models import (
     CheckResult,
     CheckStatus,
+    CheckSuite,
     Controls,
     GraderReadiness,
     RawRow,
@@ -289,10 +291,11 @@ def test_mixed_failure_infrastructure_trial_reexecutes_without_erasing_definite_
     [
         ({"backend": "qemu", "bundle_path": "/tmp/changeable"}, False),
         ({"network": "allow"}, False),
+        ({"judge_base_url": "http://judge.invalid/v1"}, False),
         ({"backend": "qemu", "worker_image": "image@sha256:" + "1" * 64}, True),
         (FixtureGradingMachines().identity(), True),
     ],
-    ids=["qemu_bundle_path", "network_allowed", "qemu_worker_image", "offline_machines"],
+    ids=["qemu_bundle_path", "network_allowed", "remote_judge", "qemu_worker_image", "offline_machines"],
 )
 def test_source_rerun_requires_immutable_offline_runtime(tmp_path, reusable_schema_row, runtime, reusable):
     suite = replace(control_suite(SCHEMA_CONTROLS, None), parameters=runtime)
@@ -503,6 +506,119 @@ def fixture_control_outcome(task: TaskSpec) -> VerificationReport:
             )
         ]
     )
+
+
+def assigned_controls(task: TaskSpec, *, outcomes: dict[str, CheckStatus]) -> VerificationReport:
+    return VerificationReport(
+        [CheckResult(check="golden", status=outcomes.get(task.id, CheckStatus.PASS), detail="control")]
+    )
+
+
+@pytest.mark.parametrize("initial_status", [CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.INFRA_ERROR])
+def test_control_sample_skips_or_runs_individual_validation(tmp_path, initial_status):
+    rows = [
+        {
+            "task_id": task_id,
+            "task_json": schema_task(task_id, OBJECT_SCHEMA).model_dump_json(),
+            "filter_status": "keep",
+            "filter_reasons": [],
+        }
+        for task_id in ("one", "two", "three", "four")
+    ]
+    failed_id = sample_rows(iter(rows), size=1, seed=0).rows[0]["task_id"]
+    unavailable_id = next(row["task_id"] for row in rows if row["task_id"] != failed_id)
+    source = tmp_path / "source"
+    (source / "audit").mkdir(parents=True)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": len(rows)}))
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), source / "audit/part-00000.parquet")
+    suite = CheckSuite(
+        id="controls",
+        revision="1",
+        parameters={},
+        run=partial(
+            assigned_controls,
+            outcomes=(
+                {}
+                if initial_status == CheckStatus.PASS
+                else {failed_id: initial_status, unavailable_id: CheckStatus.INFRA_ERROR}
+            ),
+        ),
+    )
+    policy = SourceVerificationPolicy(1, 0, 1, 0.95)
+    output = tmp_path / "verified"
+    with ZephyrContext(max_workers=2, name="per-task-fallback") as context:
+        first = verify_source(str(source), str(output), policy, suite, 2, context=context)
+        (output / "verification.json").unlink()
+        second = verify_source(str(source), str(output), policy, suite, 2, context=context)
+    if initial_status == CheckStatus.PASS:
+        assert first["verification"]["status"] == "passed"
+        assert first["verification"]["sample_count"] == 1
+        accepted = pq.read_table(output / "accepted").to_pylist()
+        assert len(accepted) == 4
+        assert sum(row["grader_readiness"] == "source_sampled" for row in accepted) == 3
+        return
+    assert first["verification"]["status"] == "validated"
+    assert first["verification"]["sample_count"] == first["verification"]["eligible_count"] == 4
+    assert first["dispositions"] == (
+        {"keep": 2, "reject": 1, "defer": 1} if initial_status == CheckStatus.FAIL else {"keep": 2, "defer": 2}
+    )
+    accepted = pq.read_table(output / "accepted").to_pylist()
+    assert {row["task_id"] for row in accepted} == {"one", "two", "three", "four"} - {failed_id, unavailable_id}
+    assert all(row["grader_readiness"] == "ready" for row in accepted)
+    first_ids = {item["task_id"]: item["execution_id"] for item in first["verification"]["evidence"]}
+    second_ids = {item["task_id"]: item["execution_id"] for item in second["verification"]["evidence"]}
+    if initial_status == CheckStatus.FAIL:
+        assert first_ids[failed_id] == second_ids[failed_id]
+    assert first_ids[unavailable_id] != second_ids[unavailable_id]
+
+
+def recovering_controls(task: TaskSpec, *, unavailable: str, failed: str, flag: str) -> VerificationReport:
+    status = (
+        CheckStatus.FAIL
+        if task.id == failed
+        else (CheckStatus.INFRA_ERROR if task.id == unavailable and Path(flag).exists() else CheckStatus.PASS)
+    )
+    return VerificationReport([CheckResult(check="golden", status=status, detail="control")])
+
+
+def test_recovered_sample_keeps_known_individual_failures(tmp_path):
+    rows = [
+        {
+            "task_id": task_id,
+            "task_json": schema_task(task_id, OBJECT_SCHEMA).model_dump_json(),
+            "filter_status": "keep",
+            "filter_reasons": [],
+        }
+        for task_id in ("one", "two", "three", "four")
+    ]
+    unavailable = sample_rows(iter(rows), size=1, seed=0).rows[0]["task_id"]
+    failed = next(row["task_id"] for row in rows if row["task_id"] != unavailable)
+    flag = tmp_path / "unavailable"
+    flag.touch()
+    source = tmp_path / "source"
+    (source / "audit").mkdir(parents=True)
+    (source / "manifest.json").write_text(json.dumps({"input_rows": 4}))
+    pq.write_table(pa.Table.from_pylist(rows, schema=TASK_SCHEMA), source / "audit/part-00000.parquet")
+    suite = CheckSuite(
+        id="controls",
+        revision="1",
+        parameters={},
+        run=partial(recovering_controls, unavailable=unavailable, failed=failed, flag=str(flag)),
+    )
+    policy = SourceVerificationPolicy(1, 0, 1, 0.95)
+    output = tmp_path / "verified"
+    with ZephyrContext(max_workers=2, name="recovered-shortcut") as context:
+        first = verify_source(str(source), str(output), policy, suite, 2, context=context)
+        flag.unlink()
+        second = verify_source(str(source), str(output), policy, suite, 2, context=context)
+    assert first["verification"]["status"] == "validated"
+    assert second["verification"]["status"] == "passed"
+    assert second["verification"]["sample_count"] == 1
+    accepted = pq.read_table(output / "accepted").to_pylist()
+    assert {row["task_id"] for row in accepted} == {"one", "two", "three", "four"} - {failed}
+    rejected = next(row for row in pq.read_table(output / "audit").to_pylist() if row["task_id"] == failed)
+    assert rejected["filter_status"] == "reject"
+    assert rejected["checks"][0]["status"] == "fail"
 
 
 @pytest.mark.parametrize("empty", [False, True])

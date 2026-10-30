@@ -117,14 +117,18 @@ type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
 class Controls:
     """The one control submission that tests a source's grader on each sampled task.
 
-    ``golden(task)`` is a known-correct submission, which must score one. When ``golden`` is
-    absent or returns ``None`` because the source supplies no known-correct answer, the task is
-    graded on an empty submission instead, which must score zero; a sandbox grader grades it in a
-    fresh grading machine. ``memory_mb`` sizes each fresh grading machine.
+    ``golden(task)`` is a known-correct submission, which must score one. ``negative(task)`` is a
+    known-invalid submission, which must score zero unless ``negative_reward(task)`` supplies the
+    expected partial reward. When neither callable supplies a submission,
+    the task is graded on an empty submission, which must score zero; a sandbox grader grades it in
+    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine. Judge-graded tasks use
+    the campaign's explicit remote judge connection rather than a network-denied grading machine.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
+    negative: Callable[[TaskSpec], ControlSubmission | None] | None = None
     memory_mb: int = 512
+    negative_reward: Callable[[TaskSpec], float] | None = None
 
 
 @dataclass(frozen=True)
@@ -181,9 +185,9 @@ class SourceStatus(StrEnum):
     """The terminal status of one source pipeline run, recorded in its manifest.
 
     ``SAMPLED``: a sample-mode run processed only its panel. ``COMPLETED``: every row was processed,
-    by full expansion or because the panel is a census. ``GATED``: a quality or verification gate
-    rejected the source. ``INCOMPLETE``: the quality gate could not decide or a control trial hit an
-    infrastructure error; evidence is retained for a retry.
+    by full expansion or because the panel is a census. ``GATED``: a quality gate rejected the source.
+    ``INCOMPLETE``: the quality gate could not decide, or no controls could complete; evidence is
+    retained for a retry. Per-task control failures and infrastructure errors affect their rows.
     """
 
     SAMPLED = "sampled"

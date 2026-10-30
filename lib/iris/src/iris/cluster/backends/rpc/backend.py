@@ -32,6 +32,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryRequest,
     BackendRecoveryResult,
     DeviceCapacity,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -164,6 +165,8 @@ class RpcTaskBackend:
     # composer at construction after it builds the autoscaler from the provider
     # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
+    # Resolve an UNSPECIFIED egress policy to ALLOWLIST (defaults.egress_allowlist.default).
+    egress_allowlist_default: bool = False
     # One shared scheduler instance reused across cycles; the controller supplies
     # the complete per-tick workspace.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
@@ -320,6 +323,13 @@ class RpcTaskBackend:
             sibling_workers=[WorkerId(worker_id) for worker_id in siblings],
             autoscaler_state=self.autoscaler.persistable_state(),
         )
+
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        """Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``)."""
+        return EgressAllowlistMode.DEFAULT if self.egress_allowlist_default else EgressAllowlistMode.OPT_IN
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:

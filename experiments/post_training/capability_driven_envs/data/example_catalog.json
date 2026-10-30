@@ -1,0 +1,56 @@
+{
+  "catalog_version": "2026.09.20-cross-domain-v3",
+  "curricula": [
+    {
+      "curriculum": {
+        "subject_id": "d43",
+        "subject_name": "Culinary arts",
+        "sections": [
+          {
+            "excludes": [
+              "Choosing preparation quantities or production timing",
+              "Creating recipes or menus",
+              "Judging finished-product quality"
+            ],
+            "id": "d43.culinary.scaling",
+            "includes": [
+              "Yield-factor calculations",
+              "Weight, volume, and temperature conversions",
+              "Edible-portion and trim-loss calculations",
+              "Baker's percentages"
+            ],
+            "kind": "capability",
+            "name": "Scale and convert recipes",
+            "outcome": "Calculate revised ingredient quantities and process parameters for a required yield while preserving ratios, units, portion sizes, and stated loss factors.",
+            "parent_id": "d43.culinary",
+            "prerequisites": [],
+            "sample_tasks": [
+              {
+                "instruction": "A soup recipe yields 12 portions of 300 mL and uses 1.8 L stock, 600 g vegetables, and 240 g cooked beans. Scale it to 30 portions, reporting every ingredient in the original unit and the final required volume.",
+                "kind": "entry"
+              },
+              {
+                "instruction": "A banquet recipe yields 40 plated portions after 8% cooking loss and specifies ingredient weights in kilograms, a sauce ratio of 3:2, and 180 g cooked food per plate. Using the supplied ingredient list and a new requirement of 135 portions with 12% expected loss, calculate the purchase and preparation quantities, preserve the sauce ratio, convert quantities to the requested purchasing units, and show the yield checks.",
+                "kind": "representative"
+              }
+            ],
+            "sampling_facets": [
+              {
+                "description": "Count, mass, volume, percentage, and baker's-percentage recipe representations under the same ratio-preserving calculation contract.",
+                "id": "recipe_representation"
+              },
+              {
+                "description": "Portioned service, batch production, and baking formulas with their applicable loss factors supplied.",
+                "id": "production_format"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "learning_progression": {
+    "catalog_version": "2026.09.20-cross-domain-v3",
+    "edges": []
+  }
+}

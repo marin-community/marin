@@ -20,6 +20,10 @@ uv run iris --cluster=marin job run \
   --sync-package marin-core \
   --sync-package marin-levanter \
   --extra gpu \
+  --include tests/test_june_snowball_model.py \
+  --include tests/conftest.py \
+  --include lib/levanter/tests/test_snowball.py \
+  --include lib/levanter/tests/conftest.py \
   --job-name "$job_name" \
   -e JAX_PLATFORMS cuda,cpu \
   -e XLA_FLAGS --xla_gpu_deterministic_ops=true \

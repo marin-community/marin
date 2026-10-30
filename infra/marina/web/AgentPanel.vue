@@ -401,6 +401,7 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="state === 'error'" class="agent-state">
       <p class="problem">{{ error }}</p>
+      <a class="button primary" :href="`${config.origin}/`" target="_blank" rel="noreferrer">Open Loom</a>
       <button type="button" @click="connect">Try again</button>
     </div>
 
@@ -476,7 +477,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: calc(100vh - 3.35rem);
+  height: 100%;
   background: var(--paper);
   border-left: 1px solid var(--edge);
   box-shadow: -12px 0 32px color-mix(in srgb, var(--ink) 10%, transparent);

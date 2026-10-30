@@ -30,7 +30,7 @@ from zephyr.stats import (
     ZephyrWorkerStatStatus,
     _push_iris_task_status,
 )
-from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
+from zephyr.worker_context import CounterEntry, CounterSnapshot, RunnerSnapshot, ShardProgress, merge_counter_entries
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,29 @@ class _ActiveShard:
     execution_id: str
     start_time: float
     attempt: int
+    stage_generation: int
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_counters: dict[str, CounterEntry] = field(default_factory=dict)
 
 
 def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]:
     return {name: entry.value for name, entry in counters.items()}
+
+
+def _shard_progress(active: _ActiveShard, snapshot: RunnerSnapshot, now: float) -> ShardProgress:
+    progress = snapshot.input_progress
+    return ShardProgress(
+        stage_generation=active.stage_generation,
+        attempt=active.attempt,
+        elapsed_seconds=max(0, now - active.start_time),
+        records_in=int(
+            snapshot.counters.get(
+                stage_counters.RECORDS_IN, CounterEntry(progress.completed if progress is not None else 0)
+            ).value
+        ),
+        input_rows_completed=progress.completed if progress is not None else None,
+        input_rows_total=progress.total if progress is not None else None,
+    )
 
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
@@ -262,6 +279,7 @@ class ZephyrWorker:
                 execution_id=work.execution_id,
                 start_time=time.monotonic(),
                 attempt=work.attempt,
+                stage_generation=work.stage_generation,
             )
             with self._resources_lock:
                 self._available = self._available - work.task.cost
@@ -310,7 +328,7 @@ class ZephyrWorker:
             try:
                 result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
             except Exception:
-                self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.FAILED, runner.live_counters())
+                self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.FAILED, runner.live_snapshot().counters)
                 raise
             self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.END, task_counters)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
@@ -412,11 +430,13 @@ class ZephyrWorker:
         return self._counter_generation
 
     def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
-        """Return changed live counters, grouped by pipeline execution."""
+        """Return live shard progress and counters, grouped by pipeline execution."""
         entries_by_execution: dict[str, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        shards_by_execution: dict[str, dict[int, ShardProgress]] = defaultdict(dict)
         with self._resources_lock:
             for active_shard in self._active_shards:
-                counters = active_shard.runner.live_counters()
+                snapshot = active_shard.runner.live_snapshot()
+                counters = snapshot.counters
                 active_shard.last_counters = dict(counters)
                 if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
                     self._stats_writer.emit_worker_stat(
@@ -429,11 +449,16 @@ class ZephyrWorker:
                         active_shard.attempt_id,
                     )
                 entries_by_execution[active_shard.execution_id].extend(counters.items())
+                shards_by_execution[active_shard.execution_id][active_shard.task.shard_idx] = _shard_progress(
+                    active_shard, snapshot, time.monotonic()
+                )
             snapshots: dict[str, CounterSnapshot] = {}
             execution_ids = entries_by_execution.keys() | self._last_reported_counters.keys()
             for execution_id in execution_ids:
                 current, _ = merge_counter_entries(entries_by_execution.get(execution_id, []))
-                if current == self._last_reported_counters.get(execution_id, {}):
+                if not shards_by_execution[execution_id] and current == self._last_reported_counters.get(
+                    execution_id, {}
+                ):
                     continue
                 if current:
                     self._last_reported_counters[execution_id] = current
@@ -442,6 +467,7 @@ class ZephyrWorker:
                 snapshots[execution_id] = CounterSnapshot(
                     counters=current,
                     generation=self._next_counter_generation_locked(),
+                    shards=shards_by_execution[execution_id],
                 )
         return snapshots or None
 

@@ -25,7 +25,6 @@ from experiments.post_training.curriculum_sft.science_trial import (
     build_self_distill,
 )
 from experiments.post_training.curriculum_sft.self_distill import AnswerCheck, answer_matches
-from experiments.post_training.curriculum_sft.trial import S3_TRIAL_PREFIX
 
 PACKET = {
     "capability_id": "d03.example",
@@ -166,7 +165,7 @@ def test_generation_builds_one_verified_question_step_per_capability():
 
 
 def test_self_distill_grades_letters_from_questions_adopted_from_the_source_prefix():
-    config = materialized_config(build_self_distill(), S3_TRIAL_PREFIX)
+    config = materialized_config(build_self_distill(), "s3://test-output/marin")
     source_prefix = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
 
     assert config.answer_check is AnswerCheck.CHOICE

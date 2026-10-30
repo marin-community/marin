@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -22,9 +23,9 @@ from shellbox.machine import (
     ExitReason,
     Machine,
     MachineSpec,
+    PackageSpec,
     RegistryImage,
     Result,
-    ShellSimBuiltins,
 )
 from verifyit.grade import main as verifyit_main
 from verifyit.spec import NumericSpec
@@ -35,6 +36,7 @@ from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
+    CommandSemantics,
     ConversationInput,
     ConversationTrace,
     EnvironmentRequirements,
@@ -60,7 +62,9 @@ from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
-GRADER_ENVIRONMENT = EnvironmentRequirements(docker_image=FIXTURE_IMAGE, compatible_backends=(Backend.DOCKER,))
+GRADER_ENVIRONMENT = EnvironmentRequirements(
+    docker_image=FIXTURE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS
+)
 GRADER_MACHINE = MachineSpec(RegistryImage(FIXTURE_IMAGE))
 VERIFYIT_ENTRYPOINT = ("python3", "-c", "from verifyit.grade import main; raise SystemExit(main())")
 REWARD_TXT = "/logs/verifier/reward.txt"
@@ -71,8 +75,8 @@ REWARD_JSON = "/logs/verifier/reward.json"
 class VerifyitImageMachine:
     """A ShellSim machine whose image provides the verifyit CLI.
 
-    ShellSim's Python lacks the standard library verifyit needs, so the CLI runs on the host against
-    copies of the machine's ``/tests`` and workspace, and its verdict is written back.
+    The CLI fake runs on the host against copied inputs; shell fixture graders
+    use the simulated filesystem without installing ports.
     """
 
     machine: Machine
@@ -104,13 +108,13 @@ class VerifyitImageMachine:
         await self.machine.close()
 
 
-class FixtureImageFactory:
+class FixtureImageFactory(DockerMachineFactory):
     """Start the pinned fixture image as ShellSim built-ins."""
 
     backend = Backend.DOCKER
 
     async def create(self, spec: MachineSpec) -> VerifyitImageMachine:
-        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=ShellSimBuiltins())))
+        return VerifyitImageMachine(await ShellSimMachineFactory().create(replace(spec, source=PackageSpec())))
 
 
 def arithmetic_task(grader: Grader) -> TaskSpec:
@@ -214,7 +218,7 @@ def local_artifact_factory(tmp_path):
         async def close(self):
             self.closed = True
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         def __init__(self, prepare_artifacts, *, archive_members=(), archive_failure=None):
             self.machines = []
             self.prepare_artifacts = prepare_artifacts
@@ -367,24 +371,25 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
 
 @pytest.mark.asyncio
 async def test_script_grader_collects_and_copies_task_machine_outputs_before_grading():
-    agent = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins(), workdir="/app"))
+    agent = await ShellSimMachineFactory().create(MachineSpec(PackageSpec(), workdir="/app"))
     await agent.run(
-        Command(("sh", "-c", "mkdir -p /app/out/nested && echo a > /app/out/a.txt && echo b > /app/out/nested/b.txt"))
+        Command(
+            ("sh", "-c", "mkdir -p /app/out/nested && printf a > /app/out/a.txt && printf b > /app/out/nested/b.txt")
+        )
     )
-    report = (
-        "import json, os, pathlib\n"
-        "out = pathlib.Path('/grader/out')\n"
-        "detail = {\n"
-        "    'collected': open('/grader/collected.txt').read(),\n"
-        "    'out': {str(p.relative_to(out)): p.read_text() for p in sorted(out.rglob('*')) if p.is_file()},\n"
-        "    'missing': os.path.exists('/grader/missing'),\n"
-        "}\n"
-        "json.dump({'reward': 1, 'detail': detail}, open('/logs/verifier/reward.json', 'w'))\n"
-    )
+    report = """test "$(find /grader/out -type f | wc -l)" = 2 || exit 1
+missing=false
+if test -e /grader/missing; then missing=true; fi
+jq -n --arg collected "$(cat /grader/collected.txt)" \
+    --arg a "$(cat /grader/out/a.txt)" --arg b "$(cat /grader/out/nested/b.txt)" \
+    --argjson missing "$missing" '{reward: 1, detail: {
+        collected: $collected, out: {"a.txt": $a, "nested/b.txt": $b}, missing: $missing
+    }}' > /logs/verifier/reward.json
+"""
     grader = ScriptGrader(
-        argv=("python3", "-c", report),
+        argv=("sh", "-c", report),
         environment=GRADER_ENVIRONMENT,
-        collect=(VerifierCommand(argv=("sh", "-c", "echo collected > /app/collected.txt")),),
+        collect=(VerifierCommand(argv=("sh", "-c", "printf collected > /app/collected.txt")),),
         artifacts=(
             VerifierArtifact(source="/app/collected.txt", target="/grader/collected.txt", kind=ArtifactKind.FILE),
             VerifierArtifact(source="/app/out", target="/grader/out", kind=ArtifactKind.DIRECTORY),
@@ -405,26 +410,22 @@ async def test_script_grader_collects_and_copies_task_machine_outputs_before_gra
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
     assert result.detail == {
-        "collected": "collected\n",
-        "out": {"a.txt": "a\n", "nested/b.txt": "b\n"},
+        "collected": "collected",
+        "out": {"a.txt": "a", "nested/b.txt": "b"},
         "missing": False,
     }
     collected = await agent.run(Command(("cat", "/app/collected.txt")))
-    assert collected.stdout == b"collected\n"
+    assert collected.stdout == b"collected"
 
 
 @pytest.mark.asyncio
 async def test_script_grader_reads_extracted_answer_and_conversation_at_declared_paths():
-    report = (
-        "import json\n"
-        "detail = {\n"
-        "    'answer': open('/submission/final.txt').read(),\n"
-        "    'conversation': json.load(open('/tests/transcript.json')),\n"
-        "}\n"
-        "json.dump({'reward': 1, 'detail': detail}, open('/logs/verifier/reward.json', 'w'))\n"
-    )
+    report = """jq --arg answer "$(cat /submission/final.txt)" \
+    '{reward: 1, detail: {answer: $answer, conversation: .}}' \
+    /tests/transcript.json > /logs/verifier/reward.json
+"""
     grader = ScriptGrader(
-        argv=("python3", "-c", report),
+        argv=("sh", "-c", report),
         environment=GRADER_ENVIRONMENT,
         answer_path="/submission/final.txt",
         conversation_path="/tests/transcript.json",

@@ -21,7 +21,12 @@ fn main() {
     // connectrpc-build reads to locate protoc.
     std::env::set_var("PROTOC", &protoc);
 
+    // Retry clones should share large IPC payloads.
+    let mut messages = connectrpc_build::CodeGenConfig::default();
+    messages.bytes_fields = vec![".finelog.stats.WriteRowsRequest.arrow_ipc".into()];
     connectrpc_build::Config::new()
+        .buffa_config(messages)
+        .generate_json(true)
         .files(&["proto/logging.proto", "proto/finelog_stats.proto"])
         .includes(&["proto/"])
         .include_file("_connectrpc.rs")

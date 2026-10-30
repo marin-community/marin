@@ -3,8 +3,9 @@
 
 """Grade tasks in a locally built image of the grader packages, which stands in for every grader environment.
 
-A campaign grades most tasks in the worker, in a uv environment built from the grader lock; this image
-holds the same packages. Build it from the repository root with::
+A campaign grades most tasks in the worker, in a uv environment built from the lock compiled from the
+grader packages' requirements; this image holds the same packages and files. Build it from the repository
+root with::
 
     uv run python -c "from pathlib import Path; \\
     from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES; \\
@@ -21,7 +22,14 @@ from dataclasses import dataclass, replace
 
 import pytest
 from shellbox.backends.docker.machine import DockerMachine, DockerMachineFactory
-from shellbox.machine import Backend, DockerImage, HostImage, MachineSpec
+from shellbox.backends.local.machine import check_local_environment
+from shellbox.machine import (
+    Backend,
+    DockerImage,
+    ExecutionRequirements,
+    HostImage,
+    MachineSpec,
+)
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import ConversationTrace, EnvironmentRequirements, GradingAttempt, TaskResource, TaskSpec
 from taskcompendium.pipeline.controls import FILE_SUBMISSION_MESSAGE
@@ -37,6 +45,12 @@ class LocalGraderFactory:
 
     backend: Backend
 
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        if self.backend == Backend.LOCAL:
+            check_local_environment(requirements, spec)
+            return
+        DockerMachineFactory().check_environment(requirements, spec)
+
     async def create(self, spec: MachineSpec) -> DockerMachine:
         return await DockerMachineFactory().create(replace(spec, source=DockerImage(LOCAL_GRADER_IMAGE)))
 
@@ -48,7 +62,7 @@ class LocalGraderMachines:
         return {"backend": Backend.DOCKER.value, "image": LOCAL_GRADER_IMAGE}
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[LocalGraderFactory, MachineSpec]:
-        if Backend.LOCAL in environment.compatible_backends:
+        if environment.packages_lock is not None:
             return LocalGraderFactory(Backend.LOCAL), MachineSpec(HostImage(), memory_mb=memory_mb)
         assert environment.docker_image is not None
         return LocalGraderFactory(Backend.DOCKER), MachineSpec(

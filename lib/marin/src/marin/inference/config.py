@@ -186,6 +186,13 @@ class SpeculativeMethod(StrEnum):
     EAGLE3 = "eagle3"
 
 
+class ObjectStoreLoadMode(StrEnum):
+    """How an inference worker makes object-store weights available to its engine."""
+
+    STREAM = "stream"
+    STAGE_LOCAL = "stage_local"
+
+
 @dataclass(frozen=True)
 class SpeculativeServingConfig:
     """A resolved draft model and its vLLM speculative-decoding policy."""
@@ -228,6 +235,7 @@ class ServedModelConfig:
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
     chat_template_content: str | None = None
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
 
     def __post_init__(self) -> None:
         if not self.weights:
@@ -264,6 +272,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None

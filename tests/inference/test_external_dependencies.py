@@ -5,6 +5,7 @@
 
 import importlib.util
 import json
+import runpy
 import tomllib
 from pathlib import Path
 
@@ -133,3 +134,86 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))
+
+
+def test_upgrade_project_lock_refreshes_every_distribution_from_the_project_repository(tmp_path, monkeypatch):
+    update_external = _update_external()
+    project_dir = tmp_path / "harbor"
+    project_dir.mkdir()
+    harbor_source = "https://github.com/marin-community/harbor.git?branch=main#" + "1" * 40
+    adapter_source = (
+        "https://github.com/marin-community/harbor.git?" "subdirectory=adapters%2Ftau3-bench&branch=main#" + "1" * 40
+    )
+    unrelated_source = "https://github.com/example/unrelated.git?branch=main#" + "2" * 40
+    (project_dir / "uv.lock").write_text(
+        f"""
+[[package]]
+name = "harbor"
+source = {{ git = "{harbor_source}" }}
+
+[[package]]
+name = "harbor-tau3-bench-adapter"
+source = {{ git = "{adapter_source}" }}
+
+[[package]]
+name = "unrelated"
+source = {{ git = "{unrelated_source}" }}
+""".strip()
+        + "\n"
+    )
+    project = update_external.ExternalProject("harbor", "harbor", "HARBOR")
+    monkeypatch.setattr(update_external, "EXTERNAL_ROOT", tmp_path)
+    commands: list[list[str]] = []
+
+    def record_command(command: list[str], *, check: bool) -> None:
+        assert check is True
+        commands.append(command)
+
+    monkeypatch.setattr(update_external.subprocess, "run", record_command)
+
+    update_external.upgrade_project_lock(project)
+
+    command = commands.pop()
+    upgraded = [command[index + 1] for index, argument in enumerate(command) if argument == "--upgrade-package"]
+    assert upgraded == ["harbor", "harbor-tau3-bench-adapter"]
+
+
+@pytest.fixture
+def gpu_pin_workspace(tmp_path, monkeypatch):
+    update_external = _update_external()
+    pin = tmp_path / "gpu.toml"
+    generated = tmp_path / "external_dependencies.py"
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    monkeypatch.setattr(update_external, "GENERATED_PINS", generated)
+    generated.write_text("# previous generated pins\n")
+    return update_external, pin, generated
+
+
+def test_promote_gpu_release_updates_pin_and_generated_dependencies(tmp_path, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    previous = _promoted_manifest()
+    previous["source"]["fork_commit"] = "e" * 40
+    previous["release"]["tag"] = "marin-vllm-gpu-20251201-eeeeeeeeeeee"
+    pin.write_text(update_external.render_gpu_release_toml(previous))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+
+    update_external.promote_gpu_release(manifest_path)
+
+    release = update_external.load_vllm_gpu_release(pin)
+    packaged = runpy.run_path(str(generated))["VLLM_GPU_RELEASE"]
+    assert release.release_tag == packaged.release_tag == _promoted_manifest()["release"]["tag"]
+    assert release.source_commit == packaged.source_commit == "a" * 40
+
+
+def test_gpu_manifest_generation_failure_preserves_the_existing_pin(tmp_path, monkeypatch, gpu_pin_workspace):
+    update_external, pin, generated = gpu_pin_workspace
+    original = update_external.render_gpu_release_toml(_promoted_manifest())
+    pin.write_text(original)
+    monkeypatch.setattr(update_external, "TPU_FORKS_CONFIG", tmp_path / "missing-tpu.toml")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+    with pytest.raises(FileNotFoundError):
+        update_external.promote_gpu_release(manifest_path)
+    assert pin.read_text() == original
+    assert generated.read_text() == "# previous generated pins\n"

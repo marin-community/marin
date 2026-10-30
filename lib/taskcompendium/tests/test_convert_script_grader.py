@@ -8,11 +8,18 @@ from pathlib import Path
 import pytest
 from shellbox.machine import DockerImage, MachineSpec
 
-from taskcompendium.convert.conversation import conversation_task
-from taskcompendium.convert.environment import grading_environment
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
+from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TaskSpec, TextMessage
+from taskcompendium.models import (
+    CommandSemantics,
+    ConversationTrace,
+    EnvironmentRequirements,
+    GradingAttempt,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.runtime.task_grading import grade_task
 
@@ -51,7 +58,7 @@ def task(tmp_path) -> TaskSpec:
     package = script_package(
         grade_script(script, *shipped_files(scorers, "colors/__init__.py", "colors/scoring.py")),
         {"words": ["red", "blue"]},
-        environment=grading_environment(IMAGE),
+        environment=EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
         timeout=30,
         answer_path="/app/answer.txt",
     )

@@ -32,7 +32,7 @@ from levanter.grug.grug_moe import (
     MOE_VALID_ASSIGNMENTS_METRIC,
     MoeActivation,
     MoeImplementation,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head
@@ -118,7 +118,7 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:

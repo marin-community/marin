@@ -74,9 +74,20 @@ uv run --package marin-iris --extra controller iris \
 The base `uv run iris` environment omits this dependency and can report every
 CoreWeave prerequisite as missing even when the objects exist.
 
+Tracked configs may use `principal:` references in role, admission, and budget
+policy. The `marin` Pulumi stack publishes their private directory from
+`iam_data.yaml`; apply the reviewed IAM stack before deploying those configs.
+Start and restart read the directory during preflight, before building images
+or stopping a controller. Controllers resolve identities at startup before
+checkpoint or database changes. GCP loads the Secret Manager reference at
+runtime; CoreWeave projects the directory through the controller-only
+`iris-controller-secrets` read-only volume. ConfigMaps and bootstrap configs retain IDs.
+Ordinary clients use the tracked config and do not read the directory.
+See [cluster configs](config/README.md).
+
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through the controller-only `iris-controller-secrets` volume. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
@@ -229,7 +240,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
   --job-name my-run-coord \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -e IRIS_PORT_JAX 32731 \
   -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
 ```
 
@@ -242,10 +253,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   prints the bundle size.
 - **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
   registers it for the JAX coordinator, and the default is shared cluster-wide.
-- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
-  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
-  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
-  run whose metrics do not matter.
+- **Application credentials use files.** The submitting client includes available
+  HF/W&B/CoreWeave credentials and its current secret bundle by default. CoreWeave
+  tasks require the submitter's storage keys; operator keys stay on infrastructure Pods. `defaults.task_env` carries
+  nonsecret settings such as `MARIN_PREFIX` and storage endpoints. See
+  [secret delivery](docs/secrets.md).
 - **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
   gang all at once, so a busy cluster holds all of it. Same-band jobs queue
   behind each other; they do not preempt.
@@ -268,9 +280,10 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 
 ### `job run` gotchas
 
-- **Remote jobs only see env vars you put in the job spec.** The submitter's
-  shell env is not copied into the container. Pass required values explicitly:
-  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
+- **Environment values must be explicit.** The submitter's shell environment is
+  not copied wholesale. HF/W&B/CoreWeave defaults use secret files automatically; pass other
+  credentials with `--secret NAME SOURCE`. `-e NAME VALUE` delivers an environment
+  value, including an explicit credential override.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
@@ -299,6 +312,14 @@ days. Kubernetes `DisruptionTarget` conditions are recorded as
 `k8s/disruption` events with the pod and node identity plus a snapshot of the
 node's taints, conditions, hardware/topology labels, and CoreWeave health
 annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -388,6 +409,16 @@ CoreWeave confirms the reboot completed (or process death is otherwise proven).
 
 ## Process Inspection & Profiling
 
+If controller RPCs time out while `/health` succeeds, inspect the RPC worker
+threads. Bundle uploads and waits for the same bundle's lock can exhaust that pool
+without stopping the control loop. When RPC profiling is unavailable on CoreWeave,
+use the configured Kubernetes context to run `py-spy dump --pid 1` in the controller
+pod. Repeated `BundleStore.write` stacks in S3 I/O or `_content_lock` identify this
+failure. Launch payload persistence has a 30-second deadline covering the lock
+wait, object existence check, and upload. A failed upload returns an `unavailable`
+job-creation error without inserting the new job; clients can retry after storage
+recovers.
+
 ```bash
 iris process status                         # controller resource usage
 iris process status -t /system/worker/<id>  # worker process status
@@ -403,7 +434,7 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
 
-GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+GPU environments set `NCCL_RAS_ENABLE=1` and `NCCL_DEBUG=WARN` by default, with no subsystem filter. The default timestamp is `[%F %T.%3f]`. Set `NCCL_DEBUG=INFO` and a focused `NCCL_DEBUG_SUBSYS` only for diagnostic jobs; the CoreWeave GPU smoke config and supervised wedge repro do this explicitly. Do not use `TRACE` or `CALL` for normal runs.
 
 GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
 
@@ -644,6 +675,8 @@ iris login                            # IAP clusters: cache the IAP edge refresh
 iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
+
+See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
 
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**
@@ -1028,6 +1061,35 @@ the node lifecycle state to `production`, and both the cordon and any
 `node.coreweave.cloud/reserved` taint are gone. Restore singleton controllers
 and original replica counts first, wait for them to become Ready, then remove
 temporary capacity or placement changes.
+
+### Rolling back the egress allowlist
+
+The allowlist is described in `docs/container-profiles.md`. Rolling it back
+changes controller config; pods already running keep their Cilium policies
+until they exit or an operator deletes the policies. `iris cluster stop` does
+not delete them.
+
+1. To stop new root jobs defaulting to `ALLOWLIST`, set
+   `defaults.egress_allowlist.default: false` and restart the controller.
+   Running `ALLOWLIST` jobs keep the policy, and so do their retries and the
+   child jobs they launch, which inherit it.
+2. To stop enforcing the allowlist for every pod started from now on, also
+   remove `kubernetes_provider.cilium` and restart the controller. New and
+   stored `ALLOWLIST` jobs then start their pods on the cluster network.
+3. To open the network of pods already running under the allowlist, delete the
+   per-pod policies first and the namespace policy second. In the other order,
+   a pod with its own rules reaches only those rules, losing the controller and
+   cluster DNS, until its policy is deleted. A pod that no policy selects is
+   unrestricted.
+
+```bash
+KUBECTL="kubectl --kubeconfig $HOME/.kube/coreweave-iris --context <context> -n <namespace>"
+$KUBECTL get ciliumnetworkpolicies -o name | grep -- '-egress$' | xargs -r $KUBECTL delete
+$KUBECTL delete ciliumnetworkpolicy iris-egress-allowlist
+```
+
+`iris cluster start` recreates `iris-egress-allowlist` while
+`kubernetes_provider.cilium` is set.
 
 ## CI Workflows
 

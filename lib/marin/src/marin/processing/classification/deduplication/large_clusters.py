@@ -158,16 +158,13 @@ def plan_large_clusters(
     )
     logger.info("Map stage wrote %d count files in %.0fs", len(outcome.results), time.monotonic() - started)
 
-    merged = pa.Table.from_pylist([], schema=_COUNT_SCHEMA)
-    sampled_rows = 0
+    tables = [pa.Table.from_pylist([], schema=_COUNT_SCHEMA)]
     for result in outcome.results:
         with StoragePath(result.path).open("rb") as handle:
-            table = pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"])
-        sampled_rows += table.num_rows
-        # The aggregated sum is nullable while count files are not, so align before concat.
-        table = table.cast(merged.schema)
-        merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
-        merged = merged.rename_columns(["dup_cluster_id", "n"])
+            tables.append(pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"]))
+    sampled_rows = sum(table.num_rows for table in tables)
+    merged = pa.concat_tables(tables).group_by("dup_cluster_id").aggregate([("n", "sum")])
+    merged = merged.rename_columns(["dup_cluster_id", "n"])
     logger.info("Aggregated %d sampled count rows", sampled_rows)
     sizes = pc.multiply(merged.column("n"), pa.scalar(params.stride, type=pa.int64()))
     keep = pc.greater_equal(sizes, pa.scalar(params.minimum_size, type=pa.int64()))

@@ -76,6 +76,9 @@ def _open_write_stream(fs, resolved_path: str, output_path: str):
     elif output_path.endswith(".gz"):
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="gzip") as f:
             yield f
+    elif output_path.endswith(".xz"):
+        with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE, compression="xz") as f:
+            yield f
     else:
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
             yield f

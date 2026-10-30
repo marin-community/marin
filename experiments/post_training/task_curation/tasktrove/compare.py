@@ -16,10 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import click
-import verifyit
 from taskcompendium.harbor import snapshots
 from taskcompendium.harbor.compare import ParityReport, write_archive_diff
-from taskcompendium.harbor.export import UnsupportedHarborTask, archive_bytes, archive_file_mode, harbor_payload
 from taskcompendium.harbor.records import NormalizedIndex
 from taskcompendium.harbor.snapshots import TaskSnapshot, file_map_snapshot, snapshot_from_dict, task_snapshot
 from taskcompendium.models import AnswerType, TaskSpec
@@ -29,6 +27,12 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.tasktrove.harbor_export import (
+    UnsupportedHarborTask,
+    archive_bytes,
+    archive_file_mode,
+    harbor_payload,
+)
 from experiments.post_training.task_curation.tasktrove.reference import REFERENCE_COMPRESSION_LEVEL
 
 FROZEN_PATHS = (
@@ -322,17 +326,8 @@ def main(
         ),
         "python": sys.version,
         "package_versions": {
-            name: importlib.metadata.version(name)
-            for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w", "harbor-config")
+            name: importlib.metadata.version(name) for name in ("pyarrow", "pydantic", "tomlkit", "tomli-w")
         },
-        "implementation_files": [
-            file_identity(path)
-            for path in sorted(
-                {Path(__file__), Path(__file__).with_name("reference.py")}
-                | set(Path(snapshots.__file__).parent.glob("*.py"))
-                | set(Path(verifyit.__file__).parent.rglob("*.py"))
-            )
-        ],
         "grader_image": grader_image,
         "sources": names,
         "results": {},

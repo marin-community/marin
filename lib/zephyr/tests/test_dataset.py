@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from zephyr import counters
 from zephyr._test_helpers import SampleDataclass
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
@@ -1322,11 +1323,13 @@ def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
 
     ds = Dataset.from_list([path]).load_parquet(batch_mode=True)
-    results = zephyr_ctx.execute(ds).results
+    outcome = zephyr_ctx.execute(ds)
+    results = outcome.results
 
     assert all(isinstance(b, pa.RecordBatch) for b in results)
     all_rows = [row for b in results for row in b.to_pylist()]
     assert sorted(all_rows, key=lambda r: r["id"]) == records
+    assert outcome.counters[counters.RECORDS_IN] == len(records)
 
 
 def test_dataset_maps_record_batches_to_parquet(tmp_path, zephyr_ctx):

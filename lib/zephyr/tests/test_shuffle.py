@@ -40,14 +40,7 @@ from zephyr.shuffle import (
 )
 from zephyr.worker_context import _worker_ctx_var
 
-
-@pytest.fixture(autouse=True)
-def mock_worker_ctx():
-    """Provide a dummy worker context for ScatterWriter."""
-    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", stage_name="test")
-    token = _worker_ctx_var.set(ctx)
-    yield
-    _worker_ctx_var.reset(token)
+pytestmark = pytest.mark.usefixtures("worker_context")
 
 
 def _read_shard(shard: ScatterReader) -> list:
@@ -97,6 +90,19 @@ def test_scatter_roundtrip(tmp_path):
         recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_shuffle_reader_reports_target_row_total(tmp_path):
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    paths = _build_shard(tmp_path, items, num_output_shards=4)
+    target = deterministic_hash(0) % 4
+    reader = ScatterReader.from_sidecars(paths, target)
+    merged = reader.merge_sorted_chunks(str(tmp_path / "sort"))
+    first = next(merged)
+    expected = [row for row in items if deterministic_hash(row["k"]) % 4 == target]
+    assert merged.total_rows == len(expected)
+    recovered = [first, *merged]
+    assert sorted(recovered, key=lambda row: row["v"]) == expected
 
 
 def test_scatter_streams_wide_items_before_consuming_input(tmp_path):

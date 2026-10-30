@@ -12,6 +12,7 @@ Also covers handoff admission/idempotency, the incremental-tombstone path, and t
 full-resync set-replacement path.
 """
 
+import json
 from contextlib import ExitStack
 from unittest.mock import Mock
 
@@ -19,8 +20,9 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import content_id
+from iris.cluster.config import AuthConfig, IrisClusterConfig, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller import reads, writes
-from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -258,15 +260,34 @@ def _peer_handoff_request(name: str, requester_id: str, submitting_user: str):
     return request
 
 
-def test_inbound_handoff_admits_a_verified_peer_for_an_allowed_submitter(tmp_path, log_client):
-    """An enforcing peer admits a handoff whose federation-peer identity matches the
-    asserted requester and whose submitter the allowlist permits."""
+@pytest.mark.parametrize(
+    ("submitter", "admitted"),
+    [("alice@openathena.ai", True), ("personal@example.com", True), ("outside@example.com", False)],
+)
+def test_inbound_handoff_resolves_personal_admission_without_broadening_access(
+    tmp_path, log_client, monkeypatch, submitter, admitted
+):
+    monkeypatch.setenv("TEST_PRINCIPAL_DIRECTORY", json.dumps({"human-999": "personal@example.com"}))
+    config = IrisClusterConfig(
+        auth=AuthConfig(
+            trusted_cidrs=["127.0.0.1/32"],
+            principal_directory="env:TEST_PRINCIPAL_DIRECTORY",
+            allowed_submitters=["*@openathena.ai", "principal:human-999"],
+        )
+    )
+    resolved = resolve_principal_references(resolve_config_secrets(config))
+    auth = create_controller_auth(resolved.auth, cluster_name="peer")
     with ExitStack() as stack:
-        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=_ENFORCING_AUTH)
-        request = _peer_handoff_request("fed-job", "parent-cluster", "alice@openathena.ai")
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client, auth=auth)
+        request = _peer_handoff_request("fed-job", "parent-cluster", submitter)
         with identity_scope(VerifiedIdentity("parent-cluster", FEDERATION_PEER_ROLE)):
-            response = peer_service.launch_job(request, None)
-        assert JobName.from_wire(response.job_id).name == "fed-job"
+            if admitted:
+                response = peer_service.launch_job(request, None)
+                assert JobName.from_wire(response.job_id).name == "fed-job"
+            else:
+                with pytest.raises(ConnectError) as exc:
+                    peer_service.launch_job(request, None)
+                assert exc.value.code == Code.PERMISSION_DENIED
 
 
 def test_inbound_handoff_rejects_a_submitter_outside_the_allowlist(tmp_path, log_client):

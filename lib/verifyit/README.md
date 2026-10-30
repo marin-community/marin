@@ -22,11 +22,13 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `unsolvable` | private classification: normal answers score zero; a validated terminal ejection scores one |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
 | `numeric` | numeric equality with explicit tolerances |
 | `exact` | normalized string equality |
+| `structure_closure` | continuation of a pinned prefix matching the first completed outer reference region |
 | `json-schema` | JSON, YAML, or TOML checked against JSON Schema |
 | `xml-elements` | required XML elements and attributes |
 | `csv-columns` | required CSV header columns |
@@ -39,8 +41,14 @@ process exit after a verdict has been written.
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
+`structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
+Callers with generation stop metadata remove configured terminal markers before candidate grading.
+
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
-Missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+`PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
+Missing imports of those modules score zero, including an empty submission.
+Workspace-qualified candidate packages add the workspace parent to Python's import path.
+Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -100,16 +108,23 @@ configures its scorer; callers own isolation when invoking its direct API.
 `adapters/` prepares framework observations for the shared modes. Frameworks retain task
 execution, dispatch, and dependency pins; installing this package does not enable an adapter.
 `preparation/` retains raw inputs and named normalization policies. Preparation failures carry
-Harbor's error categories from the pinned config-only `harbor-config` dependency.
+Verifyit's own attribution category, which determines whether an incomplete attempt can be scored.
 
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
+`structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
+fences. `closure_scoring` compares a completed outer region with a known reference and reports
+syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
+completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
+retains the sampled tokens, supplies any generation stop markers, and decides when a completed
+attempt can be scored.
+
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
-accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
 `structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
 decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
@@ -119,15 +134,21 @@ through the file grader. Predicted-action matching preserves duplicate calls and
 to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
 argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
 
+`grade_ejection_candidate(spec)` scores a validated terminal ejection using the private
+classification: `unsolvable` earns one and every other mode earns zero. Callers validate the
+terminal action and its provenance before invoking this function. Refusal text and answer strings
+never count as ejections. In-process task validation retains invalid-task and infrastructure-error
+verdicts. File grading of `unsolvable` always scores zero because a file cannot establish an ejection.
+
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" \
-  "verifyit[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/verifyit"
+uv tool install --python ">=3.11" "marin-verifyit[math]"
 ```
 
-Extras are `answer`, `schema`, `judge`, `reasoning-gym`, and `all`. Execution modes use the task
-image's toolchain.
+The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,
+numeric, and multiple-choice modes work with the base package. Other extras are `schema`,
+`judge`, `reasoning-gym`, and `all`. Execution modes use the task image's toolchain.
 
 ```python
 from pathlib import Path

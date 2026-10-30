@@ -718,11 +718,8 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
-        # Docker's embedded resolver forwards to the VM's resolver, the metadata
-        # server the filter blocks, and relies on NAT rules gVisor's network stack
-        # does not apply. The bootstrap-written resolv.conf names public resolvers.
-        if config.network_mode == EGRESS_NETWORK:
-            cmd.extend(["-v", f"{EGRESS_RESOLV_CONF}:/etc/resolv.conf:ro"])
+        if config.resolv_conf is not None:
+            cmd.extend(["-v", f"{config.resolv_conf}:/etc/resolv.conf:ro"])
 
         # Network sysctl tuning for containers with own network namespace (#3066).
         # Host-network containers inherit host settings from VM bootstrap, a
@@ -985,13 +982,15 @@ class DockerRuntime:
         mounts: list[MountSpec],
         workdir_host_path: Path | None = None,
         output_host_path: Path | None = None,
+        secret_host_path: Path | None = None,
     ) -> list[ResolvedMount]:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
         created by the task attempt. OUTPUT uses its separate attempt-local host
-        path. CACHE gets shared dirs under cache_dir. TMPFS uses Docker --tmpfs
-        for per-container isolation (no host dir).
+        path. SECRET uses secret_host_path as a read-only mount. CACHE gets
+        shared dirs under cache_dir. TMPFS uses Docker --tmpfs for
+        per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -1008,6 +1007,10 @@ class DockerRuntime:
             elif mount.kind == MountKind.TMPFS:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.SECRET:
+                if secret_host_path is None:
+                    raise RuntimeError("SECRET mount requires secret_host_path")
+                result.append(ResolvedMount(str(secret_host_path), mount.container_path, "ro", mount.kind))
             elif mount.kind == MountKind.CACHE:
                 host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
@@ -1024,6 +1027,7 @@ class DockerRuntime:
             config.mounts,
             workdir_host_path=config.workdir_host_path,
             output_host_path=config.output_host_path,
+            secret_host_path=config.secret_host_path,
         )
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)

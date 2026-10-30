@@ -2,19 +2,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the pure-Python marin-* library wheels for PyPI publication.
+"""Build the pure-Python Marin library wheels for PyPI publication.
 
-Builds the pure-Python marin-* lib packages (marin-core, marin-iris,
-marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore, marin-shellbox) into dist/. The package release engine passes one exact
-version to this builder.
+Builds the Python library family in `scripts/ci/package_release.py` into dist/.
+The package release engine passes one exact version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
 uploads anything and never needs a token.
 
-marin-finelog and marin-dupekit are NOT built here. The unified package release
-workflow publishes each pure-Python wheel together with its native companion
-(marin-finelog-server, marin-dupekit-native).
+Native package families use separate build legs in the same release workflow.
 
 Two modes:
     stable   -- build the exact version supplied by the package release engine.
@@ -26,8 +22,8 @@ Two modes:
                 the same day.
 
 Usage:
-    python scripts/python_libs_package.py --mode stable --version 0.2.0
-    python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
+    python -m scripts.python_libs_package --mode stable --version 0.2.0
+    python -m scripts.python_libs_package --mode vendor --vendor ../tiny-tpu/vendor
 
 The build is done from a temporary in-place patch of each package's version
 file plus a cross-pin rewrite of every sibling dependency, so the wheels
@@ -42,30 +38,58 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
+
+from scripts.ci.package_release import PACKAGES as RELEASE_PACKAGES
+from scripts.ci.package_release import PYTHON_LIBS_FAMILY
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "dist"
 
 
-# Each entry: (dist name, lib subdir, version-file path relative to lib subdir, version-file kind)
-# kind = "pyproject" -> patch  version = "..."  in pyproject.toml
-# kind = "about_py"  -> patch  __version__ = "..."  in src/<pkg>/__about__.py
-PACKAGES: dict[str, dict[str, str]] = {
-    "marin-core": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-iris": {"path": "lib/iris", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-finestore": {"path": "lib/finestore", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
-    "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
-    "marin-shellbox": {"path": "lib/shellbox", "version_file": "pyproject.toml", "kind": "pyproject"},
-}
+class VersionFileKind(StrEnum):
+    PYPROJECT = "pyproject"
+    ABOUT_PY = "about_py"
+
+
+@dataclass(frozen=True)
+class PythonLibrary:
+    directory: Path
+    version_file: Path
+    kind: VersionFileKind
+
+
+def _python_libraries() -> dict[str, PythonLibrary]:
+    family = RELEASE_PACKAGES[PYTHON_LIBS_FAMILY]
+    libraries = {}
+    for version_file in family.declared_version_paths:
+        if version_file.parts[0] != "lib" or len(version_file.parts) < 3:
+            raise ValueError(f"Python library version file must be below lib/: {version_file}")
+        directory = Path(*version_file.parts[:2])
+        manifest = tomllib.loads((REPO_ROOT / directory / "pyproject.toml").read_text())
+        name = manifest["project"]["name"]
+        if version_file.name == "pyproject.toml":
+            kind = VersionFileKind.PYPROJECT
+        elif version_file.name == "__about__.py":
+            kind = VersionFileKind.ABOUT_PY
+        else:
+            raise ValueError(f"Unsupported Python library version file: {version_file}")
+        libraries[name] = PythonLibrary(directory=directory, version_file=version_file, kind=kind)
+    if set(libraries) != set(family.artifacts):
+        raise ValueError("Python library version files and release artifacts disagree")
+    return libraries
+
+
+PACKAGES: Mapping[str, PythonLibrary] = MappingProxyType(_python_libraries())
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -79,9 +103,9 @@ def _check_tool(name: str, install_hint: str) -> None:
 
 def _read_base_version(pkg: str) -> str:
     info = PACKAGES[pkg]
-    path = REPO_ROOT / info["path"] / info["version_file"]
+    path = REPO_ROOT / info.version_file
     text = path.read_text()
-    if info["kind"] == "pyproject":
+    if info.kind is VersionFileKind.PYPROJECT:
         m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     else:
         m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -90,8 +114,8 @@ def _read_base_version(pkg: str) -> str:
     return m.group(1)
 
 
-def _set_version(text: str, kind: str, new_version: str) -> str:
-    if kind == "pyproject":
+def _set_version(text: str, kind: VersionFileKind, new_version: str) -> str:
+    if kind is VersionFileKind.PYPROJECT:
         new_text, count = re.subn(
             r'^version\s*=\s*"[^"]+"',
             f'version = "{new_version}"',
@@ -112,23 +136,24 @@ def _set_version(text: str, kind: str, new_version: str) -> str:
     return new_text
 
 
-# Match dependency list items: lines that are indented and start with a quoted
-# sibling name. Anchored on `^\s+"` so we never touch metadata lines like
-# `name = "marin-core"` (no leading whitespace) or single-line `gpu = ["..."]`
-# entries (no marin siblings appear in those today; verified by grep).
-_SIBLING_ALT = "|".join(re.escape(s) for s in sorted(PACKAGES, key=len, reverse=True))
-_SIBLING_ITEM_RE = re.compile(
-    rf'^(?P<indent>\s+)"(?P<name>{_SIBLING_ALT})(?![-\w])(?P<extras>\[[^\]]*\])?[^"]*"(?P<tail>.*)$',
-    re.MULTILINE,
-)
+_SIBLING_REQUIREMENT_RE = re.compile(r"^(?P<name>marin-[\w.-]+)(?P<extras>\[[^]]+\])?(?:\s*[<>=!~].*)?$")
 
 
 def _rewrite_sibling_pins(text: str, version: str) -> str:
-    """Pin every sibling marin-* package in dependency list items to ==<version>."""
-    return _SIBLING_ITEM_RE.sub(
-        lambda m: f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}',
-        text,
-    )
+    project = tomllib.loads(text)["project"]
+    requirements = list(project.get("dependencies", ()))
+    for extra in project.get("optional-dependencies", {}).values():
+        requirements.extend(extra)
+    for requirement in requirements:
+        package, separator, marker = requirement.partition(";")
+        match = _SIBLING_REQUIREMENT_RE.fullmatch(package.strip())
+        if match is None or match.group("name") not in PACKAGES:
+            continue
+        pinned = f'{match.group("name")}{match.group("extras") or ""}=={version}'
+        if separator:
+            pinned += f";{marker}"
+        text = text.replace(f'"{requirement}"', f'"{pinned}"')
+    return text
 
 
 # Match dependency list items that use PEP 440 direct URL form
@@ -157,8 +182,8 @@ def patched_tree(version: str):
     originals: dict[Path, str] = {}
     try:
         for info in PACKAGES.values():
-            pyproject_path = REPO_ROOT / info["path"] / "pyproject.toml"
-            version_path = REPO_ROOT / info["path"] / info["version_file"]
+            pyproject_path = REPO_ROOT / info.directory / "pyproject.toml"
+            version_path = REPO_ROOT / info.version_file
 
             if pyproject_path not in originals:
                 originals[pyproject_path] = pyproject_path.read_text()
@@ -168,7 +193,7 @@ def patched_tree(version: str):
             # Apply version patch first; for haliax this writes __about__.py
             # (separate file from pyproject), for the rest it overwrites the
             # pyproject we just snapshotted above.
-            patched_version = _set_version(originals[version_path], info["kind"], version)
+            patched_version = _set_version(originals[version_path], info.kind, version)
             version_path.write_text(patched_version)
 
             # Then sibling-pin rewrite + direct-URL strip on pyproject.toml.
@@ -257,7 +282,7 @@ def vendor_version() -> str:
 
 
 def build_wheels(version: str) -> None:
-    """Build all marin-* wheels + sdists into DIST_DIR with `version` patched in."""
+    """Build all library wheels and sdists into DIST_DIR with `version` patched in."""
     _check_tool("uv", "https://docs.astral.sh/uv/")
 
     if DIST_DIR.exists():
@@ -266,7 +291,7 @@ def build_wheels(version: str) -> None:
 
     with patched_tree(version):
         for name, info in PACKAGES.items():
-            pkg_dir = REPO_ROOT / info["path"]
+            pkg_dir = REPO_ROOT / info.directory
             print(f"\n--- Building {name} ({version}) ---")
             subprocess.run(
                 ["uv", "build", "--wheel", "--sdist", "--out-dir", str(DIST_DIR), str(pkg_dir)],
@@ -289,18 +314,13 @@ def build_wheels(version: str) -> None:
 
 
 def vendor_copy(target: Path) -> None:
-    """Drop freshly-built wheels into target/, replacing any prior marin-* wheels.
-
-    Cleans only files matching marin*-*.whl so unrelated files in the target
-    directory (e.g. .gitkeep, README) are left alone. Used by --mode vendor
-    to feed local wheels into a downstream experiment's find-links.
-    """
+    """Replace this bundle's wheels in target, leaving unrelated files alone."""
     target.mkdir(parents=True, exist_ok=True)
-    stale = sorted(target.glob("marin*-*.whl"))
+    stale = sorted(wheel for package in PACKAGES for wheel in target.glob(f"{package.replace('-', '_')}-*.whl"))
     for s in stale:
         s.unlink()
     if stale:
-        print(f"\nRemoved {len(stale)} stale marin-* wheel(s) from {target}")
+        print(f"\nRemoved {len(stale)} stale library wheel(s) from {target}")
     print(f"\nCopying wheels to {target}:")
     for wheel in sorted(DIST_DIR.glob("*.whl")):
         dest = target / wheel.name
@@ -309,13 +329,7 @@ def vendor_copy(target: Path) -> None:
 
 
 def lock_consumer(project_dir: Path) -> None:
-    """Re-lock the consumer project so it picks up the freshly-vendored wheels.
-
-    uv lock preserves existing resolutions when constraints are already
-    satisfied, so a plain `uv lock` after vendoring keeps the old version.
-    --upgrade-package for each marin-* package forces re-resolution against
-    the new wheels in the vendor find-links directory.
-    """
+    """Select the vendored bundle's wheel versions in a consumer lock."""
     upgrade_flags: list[str] = []
     for pkg in PACKAGES:
         upgrade_flags += ["--upgrade-package", pkg]

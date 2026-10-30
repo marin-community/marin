@@ -43,6 +43,7 @@ import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, ClassVar, NamedTuple, Protocol
 
 import cloudpickle
@@ -58,6 +59,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr import memory_budget
 from zephyr.parquet_scan import scan_parquet
+from zephyr.reader import Reader
 from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -574,7 +576,7 @@ class ScatterReader:
     def total_chunks(self) -> int:
         return len(self._chunk_files)
 
-    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
+    def merge_sorted_chunks(self, external_sort_dir: str) -> Reader[Any]:
         """Merge sorted chunks using k-way merge, yielding items in global sort order.
 
         Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
@@ -583,10 +585,13 @@ class ScatterReader:
             external_sort_dir: Directory for intermediate run files, used only
                 if the shard's chunk count exceeds the computed fan-in budget.
 
-        Yields:
-            Deserialized Python items in merged sort order.
+        Returns:
+            Reader of deserialized items in merged sort order, with a row total.
         """
 
+        return Reader(partial(self._merge_sorted_chunks, external_sort_dir), total_rows=self.shard_payload_rows)
+
+    def _merge_sorted_chunks(self, external_sort_dir: str, _reader: Reader[Any]):
         with pl.Config() as polars_config:
             polars_config.set_streaming_chunk_size(memory_budget.STREAMING_CHUNK_SIZE_ROWS)
 

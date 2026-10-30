@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 from zephyr import counters
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
@@ -25,6 +25,7 @@ from taskcompendium.pipeline.query_cache import (
     read_cached_requests,
 )
 from taskcompendium.pipeline.review_requests import (
+    DEFAULT_BATCH_POLL_SECONDS,
     DEFAULT_MAX_BATCH_BYTES,
     BatchClient,
     RequestOutput,
@@ -535,7 +536,7 @@ class BatchReviewer:
     model_revision: str
     max_tokens: int = DEFAULT_REVIEW_MAX_TOKENS
     max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS
-    poll_seconds: float = 5.0
+    poll_seconds: float = DEFAULT_BATCH_POLL_SECONDS
     max_attempts: int = DEFAULT_REVIEW_MAX_ATTEMPTS
     retry_max_tokens: int = DEFAULT_REVIEW_RETRY_MAX_TOKENS
     retry_max_prompt_characters: int = DEFAULT_PROMPT_CHARACTERS

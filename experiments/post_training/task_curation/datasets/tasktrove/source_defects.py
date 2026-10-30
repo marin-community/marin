@@ -5,6 +5,62 @@
 
 SOURCE_DEFECTS: dict[tuple[str, str], str] = {
     (
+        "DCAgent__exp_rpt_curriculum-medium-v2",
+        "curriculum-medium-0502",
+    ): (
+        "pytest parametrizes include_spaces and include_unicode but the test function accepts neither; "
+        "collection fails before checking any solution"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0030",
+    ): (
+        "authentication instruction permits code anywhere under /app but hidden tests require "
+        "register_user, login_user and get_current_user exports from the app module"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0057",
+    ): (
+        "to-do instruction permits classes anywhere under /app but hidden tests require "
+        "Task and ToDoList exports from the app module"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0157",
+    ): (
+        "authentication tests require unstated app module exports and assume no active user after "
+        "a previous test logs in, without resetting that session"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0314",
+    ): (
+        "registration endpoint instruction omits the app.register_user helper required by tests; "
+        "tests do not exercise the requested HTTP endpoint or database integration"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0358",
+    ): (
+        "authentication tests require unstated app module exports and assert mutation of a "
+        "users_db dictionary local to the test module"
+    ),
+    (
+        "DCAgent__exp_rpt_e2egit-v2",
+        "e2egit-0334",
+    ): (
+        "registration endpoint instruction omits the app.register_user helper required by tests; "
+        "tests call that helper directly instead of exercising the requested HTTP endpoint"
+    ),
+    (
+        "DCAgent2__nl2bash-tasks-cleaned-oracle-v2",
+        "task_138",
+    ): (
+        "disk-usage request excludes demo/dirB but oracle capture requires that directory; "
+        "precomputed allocation counts also disagree with the sparse fixture setup"
+    ),
+    (
         "DCAgent__exp_rpt_stack-pytest-v2",
         "stack-pytest-0249",
     ): "AlignGraph instruction exposes fixed test answers and leaves the rotation convention ambiguous",

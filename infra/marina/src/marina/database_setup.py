@@ -26,6 +26,8 @@ def applet_provisioning_statements(service_role: str) -> tuple[str, ...]:
     """SQL an administrator runs once to let Marina provision constrained applet roles."""
     service = _quoted_role(service_role)
     return (
+        "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public",
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public",
         f"CREATE SCHEMA IF NOT EXISTS {MARINA_SCHEMA} AUTHORIZATION {service}",
         f"GRANT ALL ON SCHEMA {MARINA_SCHEMA} TO {service}",
         f"""DO $$

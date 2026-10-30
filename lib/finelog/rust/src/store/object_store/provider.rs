@@ -109,6 +109,10 @@ impl Provider {
     /// URL or filesystem path used to scan the same physical object.
     pub(super) fn scan_url(&self, id: &ObjectId) -> String {
         let path = self.object_path(id);
+        self.scan_path(&path)
+    }
+
+    pub(super) fn scan_path(&self, path: &OsPath) -> String {
         match self.base_url() {
             Some(base) => format!("{base}/{path}"),
             None => self

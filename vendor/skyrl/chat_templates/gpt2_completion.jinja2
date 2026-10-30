@@ -1,0 +1,7 @@
+{#- Completion-style chat template for base models without a chat format (e.g. GPT-2).
+
+Renders each message's content verbatim with no wrapping, so a single user message
+becomes the raw prompt text and generated completions continue it. Preference-pair
+training on raw-continuation data (the DPO paper's IMDb setup) uses this template.
+-#}
+{%- for message in messages %}{{ message['content'] }}{%- endfor %}

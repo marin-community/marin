@@ -12,14 +12,12 @@
 # Grafana-posted alert cannot become a conversation. One poster also means one
 # message per alert rather than two side-by-side. See infra/grafana/README.md.
 #
-# ops-slack is the fallback for malformed or unlabeled alerts. It posts through
-# the bridge as well, so both receivers share one channel, one credential, and
-# one rendering; it differs only in opening no Loom run, since an alert carrying
-# no severity to route on carries no incident to triage. The warning policy
-# references it through an always-active mute timing and never invokes it.
+# ops-slack handles explicitly notified warnings and the fallback for unlabeled
+# alerts. It uses the same bridge endpoint, opening a Loom session on the default
+# operator channel. The dashboard-only warning route is muted and sends nothing.
 #
-# Both endpoints are loopback-only. The Loom one additionally authenticates to
-# Loom as the Cloud Run service account through Google identity federation.
+# The endpoint is loopback-only and authenticates to Loom as the Cloud Run
+# service account through Google identity federation.
 # Email delivery needs valid SMTP credentials — without them email is inert
 # while the bridge still posts.
 apiVersion: 1
@@ -49,5 +47,5 @@ contactPoints:
       - uid: ops-slack-webhook
         type: webhook
         settings:
-          url: http://127.0.0.1:8081/alerts/slack
+          url: http://127.0.0.1:8081/alerts/loom
           httpMethod: POST

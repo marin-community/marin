@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("math_verify", reason="math mode needs the `answer` extra")
+pytest.importorskip("math_verify", reason="math mode needs the `math` extra")
 
 import math_verify
 import sympy

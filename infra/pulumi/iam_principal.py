@@ -15,7 +15,7 @@
       | uv run --package marin-iac --extra deploy \
           python infra/pulumi/iam_principal.py decrypt --diff
 
-Both operations use the marin-iac KMS key. Plaintext emails remain local.
+These commands use the marin-iac KMS key. Plaintext emails remain outside Git.
 """
 
 import argparse
@@ -36,6 +36,7 @@ from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 _PRINCIPAL_REFERENCE_PATTERNS = (
     re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$"),
     re.compile(rf'principals\["({PRINCIPAL_ID_PATTERN})"\]'),
+    re.compile(rf"principal:({PRINCIPAL_ID_PATTERN})"),
 )
 _PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s*$")
 
@@ -92,7 +93,7 @@ def decrypt_diff() -> None:
     changed_records: dict[tuple[str, str], str] = {}
     changed_references: list[tuple[str, str]] = []
     for line in lines:
-        if line.startswith(("+++", "---")):
+        if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
             continue
         if match := _PRINCIPAL_RECORD_RE.match(line):
             changed_records[(line[0], match.group(1))] = match.group(2)

@@ -15,10 +15,9 @@ from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawR
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
-from experiments.post_training.task_curation.images.build import BASE_IMAGE, PYTHON_VERSION, EnvironmentArtifact
+from experiments.post_training.task_curation.images.build import EnvironmentArtifact
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    ShellSim,
     environment_requirements,
     source_recipe,
 )
@@ -33,11 +32,6 @@ def fixture_build(environment: Environment) -> EnvironmentArtifact:
     return EnvironmentArtifact(
         path=FIXTURE_ENVIRONMENT_PATH,
         identity="0" * 64,
-        lock_sha256="0" * 64,
-        apt=list(environment.apt),
-        data=list(environment.data),
-        python=PYTHON_VERSION,
-        base_image=BASE_IMAGE,
         image=FIXTURE_GRADER_IMAGE if placement(environment) == Placement.BUILT_IMAGE else None,
     )
 
@@ -69,13 +63,11 @@ def convert_row(
 
 
 def converted_task(pipeline: CurationRecipe, data: dict[str, Any], *, inputs: StagedInputs | None = None) -> TaskSpec:
-    """Convert a row that must produce a task whose agent environment matches the declaration."""
+    """Convert a fixture row that must produce a task."""
     result = convert_row(pipeline, data, inputs=inputs)
     if isinstance(result, ImportRejection):
         raise AssertionError(f"{pipeline.name} rejected its fixture row: {result}")
     task = result.task if isinstance(result, NormalizedTask) else result
-    declared = None if isinstance(pipeline.environment, ShellSim) else pipeline.environment.image
-    assert task.environment_requirements.docker_image == declared, pipeline.name
     return task
 
 

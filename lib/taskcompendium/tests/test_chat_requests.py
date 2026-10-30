@@ -10,7 +10,7 @@ from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import review_records
 
-from .test_pipeline import response
+from .pipeline_stages import response
 
 
 @dataclass
@@ -62,7 +62,9 @@ def test_concurrent_direct_invocations_share_process_admission_limit():
             return response(body["task_id"])["response"]["body"]
 
     service = BlockingChat()
-    requests = [{"custom_id": str(index), "body": {"task_id": str(index)}} for index in range(16)]
+    requests = [
+        {"custom_id": str(index), "body": {"task_id": str(index)}} for index in range(MAX_DIRECT_CONCURRENT_REQUESTS)
+    ]
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(chat_output, service, requests, max_concurrent=MAX_DIRECT_CONCURRENT_REQUESTS)
@@ -74,9 +76,27 @@ def test_concurrent_direct_invocations_share_process_admission_limit():
             release.set()
         outputs = [future.result() for future in futures]
     assert service.peak == MAX_DIRECT_CONCURRENT_REQUESTS
-    assert service.completed == 32
+    assert service.completed == 2 * len(requests)
     assert all(
         record.status == ReviewStatus.REVIEWED
         for output in outputs
-        for record in review_records(output.output, [str(index) for index in range(16)])
+        for record in review_records(output.output, [request["custom_id"] for request in requests])
     )
+
+
+def test_direct_requests_cross_byte_groups_without_a_completion_barrier():
+    started = threading.Barrier(2)
+
+    class ConcurrentChat:
+        def complete(self, body):
+            started.wait(timeout=5)
+            return response(body["task_id"])["response"]["body"]
+
+    requests = [{"custom_id": str(index), "body": {"task_id": str(index)}} for index in range(2)]
+    one_request_bytes = len(json.dumps(requests[0], ensure_ascii=False, separators=(",", ":")).encode()) + 1
+    output = chat_output(ConcurrentChat(), requests, max_concurrent=2, max_batch_bytes=one_request_bytes)
+    assert [record.status for record in review_records(output.output, ["0", "1"])] == [
+        ReviewStatus.REVIEWED,
+        ReviewStatus.REVIEWED,
+    ]
+    assert [observation.request_ids for observation in output.observations] == [("0",), ("1",)]

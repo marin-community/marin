@@ -23,6 +23,7 @@ import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 from rigging.provenance import Provenance
+from rigging.secrets import get_secret
 
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
@@ -303,6 +304,27 @@ def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
+# Device-to-host copies kept in flight while a payload is fetched. PJRT's GPU client finishes
+# pending copies on a work queue that starts a thread whenever queued work exceeds its idle
+# threads and never stops one, so starting thousands of copies at once leaves hundreds of idle
+# threads in every process. A short lookahead keeps most of the overlap and bounds that pool.
+_HOST_FETCH_WINDOW = 8
+
+
+def _fetch_arrays_to_host(tree: Any) -> None:
+    """Copy every ``jax.Array`` leaf to host with at most ``_HOST_FETCH_WINDOW`` copies in flight.
+
+    Each array caches its host value, so the conversion that follows reads host memory only.
+    """
+    arrays = [leaf for leaf in jax.tree.leaves(tree) if isinstance(leaf, jax.Array)]
+    for leaf in arrays[:_HOST_FETCH_WINDOW]:
+        leaf.copy_to_host_async()
+    for i, leaf in enumerate(arrays):
+        if i + _HOST_FETCH_WINDOW < len(arrays):
+            arrays[i + _HOST_FETCH_WINDOW].copy_to_host_async()
+        np.asarray(leaf)
+
+
 def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dict[str, Any]:
     """Flatten metrics into a wandb-ready dict.
 
@@ -314,12 +336,7 @@ def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dic
     thread before handing off to a :class:`BackgroundTracker` worker, and
     idempotent when called a second time on an already-flat dict.
     """
-    # Start every device-to-host copy before reading any value. Otherwise each scalar
-    # pays a full blocking copy, which dominates logging time for payloads with
-    # thousands of per-layer values.
-    for leaf in jax.tree.leaves(dict(metrics)):
-        if isinstance(leaf, jax.Array):
-            leaf.copy_to_host_async()
+    _fetch_arrays_to_host(dict(metrics))
 
     to_log: dict[str, Any] = {}
     for k, v in metrics.items():
@@ -459,6 +476,8 @@ class WandbConfig(TrackerConfig):
         process_count = jax.process_count()
         initialization_error = None
         try:
+            if mode not in {"disabled", "offline", "dryrun"} and (key := get_secret("WANDB_API_KEY")):
+                git_settings["api_key"] = key
             init_kwargs = dict(
                 entity=self.entity,
                 project=self.project,

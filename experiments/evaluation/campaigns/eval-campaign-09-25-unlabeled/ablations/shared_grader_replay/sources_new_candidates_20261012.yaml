@@ -1,0 +1,27 @@
+# Frozen sealed responses for the release's 131k MiniMax offline replay; no generation rerun.
+models:
+- model: open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10
+  benchmarks:
+    olympiadbench:
+      tracker_score: 0.307
+      source: s3://marin-us-east-02a/marin/evals/20261011-110826-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-olympiadbench-58ae/results
+- model: open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09
+  benchmarks:
+    olympiadbench:
+      tracker_score: 0.423
+      source: s3://marin-us-east-02a/marin/evals/20261011-093207-open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09-olympiadbench-84c2/results
+- model: open-athena/Grug-67B-A2B-BFCL-Recovery
+  benchmarks:
+    olympiadbench:
+      tracker_score: 0.337
+      source: s3://marin-us-east-02a/marin/evals/20261011-162154-open-athena-Grug-67B-A2B-BFCL-Recovery-olympiadbench-4f07/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12
+  benchmarks:
+    olympiadbench:
+      tracker_score: 0.307
+      source: s3://marin-us-east-02a/marin/evals/20261012-113922-open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12-olympiadbench-58ba/results
+- model: open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO
+  benchmarks:
+    olympiadbench:
+      tracker_score: 0.32
+      source: s3://marin-us-east-02a/marin/evals/20261012-121306-open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO-olympiadbench-45e4/results

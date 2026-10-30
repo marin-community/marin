@@ -12,7 +12,8 @@ import pytest
 
 from taskcompendium.chat import assistant_message, chat_conversation
 from taskcompendium.grading import grade_answer
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -50,7 +51,12 @@ def test_pinned_nemo_row_keeps_expected_action_private():
     saved_specification = json.loads(specification.model_dump_json())
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
-    assert saved_specification["answer_format"] == {"kind": "final_action", "require_call": False, "max_calls": 1}
+    assert saved_specification["answer_format"] == {
+        "kind": "final_action",
+        "require_call": False,
+        "max_calls": 1,
+        "normal_submission": None,
+    }
     assert isinstance(saved_specification["final_tools"], list)
     assert saved_specification["final_tools"]
     public = render_instruction(specification) + specification.answer_format.model_dump_json()
@@ -281,6 +287,17 @@ def test_imported_final_call_constraints_distinguish_invalid_submission(require_
     request = chat_request(specification)
     assert request.get("tool_choice") == ("required" if require_call else None)
     assert request["parallel_tool_calls"] is False
+
+
+@pytest.mark.parametrize("arguments", ['["invalid"]', '"invalid"', "null", "42"])
+def test_nonobject_final_arguments_are_scored_submission_failures(arguments):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification = import_row(row, canonical_sha256(row))
+    final = assistant_message(_action(row["expected_action"]["name"], arguments))
+    attempt = GradingAttempt(ConversationTrace(events=(*specification.context.events, final)))
+    result = grade_answer(specification, attempt)
+    assert (result.status, result.reward) == ("submission_failure", 0.0)
+    assert final.calls[0].arguments == json.loads(arguments)
 
 
 def test_imported_parallel_actions_accept_multiple_final_calls():

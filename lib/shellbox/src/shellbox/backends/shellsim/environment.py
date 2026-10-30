@@ -6,8 +6,10 @@
 import asyncio
 import tempfile
 from enum import StrEnum
+from functools import cache
 from pathlib import Path
 
+import shellsim
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from rigging.filesystem.storage_path import StoragePath
@@ -26,9 +28,14 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     ShellSession,
-    ShellSimBuiltins,
 )
+
+
+@cache
+def _worker_context() -> shellsim.Context:
+    return shellsim.Context(trusted_precompiled=True)
 
 
 def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
@@ -49,6 +56,8 @@ class ShellSimEnvironment(BaseEnvironment):
     def __init__(
         self,
         *args,
+        context: shellsim.Context | None = None,
+        package_spec: PackageSpec = PackageSpec(),
         network_policy: TaskNetworkPolicy = TaskNetworkPolicy.REQUIRE_OFFLINE_TASK,
         cpu_limit: int = DEFAULT_CPU_LIMIT,
         memory_mb: int = DEFAULT_MEMORY_MB,
@@ -56,11 +65,15 @@ class ShellSimEnvironment(BaseEnvironment):
         output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT,
         **kwargs,
     ):
+        self.factory = ShellSimMachineFactory(
+            context=context if context is not None else _worker_context(),
+            cpu=cpu_limit,
+            disk=disk_limit_bytes,
+            output=output_limit_bytes,
+        )
+        self.package_spec = package_spec
         self.network_policy = TaskNetworkPolicy(network_policy)
-        self.cpu_limit = cpu_limit
         self.memory_mb = memory_mb
-        self.disk_limit_bytes = disk_limit_bytes
-        self.output_limit_bytes = output_limit_bytes
         self.machine: ShellSimMachine | None = None
         super().__init__(*args, **kwargs)
 
@@ -80,12 +93,8 @@ class ShellSimEnvironment(BaseEnvironment):
 
     async def start(self, force_build: bool) -> None:
         workdir = self.task_env_config.workdir or "/workspace"
-        spec = MachineSpec(ShellSimBuiltins(), workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
-        self.machine = await ShellSimMachineFactory(
-            cpu=self.cpu_limit,
-            disk=self.disk_limit_bytes,
-            output=self.output_limit_bytes,
-        ).create(spec)
+        spec = MachineSpec(self.package_spec, workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
+        self.machine = await self.factory.create(spec)
         try:
             if self.environment_dir.is_dir():
                 await self.machine.upload(self.environment_dir, workdir)

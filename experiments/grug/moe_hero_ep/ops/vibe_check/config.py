@@ -29,16 +29,19 @@ TARGET_CLUSTER = "cw-us-east-08a"
 # prompt bank in a single pass per sample.
 SAMPLING_NODES = 16
 SAMPLING_GPUS_PER_NODE = 4
+# Earliest checkpoint sampled under the current spec. A spec change re-identifies every request, so
+# this floor keeps it from backfilling the full lineage; earlier releases keep their results.
+FIRST_SAMPLED_STEP = 270_000
 
 
 def sampling_spec() -> SamplingSpec:
     return SamplingSpec(
-        release="hero-native-v4-reference-eos",
+        release="hero-native-v6-temperature-0.7",
         completions_per_prompt=3,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
-        temperature=0.2,
+        temperature=0.7,
         max_new_tokens=1024,
         context_length=4096,
     )
@@ -68,13 +71,21 @@ def sampling_resources() -> ResourceConfig:
 
 
 def discover_requests(
-    checkpoint_paths: list[str], spec: SamplingSpec, model: dict, revision: str, *, target_cluster: str
+    checkpoint_paths: list[str],
+    spec: SamplingSpec,
+    model: dict,
+    revision: str,
+    *,
+    first_step: int,
+    target_cluster: str,
 ) -> list[SampleRequest]:
-    """Build sample requests from permanent checkpoint paths and metadata."""
+    """Build sample requests for checkpoints at or after ``first_step`` from their paths and metadata."""
     requests = []
     for uri in checkpoint_paths:
         path = StoragePath(uri)
         metadata = json.loads((path / "metadata.json").read_text())
+        if metadata["step"] < first_step:
+            continue
         checkpoint = Checkpoint(
             uri=uri,
             run_id=path.parent.parent.parent.name,

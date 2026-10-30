@@ -21,6 +21,7 @@ Examples:
     SMOKE_RUN_ID="shuffle-bench-$(date +%s)" \\
     uv run iris --cluster=marin-dev job run --no-wait \\
         --memory=2G --disk=8G --cpu=1 --extra=cpu \\
+        --include lib/zephyr/tests/benchmark_shuffle.py \\
         -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \\
         -- python lib/zephyr/tests/benchmark_shuffle.py \\
            --num-input-shards 64 --items-per-shard 600000 --item-bytes 250

@@ -19,6 +19,7 @@ from typing import Any
 
 import tomli_w
 
+from verifyit.closure_scoring import ClosureFormat
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
@@ -28,12 +29,14 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    UNSOLVABLE = "unsolvable"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
     MATH = "math"
     NUMERIC = "numeric"
     EXACT = "exact"
+    STRUCTURE_CLOSURE = "structure_closure"
     JSON_SCHEMA = "json-schema"
     XML_ELEMENTS = "xml-elements"
     CSV_COLUMNS = "csv-columns"
@@ -96,6 +99,14 @@ class FunctionCall:
 
 
 @dataclass(frozen=True)
+class UnsolvableSpec:
+    """A private task label requiring a validated terminal ejection for credit."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
 class PredictedActionSpec:
     expected_calls: tuple[FunctionCall, ...]
     numeric_tolerance: float | None = None
@@ -148,6 +159,17 @@ class ExactSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     strip_outer_whitespace: bool = True
     substring: bool = False
+
+
+@dataclass(frozen=True)
+class StructureClosureSpec:
+    """Complete a pinned assistant prefix while preserving its reference content."""
+
+    prefix: str
+    expected: str
+    format: ClosureFormat
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.GRADE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -222,6 +244,8 @@ class StdioSpec:
 class PytestSpec:
     paths: tuple[str, ...] = ()
     args: tuple[str, ...] = ()
+    candidate_modules: tuple[str, ...] = ()
+    """Python modules the task explicitly asks the candidate to implement."""
     must_pass: tuple[str, ...] = ()
     must_not_break: tuple[str, ...] = ()
     setup: str = ""
@@ -300,6 +324,7 @@ class JudgeSpec:
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
+    strip_candidate_reasoning_blocks: bool = False
     max_completion_tokens: int = 8192
     incomplete_retry_tokens: int = 0
     reasoning_effort: str = ""
@@ -325,12 +350,14 @@ class ScriptSpec:
 
 
 Spec = (
-    StructuredExactSpec
+    UnsolvableSpec
+    | StructuredExactSpec
     | PredictedActionSpec
     | McqSpec
     | MathSpec
     | NumericSpec
     | ExactSpec
+    | StructureClosureSpec
     | JsonSchemaSpec
     | XmlElementsSpec
     | CsvColumnsSpec
@@ -361,6 +388,9 @@ class ModeDescriptor:
 
 
 MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
+    Mode.UNSOLVABLE: ModeDescriptor(
+        UnsolvableSpec, "grade_unsolvable", CandidateEntrypoints("validate_unsolvable", "grade_unsolvable_candidate")
+    ),
     Mode.STRUCTURED_EXACT: ModeDescriptor(
         StructuredExactSpec,
         "grade_structured_exact",
@@ -380,6 +410,11 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
     ),
     Mode.EXACT: ModeDescriptor(
         ExactSpec, "grade_exact", CandidateEntrypoints("validate_exact", "grade_exact_candidate")
+    ),
+    Mode.STRUCTURE_CLOSURE: ModeDescriptor(
+        StructureClosureSpec,
+        "grade_structure_closure",
+        CandidateEntrypoints("validate_structure_closure", "grade_structure_closure_candidate"),
     ),
     Mode.JSON_SCHEMA: ModeDescriptor(
         JsonSchemaSpec,

@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -13,9 +14,10 @@ import stat
 import tarfile
 import tempfile
 import uuid
+from asyncio import sleep
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -26,6 +28,7 @@ from daytona import (
     CreateSnapshotParams,
     DaytonaConflictError,
     DaytonaNotFoundError,
+    DaytonaRateLimitError,
     Image,
     Resources,
 )
@@ -34,9 +37,22 @@ from rigging.timing import ExponentialBackoff
 
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
-from shellbox.machine import Backend, Command, ExitReason, MachineSpec, NetworkPolicy, Result, UnsupportedMachineSpec
+from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
+    Backend,
+    Command,
+    CommandSemantics,
+    ExecutionRequirements,
+    ExitReason,
+    MachineSpec,
+    NetworkPolicy,
+    Result,
+    UnsupportedMachineSpec,
+    check_execution_requirements,
+)
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 RUN_COMMAND = (
     'pidfile=$1; completed=$2; shift 2; echo $$ > "$pidfile"; trap \': > "$completed"; rm -f "$pidfile"\' EXIT; "$@"'
@@ -61,8 +77,19 @@ def _control_command(script: str) -> str:
     )
 
 
+def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage | DockerfileSource:
+    if isinstance(source, RegistryImage):
+        return source
+    source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
+    if source.dockerfile.parent != source.context:
+        raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+    if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
+        raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+    return source
+
+
 async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
-    """Get an active snapshot within the caller's startup deadline."""
+    """Build or await a snapshot identified by its source and resource requirements."""
     identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
     name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
@@ -81,6 +108,41 @@ async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSour
         await asyncio.sleep(backoff.next_interval())
         snapshot = await client.snapshot.get(name)
     return name
+
+
+async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    assert params.name is not None
+    backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
+    while True:
+        try:
+            try:
+                return await client.create(params, timeout=timeout)
+            except DaytonaConflictError:
+                sandbox = await client.get(params.name)
+                await sandbox.wait_for_sandbox_start(timeout=timeout)
+                return sandbox
+        except DaytonaRateLimitError as error:
+            retry_after = max(
+                (
+                    int(value)
+                    for name, value in (error.headers or {}).items()
+                    if name.lower().startswith("retry-after") and str(value).isdecimal()
+                ),
+                default=0,
+            )
+            delay = max(retry_after, backoff.next_interval())
+            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
+            await sleep(delay)
+
+
+async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
+    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        try:
+            sandbox = await client.get(name)
+        except DaytonaNotFoundError:
+            return
+        await client.delete(sandbox)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -336,24 +398,54 @@ class DaytonaMachineFactory:
         self.create_timeout = create_timeout
         self.network_policy = network_policy
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
         if isinstance(spec.source, DockerfileSource):
-            source = DockerfileSource(spec.source.context.resolve(), spec.source.dockerfile.resolve())
-            if source.dockerfile.parent != source.context:
-                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
-                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+            source = spec.source
         elif isinstance(spec.source, RegistryImage):
             source = spec.source
         else:
             raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
+        if self.network_policy is not None:
+            self.network_policy.parameters()
+        return source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        source = self._check_spec(spec)
+        reference = source.reference if isinstance(source, RegistryImage) else None
+        if self.network_policy is not None:
+            network = (
+                NetworkPolicy.DENY if self.network_policy.mode == DaytonaNetworkMode.BLOCK_ALL else NetworkPolicy.ALLOW
+            )
+            spec = replace(spec, network=network)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=LINUX_PROCESS_CAPABILITIES,
+            image_reference=reference,
+        )
+
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
+        source = _validated_source(self._check_spec(spec))
         resources = Resources(
             cpu=spec.cpus,
             memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,
             disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
             gpu=spec.gpus or None,
         )
+        return await _snapshot(client, source, resources)
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        """Prepare the snapshot used by create without starting a sandbox.
+
+        Pin registry sources by digest to reuse immutable image content.
+        """
+        timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+        async with self.client_factory() as client, asyncio.timeout(timeout):
+            return await self._prepare(client, spec)
+
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
@@ -363,9 +455,13 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await _snapshot(client, source, resources)
-                sandbox = await client.create(
+                snapshot = await self._prepare(client, spec)
+                name = f"shellbox-{uuid.uuid4().hex}"
+                lifetime.push_async_callback(_delete_named_sandbox, client, name)
+                sandbox = await _create_sandbox(
+                    client,
                     CreateSandboxFromSnapshotParams(
+                        name=name,
                         snapshot=snapshot,
                         os_user="root",
                         env_vars=spec.env,
@@ -374,7 +470,6 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            lifetime.push_async_callback(client.delete, sandbox)
             prepared = await sandbox.process.exec(_control_command("command -v setsid"), timeout=INTERRUPT_TIMEOUT)
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")

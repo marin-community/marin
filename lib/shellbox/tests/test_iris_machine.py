@@ -8,6 +8,8 @@ import json
 import os
 import pwd
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,13 +83,18 @@ class LocalTask:
 class LocalJob:
     def __init__(self, task: LocalTask | None = None):
         self.cancelled = False
-        self.task = task
+        self.killed = threading.Event()
+        self._task = task
 
     def tasks(self):
-        return [] if self.task is None else [self.task]
+        return [] if self._task is None else [self._task]
+
+    def task(self, index):
+        return self.tasks()[index]
 
     def cancel(self):
         self.cancelled = True
+        self.killed.set()
 
 
 class LocalClient:
@@ -124,8 +131,10 @@ class LocalEndpoint:
         pass
 
 
-def local_machine(tmp_path: Path, rpc=None, task: LocalTask | None = None) -> tuple[IrisMachine, LocalJob]:
-    job = LocalJob()
+def local_machine(
+    tmp_path: Path, rpc=None, task: LocalTask | None = None, job: LocalJob | None = None
+) -> tuple[IrisMachine, LocalJob]:
+    job = job or LocalJob()
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
     machine = IrisMachine(
         LocalEndpoint(),  # type: ignore[arg-type]
@@ -265,6 +274,89 @@ def test_exec_failing_after_the_controller_accepted_it_is_not_repeated(tmp_path:
     assert rpc.sent("echo once") == 1
 
 
+class ClosingRpc(RefusingRpc):
+    """Refuses every exec for a full pool; during the first refusal another thread closes the machine."""
+
+    def __init__(self):
+        super().__init__(Code.RESOURCE_EXHAUSTED, refusals=1_000)
+        self.machine: IrisMachine | None = None
+        self.closer: threading.Thread | None = None
+
+    def exec_in_container(self, request, timeout_ms):
+        if self.closer is None:
+            machine = self.machine
+            assert machine is not None
+            closing = machine.close()
+            self.closer = threading.Thread(target=lambda: asyncio.run(closing))
+            self.closer.start()
+            assert machine.job.killed.wait(timeout=10)  # type: ignore[attr-defined]
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_exec_retry_stops_once_the_machine_is_closed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "EXEC_SHED_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+    rpc = ClosingRpc()
+    machine, job = local_machine(tmp_path, rpc)
+    rpc.machine = machine
+
+    with pytest.raises(RuntimeError, match="Machine is closed"):
+        asyncio.run(machine.run(Command(("echo", "late"))))
+    assert rpc.closer is not None
+    rpc.closer.join(timeout=10)
+    assert not rpc.closer.is_alive()
+    assert job.cancelled
+    assert rpc.sent("echo late") == 1
+
+
+class HeldRpc:
+    """An exec the controller admitted, still running until ``release`` is set."""
+
+    def __init__(self, release: threading.Event):
+        self.release = release
+        self.admitted = threading.Event()
+        self.returned = threading.Event()
+
+    def exec_in_container(self, request, timeout_ms):
+        del request, timeout_ms
+        self.admitted.set()
+        assert self.release.wait(timeout=10)
+        self.returned.set()
+        return SimpleNamespace(exit_code=0, stdout="", stderr="", error="")
+
+
+def test_close_returns_only_after_admitted_execs_end(tmp_path: Path) -> None:
+    job = LocalJob()
+    # Terminating the sandbox ends the exec the controller already admitted.
+    rpc = HeldRpc(release=job.killed)
+    machine, _ = local_machine(tmp_path, rpc, job=job)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        exec_future = pool.submit(machine._exec_sync, ["true"])
+        assert rpc.admitted.wait(timeout=10)
+
+        asyncio.run(machine.close())
+
+        assert rpc.returned.is_set()
+        exec_future.result(timeout=10)
+
+
+def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(iris_backend, "CLOSE_DRAIN_SECONDS", 0.01)
+    rpc = HeldRpc(release=threading.Event())
+    machine, job = local_machine(tmp_path, rpc)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        exec_future = pool.submit(machine._exec_sync, ["true"])
+        assert rpc.admitted.wait(timeout=10)
+
+        with pytest.raises(RuntimeError, match=r"1 Iris exec\(s\) still in flight .*: true$"):
+            asyncio.run(machine.close())
+
+        assert job.cancelled
+        rpc.release.set()
+        exec_future.result(timeout=10)
+
+
 @pytest.mark.parametrize(
     ("network", "egress"),
     [
@@ -286,20 +378,40 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     assert client.submitted["egress_policy"] == egress
 
 
-def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
+@pytest.mark.parametrize("task_missing", [False, True])
+def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path, task_missing):
+    task = LocalTask(TaskState.PENDING)
+    current_status = task.status
+
+    def status():
+        nonlocal task_missing
+        if task_missing:
+            task_missing = False
+            raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
+        return current_status()
+
+    task.status = status
+    job = LocalJob(task)
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     workdir = tmp_path / "workspace"
     spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+    existing, _ = local_machine(tmp_path)
 
     async def scenario():
-        machine = await factory.create(spec)
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        creation = asyncio.create_task(factory.create(spec))
+        command = asyncio.create_task(existing.run(Command(("printf", "ready"))))
+        done, _ = await asyncio.wait((command,), timeout=5)
+        task.state = TaskState.RUNNING
+        machine = await creation
         try:
+            assert command in done and command.result().stdout == b"ready"
             assert workdir.is_dir()
         finally:
+            await command
             await machine.close()
 
     asyncio.run(scenario())

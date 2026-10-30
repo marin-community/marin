@@ -90,6 +90,8 @@ class SourceFiles:
     decode: Callable[[dict[str, Any], ConversionContext], dict[str, Any]] | None = None
     read: Callable[[StoragePath, ConversionContext], Iterator[dict[str, Any]]] | None = None
     parts: FileParts | None = None
+    prepared_component: str | None = None
+    """Component predicate for acquisition-normalized JSONL; selectors still determine membership."""
 
     def __post_init__(self) -> None:
         if self.read is not None and self.parts is not None:

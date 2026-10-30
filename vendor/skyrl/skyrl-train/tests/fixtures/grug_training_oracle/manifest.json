@@ -1,0 +1,14 @@
+{
+  "jax_backend": "cpu",
+  "matmul_precision": "highest",
+  "padding": "none",
+  "producer": "levanter.models.snowball",
+  "schema_version": 1,
+  "sgd_learning_rate": 0.001,
+  "update_parameter_names": [
+    "model.embed_tokens.weight",
+    "model.layers.0.self_attn.q_proj.weight",
+    "model.layers.2.mlp.router.weight",
+    "lm_head.weight"
+  ]
+}

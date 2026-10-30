@@ -118,6 +118,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/haliax/src/haliax/__about__.py"),
                 Path("lib/finestore/pyproject.toml"),
                 Path("lib/shellbox/pyproject.toml"),
+                Path("lib/verifyit/pyproject.toml"),
+                Path("lib/taskcompendium/pyproject.toml"),
+                Path("lib/rolloutengine/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -132,6 +135,9 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-haliax",
                         "marin-finestore",
                         "marin-shellbox",
+                        "marin-verifyit",
+                        "marin-taskcompendium",
+                        "marin-rolloutengine",
                     )
                 }
             ),
@@ -143,6 +149,13 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/shellbox/src/**",
                 "lib/shellbox/pyproject.toml",
                 "lib/shellbox/README.md",
+                "lib/verifyit/src/**",
+                "lib/verifyit/pyproject.toml",
+                "lib/verifyit/README.md",
+                "lib/taskcompendium/src/**",
+                "lib/taskcompendium/pyproject.toml",
+                "lib/rolloutengine/src/**",
+                "lib/rolloutengine/pyproject.toml",
             ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
@@ -158,7 +171,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             source_patterns=("lib/iris/rust/**", "rust/iris-*/**"),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -190,7 +203,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -221,7 +234,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -772,7 +785,8 @@ def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo
     subprocess.run(
         [
             sys.executable,
-            build.script_path.as_posix(),
+            "-m",
+            ".".join(build.script_path.with_suffix("").parts),
             "--mode",
             "stable",
             "--version",
@@ -807,8 +821,10 @@ def _build_native_package(build: NativeBuild, version: str, operation: str, repo
     if operation == BuildOperation.LINUX:
         zig_dir = str(Path(_ensure_zig(repo_root)).parent)
         environment = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    maturin_config = tomllib.loads((repo_root / build.native_path / "pyproject.toml").read_text())["tool"]["maturin"]
+    profile = maturin_config.get("profile", "release")
     for target, manylinux in targets:
-        arguments = ["build", "--release", "--out", str(dist_dir), "--target", target]
+        arguments = ["build", "--profile", profile, "--out", str(dist_dir), "--target", target]
         if manylinux:
             arguments.extend(("--manylinux", manylinux))
         if operation == BuildOperation.LINUX:

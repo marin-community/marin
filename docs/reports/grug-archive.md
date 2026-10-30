@@ -57,8 +57,17 @@ goes stale on the next commit.
 - Origin: `moe_hero_fsdp` at PR 7876
 - Introduced: b0d20062a
 - Status: active
-- Purpose: one-rack GB200 EP64 throughput and MFU baseline.
+- Purpose: one-rack GB200 EP64 baseline. The pipeline variant lives in `moe_hero_pipeline`.
 - Issue: https://github.com/marin-community/marin/issues/7279
+
+### grug-moe-hero-pipeline
+- Path: `experiments/grug/moe_hero_pipeline/`
+- Origin: `moe_hero_ep` model with the `moe_pipeline` stage adapter
+- Introduced: [PR #9279](https://github.com/marin-community/marin/pull/9279)
+- Status: active
+- Purpose: Hero pipeline adapters for GB200 and H100. The historical BF16 full 535B model completed ten synthetic 65K updates on H100 with PP24/EP8 at 15.523% MFU using local JAXPP overlays; production checkpoint continuation remains unvalidated.
+- Diff: https://github.com/marin-community/marin/pull/9279/files
+- Issue: https://github.com/marin-community/marin/issues/9277
 
 ### grug-fast-track
 - Path: `experiments/grug/fast_track/`

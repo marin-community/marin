@@ -132,9 +132,6 @@
       "linkRef": "rl_post_training"
     },
     {
-      "linkRef": "async_rl"
-    },
-    {
       "linkRef": "fleet_health"
     },
     {

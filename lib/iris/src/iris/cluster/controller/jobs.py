@@ -12,11 +12,12 @@ from typing import Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.secrets import validate_secret_name
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
 
-from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore, BundleUploadError
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
@@ -28,14 +29,21 @@ from iris.cluster.constraints import (
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
-from iris.cluster.controller.budget import budget_user_id
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendObservation,
+    EgressAllowlistMode,
+    JobFeasibilityRequest,
+    TaskBackend,
+)
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.egress import MAX_EGRESS_RULES, format_egress_rule, parse_egress_rules, validate_egress_rules
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
@@ -46,7 +54,6 @@ from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
     JobName,
-    UserBudgetDefaults,
     is_federated,
     is_job_finished,
 )
@@ -103,7 +110,7 @@ class JobDependencies:
     runtime: JobRuntime
     bundles: BundleStore
     auth: ControllerAuth
-    user_budget_defaults: UserBudgetDefaults
+    budgets: FederationBudgets
 
 
 class JobStatusRow(Protocol):
@@ -219,11 +226,13 @@ def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: boo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool) -> str:
     """Return the user-visible reason for a pending federated job."""
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
+        if not peer_reachable:
+            return f"Peer {cluster} is unreachable; queued until it reconnects"
         return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
@@ -473,6 +482,11 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
+    for name in request.environment.secrets:
+        try:
+            validate_secret_name(name)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
     if request.HasField("coscheduling") and not request.coscheduling.group_by:
@@ -549,7 +563,7 @@ def _launch_identity(
         job_id=job_id,
         received_handoff=received_handoff,
         submitting_user=submitting_user,
-        budget_user=budget_user_id(job_id, submitting_user),
+        budget_user=job_id.user,
     )
 
 
@@ -571,16 +585,17 @@ def _resolve_launch_priority(
             inherited_band = reads.get_priority_bands(snapshot, [launch.job_id.parent])[launch.job_id.parent]
     band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
     request.priority_band = band
-    if launch.received_handoff:
+    if launch.received_handoff and (
+        not dependencies.budgets.parent_id or request.federation.requester_id == dependencies.budgets.parent_id
+    ):
         return band
-    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:
+    budget_context = dependencies.budgets.snapshot()
+    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider and not launch.received_handoff:
         parent = _task_caller_parent(dependencies, launch.job_id)
         if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):
             authorize(AuthzAction.MANAGE_BUDGETS)
         return band
-    with dependencies.db.read_snapshot() as snapshot:
-        user_budget = reads.get_user_budget(snapshot, launch.budget_user)
-    max_band = user_budget.max_band if user_budget is not None else dependencies.user_budget_defaults.max_band
+    max_band = budget_context.user(launch.budget_user).max_band
     if priority_band_rank(band) < priority_band_rank(max_band):
         raise ConnectError(
             Code.PERMISSION_DENIED,
@@ -642,7 +657,7 @@ def _validate_launch_profile(
             "Container profile sandbox runs a self-contained image and accepts no workspace bundle; "
             "submit without a workspace.",
         )
-    _resolve_egress_policy(request)
+    _validate_egress(request)
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
         logger.warning(
             "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
@@ -650,12 +665,88 @@ def _validate_launch_profile(
         )
 
 
-def _resolve_egress_policy(request: controller_pb2.Controller.LaunchJobRequest) -> None:
-    """Resolve UNSPECIFIED egress in place and reject an unknown policy or a sandbox on the cluster network."""
+def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> None:
+    """Validate the requested egress.
+
+    Rejects an unknown policy, a SANDBOX job on a policy that reaches the
+    controller, a malformed or excessive rule list, and rules alongside an
+    explicit policy other than ALLOWLIST. An UNSPECIFIED policy is left
+    unresolved; its rules take effect only if it resolves to ALLOWLIST.
+    """
     try:
-        request.egress_policy = resolve_egress_policy(request.container_profile, request.egress_policy)
+        validate_egress_rules(request.egress_allow)
+        if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+            return
+        if request.egress_allow and request.egress_policy != job_pb2.EGRESS_POLICY_ALLOWLIST:
+            raise ValueError("Egress rules require egress policy allowlist")
+        resolve_egress_policy(request.container_profile, request.egress_policy)
     except ValueError as e:
         raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
+
+
+def _resolve_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    launch: LaunchIdentity,
+) -> None:
+    """Resolve the egress policy in place for a job that runs here.
+
+    A child job with an UNSPECIFIED policy inherits its parent's policy and
+    rules, so a job tree that opted out of the allowlist, or added rules,
+    keeps that choice. A root job, and a SANDBOX child, takes the cluster's
+    default: ALLOWLIST where the backend defaults to it and the job is not
+    SANDBOX, otherwise its profile's default. A job on ALLOWLIST that the
+    backend cannot enforce for it runs on CLUSTER instead, with a warning, so
+    the stored policy is the one the job runs under. A job queued for a
+    federation peer is not resolved here; the peer resolves it.
+    """
+    mode = dependencies.runtime.backend.egress_allowlist_mode(request)
+    if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+        _resolve_unspecified_egress(dependencies, request, launch, mode)
+    if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and mode is EgressAllowlistMode.UNAVAILABLE:
+        logger.warning(
+            "Job %s uses egress policy allowlist, which this cluster cannot enforce for it; "
+            "it runs on the cluster network",
+            launch.job_id.to_wire(),
+        )
+        request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+
+
+def _resolve_unspecified_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    launch: LaunchIdentity,
+    mode: EgressAllowlistMode,
+) -> None:
+    parent_id = launch.job_id.parent
+    if parent_id is not None and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        with dependencies.db.read_snapshot() as snapshot:
+            parent = reads.get_job_detail(snapshot, parent_id)
+        if parent is not None and parent.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
+            request.egress_policy = parent.egress_policy
+            _inherit_egress_rules(request, parse_egress_rules(parent.egress_allow_json))
+            return
+    if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX and mode is EgressAllowlistMode.DEFAULT:
+        request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+        return
+    request.egress_policy = resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+
+
+def _inherit_egress_rules(
+    request: controller_pb2.Controller.LaunchJobRequest, parent_rules: list[job_pb2.EgressRule]
+) -> None:
+    """Add the parent's rules that the job does not already declare, within ``MAX_EGRESS_RULES``."""
+    declared = {format_egress_rule(rule) for rule in request.egress_allow}
+    inherited = {format_egress_rule(rule): rule for rule in parent_rules}
+    for key in declared:
+        inherited.pop(key, None)
+    if len(request.egress_allow) + len(inherited) > MAX_EGRESS_RULES:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"Job declares {len(request.egress_allow)} egress rules and inherits {len(inherited)} more from its "
+            f"parent; at most {MAX_EGRESS_RULES} are allowed",
+        )
+    request.egress_allow.extend(inherited.values())
 
 
 def _validate_launch_capacity(
@@ -787,12 +878,12 @@ def _store_launch_payload(
     return normalized
 
 
-def _route_launch(
+def _plan_launch(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
     launch: LaunchIdentity,
-) -> controller_pb2.Controller.LaunchJobResponse | None:
-    """Validate placement and either queue, reject, or select local execution."""
+) -> SubmitPlan:
+    """Validate placement before replacing an existing job or storing payloads."""
     constraints = [Constraint.from_proto(constraint) for constraint in request.constraints]
     tpu_error = validate_tpu_request(request.resources, constraints)
     if tpu_error:
@@ -830,20 +921,13 @@ def _route_launch(
             )
         if dependencies.auth.provider and launch.submitting_user == LOCAL_ADMIN_SUBMITTER:
             raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-        return _queue_federated_job(
-            dependencies,
-            launch.job_id,
-            request,
-            plan.pinned_peer_id,
-            launch.submitting_user,
-        )
     if plan.disposition == SubmitDisposition.REJECT:
         reason = error or "no local backend or peer can host it"
         raise ConnectError(
             Code.FAILED_PRECONDITION,
             f"Job {launch.job_id} is unschedulable: {reason} (constraints: {constraints})",
         )
-    return None
+    return plan
 
 
 def _insert_local_job(
@@ -901,15 +985,30 @@ def launch_job(
     _validate_launch_profile(dependencies, request, launch)
     _validate_launch_capacity(dependencies, request, launch)
 
+    request = _inject_resource_constraints(request)
+    plan = _plan_launch(dependencies, request, launch)
+    if plan.disposition == SubmitDisposition.LOCAL:
+        _resolve_egress(dependencies, request, launch)
+        error = dependencies.runtime.backend.validate_job(request)
+        if error:
+            raise ConnectError(Code.INVALID_ARGUMENT, error)
+
     existing = _prepare_job_slot(dependencies, request, launch)
     if existing is not None:
         return existing
 
-    request = _store_launch_payload(dependencies, request)
-    request = _inject_resource_constraints(request)
-    routed = _route_launch(dependencies, request, launch)
-    if routed is not None:
-        return routed
+    try:
+        request = _store_launch_payload(dependencies, request)
+    except BundleUploadError as exc:
+        raise ConnectError(Code.UNAVAILABLE, f"Job {launch.job_id} creation failed: {exc}") from exc
+    if plan.disposition == SubmitDisposition.QUEUE:
+        return _queue_federated_job(
+            dependencies,
+            launch.job_id,
+            request,
+            plan.pinned_peer_id,
+            launch.submitting_user,
+        )
     return _insert_local_job(dependencies, request, launch, band)
 
 
@@ -1069,7 +1168,9 @@ def _job_to_proto(
     current_peer_status = peer_status(job.cluster, handoff_state, task_summary is not None)
     pending_reason = job.error or ""
     if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-        pending_reason = _federated_pending_reason(job.cluster, handoff_state, current_peer_status)
+        pending_reason = _federated_pending_reason(
+            job.cluster, handoff_state, current_peer_status, dependencies.runtime.federation.peer_reachable(job.cluster)
+        )
     elif job.state == job_pb2.JOB_STATE_PENDING:
         sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
         pending_reason = sched_reason or "Pending scheduler feedback"

@@ -8,11 +8,6 @@ import json
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
-from taskcompendium.convert.tasktrove_converted_task import archive_conversion
-from taskcompendium.convert.tasktrove_nemotron_structured_outputs import (
-    MISSING_INSTRUCTION,
-    convert_nemotron_structured_outputs,
-)
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -29,7 +24,12 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
-from experiments.post_training.task_curation.pipeline import CurationRecipe, ShellSim, process_rows
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import archive_conversion
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.structured_outputs import (
+    MISSING_INSTRUCTION,
+    convert_nemotron_structured_outputs,
+)
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
@@ -127,7 +127,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
                 version="1",
-                environment=ShellSim(),
                 intended_use=IntendedUse.TRAIN,
                 rubric=STRUCTURED_OUTPUTS_RUBRIC,
                 grader=GRADER_PACKAGES,

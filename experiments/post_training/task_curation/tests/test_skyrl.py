@@ -43,6 +43,7 @@ RECIPES = {
 
 SUM_TESTS = {"inputs": ["1 2\n"], "outputs": ["3\n"]}
 SUM_SOLUTION = "a, b = map(int, input().split())\nprint(a + b)"
+OVERSIZED_APPS_INTEGER = "9" * 9131
 HH_ROW = {
     "chosen": "\n\nHuman: How do I boil an egg?\n\nAssistant: Simmer it for nine minutes.",
     "rejected": "\n\nHuman: How do I boil an egg?\n\nAssistant: I don't know.",
@@ -337,6 +338,22 @@ REJECTIONS = [
     *(
         ("apps", {"input_output": encoded}, ImportFailureKind.SOURCE_DEFECT, "invalid_test_contract")
         for encoded in ("", "{", "null", "[]", '{"inputs": "1 2", "outputs": ["3"]}')
+    ),
+    *(
+        ("apps", {"input_output": encoded}, ImportFailureKind.SOURCE_DEFECT, "nonfinite_test_contract")
+        for encoded in (
+            '{"fn_name": "find_time_to_break", "inputs": [[90, 90]], "outputs": [[Infinity]]}',
+            '{"fn_name": "is_negative_zero", "inputs": [[-0.0], [-Infinity], [-5.0], [-4.0], [-3.0], '
+            "[-2.0], [-1.0], [1.0], [2.0], [3.0], [4.0], [5.0], [Infinity]], "
+            '"outputs": [[true], [false], [false], [false], [false], [false], [false], [false], [false], '
+            "[false], [false], [false], [false]]}",
+        )
+    ),
+    (
+        "apps",
+        {"input_output": f'{{"fn_name": "factorial", "inputs": [[10]], "outputs": [[{OVERSIZED_APPS_INTEGER}]]}}'},
+        ImportFailureKind.UNSUPPORTED,
+        "unsupported_test_contract",
     ),
     *(
         ("apps", {"solutions": solutions}, ImportFailureKind.SOURCE_DEFECT, "invalid_solutions")

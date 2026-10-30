@@ -6,12 +6,15 @@
 ``train.py`` fits the model and ``data.py`` builds a compact vocabulary remap from
 the training corpus; to score *new* documents we need both the serialised model and
 that remap. :class:`PooledScorer` bundles them and ``load_pooled_scorer`` builds one
-from a model dir. ``score_windowed`` scores pre-sliced token windows per document
-(the scoring stage slices its own); ``score_bme`` slices begin/middle/end windows
-from whole-document ids first (calibration fitting and tests). Windows are the
-tokenize stage's ``input_ids`` (BOS/EOS included), each at most ``max_tokens`` long
-and padded to ``max_tokens`` so ``predict`` compiles once. This module deliberately depends only on
-the model + inference forward, not on the training loop or the zephyr/iris pipeline.
+from a model dir, whose artifacts are named after the one ``.eqx`` it holds
+(``pooled_junkgate2`` for the text scorer, ``nemotron_88k`` for the fusion scorer).
+``score_windowed`` scores pre-sliced token windows per document (the scoring stage
+slices its own); ``score_bme`` slices begin/middle/end windows from whole-document
+ids first (calibration fitting and tests). Windows are the tokenize stage's
+``input_ids`` (BOS/EOS included), each at most ``max_tokens`` long and padded to
+``max_tokens`` so ``predict`` compiles once. This module deliberately depends only
+on the model + inference forward, not on the training loop or the zephyr/iris
+pipeline.
 """
 
 import json
@@ -23,19 +26,19 @@ import equinox as eqx
 import jax.random as jr
 import numpy as np
 from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, bme_windows, remap_table
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import artifact_names, model_stem
 
 # CPU workers: 30.7 vs 44.2 CPU-s per 75k windows against predict's default, scores
 # bit-identical; TPU callers keep ``inference.predict``'s default.
 PREDICT_BATCH_SIZE = 64
 
-MODEL_STEM = "pooled_junkgate2"  # the deployed model artifact stem
-MODEL_EQX = f"{MODEL_STEM}.eqx"
-MODEL_REMAP = f"{MODEL_STEM}_remap.json"
-MODEL_META = f"{MODEL_STEM}_meta.json"
+MODEL_STEM = "pooled_junkgate2"  # the stem ``train.py`` writes a new text scorer under
+MODEL_EQX, MODEL_REMAP, MODEL_META = artifact_names(MODEL_STEM)
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,11 @@ class PooledScorer:
         )
 
     def score_windows(self, windows: list[np.ndarray], batch_size: int = PREDICT_BATCH_SIZE) -> np.ndarray:
-        """Quality score in ``[0, 1]`` per token window (each padded to ``max_tokens``)."""
+        """Quality score in ``[0, 1]`` per token window (each padded to ``max_tokens``).
+
+        A fusion scorer (one whose config declares ``doc_embed_dim``) fails here;
+        :mod:`score_fusion` scores it with its document embeddings.
+        """
         ids = np.full((len(windows), self.max_tokens), PAD_ID, dtype=np.int32)
         last = len(self.remap_table) - 1
         for i, window in enumerate(windows):
@@ -84,11 +91,12 @@ class PooledScorer:
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
     """Load a `PooledScorer` from a model dir (streams the .eqx to a local path,
     which eqx deserialisation requires)."""
-    model_dir = model_dir.rstrip("/")
+    root = StoragePath(model_dir)
+    eqx_name, remap_name, meta_name = artifact_names(model_stem(model_dir))
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
-    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{MODEL_EQX}", "rb") as fh:
+    with os.fdopen(fd, "wb") as out, (root / eqx_name).open("rb") as fh:
         out.write(fh.read())
-    return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
+    return PooledScorer.load(local_eqx, str(root / remap_name), str(root / meta_name))
 
 
 def score_windowed(scorer: PooledScorer, docs: list[list[np.ndarray]]) -> np.ndarray:

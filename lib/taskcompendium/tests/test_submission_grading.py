@@ -6,18 +6,33 @@
 import json
 
 import pytest
-from shellbox.machine import Backend
 from verifyit.json_comparison import NumericTypePolicy
-from verifyit.spec import ExactSpec, McqSpec, NumericSpec, ScriptSpec, Spec, StructuredExactSpec
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    McqSpec,
+    NumericSpec,
+    ScriptSpec,
+    Spec,
+    StructuredExactSpec,
+)
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
+    CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    FinalAction,
+    FunctionDefinition,
     Grader,
     GradingAttempt,
     JsonAnswer,
@@ -34,7 +49,7 @@ from taskcompendium.runtime.task_grading import grade_task
 from taskcompendium.submission import submission_compatibility
 
 GRADING_ENVIRONMENT = EnvironmentRequirements(
-    docker_image="private/grader@sha256:" + "a" * 64, compatible_backends=(Backend.DOCKER,)
+    docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
 )
 
 
@@ -138,12 +153,172 @@ def test_duplicate_json_answer_is_submission_failure(content):
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
+def test_plain_text_passes_blank_candidates_to_a_verifier_that_grades_them():
+    task = _task(_grader(ExactSpec(expected=("",), empty_output=EmptyOutputPolicy.GRADE)))
+    result = grade_answer(task, _attempt(task, " \n"))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+
+
 def test_captured_null_state_is_a_submission_but_missing_state_is_not():
     task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)
     missing = grade_answer(task, _attempt(task, "Done."))
     captured = grade_answer(task, _attempt(task, "Done.", StateSubmission(None)))
     assert (missing.status, missing.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     assert (captured.status, captured.reward) == (Outcome.GRADED, 1.0)
+
+
+def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoint(judge_server):
+    response = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
+    )
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Public conversation and tool schema",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(require_call=True, max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
+
+    result = grade_task(
+        task,
+        attempt,
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert result.detail["verdict"] == "PASS"
+    assert len(judge_server.requests) == 1
+    prompt = judge_server.requests[0]["messages"][-1]["content"]
+    assert json.loads(prompt.split("\nCandidate: ", 1)[1]) == {
+        "type": "function_call",
+        "name": "lookup",
+        "arguments": {"query": "weather"},
+    }
+
+
+def test_runtime_requires_an_explicit_connection_for_judge_grading():
+    task = _task(verifyit_package(JudgeSpec(references=("answer",)), environment=GRADING_ENVIRONMENT).grader)
+    result = grade_task(task, _attempt(task, "candidate"))
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+
+
+def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Complete the task.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="empty-judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection("http://unused.invalid/v1", "secret"),
+    )
+
+    assert (result.status, result.reward, result.detail) == (
+        Outcome.GRADED,
+        0.0,
+        {"reason": "empty_candidate"},
+    )
+
+
+def test_remote_judge_grades_blank_plain_text_when_its_policy_requires_it(judge_server):
+    judge_server.reply = "C"
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"A": 1.0, "B": 0.0, "C": 0.5},
+            empty_output=EmptyOutputPolicy.GRADE,
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.5)
+    assert len(judge_server.requests) == 1
+
+
+def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_server):
+    judge_server.status_code = 400
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, "candidate"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+    assert len(judge_server.requests) == 1
 
 
 @pytest.mark.parametrize("state,reward", [("null", 1.0), ('{"value": 1}', 0.0)])

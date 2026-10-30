@@ -271,9 +271,6 @@ impl StatsService for StatsServiceImpl {
             .namespace
             .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
             .to_string();
-        // Copy the IPC bytes out of the borrowed request so the blocking decode
-        // owns them across the spawn_blocking boundary.
-        let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
@@ -283,16 +280,18 @@ impl StatsService for StatsServiceImpl {
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {
+            // The owned view keeps its backing bytes alive across the blocking hop.
+            let arrow_ipc = request.arrow_ipc.unwrap_or(&[]);
             if forwarded_telemetry {
                 return store.write_forwarded_telemetry_rows(
                     &ns,
-                    &arrow_ipc,
+                    arrow_ipc,
                     origin_cluster
                         .as_deref()
                         .expect("forwarded telemetry has an origin cluster"),
                 );
             }
-            store.write_ingestion_rows(&ns, &arrow_ipc, origin_cluster.as_deref())
+            store.write_ingestion_rows(&ns, arrow_ipc, origin_cluster.as_deref())
         })
         .await?;
         let ForwardedWrite {

@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 
-from infra.marina.applets.filer.server import app as filer
+from infra.marina.apps.filer.server import app as filer
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_parquet_large_group_allows_schema_then_narrow_projection(storage_client
     [
         (
             "rows.csv.gz",
-            gzip.compress(b'name,body\na,"line one\nline two"\n'),
+            gzip.compress(b'name,body\na,"line one\nline two"\n', mtime=0),
             [{"name": "a", "body": "line one\nline two"}],
         ),
         ("rows.jsonl", b'{"nested":{"a":[1,2]}}\n{"nested":null}\n', [{"nested": {"a": [1, 2]}}, {"nested": None}]),

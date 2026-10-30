@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import wandb
+from rigging.secrets import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def init_wandb(
     project: str = WANDB_PROJECT,
 ) -> wandb.sdk.wandb_run.Run | None:
     """
-    Initialize a wandb run if WANDB_API_KEY is set.
+    Initialize a wandb run if WANDB_API_KEY is available.
 
     Args:
         run_name: Name for the run. If not provided, uses WANDB_RUN_NAME env var
@@ -34,9 +35,10 @@ def init_wandb(
         project: Wandb project (defaults to WANDB_PROJECT).
 
     Returns:
-        The wandb run object if initialized, None if WANDB_API_KEY is not set.
+        The wandb run object if initialized, None if no key is available.
     """
-    if "WANDB_API_KEY" not in os.environ or not os.environ["WANDB_API_KEY"]:
+    key = get_secret("WANDB_API_KEY")
+    if not key:
         logger.info("WANDB_API_KEY not set, skipping wandb initialization.")
         return None
 
@@ -52,4 +54,5 @@ def init_wandb(
         name=run_name,
         tags=tags,
         config=config,
+        settings=wandb.Settings(api_key=key),
     )

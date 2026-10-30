@@ -9,8 +9,9 @@ import hashlib
 import tempfile
 from pathlib import Path
 
+from shellbox.backends.qemu.image import load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachineFactory
-from shellbox.machine import Command, MachineSpec, QemuBundle
+from shellbox.machine import Command, MachineSpec
 
 
 def disk_digest(bundle: Path) -> str:
@@ -27,7 +28,7 @@ async def main(bundle: Path) -> None:
         for child in bundle.iterdir():
             (mounted / child.name).symlink_to(child)
         factory = QemuMachineFactory(Acceleration.TCG)
-        spec = MachineSpec(QemuBundle(mounted))
+        spec = MachineSpec(load_qemu_bundle(mounted))
         first = await factory.create(spec)
         try:
             written = await first.run(Command(("/bin/sh", "-c", "echo first > /isolation-marker; sync")))

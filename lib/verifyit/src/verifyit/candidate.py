@@ -32,6 +32,7 @@ from verifyit.spec import (
     PredictedActionSpec,
     Spec,
     StructuredExactSpec,
+    UnsolvableSpec,
     mode_of,
     spec_from_table,
 )
@@ -105,6 +106,23 @@ def grade_candidate(spec: Spec, candidate: Candidate, resources: Mapping[str, by
     try:
         _validate(spec)
         return _grade(spec, candidate, resources)
+    except InvalidTask as error:
+        return invalid_task(str(error))
+    except GradingInfraError as error:
+        return infra_error(str(error), **error.detail)
+
+
+def grade_ejection_candidate(spec: Spec) -> Reward:
+    """Score a validated terminal ejection against the private task classification.
+
+    The caller validates the terminal action and its provenance. In-process task validation
+    retains the same invalid-task and infrastructure-error results as normal candidate grading.
+    Other modes receive zero without running their file grader.
+    """
+    try:
+        if supports_in_process(mode_of(spec)):
+            _validate(spec)
+        return scored(float(isinstance(spec, UnsolvableSpec)))
     except InvalidTask as error:
         return invalid_task(str(error))
     except GradingInfraError as error:

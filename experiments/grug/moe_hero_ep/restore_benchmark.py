@@ -49,7 +49,6 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.hero_recipe import (
-    HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
@@ -59,6 +58,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
+    hero_rack_batch_size,
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
@@ -246,7 +246,7 @@ def main(
     requests: int,
     replica_mode: str,
 ) -> None:
-    batch_size = HERO_EP_BATCH_SIZE * replica_groups
+    batch_size = hero_rack_batch_size(HERO_MODEL_CONFIG.max_seq_len) * replica_groups
     if model_size == HERO_MODEL_SIZE:
         model = with_transport_remat_mode(HERO_MODEL_CONFIG)
         _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)

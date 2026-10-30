@@ -8,9 +8,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from taskcompendium.models import (
+    TOOL_ARGUMENTS_OBJECT_ERROR,
+    AnswerCall,
     AssistantMessage,
     ConversationEvent,
     FunctionCall,
+    FunctionDefinition,
     TaskSpec,
     TextMessage,
     ToolResult,
@@ -26,6 +29,7 @@ from taskcompendium.runtime.models import (
     Termination,
 )
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.submission import answer_call_tool, visible_format
 
 
 @dataclass
@@ -63,7 +67,12 @@ async def run_episode(
     detail = ""
     try:
         environment = await factory.create(task)
-        public = ActorTask(task.id, task.interaction_tools)
+        final_tools = task.final_tools
+        if isinstance(visible_format(task.answer_format), AnswerCall):
+            final_tools = (*final_tools, FunctionDefinition.model_validate(answer_call_tool()["function"]))
+        tools = (*environment.tools, *final_tools)
+        final_names = {tool.name for tool in final_tools}
+        public = ActorTask(task.id, tools)
         for _ in range(max_steps):
             response = actor.respond(public, events)
             if isinstance(response, TextMessage) and response.role != "assistant":
@@ -72,9 +81,14 @@ async def run_episode(
             if isinstance(response, TextMessage):
                 termination = Termination.FINAL_MESSAGE
                 break
+            if any(call.name in final_names for call in response.calls):
+                termination = Termination.FINAL_MESSAGE
+                break
             for call in response.calls:
-                if call.name not in {tool.name for tool in task.interaction_tools}:
+                if call.name not in {tool.name for tool in tools}:
                     observation = json.dumps({"error": "Tool is not advertised"})
+                elif not isinstance(call.arguments, dict):
+                    observation = json.dumps({"error": TOOL_ARGUMENTS_OBJECT_ERROR})
                 else:
                     observation = await environment.step(FunctionCall(name=call.name, arguments=call.arguments))
                 events.append(ToolResult(call_id=call.call_id, content=observation))

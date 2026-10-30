@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from tempfile import SpooledTemporaryFile
 from typing import Any
 
-from taskcompendium.importers.nemo_predicted_action import canonical_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.conversion import ConvertedRow, convert_record
 from taskcompendium.pipeline.filtering import task_decision

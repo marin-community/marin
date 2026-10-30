@@ -18,28 +18,31 @@ import tempfile
 import threading
 import tomllib
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from rigging.filesystem.storage_path import prefix_join
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 from starlette.types import ASGIApp
 
+from marina.apps import RegisteredApi
 from marina.database_setup import (
     APPLET_READER_ROLE,
     APPLET_ROLE_PREFIX,
     MARINA_SCHEMA,
     PROVISION_APPLET_FUNCTION,
 )
-from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection
+from marina.db import DatabaseSpec, QueryEngineCache, engine_for, engine_for_role, grant_read_on_connection, schema_name
+from marina.host_bindings import migrate_host_bindings, normalize_hostname
+from marina.manifest import APP_NAME_PATTERN, KERNEL_PREFIXES, AgentPanelManifest, AppJob, agent_panel, app_jobs
 
 APPLET_MANIFEST = "applet.toml"
 DIST_PREFIX = "dist/"
-SERVER_PREFIX = "server/"
 INDEX_FILE = "dist/index.html"
 MAX_PACKAGE_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
@@ -50,7 +53,23 @@ MAX_QUERY_ROWS = 10_000
 MAX_QUERY_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_REVISIONS = 5
 BACKEND_VALIDATION_TIMEOUT = 15
-KNOWN_MANIFEST_KEYS = frozenset({"title", "description", "connect_src", "build_command", "python_entrypoint"})
+SCHEMA_ADOPTION_LOCK_TIMEOUT = "5s"
+KNOWN_MANIFEST_KEYS = frozenset(
+    {
+        "title",
+        "description",
+        "connect_src",
+        "build_command",
+        "python_entrypoint",
+        "name",
+        "data_url",
+        "jobs",
+        "agent",
+        "applet_id",
+        "source_paths",
+    }
+)
+SOURCE_EXCLUSIONS = frozenset({"tests", "journeys", "web", "dist", "node_modules", "__pycache__"})
 ENTRYPOINT_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
 BACKEND_CACHE_ROOT = Path(tempfile.gettempdir()) / "marina-applet-backends"
 APPLET_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"
@@ -115,6 +134,12 @@ class AppletManifest:
     connect_src: tuple[str, ...] = ()
     build_command: str | None = None
     python_entrypoint: str | None = None
+    name: str | None = None
+    data_url: str | None = None
+    jobs: tuple[AppJob, ...] = ()
+    agent: AgentPanelManifest | None = None
+    applet_id: str | None = None
+    source_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,13 +155,15 @@ class AppletSummary:
     id: uuid.UUID
     title: str
     description: str
-    owner: str
+    published_by: str
     current_version: int
     mode: AppletMode
+    published_at: datetime
+    name: str | None = None
 
     @property
     def path(self) -> str:
-        return f"/a/{self.id}/"
+        return f"/{self.name}/" if self.name is not None else f"/a/{self.id}/"
 
 
 @dataclass(frozen=True)
@@ -145,6 +172,13 @@ class AppletVersion:
     version: int
     manifest: AppletManifest
     digest: bytes
+
+
+@dataclass(frozen=True)
+class AppletSnapshot:
+    applet_id: uuid.UUID
+    version: int
+    package: AppletPackage
 
 
 @dataclass(frozen=True)
@@ -221,18 +255,34 @@ def parse_applet_manifest(content: bytes) -> AppletManifest:
         raise ValueError(f"{APPLET_MANIFEST}: 'connect_src' must be a list of strings")
     if any(not item or any(character.isspace() or character == ";" for character in item) for item in connect_src):
         raise ValueError(f"{APPLET_MANIFEST}: connect_src entries must be single CSP source expressions")
-    for optional in ("build_command", "python_entrypoint"):
+    for optional in ("build_command", "python_entrypoint", "data_url", "applet_id"):
         if optional in raw and not isinstance(raw[optional], str):
             raise ValueError(f"{APPLET_MANIFEST}: {optional!r} must be a string")
     entrypoint = raw.get("python_entrypoint")
     if entrypoint is not None and not ENTRYPOINT_PATTERN.fullmatch(entrypoint):
         raise ValueError(f"{APPLET_MANIFEST}: invalid python_entrypoint {entrypoint!r}")
+    name = raw.get("name")
+    if name is not None and (
+        not isinstance(name, str) or len(name) > 63 or not APP_NAME_PATTERN.fullmatch(name) or name in KERNEL_PREFIXES
+    ):
+        raise ValueError(f"{APPLET_MANIFEST}: invalid or reserved application name {name!r}")
+    source_paths = raw.get("source_paths", [])
+    if not isinstance(source_paths, list) or any(
+        not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts for path in source_paths
+    ):
+        raise ValueError("source_paths must be repository-relative paths")
     return AppletManifest(
         title=raw["title"].strip(),
         description=raw["description"].strip(),
         connect_src=tuple(connect_src),
         build_command=raw.get("build_command"),
         python_entrypoint=entrypoint,
+        name=name,
+        data_url=raw.get("data_url"),
+        jobs=app_jobs(raw.get("jobs", [])),
+        agent=agent_panel(raw["agent"]) if "agent" in raw else None,
+        applet_id=str(uuid.UUID(raw["applet_id"])) if "applet_id" in raw else None,
+        source_paths=tuple(source_paths),
     )
 
 
@@ -253,9 +303,9 @@ def _validate_package_files(files: dict[str, bytes]) -> AppletPackage:
     for path in files:
         if path == APPLET_MANIFEST or path.startswith(DIST_PREFIX):
             continue
-        if path.startswith(SERVER_PREFIX) and path.endswith(".py"):
+        if path.endswith(".py") and not SOURCE_EXCLUSIONS.intersection(PurePosixPath(path).parts):
             continue
-        raise ValueError(f"package entry {path!r} is outside applet.toml, dist/, or Python files under server/")
+        raise ValueError(f"package entry {path!r} is outside applet.toml, dist/, or application Python source")
     _validate_inline_scripts(files)
     if manifest.python_entrypoint is not None:
         module, _factory = manifest.python_entrypoint.split(":", 1)
@@ -263,8 +313,10 @@ def _validate_package_files(files: dict[str, bytes]) -> AppletPackage:
         package_file = module.replace(".", "/") + "/__init__.py"
         if module_file not in files and package_file not in files:
             raise ValueError(f"python_entrypoint module {module!r} is absent from the package")
-        if not module.startswith("server"):
-            raise ValueError("python_entrypoint must name a module under server/")
+    for job in manifest.jobs:
+        module = job.module.replace(".", "/")
+        if f"{module}.py" not in files and f"{module}/__init__.py" not in files:
+            raise ValueError(f"job module {job.module!r} is absent from the package")
     digest = hashlib.sha256()
     for path, body in sorted(files.items()):
         digest.update(path.encode())
@@ -306,58 +358,63 @@ def read_applet_package(payload: bytes) -> AppletPackage:
     return _validate_package_files(files)
 
 
-def package_applet(app_dir: Path) -> bytes:
-    """Build the validated tarball sent by ``marina publish``."""
+def package_applet(app_dir: Path, *, extra_files: dict[str, bytes] | None = None) -> bytes:
+    """Build a validated applet tarball, including optional generated files."""
     paths = [app_dir / APPLET_MANIFEST]
-    for directory in (app_dir / "dist", app_dir / "server"):
-        if directory.exists():
-            paths.extend(
-                path
-                for path in sorted(directory.rglob("*"))
-                if not path.is_dir()
-                and "__pycache__" not in path.relative_to(app_dir).parts
-                and path.suffix not in {".pyc", ".pyo"}
-            )
+    for path in sorted(app_dir.rglob("*")):
+        relative = path.relative_to(app_dir)
+        if path.is_dir() or any(part.startswith(".") for part in relative.parts):
+            continue
+        if relative.parts[0] == "dist" and path.suffix not in {".pyc", ".pyo"}:
+            paths.append(path)
+        elif path.suffix == ".py" and not SOURCE_EXCLUSIONS.intersection(relative.parts):
+            paths.append(path)
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for path in paths:
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"package entry {path} is not a regular file")
             archive.add(path, arcname=path.relative_to(app_dir).as_posix(), recursive=False)
+        for name, body in (extra_files or {}).items():
+            if (app_dir / name).exists():
+                raise ValueError(f"generated package entry {name!r} already exists in the source directory")
+            member = tarfile.TarInfo(name)
+            member.size = len(body)
+            archive.addfile(member, io.BytesIO(body))
     payload = buffer.getvalue()
     read_applet_package(payload)
     return payload
 
 
-def applet_schema(applet_id: uuid.UUID) -> str:
-    return f"{APPLET_ROLE_PREFIX}{applet_id.hex}"
+def applet_schema(applet_id: uuid.UUID, name: str | None = None) -> str:
+    return schema_name(name) if name is not None else applet_role(applet_id)
 
 
 def applet_role(applet_id: uuid.UUID) -> str:
-    return applet_schema(applet_id)
+    return f"{APPLET_ROLE_PREFIX}{applet_id.hex}"
 
 
 def _manifest_json(manifest: AppletManifest) -> str:
-    return json.dumps(
-        {
-            "title": manifest.title,
-            "description": manifest.description,
-            "connect_src": list(manifest.connect_src),
-            "build_command": manifest.build_command,
-            "python_entrypoint": manifest.python_entrypoint,
-        }
-    )
+    return json.dumps(asdict(manifest))
 
 
 def _manifest_from_json(value: dict[str, object]) -> AppletManifest:
     connect_src = value.get("connect_src", [])
     assert isinstance(connect_src, list)
+    source_paths = value.get("source_paths", [])
+    assert isinstance(source_paths, list)
     return AppletManifest(
         title=str(value["title"]),
         description=str(value["description"]),
         connect_src=tuple(str(item) for item in connect_src),
         build_command=str(value["build_command"]) if value.get("build_command") is not None else None,
         python_entrypoint=str(value["python_entrypoint"]) if value.get("python_entrypoint") is not None else None,
+        name=str(value["name"]) if value.get("name") is not None else None,
+        data_url=str(value["data_url"]) if value.get("data_url") is not None else None,
+        jobs=app_jobs(value.get("jobs", [])),
+        agent=agent_panel(value["agent"]) if value.get("agent") is not None else None,
+        applet_id=str(value["applet_id"]) if value.get("applet_id") is not None else None,
+        source_paths=tuple(str(item) for item in source_paths),
     )
 
 
@@ -367,6 +424,12 @@ class AppletStore:
     def __init__(self, database: DatabaseSpec):
         self.database = database
         self.engine = engine_for(database, MARINA_SCHEMA)
+        self._query_engines = QueryEngineCache(database)
+
+    def close(self) -> None:
+        """Dispose the registry pool and retire SQL-request pools."""
+        self._query_engines.close()
+        self.engine.dispose()
 
     def migrate(self) -> None:
         statements = (
@@ -374,7 +437,7 @@ class AppletStore:
                 id UUID PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
-                owner TEXT NOT NULL,
+                owner TEXT NOT NULL, -- Original publisher metadata; never used for authorization.
                 mode TEXT NOT NULL DEFAULT 'private' CHECK (mode IN ('private', 'public')),
                 current_version INTEGER,
                 archived_at TIMESTAMPTZ,
@@ -383,6 +446,7 @@ class AppletStore:
             )""",
             """ALTER TABLE applets ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'private'
                 CHECK (mode IN ('private', 'public'))""",
+            "ALTER TABLE applets ADD COLUMN IF NOT EXISTS name TEXT UNIQUE",
             """CREATE TABLE IF NOT EXISTS applet_versions (
                 applet_id UUID NOT NULL REFERENCES applets(id) ON DELETE CASCADE,
                 version INTEGER NOT NULL,
@@ -411,11 +475,13 @@ class AppletStore:
             )""",
             f"""CREATE OR REPLACE VIEW applet_catalog AS
                 SELECT a.id AS applet_id, a.title, a.owner,
-                       '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', '') AS schema_name,
+                       COALESCE(replace(a.name, '-', '_'),
+                                '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', '')) AS schema_name,
                        c.table_name, c.column_name, c.data_type, c.ordinal_position
                 FROM applets a
                 LEFT JOIN information_schema.columns c
-                  ON c.table_schema = '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', '')
+                  ON c.table_schema = COALESCE(replace(a.name, '-', '_'),
+                                               '{APPLET_ROLE_PREFIX}' || replace(a.id::TEXT, '-', ''))
                 WHERE a.archived_at IS NULL""",
             f"GRANT USAGE ON SCHEMA {MARINA_SCHEMA} TO {APPLET_READER_ROLE}",
             f"GRANT SELECT ON applet_catalog TO {APPLET_READER_ROLE}",
@@ -423,34 +489,98 @@ class AppletStore:
         with self.engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+            migrate_host_bindings(connection)
+
+    def host_applet(self, hostname: str) -> uuid.UUID | None:
+        """Resolve a hostname; disabled hosts raise to keep their origins isolated."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT applet_id FROM applet_hosts WHERE hostname = :hostname"),
+                {"hostname": hostname},
+            ).first()
+        if row is None:
+            return None
+        if row.applet_id is None:
+            raise AppletNotFound(hostname)
+        return row.applet_id
+
+    def host_bindings(self) -> dict[str, str | None]:
+        with self.engine.connect() as connection:
+            return {
+                row.hostname: str(row.applet_id) if row.applet_id is not None else None
+                for row in connection.execute(text("SELECT hostname, applet_id FROM applet_hosts ORDER BY hostname"))
+            }
+
+    def bind_host(self, hostname: str, applet_id: uuid.UUID) -> None:
+        """Bind a hostname to an active applet; callers must authorize the operator."""
+        hostname = normalize_hostname(hostname)
+        with self.engine.begin() as connection:
+            applet = connection.execute(
+                text("SELECT id FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                {"id": applet_id},
+            ).scalar()
+            if applet is None:
+                raise AppletNotFound(str(applet_id))
+            connection.execute(
+                text(
+                    "INSERT INTO applet_hosts (hostname, applet_id) VALUES (:hostname, :id) "
+                    "ON CONFLICT (hostname) DO UPDATE SET applet_id = EXCLUDED.applet_id, updated_at = now()"
+                ),
+                {"hostname": hostname, "id": applet_id},
+            )
+
+    def unbind_host(self, hostname: str) -> None:
+        """Disable routing while reserving the hostname's isolated applet origin."""
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text("UPDATE applet_hosts SET applet_id = NULL, updated_at = now() WHERE hostname = :hostname"),
+                {"hostname": normalize_hostname(hostname)},
+            )
+            if result.rowcount == 0:
+                raise AppletNotFound(hostname)
 
     def publish(
         self,
         package: AppletPackage,
-        owner: str,
+        publisher: str,
         applet_id: uuid.UUID | None = None,
         base_version: int | None = None,
         operators: frozenset[str] = frozenset(),
         mode: AppletMode | None = None,
+        *,
+        reader_roles: tuple[str, ...] = (),
     ) -> PublishResult:
         applet_id = applet_id or uuid.uuid4()
+        if package.manifest.applet_id is not None and package.manifest.applet_id != str(applet_id):
+            raise ValueError(
+                "Upload target differs from applet.toml's applet_id; supply the declared UUID and base version"
+            )
+        if package.manifest.name is None and (
+            package.manifest.data_url is not None or package.manifest.jobs or package.manifest.agent is not None
+        ):
+            raise ValueError("Data URLs, scheduled jobs and agent panels require a named application")
+        if package.manifest.name is not None and mode is AppletMode.PUBLIC:
+            raise ValueError("Named applications are private; public applets use the isolated applet origin")
         with self.engine.begin() as connection:
             self._lock_applet(connection, applet_id)
             version, effective_mode = self._allocate_version(
                 connection,
                 applet_id,
                 package.manifest,
-                owner,
+                publisher,
                 base_version,
                 operators,
                 mode,
             )
-            self._insert_version(connection, applet_id, version, package, owner)
+            self._insert_version(connection, applet_id, version, package, publisher)
             self._store_files(connection, applet_id, version, package.files)
             connection.execute(text(f'SET LOCAL ROLE "{applet_role(applet_id)}"'))
-            connection.execute(text(f'SET LOCAL search_path TO "{applet_schema(applet_id)}", public'))
+            schema = applet_schema(applet_id, package.manifest.name)
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
             self._run_migration(connection, applet_id, version, package)
-            grant_read_on_connection(connection, applet_schema(applet_id), APPLET_READER_ROLE)
+            grant_read_on_connection(connection, schema, APPLET_READER_ROLE)
+            for reader in reader_roles:
+                grant_read_on_connection(connection, schema, reader)
             connection.execute(text("RESET ROLE"))
             connection.execute(text("SET LOCAL search_path TO marina, public"))
             self._activate_version(connection, applet_id, version, package.manifest, effective_mode)
@@ -462,18 +592,16 @@ class AppletStore:
         connection.execute(text(APPLET_LOCK_SQL), {"id": str(applet_id)})
 
     @classmethod
-    def _authorize_versioned_mutation(
+    def _check_current_version(
         cls,
         connection: Connection,
         applet_id: uuid.UUID,
-        actor: str,
         base_version: int,
-        operators: frozenset[str],
     ) -> None:
         cls._lock_applet(connection, applet_id)
         applet = (
             connection.execute(
-                text("SELECT owner, current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                text("SELECT current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
                 {"id": applet_id},
             )
             .mappings()
@@ -481,8 +609,6 @@ class AppletStore:
         )
         if applet is None:
             raise AppletNotFound(str(applet_id))
-        if applet["owner"] != actor and actor not in operators:
-            raise AppletForbidden(str(applet_id))
         if int(applet["current_version"]) != base_version:
             raise AppletConflict(str(applet_id))
 
@@ -491,14 +617,14 @@ class AppletStore:
         connection: Connection,
         applet_id: uuid.UUID,
         manifest: AppletManifest,
-        owner: str,
+        publisher: str,
         base_version: int | None,
         operators: frozenset[str],
         mode: AppletMode | None,
     ) -> tuple[int, AppletMode]:
         existing = (
             connection.execute(
-                text("SELECT owner, mode, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
+                text("SELECT mode, current_version, archived_at, name FROM applets WHERE id = :id FOR UPDATE"),
                 {"id": applet_id},
             )
             .mappings()
@@ -507,8 +633,8 @@ class AppletStore:
         if existing is not None:
             if existing["archived_at"] is not None:
                 raise AppletNotFound(str(applet_id))
-            if existing["owner"] != owner and owner not in operators:
-                raise AppletForbidden(str(applet_id))
+            if existing["name"] != manifest.name:
+                raise ValueError("An application's registered name cannot change")
             if base_version is None or existing["current_version"] != base_version:
                 raise AppletConflict(str(applet_id))
             version = int(
@@ -519,24 +645,60 @@ class AppletStore:
             )
             effective_mode = AppletMode(existing["mode"]) if mode is None else mode
             return version, effective_mode
-        if base_version is not None:
+        if base_version not in (None, 0):
             raise AppletNotFound(str(applet_id))
+        if manifest.name is not None and publisher not in operators:
+            raise AppletForbidden("Only an operator may register a named application")
+        if manifest.name is not None:
+            connection.execute(text(APPLET_LOCK_SQL), {"id": f"marina:name:{manifest.name}"})
+            if connection.execute(text("SELECT 1 FROM applets WHERE name = :name"), {"name": manifest.name}).scalar():
+                raise AppletConflict(f"Application name {manifest.name!r} is already registered")
         effective_mode = mode or AppletMode.PRIVATE
         connection.execute(text(f"SELECT {PROVISION_APPLET_FUNCTION}(:id)"), {"id": applet_id})
+        if manifest.name is not None:
+            AppletStore._adopt_schema(connection, schema_name(manifest.name), applet_role(applet_id))
         connection.execute(
             text(
-                "INSERT INTO applets (id, title, description, owner, mode) "
-                "VALUES (:id, :title, :description, :owner, :mode)"
+                "INSERT INTO applets (id, title, description, owner, mode, name) "
+                "VALUES (:id, :title, :description, :publisher, :mode, :name)"
             ),
             {
                 "id": applet_id,
                 "title": manifest.title,
                 "description": manifest.description,
-                "owner": owner,
+                "publisher": publisher,
                 "mode": effective_mode.value,
+                "name": manifest.name,
             },
         )
         return 1, effective_mode
+
+    @staticmethod
+    def _adopt_schema(connection: Connection, schema: str, role: str) -> None:
+        """Keep existing application data while transferring its schema to the package role."""
+        connection.execute(text(f"SET LOCAL lock_timeout = '{SCHEMA_ADOPTION_LOCK_TIMEOUT}'"))
+        connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}" AUTHORIZATION "{role}"'))
+        connection.execute(text(f'ALTER SCHEMA "{schema}" OWNER TO "{role}"'))
+        relations = connection.execute(
+            text(
+                "SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = :schema AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') "
+                "AND (c.relkind <> 'S' OR NOT EXISTS (SELECT 1 FROM pg_depend d "
+                "WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype IN ('a', 'i')))"
+            ),
+            {"schema": schema},
+        ).all()
+        kinds = {
+            "r": "TABLE",
+            "p": "TABLE",
+            "v": "VIEW",
+            "m": "MATERIALIZED VIEW",
+            "S": "SEQUENCE",
+            "f": "FOREIGN TABLE",
+        }
+        for name, kind in relations:
+            quoted = connection.dialect.identifier_preparer.quote_identifier(name)
+            connection.execute(text(f'ALTER {kinds[kind]} "{schema}".{quoted} OWNER TO "{role}"'))
 
     @staticmethod
     def _insert_version(
@@ -544,13 +706,13 @@ class AppletStore:
         applet_id: uuid.UUID,
         version: int,
         package: AppletPackage,
-        owner: str,
+        publisher: str,
     ) -> None:
         connection.execute(
             text(
                 "INSERT INTO applet_versions "
                 "(applet_id, version, manifest, package_digest, byte_size, published_by) "
-                "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :owner)"
+                "VALUES (:id, :version, CAST(:manifest AS jsonb), :digest, :byte_size, :publisher)"
             ),
             {
                 "id": applet_id,
@@ -558,7 +720,7 @@ class AppletStore:
                 "manifest": _manifest_json(package.manifest),
                 "digest": package.digest,
                 "byte_size": package.byte_size,
-                "owner": owner,
+                "publisher": publisher,
             },
         )
 
@@ -674,8 +836,10 @@ class AppletStore:
         with self.engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT id, title, description, owner, current_version, mode FROM applets "
-                    "WHERE archived_at IS NULL AND current_version IS NOT NULL ORDER BY title, id"
+                    "SELECT a.id, a.title, a.description, v.published_by, v.published_at, "
+                    "a.current_version, a.mode, a.name "
+                    "FROM applets a JOIN applet_versions v ON v.applet_id = a.id AND v.version = a.current_version "
+                    "WHERE a.archived_at IS NULL ORDER BY a.title, a.id"
                 )
             ).mappings()
             return [
@@ -683,12 +847,49 @@ class AppletStore:
                     id=row["id"],
                     title=row["title"],
                     description=row["description"],
-                    owner=row["owner"],
+                    published_by=row["published_by"],
                     current_version=row["current_version"],
                     mode=AppletMode(row["mode"]),
+                    published_at=row["published_at"],
+                    name=row["name"],
                 )
                 for row in rows
             ]
+
+    def named_applet(self, name: str) -> AppletSummary:
+        for applet in self.active_applets():
+            if applet.name == name:
+                return applet
+        raise AppletNotFound(name)
+
+    def schema(self, applet_id: uuid.UUID) -> str:
+        with self.engine.connect() as connection:
+            row = connection.execute(text("SELECT name FROM applets WHERE id = :id"), {"id": applet_id}).first()
+        if row is None:
+            raise AppletNotFound(str(applet_id))
+        return applet_schema(applet_id, row[0])
+
+    def snapshots(self, runner: str) -> tuple[AppletSnapshot, ...]:
+        """Read a runner's current packages atomically so pruning cannot race its snapshot."""
+        with self.engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT a.id, a.current_version, f.path, b.inline_bytes FROM applets a "
+                        "JOIN applet_versions v ON v.applet_id = a.id AND v.version = a.current_version "
+                        "JOIN applet_files f ON f.applet_id = v.applet_id AND f.version = v.version "
+                        "JOIN blobs b ON b.id = f.blob_id WHERE a.archived_at IS NULL "
+                        "AND v.manifest->'jobs' @> CAST(:jobs AS jsonb) ORDER BY a.id, f.path"
+                    ),
+                    {"jobs": json.dumps([{"runner": runner}])},
+                )
+                .mappings()
+                .all()
+            )
+        files: dict[tuple[uuid.UUID, int], dict[str, bytes]] = {}
+        for row in rows:
+            files.setdefault((row["id"], row["current_version"]), {})[row["path"]] = bytes(row["inline_bytes"])
+        return tuple(AppletSnapshot(key[0], key[1], _validate_package_files(value)) for key, value in files.items())
 
     def access_mode(self, applet_id: uuid.UUID) -> AppletMode:
         with self.engine.connect() as connection:
@@ -704,12 +905,16 @@ class AppletStore:
         self,
         applet_id: uuid.UUID,
         mode: AppletMode,
-        actor: str,
         base_version: int,
-        operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
+            self._check_current_version(connection, applet_id, base_version)
+            if (
+                mode is AppletMode.PUBLIC
+                and connection.execute(text("SELECT name FROM applets WHERE id = :id"), {"id": applet_id}).scalar_one()
+                is not None
+            ):
+                raise ValueError("Named applications remain private")
             connection.execute(
                 text("UPDATE applets SET mode = :mode, updated_at = now() WHERE id = :id"),
                 {"id": applet_id, "mode": mode.value},
@@ -772,12 +977,10 @@ class AppletStore:
         self,
         applet_id: uuid.UUID,
         version: int,
-        actor: str,
         base_version: int,
-        operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
+            self._check_current_version(connection, applet_id, base_version)
             exists = connection.execute(
                 text("SELECT 1 FROM applet_versions WHERE applet_id = :id AND version = :version"),
                 {"id": applet_id, "version": version},
@@ -789,11 +992,11 @@ class AppletStore:
                 {"id": applet_id, "version": version},
             )
 
-    def archive(self, applet_id: uuid.UUID, actor: str, operators: frozenset[str] = frozenset()) -> None:
+    def archive(self, applet_id: uuid.UUID) -> None:
         with self.engine.begin() as connection:
             applet = (
                 connection.execute(
-                    text("SELECT owner FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                    text("SELECT id FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
                     {"id": applet_id},
                 )
                 .mappings()
@@ -801,8 +1004,6 @@ class AppletStore:
             )
             if applet is None:
                 raise AppletNotFound(str(applet_id))
-            if applet["owner"] != actor and actor not in operators:
-                raise AppletForbidden(str(applet_id))
             connection.execute(
                 text("UPDATE applets SET archived_at = now(), updated_at = now() WHERE id = :id"), {"id": applet_id}
             )
@@ -875,8 +1076,7 @@ class AppletStore:
     def query(self, applet_id: uuid.UUID, sql: str, parameters: dict[str, object]) -> dict[str, object]:
         self.current_version(applet_id)
         command = validate_query(sql)
-        engine = engine_for_role(self.database, applet_schema(applet_id), applet_role(applet_id))
-        try:
+        with self._query_engines.engine(self.schema(applet_id), applet_role(applet_id)) as engine:
             with engine.begin() as connection:
                 connection.execute(text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_MS}ms'"))
                 if command in {"SELECT", "WITH"}:
@@ -907,8 +1107,6 @@ class AppletStore:
                 if result.returns_rows:
                     raise InvalidQuery(f"{command} statements may not return rows")
                 return {"columns": [], "rows": [], "row_count": result.rowcount}
-        finally:
-            engine.dispose()
 
 
 @dataclass(frozen=True)
@@ -918,9 +1116,12 @@ class AppletServices:
     applet_id: uuid.UUID
     version: int
     database: DatabaseSpec
+    name: str
+    data_url: str
+    schema: str
 
     def engine(self) -> Engine:
-        return engine_for_role(self.database, applet_schema(self.applet_id), applet_role(self.applet_id))
+        return engine_for_role(self.database, self.schema, applet_role(self.applet_id))
 
 
 def validate_query(sql: str) -> str:
@@ -954,11 +1155,11 @@ def _module_name(applet_id: uuid.UUID, version: int, digest: bytes) -> str:
     return f"marina_applet_{applet_id.hex}_v{version}_{digest.hex()[:12]}"
 
 
-def _materialize_package(module_root: Path, package: AppletPackage) -> None:
+def materialize_package(module_root: Path, package: AppletPackage) -> None:
     module_root.mkdir(parents=True, exist_ok=True)
     (module_root / "__init__.py").touch()
     for path, body in package.files.items():
-        if not path.startswith(SERVER_PREFIX):
+        if not path.endswith(".py") or path.startswith(DIST_PREFIX):
             continue
         target = module_root / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -967,11 +1168,14 @@ def _materialize_package(module_root: Path, package: AppletPackage) -> None:
 
 def validate_backend_import(package: AppletPackage) -> None:
     """Import a Python backend with Marina's module layout and without environment credentials."""
-    if package.manifest.python_entrypoint is None:
+    entrypoints = [job.module for job in package.manifest.jobs]
+    if package.manifest.python_entrypoint is not None:
+        entrypoints.insert(0, package.manifest.python_entrypoint)
+    if not entrypoints:
         return
     with tempfile.TemporaryDirectory(prefix="marina-applet-validate-") as directory:
         module_root = Path(directory) / "candidate"
-        _materialize_package(module_root, package)
+        materialize_package(module_root, package)
         environment = {name: os.environ[name] for name in ("PATH", "LANG", "LC_ALL") if name in os.environ}
         try:
             result = subprocess.run(
@@ -981,7 +1185,7 @@ def validate_backend_import(package: AppletPackage) -> None:
                     "-m",
                     "marina.applet_validator",
                     str(module_root),
-                    package.manifest.python_entrypoint,
+                    *entrypoints,
                 ],
                 capture_output=True,
                 text=True,
@@ -1001,7 +1205,7 @@ def load_backend_entrypoint(applet_id: uuid.UUID, version: int, package: AppletP
     module_path, factory_name = package.manifest.python_entrypoint.split(":", 1)
     root_name = _module_name(applet_id, version, package.digest)
     module_root = BACKEND_CACHE_ROOT / root_name
-    _materialize_package(module_root, package)
+    materialize_package(module_root, package)
     cache_parent = str(BACKEND_CACHE_ROOT)
     if cache_parent not in sys.path:
         sys.path.insert(0, cache_parent)
@@ -1020,10 +1224,11 @@ def remove_backend_revision(applet_id: uuid.UUID, version: int, digest: bytes) -
 class AppletRuntime:
     """Load and retain revision-specific ASGI applications."""
 
-    def __init__(self, store: AppletStore):
+    def __init__(self, store: AppletStore, data_root: str = ""):
         self.store = store
+        self.data_root = data_root
         self._apis: dict[tuple[uuid.UUID, int], ASGIApp] = {}
-        self._failures: dict[tuple[uuid.UUID, int], str] = {}
+        self._registered: dict[tuple[uuid.UUID, int], RegisteredApi] = {}
         self._digests: dict[tuple[uuid.UUID, int], bytes] = {}
         self._initializers: dict[tuple[uuid.UUID, int], threading.Lock] = {}
         self._lock = threading.Lock()
@@ -1036,15 +1241,11 @@ class AppletRuntime:
             self.retain_versions(applet_id, self._retained_versions(applet_id))
             raise
         with self._lock:
-            if key in self._failures:
-                raise AppletBackendUnavailable(self._failures[key])
             if key in self._apis:
                 return self._apis[key]
             initializer = self._initializers.setdefault(key, threading.Lock())
         with initializer:
             with self._lock:
-                if key in self._failures:
-                    raise AppletBackendUnavailable(self._failures[key])
                 if key in self._apis:
                     return self._apis[key]
             package = self.store.package(applet_id, version)
@@ -1053,15 +1254,28 @@ class AppletRuntime:
             try:
                 module, factory_name = load_backend_entrypoint(applet_id, version, package)
                 factory = getattr(module, factory_name)
-                candidate = factory(AppletServices(applet_id=applet_id, version=version, database=self.store.database))
+                manifest = package.manifest
+                name = manifest.name or str(applet_id)
+                candidate = factory(
+                    AppletServices(
+                        applet_id=applet_id,
+                        version=version,
+                        database=self.store.database,
+                        name=name,
+                        data_url=manifest.data_url or prefix_join(self.data_root, name),
+                        schema=self.store.schema(applet_id),
+                    )
+                )
+                if isinstance(candidate, RegisteredApi):
+                    with self._lock:
+                        self._registered[key] = candidate
+                    candidate = candidate.app
                 if not callable(candidate):
                     raise TypeError("create_api did not return an ASGI application")
                 api = cast(ASGIApp, candidate)
             except Exception as error:
                 remove_backend_revision(applet_id, version, package.digest)
                 message = f"{type(error).__name__}: {error}"
-                with self._lock:
-                    self._failures[key] = message
                 raise AppletBackendUnavailable(message) from error
             with self._lock:
                 self._apis[key] = api
@@ -1072,6 +1286,11 @@ class AppletRuntime:
                 self.retain_versions(applet_id, self._retained_versions(applet_id))
                 raise
             return api
+
+    def registered_api(self, applet_id: uuid.UUID, version: int) -> RegisteredApi | None:
+        self.api(applet_id, version)
+        with self._lock:
+            return self._registered.get((applet_id, version))
 
     def _retained_versions(self, applet_id: uuid.UUID) -> set[int]:
         try:
@@ -1086,10 +1305,8 @@ class AppletRuntime:
             stale_apis = [key for key in self._apis if key[0] == applet_id and key[1] not in versions]
             for key in stale_apis:
                 self._apis.pop(key)
+                self._registered.pop(key, None)
                 removed.append((key[1], self._digests.pop(key)))
-            stale_failures = [key for key in self._failures if key[0] == applet_id and key[1] not in versions]
-            for key in stale_failures:
-                self._failures.pop(key)
             stale_initializers = [key for key in self._initializers if key[0] == applet_id and key[1] not in versions]
             for key in stale_initializers:
                 self._initializers.pop(key)

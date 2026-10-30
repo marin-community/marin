@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate and execute Harbor policies inside the pinned external environment."""
+"""Validate and execute Harbor policies inside its isolated runtime environment."""
 
 import asyncio
 import hashlib
@@ -18,6 +18,7 @@ from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
+import fsspec.config
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
@@ -33,6 +34,8 @@ from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
+from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
@@ -41,13 +44,15 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
+from marin.evaluation.harbor.provenance import vendored_harbor_source
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _PI_ACP_REGISTRY_ID = "pi-acp"
+_PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -255,6 +260,12 @@ def _terminus_llm_call_kwargs(
     return {**call_kwargs, _MAX_TOKENS_KEY: max_tokens}
 
 
+def _pinned_pi_agent[T: AgentConfig](agent: T) -> T:
+    if agent.name != AgentName.PI:
+        return agent
+    return agent.model_copy(update={"kwargs": {**agent.kwargs, "version": _PI_VERSION}})
+
+
 def _agent_config(
     agent: AgentConfig,
     *,
@@ -265,14 +276,20 @@ def _agent_config(
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
-    return AgentConfig.model_validate(
+    runtime_env = agent.env
+    if agent.name is not None and is_acp_registry_shorthand(agent.name):
+        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
+    configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
+            "env": runtime_env,
         },
         extra="forbid",
     )
+
+    return _pinned_pi_agent(configured)
 
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
@@ -334,6 +351,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "job_name": overlay.job_name,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
+            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
             "archive": ArchiveConfig(
@@ -352,6 +370,7 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "job_name": _STABLE_JOB_NAME,
             "jobs_dir": _STABLE_JOBS_DIR,
             "agents": [agent],
+            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
         }
     )
     return JobConfig.model_validate(stable.model_dump(mode="json"), extra="forbid")
@@ -381,12 +400,16 @@ def _stable_policy_json(config: JobConfig) -> str:
 
 
 def _harbor_config_commit() -> str:
-    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
-    direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
-    commit = direct_url.get("vcs_info", {}).get("commit_id")
-    if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
-        raise ValueError("Harbor distribution does not identify its pinned commit")
-    return commit
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise ValueError("Harbor driver requires a Marin workspace to locate its vendored source")
+    project = workspace_root / "vendor/harbor"
+    direct_url = json.loads(importlib.metadata.distribution("harbor").read_text("direct_url.json") or "{}")
+    if direct_url.get("url") != project.resolve().as_uri() or not Path(
+        inspect.getfile(JobConfig)
+    ).resolve().is_relative_to(project / "src"):
+        raise ValueError(f"Harbor distribution must use the vendored source at {project}")
+    return vendored_harbor_source(project).commit
 
 
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -513,6 +536,9 @@ def _diagnostic(exc: Exception) -> str:
 
 def main() -> None:
     try:
+        # Harbor uses UPath directly, so configure its filesystem credentials
+        # before parsing remote job paths or starting artifact writers.
+        fsspec.config.conf.setdefault("s3", {}).update(s3_credential_options())
         command = sys.argv[1]
         if command == "preflight":
             _preflight(Path(sys.argv[2]))
