@@ -22,15 +22,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import jinja2
 from marin.inference.openai_chat import OpenAIChatClient
 from transformers import AutoTokenizer
+from transformers.utils.chat_template_utils import _compile_jinja_template
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, FAMILY_TOKENIZER_REVISIONS, shared_template
 from experiments.post_training.glm import (
     GLM_BULK_TOKEN_ENV,
     GLM_REQUEST_ATTEMPTS,
-    GLM_REQUEST_TIMEOUT,
     resolve_glm_base_url,
 )
 
@@ -42,9 +41,13 @@ class ChatClient(Protocol):
     def complete(self, body: Mapping[str, Any]) -> dict[str, Any]: ...
 
 
-def glm_chat_client(relay_job: str) -> OpenAIChatClient:
-    """A client for the GLM relay registered by ``relay_job``; reads the bulk token from the environment."""
-    return OpenAIChatClient(resolve_glm_base_url(relay_job), os.environ[GLM_BULK_TOKEN_ENV], timeout=GLM_REQUEST_TIMEOUT)
+def glm_chat_client(relay_job: str, *, timeout: float) -> OpenAIChatClient:
+    """A client for the GLM relay registered by ``relay_job``; reads the bulk token from the environment.
+
+    The relay answers only once the whole completion is generated, so ``timeout``
+    must cover the longest completion ``max_tokens`` allows.
+    """
+    return OpenAIChatClient(resolve_glm_base_url(relay_job), os.environ[GLM_BULK_TOKEN_ENV], timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -66,24 +69,25 @@ def chat_completion(
 ) -> ExpertResponse:
     """One chat completion with the sampling parameters set explicitly.
 
-    Transport failures are retried up to ``GLM_REQUEST_ATTEMPTS`` times. A response
+    Transport failures and read timeouts are retried up to ``GLM_REQUEST_ATTEMPTS`` times. A response
     that ran into ``max_tokens`` is marked ``truncated``; callers set ``max_tokens``
     above the cap, so a truncated response is over the cap and is dropped.
-    ``reasoning_content`` is the chain-of-thought field the GLM relay and vLLM's
-    reasoning parsers emit; a provider that omits it leaves the reasoning empty.
+    The chain of thought arrives as ``reasoning`` from the GLM relay and as
+    ``reasoning_content`` from vLLM's reasoning parsers; a provider that sends
+    neither leaves the reasoning empty.
     """
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
     for attempt in range(GLM_REQUEST_ATTEMPTS):
         try:
             response = client.complete(body)
             break
-        except ConnectionError:
+        except (ConnectionError, TimeoutError):
             if attempt == GLM_REQUEST_ATTEMPTS - 1:
                 raise
     choice = response["choices"][0]
     message = choice["message"]
     return ExpertResponse(
-        reasoning=message.get("reasoning_content") or "",
+        reasoning=message.get("reasoning") or message.get("reasoning_content") or "",
         content=message.get("content") or "",
         truncated=choice.get("finish_reason") == "length",
     )
@@ -105,8 +109,9 @@ def token_counter(tokenizer) -> Callable[[str], int]:
 
 
 @functools.cache
-def _assistant_template(family: str) -> jinja2.Template:
-    return jinja2.Environment().from_string(shared_template(FAMILY_TOKEN_MAPS[family]))
+def _assistant_template(family: str):
+    # transformers' environment: the template's {% generation %} masking tag needs its extension.
+    return _compile_jinja_template(shared_template(FAMILY_TOKEN_MAPS[family]))
 
 
 def rendered_completion_text(family: str, response: ExpertResponse) -> str:
