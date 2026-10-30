@@ -314,8 +314,6 @@ class GrugTrainerConfig:
     gc_interval: int | None = None
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
-    # Rescale the whole gradient to this global L2 norm when it is larger; None disables clipping.
-    # The clip runs in the train step before the optimizer, so it adds no optimizer state.
     max_grad_norm: float | None = None
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
