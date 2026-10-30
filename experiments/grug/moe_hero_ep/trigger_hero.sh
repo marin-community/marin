@@ -14,8 +14,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 # Permanent checkpoint N, requested on hero-ctx16k-step257k through its training-control endpoint, resumes
 # at global_step N. Parent W&B _step N-1 records global_step N-1.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ctx16k-step257k/2026.08.19.2/checkpoints/step-REPLACE_BEFORE_DEPLOYMENT
-WANDB_FORK_FROM='hero-ctx16k-step257k?_step=REPLACE_BEFORE_DEPLOYMENT'
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-ctx16k-step257k/2026.08.19.2/checkpoints/step-356531
+WANDB_FORK_FROM='hero-ctx16k-step257k?_step=356530'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506

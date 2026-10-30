@@ -35,8 +35,7 @@ Changelog:
     2026-10-14 (#9615): the hero trains at 16K context with qk_mult 1.48 from step 257553.
         hero-ctx16k-step257k forks hero-mfu30-step231k at permanent step 257553 (see ``trigger_hero.sh``).
     2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step.
-        hero-gradclip-stepREPLACE_BEFORE_DEPLOYMENTk forks hero-ctx16k-step257k at permanent step
-        REPLACE_BEFORE_DEPLOYMENT (see ``trigger_hero.sh``).
+        hero-gradclip-step356k forks hero-ctx16k-step257k at permanent step 356531 (see ``trigger_hero.sh``).
 """
 
 import dataclasses
