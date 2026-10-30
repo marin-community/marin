@@ -1,14 +1,14 @@
 # cloudsql
 
 A shared Cloud SQL for PostgreSQL instance, `marin-metadata`, for Marin's internal metadata:
-Grafana's state (the `grafana` database) and eval run records (the `evals` database). It also
+Grafana's state (`grafana`), eval run records (`evals`) and performance results (`inferencex`). It also
 declares `marin-eval-metadata`, a GCS bucket for eval run records.
 
 The instance has a public IP with no authorized networks, so nothing dials it directly.
 Consumers connect through the Cloud SQL connector/auth-proxy — Cloud Run mounts the socket
 under `/cloudsql` (see `iac.gcp.cloud_run.CloudRunService.cloudsql_instances`).
 
-Pulumi owns the instance, the two databases, the two Secret Manager secret *shells*, and the
+Pulumi owns the instance, the databases, their Secret Manager secret *shells*, and the
 bucket. It does not own the SQL users or their passwords: a password passed to Pulumi would
 land in stack state. Users and secret values are set out-of-band with `gcloud` (below). This
 directory is its own Pulumi project, runs on the shared repo venv, and shares `infra/pulumi`'s
@@ -35,6 +35,12 @@ identity can decrypt.
 `cloudsql-grafana-password` and `cloudsql-evals-password` secret shells, and the
 `marin-eval-metadata` bucket. Outputs: `connection_name` (the `project:region:instance`
 connector target), `public_ip`, and `eval_bucket`.
+
+The performance dashboard adds the `inferencex` database and
+`cloudsql-inferencex-reader-password` / `cloudsql-inferencex-writer-password` secret shells.
+Its restricted SQL roles, migration ownership and activation order are documented in
+[`../inferencex/README.md`](../inferencex/README.md). Do not grant the web reader the elevated
+membership of a default Cloud SQL native user.
 
 ## Users and passwords (out-of-band)
 
