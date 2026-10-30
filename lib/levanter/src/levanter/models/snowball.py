@@ -571,10 +571,8 @@ class SnowballMoEMLP(eqx.Module):
             cfg=cfg,
         )
 
-    @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        b, s, _ = x.shape
-        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
+    def _route(self, x_flat: Float[Array, "T D"]) -> tuple[Int[Array, "T K"], Float[Array, "T K"]]:
+        """Selected experts (top-k on biased logits) and their combine weights (unbiased sigmoid)."""
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
@@ -588,16 +586,25 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        return selected_experts.astype(jnp.int32), combine_weights_f
 
+    def forward_with_load(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], Int[Array, " E"]]:
+        """The routed output and the number of tokens routed to each expert."""
+        b, s, _ = x.shape
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
+        selected_experts, combine_weights_f = self._route(x_flat)
         routed_flat = self.expert_mlp(
             x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
+            selected_experts,
+            combine_weights_f.astype(x.dtype),
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
+        load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32).at[unshard(selected_experts).reshape(-1)].add(1)
+        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec()), load
+
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        return self.forward_with_load(x)[0]
 
 
 class SnowballBlock(eqx.Module):
@@ -632,6 +639,16 @@ class SnowballBlock(eqx.Module):
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
     ) -> Float[Array, "B S D"]:
+        return self.forward_with_load(x, short_mask, long_mask, use_long)[0]
+
+    def forward_with_load(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: Bool[Array, ""],
+    ) -> tuple[Float[Array, "B S D"], Int[Array, " E"]]:
+        """The block output and its routed-expert load (unused loads are dead code under jit)."""
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -644,8 +661,8 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
-        return x + mlp_out
+        routed, load = self.mlp.forward_with_load(mlp_in)
+        return x + (routed + self.shared(mlp_in)), load
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -723,6 +740,24 @@ class SnowballTransformer(eqx.Module):
         hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
 
+    def expert_loads(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Int[Array, "L E"]:
+        """Tokens routed to each expert in each layer over ``token_ids`` (forward only)."""
+        cfg = self.config
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
+        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
+
+        def _scan_layer(carry, layer_and_flag):
+            layer, use_long = layer_and_flag
+            return layer.forward_with_load(carry, short_mask, long_mask, use_long)
+
+        _, loads = jax.lax.scan(_scan_layer, hidden, (stacked, long_attention_layer_mask(len(self.blocks))))
+        return loads
+
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
 
@@ -758,15 +793,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
+        # The transformer core builds its own per-layer short/long causal masks; only the packed
+        # segment ids carry over from ``attn_mask``, so packed documents never attend across.
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
-        hidden = self.transformer(tokens)  # [B, S, D]
+        hidden = self.transformer(tokens, _segment_mask(attn_mask, input_ids, b, s))  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
@@ -791,6 +826,36 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
         return SnowballLMHeadModel(new_tf, self._config)
+
+
+def _segment_mask(
+    attn_mask: Optional[LmHeadAttentionMask | NamedArray], input_ids: NamedArray, b: int, s: int
+) -> AttentionMask | None:
+    """The causal grug mask carrying ``attn_mask``'s packed segment ids as ``[B, S]`` arrays.
+
+    Returns ``None`` (plain causal) when the mask has no segment ids. Dense or non-causal masks
+    are rejected: the core's per-layer windows define everything except document boundaries.
+    """
+    if attn_mask is None:
+        return None
+    if not isinstance(attn_mask, LmHeadAttentionMask):
+        raise NotImplementedError("Snowball accepts only a structured causal AttentionMask, not a dense mask.")
+    if not attn_mask.is_causal or attn_mask.explicit_mask is not None:
+        raise NotImplementedError("Snowball supports only causal attention masks, optionally with segment ids.")
+    if attn_mask.segment_ids is None:
+        return None
+    q_named, kv_named = attn_mask.segment_ids
+    input_names = {axis.name for axis in input_ids.axes}
+    pos_name = input_ids.axes[-1].name
+
+    def flat(segments: NamedArray) -> jax.Array:
+        # A kv segment array names its sequence axis after the key positions; align it to the query's.
+        segments = segments.rename({axis.name: pos_name for axis in segments.axes if axis.name not in input_names})
+        return hax.broadcast_to(segments, input_ids.axes).array.reshape(b, s).astype(jnp.int32)
+
+    q_segments = flat(q_named)
+    kv_segments = q_segments if kv_named is q_named else flat(kv_named)
+    return AttentionMask(is_causal=True, segment_ids=(q_segments, kv_segments))
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
