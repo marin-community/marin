@@ -16,8 +16,10 @@ Evalchemy's [permissive extraction change](https://github.com/marin-community/ev
 also accepts trailing boxed numbers, inline math, equations, explicit answer
 lines, a bare number on the last line, and a type-valid numeric suffix after a
 sentence-ending period. It also recovers a terminal numeric token that exactly
-repeats the reference answer twice without a separator; a larger number that
-merely ends with that repetition does not qualify. The extracted answer stored
+repeats the reference answer twice without a separator, provided the preceding
+content separately states the same final answer. A doubled token alone is
+ambiguous and does not qualify. Periods immediately after digits do not count
+as sentence boundaries. The extracted answer stored
 with each sample is the one actually used for scoring. The grader discards
 content before the last `<|end_think|>` marker and rejects an unfinished
 `<|start_think|>` block.

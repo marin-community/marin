@@ -52,11 +52,8 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     """Extract a direct or clearly marked final numeric answer."""
     if answer_format not in _ANSWER_PATTERNS:
         raise ValueError(f"Unsupported NUPA answer format: {answer_format}")
+    text = _final_content(text)
     if text is None:
-        return None
-    if "<|end_think|>" in text:
-        text = text.rsplit("<|end_think|>", 1)[1]
-    if "<|start_think|>" in text:
         return None
     stripped = text.strip()
     tail = stripped.rstrip(" \t\r\n.,;:!?$")
@@ -83,10 +80,18 @@ def extract_answer(text: str | None, answer_format: str) -> str | None:
     return _normalize_answer(match.group())
 
 
+def _final_content(text: str | None) -> str | None:
+    if text is None:
+        return None
+    if "<|end_think|>" in text:
+        text = text.rsplit("<|end_think|>", 1)[1]
+    return None if "<|start_think|>" in text else text
+
+
 def _answer_after_terminal_period(text: str, answer_format: str) -> str | None:
     """Extract a typed answer appended after sentence-ending punctuation."""
     for boundary in range(len(text) - 1, -1, -1):
-        if text[boundary] != ".":
+        if text[boundary] != "." or (boundary > 0 and text[boundary - 1].isdigit()):
             continue
         answer = _full_answer(text[boundary + 1 :].strip(), answer_format)
         if answer is not None:
@@ -108,7 +113,7 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
     """Score a completion with permissive extraction and exact numeric components."""
     extracted = extract_answer(prediction, answer_format)
     if extracted != _normalize_answer(gold):
-        repeated_reference = _repeated_terminal_reference(prediction, gold)
+        repeated_reference = _repeated_terminal_reference(prediction, gold, answer_format)
         if repeated_reference is not None:
             extracted = repeated_reference
     gold_parts = _digit_parts(gold, answer_format)
@@ -124,14 +129,18 @@ def score_prediction(prediction: str | None, gold: str, answer_format: str) -> E
     )
 
 
-def _repeated_terminal_reference(prediction: str | None, gold: str) -> str | None:
-    """Recover an exact reference answer emitted twice without a separator."""
+def _repeated_terminal_reference(prediction: str | None, gold: str, answer_format: str) -> str | None:
+    """Recover repetition only when a separate final answer confirms it."""
+    prediction = _final_content(prediction)
     if prediction is None:
         return None
     tail = prediction.strip().rstrip(" \t\r\n.,;:!?$")
     terminal_token = tail.rsplit(maxsplit=1)[-1] if tail else ""
     normalized_gold = _normalize_answer(gold)
-    if _normalize_answer(terminal_token) == normalized_gold * 2:
+    if _normalize_answer(terminal_token) != normalized_gold * 2:
+        return None
+    preceding = tail[: -len(terminal_token)].rstrip()
+    if extract_answer(preceding, answer_format) == normalized_gold:
         return normalized_gold
     return None
 
