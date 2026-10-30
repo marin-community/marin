@@ -11,7 +11,6 @@ from experiments.post_training.stage0.qwen_native_gate import (
 )
 
 
-
 def test_qwen_native_requests_keep_full_cap_and_model_specific_prefills():
     messages = [{"role": "user", "content": "Two plus two?"}]
     qwen3 = native_request("qwen3_moe", messages, Thinking.ENABLED, Decode(), [151645, 151643])
