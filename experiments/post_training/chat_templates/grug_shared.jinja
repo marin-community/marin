@@ -1,0 +1,35 @@
+{%- if '<|begin_of_text|>' -%}{{ '<|begin_of_text|>' }}{%- endif -%}{%- for message in messages -%}
+{%- if message.role == 'assistant' -%}
+{{- '<|start_header_id|>assistant<|end_header_id|>
+' -}}
+{%- generation -%}
+{%- if message.reasoning_content -%}
+{{- '<|start_think|>' ~ message.reasoning_content ~ '<|end_think|>' -}}
+{%- endif -%}
+{{- message.content if message.content else '' -}}
+{%- for call in message.tool_calls or [] -%}
+{%- set function = call.function if call.function is defined else call -%}
+{{- '<tool_call>\n{"name": ' -}}
+{{- function.name | tojson -}}
+{{- ', "arguments": ' -}}
+{{- function.arguments if function.arguments is string else function.arguments | tojson -}}
+{{- '}\n</tool_call>' -}}
+{%- endfor -%}
+{{- '<|eot_id|>' -}}
+{%- endgeneration -%}
+{%- elif message.role == 'tool' -%}
+{{- '<|start_header_id|>tool<|end_header_id|>
+<tool_response>\n' -}}
+{{- message.content if message.content else '' -}}
+{{- '\n</tool_response><|eot_id|>' -}}
+{%- else -%}
+{{- '<|start_header_id|>' ~ message.role ~ '<|end_header_id|>\n' -}}
+{{- message.content if message.content else '' -}}
+{{- '<|eot_id|>' -}}
+{%- endif -%}
+{{- '\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{- '<|start_header_id|>assistant<|end_header_id|>
+' -}}
+{%- endif -%}
