@@ -90,6 +90,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
+from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
@@ -200,6 +201,9 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
+
+    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
+        raise ProviderUnsupportedError("Test backend has no persistent execution runtime")
 
     def exec_in_container(
         self,

@@ -35,6 +35,7 @@ from iris.cluster.controller.backend import (
     EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
+    ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
     RemoveCapacityRequest,
@@ -55,6 +56,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
+from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -370,6 +372,9 @@ class RpcTaskBackend:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)
         return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
+
+    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
+        raise ProviderUnsupportedError("Persistent execution requires a Kubernetes backend")
 
     def exec_in_container(
         self,

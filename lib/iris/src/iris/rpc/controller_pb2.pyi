@@ -61,6 +61,28 @@ class Controller(_message.Message):
         ENDPOINT_ACCESS_LINK: _ClassVar[Controller.EndpointAccess]
     ENDPOINT_ACCESS_PRIVATE: Controller.EndpointAccess
     ENDPOINT_ACCESS_LINK: Controller.EndpointAccess
+    class OpenExecSessionRequest(_message.Message):
+        __slots__ = ("task_id", "attempt_uid", "container_name", "command")
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+        CONTAINER_NAME_FIELD_NUMBER: _ClassVar[int]
+        COMMAND_FIELD_NUMBER: _ClassVar[int]
+        task_id: str
+        attempt_uid: str
+        container_name: str
+        command: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, task_id: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., container_name: _Optional[str] = ..., command: _Optional[_Iterable[str]] = ...) -> None: ...
+    class OpenExecSessionResponse(_message.Message):
+        __slots__ = ("gateway_address", "grant", "expires_at", "attempt_uid")
+        GATEWAY_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        GRANT_FIELD_NUMBER: _ClassVar[int]
+        EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+        gateway_address: str
+        grant: str
+        expires_at: _time_pb2.Timestamp
+        attempt_uid: str
+        def __init__(self, gateway_address: _Optional[str] = ..., grant: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., attempt_uid: _Optional[str] = ...) -> None: ...
     class LaunchJobRequest(_message.Message):
         __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "egress_policy", "egress_allow", "federation")
         NAME_FIELD_NUMBER: _ClassVar[int]

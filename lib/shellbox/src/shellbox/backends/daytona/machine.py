@@ -35,6 +35,7 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from rigging.timing import ExponentialBackoff
 
+from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT, KILL_PROCESS_GROUP_COMMAND, START_COMMAND
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from shellbox.machine import (
@@ -50,6 +51,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
 logger = logging.getLogger(__name__)
@@ -177,6 +179,71 @@ class DaytonaMachine:
         self.spec = spec
         self.resources = resources
         self._closed = False
+        self._sessions: set[DaytonaProcessSession] = set()
+        self._acquisitions: set[asyncio.Task[None]] = set()
+        self._closing: asyncio.Task[None] | None = None
+
+    async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
+        if user in (None, "root", "0"):
+            return argv
+        assert user is not None
+        if user.isdecimal():
+            account = await self.sandbox.process.exec(_control_command(f"getent passwd {shlex.quote(user)}"))
+            if account.exit_code or not account.result.strip():
+                raise ValueError(f"Execution user {user} has no guest account")
+            user = account.result.split(":", 1)[0]
+        capabilities = await self.sandbox.process.exec(_control_command("su --help"))
+        if capabilities.exit_code or "--session-command" not in capabilities.result:
+            raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
+        return ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+
+    async def open_process(self, command: Command) -> DaytonaProcessSession:
+        """Attach persistent binary pipes through one provider session and log stream."""
+        if self._closed:
+            raise RuntimeError("Machine is closed")
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+
+        async def cleanup_failed() -> None:
+            if not self._closed:
+                await self.close()
+
+        session = DaytonaProcessSession(
+            self.sandbox.process,
+            f"shellbox-{uuid.uuid4().hex}",
+            stderr_limit=command.output_limit_bytes,
+            release=self._sessions.discard,
+            failed_cleanup=cleanup_failed,
+        )
+        self._sessions.add(session)
+
+        async def start() -> None:
+            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                argv = await self._user_argv(command.argv, command.user)
+                await session.start(argv, command.cwd or self.spec.workdir or None, {**self.spec.env, **command.env})
+
+        acquisition = asyncio.create_task(start())
+        self._acquisitions.add(acquisition)
+        try:
+            await asyncio.shield(acquisition)
+            if self._closed:
+                raise RuntimeError("Machine was closed while opening a process session")
+            return session
+        except BaseException as error:
+            try:
+                await finish_owned(acquisition)
+            except BaseException as acquisition_error:
+                if acquisition_error is not error:
+                    error.add_note(f"Daytona process acquisition failed ({type(acquisition_error).__name__})")
+            try:
+                await finish_owned(own_cleanup(session.close()))
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona process cleanup failed ({type(cleanup_error).__name__})")
+            raise
+        finally:
+            self._acquisitions.discard(acquisition)
 
     async def _read_output(self, path: str, limit: int) -> tuple[bytes, bool]:
         count = await self.sandbox.process.exec(_control_command(f"wc -c < {shlex.quote(path)}"))
@@ -223,18 +290,7 @@ class DaytonaMachine:
                     "shellbox-agent",
                     *command.argv,
                 )
-                if command.user not in (None, "root", "0"):
-                    user = command.user
-                    # su accepts names. Resolve a numeric UID in the guest's account database.
-                    if user.isdecimal():
-                        account = await self.sandbox.process.exec(_control_command(f"getent passwd {shlex.quote(user)}"))
-                        if account.exit_code or not account.result.strip():
-                            raise ValueError(f"Execution user {user} has no guest account")
-                        user = account.result.split(":", 1)[0]
-                    capabilities = await self.sandbox.process.exec(_control_command("su --help"))
-                    if capabilities.exit_code or "--session-command" not in capabilities.result:
-                        raise UnsupportedMachineSpec("Non-root Daytona commands require util-linux su --session-command")
-                    argv = ("su", "-s", "/bin/sh", "-m", user, "--session-command", shlex.join(argv))
+                argv = await self._user_argv(argv, command.user)
                 argv = (
                     "/bin/sh",
                     "-c",
@@ -374,10 +430,29 @@ class DaytonaMachine:
         target.write_bytes(data)
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        await self.resources.aclose()
+        if self._closing is None:
+            self._closed = True
+            self._closing = own_cleanup(self._close())
+        try:
+            await asyncio.shield(self._closing)
+        except asyncio.CancelledError as error:
+            try:
+                await finish_owned(self._closing)
+            except Exception as cleanup_error:
+                error.add_note(f"Daytona cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _close(self) -> None:
+        try:
+            await asyncio.gather(*tuple(self._acquisitions), return_exceptions=True)
+            results = await asyncio.gather(
+                *(session.close() for session in tuple(self._sessions)), return_exceptions=True
+            )
+        finally:
+            await self.resources.aclose()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
 
 class DaytonaMachineFactory:

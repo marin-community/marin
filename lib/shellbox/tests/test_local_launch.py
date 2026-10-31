@@ -84,6 +84,78 @@ def test_guest_exec_inherits_no_private_launcher_descriptors(factory):
     asyncio.run(check())
 
 
+def test_process_session_keeps_pipes_without_exposing_private_descriptors(factory):
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/"))
+        session = await machine.open_process(
+            Command(
+                (
+                    "/bin/sh",
+                    "-c",
+                    'for fd in /proc/$$/fd/*; do test ! -L "$fd" || printf "%s " "${fd##*/}"; done; '
+                    'printf "\\n"; while IFS= read -r line; do printf "reply:%s\\n" "$line"; done',
+                )
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                descriptors = bytearray()
+                while not descriptors.endswith(b"\n"):
+                    descriptors.extend(await session.read(1))
+                assert set(bytes(descriptors).split()) == {b"0", b"1", b"2"}
+                for value in (b"first", b"second"):
+                    await session.write(value + b"\n")
+                    response = bytearray()
+                    while not response.endswith(b"\n"):
+                        response.extend(await session.read(1))
+                    assert response == b"reply:" + value + b"\n"
+            assert (await machine.run(Command(("true",), timeout=5))).exit_code == 0
+        finally:
+            await session.close()
+            await machine.close()
+        assert await session.wait() != 0
+
+    asyncio.run(check())
+
+
+def test_cancelled_process_acquisition_reclaims_child_after_repeated_cancellation(factory, monkeypatch):
+    create_process = asyncio.create_subprocess_exec
+
+    async def check():
+        machine = await factory.create(MachineSpec(HostImage(), workdir="/"))
+        acquired, release = asyncio.Event(), asyncio.Event()
+        processes = []
+
+        async def held_process(*args, **kwargs):
+            process = await create_process(*args, **kwargs)
+            processes.append(process)
+            acquired.set()
+            await release.wait()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", held_process)
+        acquisition = asyncio.create_task(machine.open_process(Command(("/bin/sh", "-c", "read line"))))
+        try:
+            await asyncio.wait_for(acquired.wait(), 5)
+            acquisition.cancel("original cancellation")
+            # Enter the acquisition's teardown before delivering cancellation again.
+            await asyncio.sleep(0)
+            acquisition.cancel("second cancellation")
+            await asyncio.sleep(0)
+            assert not acquisition.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await asyncio.wait_for(acquisition, 5)
+            assert caught.value.args == ("original cancellation",)
+            assert processes[0].returncode is not None
+        finally:
+            release.set()
+            await asyncio.gather(acquisition, return_exceptions=True)
+            await machine.close()
+
+    asyncio.run(check())
+
+
 def test_commands_join_the_keeper_cgroup_namespace(factory):
     async def check():
         machine = await factory.create(MachineSpec(HostImage(), workdir="/"))

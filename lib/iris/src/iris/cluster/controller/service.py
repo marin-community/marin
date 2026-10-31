@@ -8,6 +8,7 @@ from finelog.client import LogClient
 from rigging.timing import Timer
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import ExecGatewayConfig
 from iris.cluster.controller import (
     accounts,
     attempts,
@@ -58,6 +59,7 @@ class ControllerServiceImpl:
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
         budgets: FederationBudgets | None = None,
+        exec_gateway: ExecGatewayConfig | None = None,
     ):
         self._db = db
         self._controller = controller
@@ -92,6 +94,7 @@ class ControllerServiceImpl:
             profile_table=log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
             capability_urls=capability_url_config or attempts.CapabilityUrlConfig(),
             timer=Timer(),
+            exec_gateway=exec_gateway,
         )
         db.attach_task_event_table(
             log_client.get_table(
@@ -264,6 +267,13 @@ class ControllerServiceImpl:
         ctx: RequestContext,
     ) -> job_pb2.GetCurrentUserResponse:
         return accounts.get_current_user(request, ctx)
+
+    def open_exec_session(
+        self,
+        request: controller_pb2.Controller.OpenExecSessionRequest,
+        ctx: RequestContext,
+    ) -> controller_pb2.Controller.OpenExecSessionResponse:
+        return attempts.open_exec_session(self._attempts, request, ctx)
 
     def exec_in_container(
         self,

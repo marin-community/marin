@@ -3,6 +3,7 @@
 
 """Controller operations that perform exact, on-demand Attempt I/O."""
 
+import json
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import get_verified_identity
 from rigging.timing import Timer, Timestamp
 
+from iris.cluster.config import ExecGatewayConfig
 from iris.cluster.controller import reads, tasks, workers
 from iris.cluster.controller.auth import (
     DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
@@ -28,6 +30,7 @@ from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.exec_gateway.auth import EXEC_GRANT_TTL, MAX_COMMAND_JSON_BYTES, mint_exec_grant
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.process_status import get_process_status as local_process_status
@@ -37,6 +40,7 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
+from iris.cluster.runtime.task_spec import SERVICE_PREFIX
 from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -93,6 +97,7 @@ class AttemptDependencies:
     profile_table: Table
     capability_urls: CapabilityUrlConfig
     timer: Timer
+    exec_gateway: ExecGatewayConfig | None = None
 
 
 def profile_task(
@@ -279,6 +284,78 @@ def exec_in_container(
         stdout=response.stdout,
         stderr=response.stderr,
         error=response.error,
+    )
+
+
+def open_exec_session(
+    dependencies: AttemptDependencies,
+    request: controller_pb2.Controller.OpenExecSessionRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.OpenExecSessionResponse:
+    """Authorize one exact running container and mint a host-only gateway grant."""
+    del context
+    try:
+        task_id = JobName.from_wire(request.task_id)
+        task_id.require_task()
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
+    _authorize_task_owner(dependencies, task_id)
+    task = _task_with_attempts(dependencies, task_id, request.task_id)
+    proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.open_exec_session(request))
+    if proxied is not None:
+        return proxied
+    gateway = dependencies.exec_gateway
+    manager = dependencies.auth.jwt_manager
+    if gateway is None or not gateway.address or not gateway.gateway_id or manager is None:
+        raise ConnectError(Code.UNIMPLEMENTED, "Persistent execution gateway is not configured")
+    if (
+        not request.command
+        or not request.command[0]
+        or len(json.dumps(list(request.command)).encode()) > MAX_COMMAND_JSON_BYTES
+    ):
+        raise ConnectError(Code.INVALID_ARGUMENT, "A bounded nonempty execution command is required")
+    if task.state != job_pb2.TASK_STATE_RUNNING:
+        raise ConnectError(Code.FAILED_PRECONDITION, "Execution task is not running")
+    target = _resolve_task_target(dependencies, task, task.current_attempt_id, wire_name=request.task_id)
+    if not target.attempt_uid or (request.attempt_uid and request.attempt_uid != target.attempt_uid):
+        raise ConnectError(Code.FAILED_PRECONDITION, "Execution attempt is stale or unavailable")
+    assert task_id.parent is not None
+    with dependencies.db.read_snapshot() as snapshot:
+        job = reads.get_job_detail(snapshot, task_id.parent)
+    assert job is not None
+    environment = proto_from_json(job.environment_json, job_pb2.EnvironmentConfig)
+    name = request.container_name
+    if name in ("", "task", environment.primary_service or "task"):
+        container_name = "task"
+    elif name in {service.name for service in environment.services}:
+        container_name = f"{SERVICE_PREFIX}{name}"
+    else:
+        raise ConnectError(Code.INVALID_ARGUMENT, "Exec target is not a declared task container")
+    try:
+        pod = dependencies.runtime.backend.resolve_exec_target(target, container_name)
+    except ProviderError as error:
+        raise ConnectError(Code.FAILED_PRECONDITION, str(error)) from error
+    # Backend I/O may have raced a retry or cancellation. Refuse to grant the
+    # old Pod after observing a newer controller decision.
+    current = _task_with_attempts(dependencies, task_id, request.task_id)
+    current_uid = next(
+        (attempt.attempt_uid for attempt in current.attempts if attempt.attempt_id == current.current_attempt_id), ""
+    )
+    if current.state != job_pb2.TASK_STATE_RUNNING or current_uid != target.attempt_uid:
+        raise ConnectError(Code.FAILED_PRECONDITION, "Execution attempt changed while resolving its Pod")
+    token = mint_exec_grant(
+        manager.signer,
+        gateway_id=gateway.gateway_id,
+        grant_id=secrets.token_urlsafe(24),
+        subject=task_id.user,
+        target=pod,
+        command=list(request.command),
+    )
+    return controller_pb2.Controller.OpenExecSessionResponse(
+        gateway_address=gateway.address,
+        grant=token,
+        expires_at=timestamp_to_proto(Timestamp.from_ms(Timestamp.now().epoch_ms() + EXEC_GRANT_TTL * 1000)),
+        attempt_uid=target.attempt_uid,
     )
 
 

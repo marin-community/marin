@@ -31,6 +31,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
+from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -198,6 +199,9 @@ class ScriptedTaskBackend:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("journey backend has no profiler")
+
+    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
+        raise ProviderUnsupportedError("Test backend has no persistent execution runtime")
 
     def exec_in_container(
         self,

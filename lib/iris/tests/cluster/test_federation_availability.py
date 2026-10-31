@@ -4,6 +4,8 @@
 """Unit tests for federated availability: the job→gate translation, the
 generation-keyed reservation ledger, and the pure queued-assignment pass."""
 
+from dataclasses import replace
+
 import pytest
 from iris.cluster.constraints import (
     Constraint,
@@ -85,6 +87,26 @@ def _cpu_reserve(name: str, variant: str = "h100", *, ts: int = 0):
         shape_constraints=[availability_constraint(variant)],
         availability_gate=[],
     )
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_queued_service_tasks_cannot_force_route_past_missing_capabilities(pinned):
+    candidate = replace(
+        _candidate("service"),
+        pinned_peer_id="cw" if pinned else "",
+        shape_constraints=[],
+        availability_gate=[],
+        required_capabilities=frozenset({"task-services"}),
+    )
+    backend = _backend("k8s", free=8)
+    peer = _peer("cw", [backend])
+    ledger = ReservationLedger()
+    assert assign_queued([candidate], [peer], ledger, max_per_peer_per_cycle=8) == []
+
+    peer = _peer("cw", [replace(backend, capabilities=frozenset({"task-services"}))])
+    [promotion] = assign_queued([candidate], [peer], ledger, max_per_peer_per_cycle=8)
+    assert promotion.job_id == candidate.job_id
+    assert promotion.peer_id == "cw"
 
 
 # --- translation -----------------------------------------------------------

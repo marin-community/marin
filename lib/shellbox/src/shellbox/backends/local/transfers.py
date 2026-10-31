@@ -112,7 +112,7 @@ def _merge_destination(source: Path, target: Path) -> None:
         os.close(descriptor)
 
 
-def unpack_local_archive(stream: bytes, target: Path) -> None:
+def unpack_local_archive(stream: bytes, target: Path, *, source_name: str) -> None:
     """Merge a guest tar stream into a caller-selected host file or directory.
 
     The destination and its ancestors must not be symlinks. Interior symlinks
@@ -128,6 +128,8 @@ def unpack_local_archive(stream: bytes, target: Path) -> None:
             raise ValueError("The machine's archive must start with a regular file or directory")
         if not directory and PurePosixPath(members[0].name).name != members[0].name:
             raise ValueError("A single-file archive must start with its file's basename")
+        if not directory and members[0].name != source_name:
+            raise ValueError("A single-file archive must name the requested source")
         archive.extractall(staging, filter=_guest_member)
         source = Path(staging) if directory else Path(staging, members[0].name)
         if source.is_symlink() or not (source.is_dir() if directory else source.is_file()):

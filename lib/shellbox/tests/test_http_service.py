@@ -5,15 +5,19 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import socket
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
+import shellbox.http_service as http_service
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
-from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, NetworkPolicy, Result
+from shellbox.machine import Command, DockerImage, MachineSpec, NetworkPolicy, Result
+from shellbox.process_session import SubprocessSession
 
 GUEST_HTTP_REQUEST = """
 import http.client, json, sys, urllib.parse
@@ -34,6 +38,25 @@ class ProcessMachine:
 
     def __init__(self, root: Path):
         self.root = root
+        self.processes = []
+
+    async def open_process(self, command: Command) -> SubprocessSession:
+        process = await asyncio.create_subprocess_exec(
+            *command.argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={"PATH": os.environ["PATH"]},
+            start_new_session=True,
+        )
+        self.processes.append(process)
+
+        async def stop():
+            if process.returncode is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+
+        return SubprocessSession(process, stop=stop)
 
     def path(self, value: str) -> str:
         if value.startswith("/tmp/shellbox-http-"):
@@ -41,15 +64,7 @@ class ProcessMachine:
         return value
 
     async def run(self, command: Command) -> Result:
-        process = await asyncio.create_subprocess_exec(
-            *(self.path(arg) for arg in command.argv),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ["PATH"]},
-        )
-        stdout, stderr = await process.communicate(command.stdin)
-        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
+        raise AssertionError("HTTP relaying must not execute per-request or idle commands")
 
     async def upload(self, source: Path, target: str) -> None:
         shutil.copyfile(source, self.path(target))
@@ -73,6 +88,8 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
         release = asyncio.Event()
 
         async def handler(request: HttpRequest) -> HttpResponse:
+            if request.path == "/echo":
+                return HttpResponse(200, request.body, "application/octet-stream")
             if request.path == "/slow":
                 blocked.set()
                 await release.wait()
@@ -93,9 +110,163 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
                 broken = await client.post(url + "/broken")
                 assert broken.status_code == 502
                 assert "secret-host-key" not in broken.text
+                body = bytes(range(256)) * (MAX_BODY // 256)
+                echoed = await client.post(url + "/echo", content=body)
+                assert echoed.status_code == 200 and echoed.content == body
                 release.set()
                 assert (await slow).json() == {"done": True}
         assert list(tmp_path.iterdir()) == []
+        assert len(machine.processes) == 1
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process(tmp_path):
+    async def check():
+        machine = ProcessMachine(tmp_path)
+
+        async def handler(request):
+            return HttpResponse(200, b"{}")
+
+        with pytest.raises(RuntimeError, match="process ended"):
+            async with serve_http(machine, handler, port=available_port()):
+                machine.processes[0].kill()
+                await asyncio.wait_for(asyncio.Event().wait(), 5)
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_preserves_body_error_when_helper_close_fails(tmp_path):
+    class BrokenCloseMachine(ProcessMachine):
+        async def open_process(self, command):
+            session = await super().open_process(command)
+            close = session.close
+
+            async def broken_close():
+                await close()
+                raise RuntimeError("cleanup failed")
+
+            session.close = broken_close
+            return session
+
+    async def check():
+        machine = BrokenCloseMachine(tmp_path)
+
+        async def handler(request):
+            return HttpResponse(200, b"{}")
+
+        with pytest.raises(ValueError, match="body failure"):
+            async with serve_http(machine, handler, port=available_port()):
+                raise ValueError("body failure")
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup(tmp_path):
+    async def check():
+        closing, release, entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        class DelayedCloseMachine(ProcessMachine):
+            async def open_process(self, command):
+                session = await super().open_process(command)
+                close = session.close
+
+                async def delayed_close():
+                    closing.set()
+                    await release.wait()
+                    await close()
+
+                session.close = delayed_close
+                return session
+
+        machine = DelayedCloseMachine(tmp_path)
+
+        async def handler(request):
+            return HttpResponse(200, b"{}")
+
+        async def serve():
+            async with serve_http(machine, handler, port=available_port()):
+                entered.set()
+                await asyncio.Event().wait()
+
+        operation = asyncio.create_task(serve())
+        await asyncio.wait_for(entered.wait(), 5)
+        operation.cancel("original cancellation")
+        await asyncio.wait_for(closing.wait(), 5)
+        operation.cancel("second cancellation")
+        # Let the second cancellation reach the shielded cleanup wait.
+        await asyncio.sleep(0)
+        assert not operation.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await operation
+        assert caught.value.args == ("original cancellation",)
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_rejects_oversized_guest_frames_and_reaps_process(tmp_path):
+    class OversizedFrameMachine(ProcessMachine):
+        async def open_process(self, command):
+            script = (
+                'import os\nos.write(1, b\'{"type":"ready"}\\n\')\n'
+                f"os.write(1, b'x' * {http_service.WIRE_LIMIT + 1})\n"
+            )
+            return await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))
+
+    async def check():
+        machine = OversizedFrameMachine(tmp_path)
+
+        async def handler(request):
+            raise AssertionError("Invalid guest frames must not reach the host handler")
+
+        with pytest.raises(ValueError, match="exceeds its limit"):
+            async with serve_http(machine, handler, port=available_port()):
+                await asyncio.wait_for(asyncio.Event().wait(), 5)
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+def test_http_capability_bounds_close_when_host_handler_defers_cancellation(tmp_path, monkeypatch):
+    monkeypatch.setattr(http_service, "CLEANUP_TIMEOUT", 0.05)
+
+    async def check():
+        entered, cancelled, release, finished = (asyncio.Event() for _ in range(4))
+        machine = ProcessMachine(tmp_path)
+
+        async def handler(request):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+            finally:
+                finished.set()
+            return HttpResponse(200, b"{}")
+
+        request = None
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                async with asyncio.timeout(5):
+                    async with serve_http(machine, handler, port=available_port()) as url:
+                        request = asyncio.create_task(client.post(url + "/wait"))
+                        await entered.wait()
+                assert cancelled.is_set()
+                assert machine.processes[0].returncode is not None
+                release.set()
+                await asyncio.wait_for(finished.wait(), 5)
+                await asyncio.gather(request, return_exceptions=True)
+        finally:
+            release.set()
+            if request is not None:
+                request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
 
     asyncio.run(check())
 

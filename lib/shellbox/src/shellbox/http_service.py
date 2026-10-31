@@ -7,34 +7,22 @@ import asyncio
 import base64
 import json
 import logging
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from shellbox import http_service_guest
-from shellbox.machine import Command, Machine
+from shellbox.machine import Command, Machine, ProcessMachine, ProcessSession, UnsupportedMachineSpec
+from shellbox.process_session import finish_owned, own_cleanup
 
 logger = logging.getLogger(__name__)
 MAX_BODY = http_service_guest.MAX_BODY
 MAX_PENDING = http_service_guest.MAX_PENDING
 MAX_PATH = http_service_guest.MAX_PATH
-WIRE_LIMIT = MAX_BODY * 2
-POLL_INTERVAL = 0.1
+WIRE_LIMIT = http_service_guest.WIRE_LIMIT
 TRANSPORT_TIMEOUT = 30
-CONTROL_SCRIPT = """
-import http.client, sys
-c = http.client.HTTPConnection('127.0.0.1', int(sys.argv[1]), timeout=float(sys.argv[4]))
-try:
-    c.request('POST', '/__shellbox_http__/' + sys.argv[2], body=sys.stdin.buffer.read())
-    r = c.getresponse()
-    if r.status != 200:
-        raise RuntimeError('HTTP service control failed')
-    sys.stdout.buffer.write(r.read(int(sys.argv[3]) + 1))
-finally:
-    c.close()
-"""
+CLEANUP_TIMEOUT = 5
 
 
 @dataclass(frozen=True)
@@ -51,26 +39,27 @@ class HttpResponse:
     content_type: str = "application/json"
 
 
-async def _control(machine: Machine, port: int, operation: str, body: bytes = b"") -> object:
-    result = await machine.run(
-        Command(
-            (
-                "python3",
-                "-c",
-                CONTROL_SCRIPT,
-                str(port),
-                operation,
-                str(WIRE_LIMIT),
-                str(http_service_guest.IDLE_POLL_TIMEOUT + 5),
-            ),
-            stdin=body,
-            output_limit_bytes=WIRE_LIMIT + 1,
-            timeout=TRANSPORT_TIMEOUT,
-        )
-    )
-    if result.exit_code != 0 or result.stdout_truncated or len(result.stdout) > WIRE_LIMIT:
-        raise RuntimeError("Sandbox HTTP service transport failed")
-    return json.loads(result.stdout)
+class _Frames:
+    def __init__(self, session: ProcessSession):
+        self.session = session
+        self.buffer = bytearray()
+
+    async def receive(self) -> dict:
+        while True:
+            end = self.buffer.find(b"\n")
+            if end >= 0:
+                frame = bytes(self.buffer[:end])
+                del self.buffer[: end + 1]
+                item = json.loads(frame)
+                if not isinstance(item, dict):
+                    raise ValueError("Invalid sandbox HTTP frame")
+                return item
+            if len(self.buffer) >= WIRE_LIMIT:
+                raise ValueError("Sandbox HTTP frame exceeds its limit")
+            data = await self.session.read(min(65536, WIRE_LIMIT - len(self.buffer)))
+            if not data:
+                raise RuntimeError("Sandbox HTTP service process ended")
+            self.buffer.extend(data)
 
 
 async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request: HttpRequest) -> HttpResponse:
@@ -78,7 +67,7 @@ async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], r
         response = await asyncio.wait_for(handler(request), timeout=http_service_guest.REQUEST_TIMEOUT)
         if not 100 <= response.status <= 599 or len(response.body) > MAX_BODY:
             raise ValueError("HTTP capability response exceeds its limits")
-        if "\r" in response.content_type or "\n" in response.content_type:
+        if len(response.content_type) > MAX_PATH or "\r" in response.content_type or "\n" in response.content_type:
             raise ValueError("Invalid HTTP capability content type")
         return response
     except Exception as error:
@@ -87,65 +76,78 @@ async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], r
         return HttpResponse(502, b'{"error":"host service failed"}')
 
 
-async def _pump(
-    machine: Machine,
-    port: int,
-    handler: Callable[[HttpRequest], Awaitable[HttpResponse]],
-    stop: asyncio.Event,
-) -> None:
+async def _cancel(tasks: set[asyncio.Task]) -> None:
+    for task in tasks:
+        task.cancel()
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks, timeout=CLEANUP_TIMEOUT)
+    for task in done:
+        if not task.cancelled():
+            task.exception()
+    # A handler that suppresses cancellation must not hold the service open.
+    # Retain its task until it exits, consuming any eventual error.
+    for task in pending:
+        task.add_done_callback(_handler_finished)
+        _UNFINISHED_HANDLERS.add(task)
+
+
+_UNFINISHED_HANDLERS: set[asyncio.Task] = set()
+
+
+def _handler_finished(task: asyncio.Task) -> None:
+    _UNFINISHED_HANDLERS.discard(task)
+    if not task.cancelled():
+        task.exception()
+
+
+async def _pump(frames: _Frames, handler: Callable[[HttpRequest], Awaitable[HttpResponse]]) -> None:
     pending: dict[str, asyncio.Task[HttpResponse]] = {}
+    receive = asyncio.create_task(frames.receive())
     try:
-        while not stop.is_set():
+        while True:
+            done, _ = await asyncio.wait((receive, *pending.values()), return_when=asyncio.FIRST_COMPLETED)
             for request_id, task in list(pending.items()):
-                if not task.done():
+                if task not in done:
                     continue
                 response = task.result()
-                await _control(
-                    machine,
-                    port,
-                    "respond",
+                frame = (
                     json.dumps(
                         {
                             "id": request_id,
                             "status": response.status,
                             "body": base64.b64encode(response.body).decode(),
                             "content_type": response.content_type,
-                        }
-                    ).encode(),
+                        },
+                        separators=(",", ":"),
+                    ).encode()
+                    + b"\n"
                 )
+                async with asyncio.timeout(TRANSPORT_TIMEOUT):
+                    await frames.session.write(frame)
                 del pending[request_id]
-            if len(pending) < MAX_PENDING:
-                # Long idle polls reduce controller exec traffic. Keep polls
-                # short while host work is pending so completed responses drain.
-                wait = 1 if pending else http_service_guest.IDLE_POLL_TIMEOUT
-                item = await _control(machine, port, "poll", json.dumps({"wait": wait}).encode())
-                if item is not None:
-                    if not isinstance(item, dict):
-                        raise ValueError("Invalid sandbox HTTP request")
-                    request_id, method, path, encoded = (item[key] for key in ("id", "method", "path", "body"))
-                    if (
-                        not isinstance(request_id, str)
-                        or len(request_id) != 32
-                        or request_id in pending
-                        or method not in ("GET", "POST")
-                        or not isinstance(path, str)
-                        or len(path) > MAX_PATH
-                        or not isinstance(encoded, str)
-                    ):
-                        raise ValueError("Invalid sandbox HTTP request")
-                    body = base64.b64decode(encoded, validate=True)
-                    if len(body) > MAX_BODY:
-                        raise ValueError("Sandbox HTTP request exceeds its limit")
-                    pending[request_id] = asyncio.create_task(_response(handler, HttpRequest(method, path, body)))
-                    continue
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=POLL_INTERVAL)
-            except TimeoutError:
-                pass
+            if receive in done:
+                item = receive.result()
+                request_id, method, path, encoded = (item[key] for key in ("id", "method", "path", "body"))
+                if (
+                    item.get("type") != "request"
+                    or not isinstance(request_id, str)
+                    or len(request_id) != 32
+                    or request_id in pending
+                    or method not in ("GET", "POST")
+                    or not isinstance(path, str)
+                    or len(path) > MAX_PATH
+                    or not isinstance(encoded, str)
+                    or len(pending) >= MAX_PENDING
+                ):
+                    raise ValueError("Invalid sandbox HTTP request")
+                body = base64.b64decode(encoded, validate=True)
+                if len(body) > MAX_BODY:
+                    raise ValueError("Sandbox HTTP request exceeds its limit")
+                pending[request_id] = asyncio.create_task(_response(handler, HttpRequest(method, path, body)))
+                receive = asyncio.create_task(frames.receive())
     finally:
-        for task in pending.values():
-            task.cancel()
-        await asyncio.gather(*pending.values(), return_exceptions=True)
+        await finish_owned(own_cleanup(_cancel({receive, *pending.values()})))
 
 
 @asynccontextmanager
@@ -155,37 +157,73 @@ async def serve_http(
     *,
     port: int,
 ) -> AsyncIterator[str]:
-    """Run an explicit host handler behind a machine-local HTTP listener.
+    """Run a host handler behind one foreground machine-local HTTP listener.
 
-    The guest needs Python 3. Requests cross the existing machine exec channel;
-    the guest receives no host address, authentication headers or network access.
-    The handler must authorize paths and operations before using host authority.
-    Responses are buffered and bounded; streaming and caller headers are unsupported.
-    Close this context before closing the machine or its service group.
+    Python 3 in the guest exchanges bounded, buffered frames over persistent
+    process pipes. The handler authorizes paths and operations before using host
+    authority. Caller headers and streaming are unsupported. Close this context
+    before closing the machine or its service group.
     """
     if not 1 <= port <= 65535:
         raise ValueError("HTTP service port is out of range")
-    source = Path(http_service_guest.__file__)
-    target = f"/tmp/shellbox-http-{uuid.uuid4().hex}.py"
-    await machine.upload(source, target)
-    stop = asyncio.Event()
-    pump = None
-    started = False
+    if not isinstance(machine, ProcessMachine):
+        raise UnsupportedMachineSpec("HTTP services require persistent process sessions")
+    source = Path(http_service_guest.__file__).read_text()
+    session = await machine.open_process(Command(("python3", "-u", "-c", source, str(port))))
+    pump: asyncio.Task[None] | None = None
+    owner = asyncio.current_task()
+    assert owner is not None
+    failed = False
+    interrupted = False
+    primary: BaseException | None = None
+
+    def finished(task: asyncio.Task[None]) -> None:
+        nonlocal failed, interrupted
+        if not task.cancelled():
+            # Interrupt the body promptly if the helper exits while no HTTP
+            # request is active. Retrieve the actual failure after cleanup.
+            failed = True
+            if not owner.cancelling():
+                interrupted = True
+                owner.cancel()
+
     try:
-        result = await machine.run(Command(("python3", target, "start", str(port)), timeout=TRANSPORT_TIMEOUT))
-        if result.exit_code != 0:
-            raise RuntimeError("Sandbox HTTP listener failed to start")
-        started = True
-        pump = asyncio.create_task(_pump(machine, port, handler, stop))
+        frames = _Frames(session)
+        async with asyncio.timeout(TRANSPORT_TIMEOUT):
+            if await frames.receive() != {"type": "ready"}:
+                raise RuntimeError("Sandbox HTTP listener failed to start")
+        pump = asyncio.create_task(_pump(frames, handler))
+        pump.add_done_callback(finished)
         yield f"http://127.0.0.1:{port}"
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        stop.set()
-        try:
+        if pump is not None:
+            pump.remove_done_callback(finished)
+
+        async def cleanup() -> None:
             if pump is not None:
-                await pump
-        finally:
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+            async with asyncio.timeout(TRANSPORT_TIMEOUT):
+                await session.close()
+
+        closing = own_cleanup(cleanup())
+        try:
+            await asyncio.shield(closing)
+        except BaseException as error:
             try:
-                if started:
-                    await _control(machine, port, "stop")
-            finally:
-                await machine.run(Command(("rm", "-f", target), timeout=TRANSPORT_TIMEOUT))
+                await finish_owned(closing)
+            except BaseException as cleanup_error:
+                error.add_note(f"HTTP service cleanup failed ({type(cleanup_error).__name__})")
+            if primary is None:
+                raise
+        if (
+            failed
+            and pump is not None
+            and (primary is None or (interrupted and isinstance(primary, asyncio.CancelledError)))
+        ):
+            if interrupted:
+                owner.uncancel()
+            pump.result()

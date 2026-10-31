@@ -1106,3 +1106,131 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 # View failed run
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
+
+## Persistent execution gateway
+
+Persistent execution runs in a separate trusted platform Deployment. The controller
+handles only `OpenExecSession`: it checks the job owner or received federation
+handoff, current attempt, declared container, and live Pod identity, then signs a
+host-only grant. The caller sends that grant directly to the gateway's Connect
+RPCs. Neither the grant nor the controller signing key enters a task container.
+The gateway mounts only the controller's public verification key. Its namespaced
+Role permits `get` on Pods and `get`/`create` on `pods/exec`.
+
+Deploy the gateway before enabling its endpoint in cluster configuration. Use a
+controller image built from the same checkout; `lib/iris/Dockerfile`'s `controller`
+target includes Kubernetes and the asynchronous WebSocket transport. The existing
+CoreWeave smoke workflow, `.github/workflows/iris-smoke-coreweave.yaml`, builds
+`ghcr.io/marin-community/iris-controller` for `linux/amd64` and uses namespace
+`iris-ci` with `lib/iris/config/cw-us-west-04a.yaml`. Reuse that built image tag
+rather than an unrelated `latest` when adding a gateway to that workflow.
+
+Export just the configured signing key's public PEM in the operator environment.
+This reads the private key through its existing secret reference and writes only
+the derived public key:
+
+```bash
+mkdir -p /tmp/iris-exec-setup
+uv run --no-sync python - lib/iris/config/cw-us-west-04a.yaml \
+  > /tmp/iris-exec-setup/public.pem <<'PY'
+import sys
+from iris.cluster.config import load_config
+from rigging.secrets import resolve_secret_spec
+from rigging.token_authority import signing_key_from_private_pem
+
+config = load_config(sys.argv[1])
+assert config.auth and config.auth.signing_key
+key = signing_key_from_private_pem(resolve_secret_spec(config.auth.signing_key).value)
+print(key.public_pem, end="")
+PY
+```
+
+Render the operator manifests, review them, then apply them through the normal
+cluster deployment procedure. The issuer must equal the cluster config's `name`.
+The gateway ID is an audience identifier shared with the controller's gateway
+configuration; choose a distinct ID for each gateway.
+
+```bash
+uv run --no-sync iris exec-gateway manifests \
+  --namespace iris-ci \
+  --image ghcr.io/marin-community/iris-controller:BUILT_TAG \
+  --gateway-id iris-ci-exec \
+  --issuer cw-us-west-04a \
+  --public-key /tmp/iris-exec-setup/public.pem \
+  > /tmp/iris-exec-setup/gateway.yaml
+kubectl --context marin_US-WEST-04A apply -f /tmp/iris-exec-setup/gateway.yaml
+kubectl --context marin_US-WEST-04A -n iris-ci rollout status deployment/iris-exec-gateway
+```
+
+The Service listens on port `10002`. For shared callers, configure a separate TLS
+endpoint that forwards `/iris.exec_gateway.ExecGatewayService/*` to that Service,
+including unary calls lasting at least 30 seconds. The gateway authenticates its
+own signed execution grants; the caller does not forward controller credentials.
+Every caller must be able to reach this endpoint. The gateway reaches the
+Kubernetes API server with its service account, then streams through the API
+server's `pods/exec` connection. It requires no network route into task Pods, and
+service-group Pods retain their loopback-only NetworkPolicy.
+
+Set the externally reachable origin in the cluster config and roll the controller
+through the existing controller rollout procedure:
+
+```yaml
+exec_gateway:
+  address: https://iris-exec.example.org
+  gateway_id: iris-ci-exec
+```
+
+A missing gateway configuration disables persistent execution and omits its
+backend capability. Configuration requires a persistent controller signing key.
+After a signing-key rotation, replace the gateway's pinned public-key ConfigMap
+and restart the gateway alongside the controller rollout. A restart closes its
+current sessions; callers must open new sessions.
+
+For a single-host CI or manual proof, port-forward the gateway Service and use
+`http://127.0.0.1:10002` as the configured gateway address for that environment:
+
+```bash
+kubectl --context marin_US-WEST-04A -n iris-ci \
+  port-forward service/iris-exec-gateway 10002:10002
+```
+
+From another terminal on that host, run against an existing running task whose
+selected container provides Python. This verifies 256 KiB of binary stdin and
+stdout across multiple chunks, stderr, EOF, and a nonzero process exit:
+
+```bash
+uv run --no-sync iris --config lib/iris/config/cw-us-west-04a.yaml \
+  exec-gateway probe --task-id /OWNER/JOB/0 --container-name task
+```
+
+`Open`, `Send`, `Receive`, and `CloseSession` are typed unary Connect RPCs.
+`Receive` waits asynchronously for up to 20 seconds. Each stdin chunk and output
+response is capped at 64 KiB; a session buffers at most 1 MiB of output and
+backpressures the Kubernetes stream until the caller drains it. A gateway admits
+256 sessions, with eight bounded metadata/authentication setup workers. Idle
+streams use asynchronous sockets rather than controller or gateway worker
+threads. An idle session closes after five minutes without a client operation;
+its signed grant expires after one hour even if the client remains active.
+Grants permit one launch and cannot be replayed to reopen a closed session.
+Sessions have no renewal or cross-process recovery: a longer-lived caller must
+handle expiry as a closed process and open a new authorized process if needed.
+
+Keep one replica per gateway identity: session state belongs to its process.
+Deploy additional gateway identities to partition capacity rather than sending
+one identity's requests to independent replicas. Closing a session half-closes
+stdin and disconnects exec. Programs using persistent sessions must clean up their
+children on stdin EOF; disconnecting Kubernetes exec alone does not guarantee
+that an arbitrary detached process dies.
+
+Inspect gateway lifecycle and pressure from its own logs:
+
+```bash
+kubectl --context marin_US-WEST-04A -n iris-ci logs deployment/iris-exec-gateway --since=10m
+```
+
+Open records report active/opening sessions and the target Pod/container. Capacity
+refusals report active sessions, setup operations, and retained spent grants. Close
+records report bytes transferred, remaining queued bytes, backpressure events, dropped bytes,
+receive count and cumulative receive wait milliseconds, exit status, and any
+transport, idle, or expiry error. Empty long polls produce no individual log
+records. Grants and their command arguments are excluded from these logs.

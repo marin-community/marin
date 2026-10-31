@@ -42,7 +42,7 @@ from iris.cluster.platforms.k8s.network_policies import build_service_group_netw
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from iris.testing.k8s import (
     k8s_backend_descriptor,
@@ -282,6 +282,77 @@ def test_default_service_group_member_exit_completes_task_and_reclaims_peers(
     assert update.exit_code == exit_code
     assert provider.sync(make_batch()) == []
     assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
+@pytest.mark.parametrize("condition_type", ["DisruptionTarget", "TerminationTarget"])
+def test_service_exiting_before_the_primary_preserves_disruption_classification(
+    provider, k8s, service_group_request, condition_type
+):
+    request = service_group_request
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+    entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)
+    assert provider.sync(make_batch(tasks_to_run=[request])) == []
+    [pod] = k8s.list_json(K8sResource.PODS)
+    pod_name = pod["metadata"]["name"]
+    pod["status"] = {
+        "phase": "Running",
+        "conditions": [{"type": condition_type, "status": "True", "reason": "WorkloadEvictedDueToPreempted"}],
+        "containerStatuses": [
+            {"name": "task", "state": {"running": {}}},
+            {"name": "service-runtime", "state": {"terminated": {"exitCode": 0}}},
+        ],
+    }
+    k8s.seed_resource(K8sResource.PODS, pod_name, pod)
+
+    [update] = provider.sync(make_batch(running_tasks=[entry]))
+
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert update.terminal_reason == "WorkloadEvictedDueToPreempted"
+    assert update.error == update.terminal_reason
+    assert provider.sync(make_batch()) == []
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
+def test_default_service_groups_keep_private_loopback_when_the_cluster_uses_host_network(k8s, service_group_request):
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(host_network=True), cluster_scan_interval=0.0
+    )
+    requests = []
+    for name in ("first", "second"):
+        request = job_pb2.RunTaskRequest()
+        request.CopyFrom(service_group_request)
+        request.task_id = f"/alice/{name}/0"
+        request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+        request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+        requests.append(request)
+    try:
+        assert provider.sync(make_batch(tasks_to_run=requests)) == []
+        pods = k8s.list_json(K8sResource.PODS)
+        assert len(pods) == 2
+        assert all(pod["spec"].get("hostNetwork", False) is False for pod in pods)
+        assert all(
+            any(alias["ip"] == "127.0.0.1" and "runtime" in alias["hostnames"] for alias in pod["spec"]["hostAliases"])
+            for pod in pods
+        )
+    finally:
+        provider.close()
+
+
+def test_multi_host_gpu_service_group_is_rejected_before_pod_creation(provider, k8s, service_group_request):
+    request = service_group_request
+    request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+    request.num_tasks = 2
+    request.environment.services[0].resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=1))
+    launch = controller_pb2.Controller.LaunchJobRequest(replicas=2, environment=request.environment)
+    launch.resources.device.gpu.CopyFrom(request.environment.services[0].resources.device.gpu)
+
+    assert "InfiniBand" in provider.validate_job(launch)
+    [failure] = provider.sync(make_batch(tasks_to_run=[request]))
+    assert failure.new_state == job_pb2.TASK_STATE_FAILED
+    assert "InfiniBand" in failure.error
+    assert k8s.list_json(K8sResource.PODS) == []
 
 
 @pytest.mark.parametrize(

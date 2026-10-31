@@ -183,11 +183,8 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("private_credentials", [False, True])
 @pytest.mark.parametrize("task_interface", [False, True], ids=["machine", "task"])
-def test_factory_uses_typed_iris_states_and_cancels_the_job(
-    tmp_path, monkeypatch, caplog, private_credentials, task_interface
-):
+def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, task_interface):
     task_id = JobName.from_wire("/fixture/sandbox/0")
     status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
@@ -208,10 +205,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(
     monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
     secret = "private-fixture-credential"
     monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
-    factory = IrisMachineFactory(
-        controller_url="http://fixture",
-        secret_env={"JUDGE_KEY": ("env:SHELLBOX_TEST_PRIVATE_KEY",)} if private_credentials else None,
-    )
+    factory = IrisMachineFactory(controller_url="http://fixture")
     spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
 
     async def scenario():
@@ -229,7 +223,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(
 
     asyncio.run(scenario())
     assert job.cancelled
-    assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
+    assert submitted_environments == [{}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
 
@@ -521,6 +515,51 @@ def test_cancelled_factory_wait_reclaims_the_submitted_job(monkeypatch, tmp_path
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("grouped", [False, True])
+def test_cancelled_blocked_submission_keeps_ownership_until_job_can_be_reclaimed(monkeypatch, tmp_path, grouped):
+    admitted, release = threading.Event(), threading.Event()
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+
+    class BlockingClient(TaskClient):
+        def submit_task(self, **kwargs):
+            admitted.set()
+            assert release.wait(10)
+            return super().submit_task(**kwargs)
+
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: BlockingClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    machine_spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
+
+    async def check():
+        operation = asyncio.create_task(
+            factory.create_task(
+                TaskSpec(containers=(ContainerSpec("task", machine_spec), ContainerSpec("runtime", machine_spec)))
+            )
+            if grouped
+            else factory.create(machine_spec)
+        )
+        try:
+            assert await asyncio.to_thread(admitted.wait, 5)
+            operation.cancel("original cancellation")
+            # Enter submission ownership recovery before delivering cancellation again.
+            await asyncio.sleep(0)
+            operation.cancel("second cancellation")
+            await asyncio.sleep(0)
+            assert not operation.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await asyncio.wait_for(operation, 5)
+            assert caught.value.args == ("original cancellation",)
+            assert job.cancelled
+        finally:
+            release.set()
+            await asyncio.gather(operation, return_exceptions=True)
+
+    asyncio.run(check())
+
+
 def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypatch):
     info = JobInfo(
         task_id=JobName.from_wire("/user/driver/0"),
@@ -538,7 +577,7 @@ def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypat
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: pytest.fail("Read host cluster credentials"))
     monkeypatch.setattr(iris_backend.IrisClient, "remote", remote)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    factory = IrisMachineFactory(controller_url="http://controller")
+    factory = IrisMachineFactory.in_cluster()
 
     with pytest.raises(SubmissionRecorded):
         asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
@@ -552,7 +591,8 @@ class GroupRpc(LocalRpc):
         self.targets: set[str] = set()
 
     def list_backends(self, request):
-        return SimpleNamespace(backends=[SimpleNamespace(capabilities=["task-services"])])
+        # A hub can forward this group to a capable peer without a local pool.
+        return SimpleNamespace(backends=[])
 
     def exec_in_container(self, request, timeout_ms):
         self.targets.add(request.container_name)
@@ -690,13 +730,10 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     assert job.cancelled
 
 
-@pytest.mark.parametrize("advertise_support", [True, False])
-def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path, advertise_support):
+def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.RUNNING))
     client = TaskClient(job)
     rpc = GroupRpc()
-    if not advertise_support:
-        monkeypatch.setattr(rpc, "list_backends", lambda _: SimpleNamespace(backends=[]))
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
@@ -718,11 +755,6 @@ def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path, adver
 
     async def run():
         factory = IrisMachineFactory(controller_url="http://controller")
-        if not advertise_support:
-            with pytest.raises(UnsupportedMachineSpec):
-                await factory.create_task(spec)
-            assert not client.submitted
-            return
         group = await factory.create_task(spec)
         with pytest.raises(RuntimeError):
             await group.wait_ready()

@@ -66,6 +66,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -857,10 +858,14 @@ def _topology_request_annotations(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
-    for cluster egress.
+    Single-container CLUSTER pods do. Service groups keep their own loopback,
+    and legacy gVisor needs the CNI-created interface and routes for egress.
     """
-    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+    if (
+        not config.host_network
+        or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
+        or len(run_req.environment.services) > 1
+    ):
         return False
     return network is TaskNetwork.CLUSTER
 
@@ -926,6 +931,8 @@ def _build_pod_manifest(
     except ValueError as error:
         raise PodManifestError(str(error)) from error
     multiple = len(task_spec.containers) > 1
+    if multiple and _needs_infiniband(run_req.num_tasks, run_req.resources.device):
+        raise PodManifestError("Multi-service tasks do not support multi-host GPU InfiniBand networking")
     private_group = multiple and isolation.network is TaskNetwork.NONE
     service_account = config.service_account if isolation.include_service_account else ""
     network = isolation.network
@@ -1356,7 +1363,9 @@ def _pod_failure_state(pod: dict) -> int:
         # Pod-level eviction: the pod status reason indicates infrastructure.
         reason = pod.get("status", {}).get("reason", "")
     else:
-        reason = status.get("state", {}).get("terminated", {}).get("reason", "")
+        reason = status.get("state", {}).get("terminated", {}).get("reason", "") or pod.get("status", {}).get(
+            "reason", ""
+        )
     if reason in _INFRASTRUCTURE_FAILURE_REASONS:
         return job_pb2.TASK_STATE_WORKER_FAILED
     return job_pb2.TASK_STATE_FAILED
@@ -1400,13 +1409,20 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         )
         if exited is not None:
             terminated = exited["state"]["terminated"]
+            new_state = _pod_failure_state(pod)
+            terminal_reason = _extract_terminal_reason(pod)
+            service_error = (
+                f"Task service {exited['name']} exited before the primary completed "
+                f"(exit code {terminated.get('exitCode', 1)}): {terminated.get('reason', 'terminated')}"
+            )
             return TaskUpdate(
                 attempt_uid=AttemptUid(entry.attempt_uid),
                 task_id=task_id,
                 attempt_id=attempt_id,
-                new_state=job_pb2.TASK_STATE_FAILED,
+                new_state=new_state,
                 exit_code=terminated.get("exitCode", 1),
-                error=f"Task service {exited['name']} exited: {terminated.get('reason', 'terminated')}",
+                error=(terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else service_error),
+                terminal_reason=terminal_reason,
                 **identity,
             )
 
@@ -2612,6 +2628,8 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if len(request.environment.services) > 1 and _needs_infiniband(request.replicas, request.resources.device):
+            return "Multi-service tasks do not support multi-host GPU InfiniBand networking"
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
@@ -2810,6 +2828,26 @@ class K8sTaskProvider:
             self.profile_table.write([row])
 
         return resp
+
+    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
+        """Fence a grant to the exact current Pod and declared running container."""
+        if not target.attempt_uid:
+            raise ProviderError("Persistent execution requires an exact attempt UID")
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+        if pod is None:
+            raise ProviderError("Execution target Pod does not exist")
+        metadata = pod.get("metadata", {})
+        if metadata.get("labels", {}).get(_LABEL_ATTEMPT_UID) != target.attempt_uid:
+            raise ProviderError("Execution target Pod belongs to another attempt")
+        if metadata.get("deletionTimestamp") or not metadata.get("uid"):
+            raise ProviderError("Execution target Pod is terminating or has no UID")
+        declared = {container["name"] for container in pod.get("spec", {}).get("containers", [])}
+        statuses = pod.get("status", {}).get("containerStatuses", [])
+        running = any(status["name"] == container_name and "running" in status.get("state", {}) for status in statuses)
+        if container_name not in declared or not running:
+            raise ProviderError("Execution target container is not running")
+        return ExecPodTarget(self.kubectl.namespace, pod_name, metadata["uid"], container_name, target.attempt_uid)
 
     def exec_in_container(
         self,
