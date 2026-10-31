@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Mapping
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 _SENSITIVE_KEY_RE = re.compile(
@@ -91,7 +92,9 @@ def sanitize_env_assignment(value: str) -> str:
     return f"{key}={redact_sensitive_value(raw_value)}"
 
 
-def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
+def resolve_env_vars(
+    env_dict: dict[str, str], *, source: Mapping[str, str] | None = None
+) -> dict[str, str]:
     """
     Resolve environment variable templates in a dictionary.
 
@@ -108,6 +111,7 @@ def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
     Raises:
         ValueError: If a required environment variable is not found and no default
     """
+    environment = os.environ if source is None else source
     resolved = {}
 
     for key, value in env_dict.items():
@@ -115,8 +119,8 @@ def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:
         if match:
             var_name = match.group(1)
             default = match.group(2)
-            if var_name in os.environ:
-                resolved[key] = os.environ[var_name]
+            if var_name in environment:
+                resolved[key] = environment[var_name]
             elif default is not None:
                 resolved[key] = default
             else:

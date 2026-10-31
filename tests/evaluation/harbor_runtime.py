@@ -12,6 +12,7 @@ from pathlib import Path
 from marin.evaluation.harbor.driver_config import _driver_environment
 
 _ROOT = Path(__file__).parents[2]
+_DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
 _RUNTIME_PROJECT = _ROOT / "vendor/harbor"
 
 
@@ -160,3 +161,29 @@ def run_single_turn_aime_agent(
         """
     )
     return json.loads(external_python("-c", script).stdout)
+
+
+def preflight(
+    tmp_path: Path,
+    requests: list[tuple[Path, dict[str, object]]],
+    *,
+    hash_seed: str = "0",
+    check: bool = True,
+    extra_python_path: Path | None = None,
+    judge_model: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    request_path = tmp_path / f"requests-{hash_seed}.json"
+    request_path.write_text(
+        json.dumps(
+            [{"path": str(path), "model_agent_kwargs": kwargs, "judge_model": judge_model} for path, kwargs in requests],
+            separators=(",", ":"),
+        )
+    )
+    return external_python(
+        str(_DRIVER),
+        "preflight",
+        str(request_path),
+        hash_seed=hash_seed,
+        check=check,
+        extra_python_path=extra_python_path,
+    )

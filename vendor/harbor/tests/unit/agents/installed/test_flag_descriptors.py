@@ -8,6 +8,25 @@ from harbor.agents.installed.base import _coerce_value
 from harbor.agents.installed.claude_code import ClaudeCode
 from harbor.agents.installed.codex import Codex
 from harbor.agents.installed.openhands import OpenHands
+from harbor.agents.installed.qwen_code import QwenCode
+from harbor.utils.env import task_environment
+
+
+@pytest.mark.parametrize("grant", ["agent", "task"])
+def test_qwen_descriptor_uses_granted_dummy_instead_of_host_provider_key(
+    temp_dir, monkeypatch, grant
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+    capabilities = {"OPENAI_API_KEY": "EMPTY"}
+    with task_environment(capabilities if grant == "task" else {}):
+        agent = QwenCode(
+            logs_dir=temp_dir,
+            model_name="qwen/model",
+            extra_env=capabilities if grant == "agent" else {},
+        )
+    assert agent.resolve_env_vars()["OPENAI_API_KEY"] == "EMPTY"
+    with pytest.raises(ValueError, match="credentials must remain on the host"):
+        QwenCode(logs_dir=temp_dir, model_name="qwen/model")
 
 
 class TestCoerceValue:

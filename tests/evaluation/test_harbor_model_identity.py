@@ -136,13 +136,13 @@ def test_preflight_policy_identity_ignores_model_and_serving_names():
             path.write_text(
                 json.dumps(
                     {
-                        "environment": {"type": "docker"},
+                        "environment": {"type": "daytona"},
                         "agents": [{"name": "terminus-2", "model_name": model_name, "model_alias": model_alias}],
                         "datasets": [{"path": "dataset"}],
                     }
                 )
             )
             paths.append(path)
-        configs = preflight_harbor_configs([(path, {}) for path in paths])
+        configs = preflight_harbor_configs([(path, {}) for path in paths], judge_model=None)
         assert configs[0].digest == configs[1].digest
         assert configs[0].benchmark.n_attempted == configs[1].benchmark.n_attempted == 1

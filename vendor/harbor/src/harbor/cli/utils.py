@@ -2,15 +2,33 @@ import asyncio
 import json
 import sys
 import tomllib
+from collections.abc import Mapping
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Coroutine, TypeVar
 
 import yaml
+from typer import Context
+
+from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials
 
 from harbor.models.task.config import MCPServerConfig, TpuSpec
 from harbor.utils.logger import logger
 
 T = TypeVar("T")
+
+
+def bind_backend_credentials(context: Context, environment: Mapping[str, str]) -> None:
+    """Keep an explicit host connection bound until the CLI command closes."""
+    resources = ExitStack()
+    context.call_on_close(resources.close)
+    resources.enter_context(
+        host_backend_credentials(
+            daytona_api_key=environment.get("DAYTONA_API_KEY"),
+            daytona_api_url=environment.get("DAYTONA_API_URL", DAYTONA_API_URL),
+            daytona_target=environment.get("DAYTONA_TARGET"),
+        )
+    )
 
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:

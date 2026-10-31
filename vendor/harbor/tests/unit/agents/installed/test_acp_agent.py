@@ -749,7 +749,7 @@ class TestAcpAgentRun:
             model_name="Qwen/Qwen3.6-35B-A3B",
             model_alias="hosted_vllm/campaign-model",
             api_base=endpoint,
-            api_key="dummy-key",
+            api_key="EMPTY",
             model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
             thinking_format="qwen-chat-template",
         )
@@ -806,4 +806,4 @@ class TestAcpAgentRun:
             }
         ]
         assert not endpoint_path.exists()
-        assert agent.acp_env() == {"HARBOR_PI_API_KEY": "dummy-key"}
+        assert agent.acp_env() == {"HARBOR_PI_API_KEY": "EMPTY"}

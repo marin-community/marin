@@ -3,13 +3,12 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from typer.testing import CliRunner
-
 from harbor.cli.main import app
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.trial.single_step import SingleStepTrial
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -45,13 +44,10 @@ def test_job_start_mcp_config_populates_agents(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
     )
-    monkeypatch.setattr(
-        "harbor.cli.jobs._confirm_host_env_access", lambda *_, **__: None
-    )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
     result = runner.invoke(
-        app, ["jobs", "start", "--mcp-config", str(_mcp_json(tmp_path)), "--yes"]
+        app, ["jobs", "start", "--mcp-config", str(_mcp_json(tmp_path))]
     )
 
     assert result.exit_code == 0, result.output

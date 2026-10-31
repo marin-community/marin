@@ -1,5 +1,4 @@
 import json
-import os
 import shlex
 import tempfile
 import uuid
@@ -27,6 +26,7 @@ from harbor.literal.rollout_build import (
 from harbor.models.agent.context import AgentContext
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
+from harbor.utils.env import validate_task_environment
 
 
 _CURRENT_PI_PACKAGE = "@earendil-works/pi-coding-agent"
@@ -91,7 +91,9 @@ lines.on("close", () => {
   }
   process.exitCode = 1;
 });
-""".replace("__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER)
+""".replace(
+            "__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER
+        )
         .replace("__CONTEXT_LENGTH_FAILURE_MARKER__", _CONTEXT_LENGTH_FAILURE_MARKER)
         .strip()
     )
@@ -301,8 +303,10 @@ export default function (pi) {
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
             raise ValueError("api_base must be a non-empty string")
-        if api_key is not None and (not isinstance(api_key, str) or not api_key):
-            raise ValueError("api_key must be a non-empty string")
+        if api_key not in (None, "", "EMPTY"):
+            raise ValueError(
+                "Pi provider credentials must remain on the host; use api_key='EMPTY' with a model relay"
+            )
         if (
             thinking_format is not None
             and thinking_format not in self._SUPPORTED_THINKING_FORMATS
@@ -321,7 +325,7 @@ export default function (pi) {
             )
 
         self._api_base = api_base
-        self._api_key = api_key or "not-needed"
+        self._api_key = api_key or "EMPTY"
         self._collect_rollout_details = collect_rollout_details
         self.rollout_correlation_id = (
             uuid.uuid4().hex if collect_rollout_details else None
@@ -559,6 +563,7 @@ export default function (pi) {
         """Upload the endpoint variables without placing their values in a command."""
         if self._api_base is None:
             raise ValueError("api_base is required to stage the endpoint environment")
+        validate_task_environment({"OPENAI_API_KEY": self._api_key})
         contents = (
             f"export {self._API_BASE_ENV}={shlex.quote(self._api_base)}\n"
             f"export {self._API_KEY_ENV}={shlex.quote(self._api_key)}\n"
@@ -645,7 +650,7 @@ export default function (pi) {
                 keys.append("XAI_API_KEY")
 
         for key in keys:
-            val = os.environ.get(key)
+            val = self._get_env(key)
             if val:
                 env[key] = val
 

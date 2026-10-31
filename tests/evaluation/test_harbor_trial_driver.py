@@ -4,7 +4,6 @@
 """Behavior of the vendored Harbor policy boundary."""
 
 import json
-import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
@@ -12,15 +11,15 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
 from tests.evaluation.harbor_runtime import external_python, write_runtime_overlay
+from tests.evaluation.harbor_runtime import preflight as _preflight
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
-_RUNTIME_PROJECT = _ROOT / "vendor/harbor"
 _POLICIES = _ROOT / "experiments/evaluation/configs/harbor"
 _INVALID_SOURCE_DOCUMENTS = {
     "hf-uri-in-path": {
@@ -55,13 +54,11 @@ def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
         import finestore
         import harbor_config
         import rigging
-        from marin.evaluation.harbor.trial_driver import _harbor_config_commit
 
         print(json.dumps({
             "harbor_config": inspect.getfile(harbor_config.JobConfig),
             "rigging": rigging.__file__,
             "finestore": finestore.__file__,
-            "commit": _harbor_config_commit(),
         }))
         """
     )
@@ -71,7 +68,6 @@ def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
     assert Path(imported["harbor_config"]).is_relative_to(_ROOT / "vendor/harbor/src")
     assert Path(imported["rigging"]).is_relative_to(_ROOT / "lib/rigging/src")
     assert Path(imported["finestore"]).is_relative_to(_ROOT / "lib/finestore/src")
-    assert imported["commit"] == HARBOR_SOURCE.commit
 
 
 def test_external_driver_uses_locked_archive_dependencies():
@@ -124,31 +120,6 @@ def test_external_driver_retries_spurious_path_style_response():
     )
 
     assert result.returncode == 0
-
-
-def _preflight(
-    tmp_path: Path,
-    requests: list[tuple[Path, dict[str, object]]],
-    *,
-    hash_seed: str = "0",
-    check: bool = True,
-    extra_python_path: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    request_path = tmp_path / f"requests-{hash_seed}.json"
-    request_path.write_text(
-        json.dumps(
-            [{"path": str(path), "model_agent_kwargs": kwargs} for path, kwargs in requests],
-            separators=(",", ":"),
-        )
-    )
-    return external_python(
-        str(_DRIVER),
-        "preflight",
-        str(request_path),
-        hash_seed=hash_seed,
-        check=check,
-        extra_python_path=extra_python_path,
-    )
 
 
 @pytest.fixture(scope="module")
@@ -226,7 +197,7 @@ verifier:
     assert stable_policy["agents"][0]["env"] == {}
 
 
-def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+def test_preflight_exports_harbor_error_taxonomy(checked_policies):
     taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
 
     assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
@@ -238,7 +209,6 @@ def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
         "VerificationNotCompletedError",
         "VerifierTimeoutError",
     }
-    assert taxonomies[0]["commit"] == HARBOR_SOURCE.commit
 
 
 def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
@@ -411,7 +381,7 @@ datasets:
         (task_dir / "tests").mkdir()
         (task_dir / "tests/test.sh").write_text("exit 0\n")
 
-        (config,) = preflight_harbor_configs([(policy_path, {})])
+        (config,) = preflight_harbor_configs([(policy_path, {})], judge_model=None)
         assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
@@ -596,7 +566,7 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
     source.write_text(
         json.dumps(
             {
-                "environment": {"type": "docker"},
+                "environment": {"type": "daytona"},
                 "agents": [{"name": agent_name, "kwargs": policy_kwargs}],
                 "datasets": [{"path": "dataset"}],
                 "user_agent": user_agent,
@@ -609,7 +579,7 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
         "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384},
     }
     requests = tmp_path / "requests.json"
-    requests.write_text(json.dumps([{"path": str(source), "model_agent_kwargs": model_kwargs}]))
+    requests.write_text(json.dumps([{"path": str(source), "model_agent_kwargs": model_kwargs, "judge_model": None}]))
     policy = tmp_path / "policy.json"
     overlay = tmp_path / "overlay.json"
     write_runtime_overlay(

@@ -623,11 +623,19 @@ class TaskRolloutWorkerSpec:
         installed_agents = None
         if self.harbor_config is not None and self.harbor_config.get("installed_agent") is not None:
             # Full Harbor is an optional dependency for installed-agent runs.
+            from harbor.environments.runtime import DAYTONA_API_URL, DaytonaConnection
             from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
             from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 
             settings = InstalledAgentSettings.model_validate(
                 OmegaConf.to_container(self.harbor_config.installed_agent, resolve=True)
+            )
+            assert harbor is not None
+            daytona_options = harbor.environment.kwargs
+            daytona_connection = DaytonaConnection(
+                api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
+                api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+                target=os.environ.get("DAYTONA_TARGET"),
             )
             installed_agents = InstalledAgentRuntime(
                 settings,
@@ -635,6 +643,11 @@ class TaskRolloutWorkerSpec:
                     inference.model_name, generation_context_limit(runner_config), inference.tokenize, tokenizer
                 ),
                 int(runner_config.sampling_params.max_generate_length),
+                daytona_connection=daytona_connection,
+                eval_daytona_connection=replace(
+                    daytona_connection,
+                    api_key=os.environ.get(daytona_options.get("eval_api_key_env") or "DAYTONA_API_KEY"),
+                ),
             )
         factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:

@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from harbor.environments.base import ExecResult
 from harbor.models.environment_type import EnvironmentType
-from harbor.models.trial.config import TaskConfig as TrialTaskConfig
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
     TrialConfig,
     VerifierConfig,
 )
+from harbor.models.trial.config import TaskConfig as TrialTaskConfig
 from harbor.models.trial.result import AgentInfo
 from harbor.trial.trial import Trial
 
@@ -27,9 +27,7 @@ def _task_with_configured_artifacts(
     artifacts_toml = (
         "['/logs/agent/trajectory.json']"
         if artifacts is None
-        else artifacts
-        if isinstance(artifacts, str)
-        else repr(artifacts)
+        else artifacts if isinstance(artifacts, str) else repr(artifacts)
     )
     task_dir = tmp / "task"
     task_dir.mkdir()
@@ -111,7 +109,7 @@ async def _run(task_dir, trials_dir, agent_env, verifier_env):
         task=TrialTaskConfig(path=task_dir),
         trials_dir=trials_dir,
         agent=AgentConfig(name="oracle"),
-        environment=EnvironmentConfig(type=EnvironmentType.DOCKER, delete=False),
+        environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=False),
         verifier=VerifierConfig(),
     )
     call_index = [0]

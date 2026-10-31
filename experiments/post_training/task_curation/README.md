@@ -83,9 +83,10 @@ catalog beside it. `--report-path` chooses another report
 location. Review requests are cached under `CACHE_DIR/review-cache` unless
 `--review-cache` selects another location. `GLM_BULK_TOKEN` supplies credentials.
 Package-backed and image graders retain their normal environment prerequisites.
-`--image-backend` and `--controller-url` can explicitly select a remote image
-grader while curation runs locally; worker-image and coordinator flags apply only
-to Iris execution.
+`--image-backend daytona` selects a remote image grader for local curation.
+`--image-backend gvisor` requires an authenticated Iris driver inside the
+execution cluster with Pod networking; a controller URL alone is insufficient.
+Worker-image and coordinator flags apply only to Iris execution.
 Use `--input-root`, `--input-file` or `--input` only when deliberately replacing
 the pinned inputs; the local rollout can use real sources without overrides.
 Keep the same `--quality-sample-size` and `--seed` when moving from SAMPLE to
