@@ -223,7 +223,7 @@ def main(
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
             topology=SkyRLTopology(
-            num_nodes=1, gpus_per_node=model.gpus_per_node, gpu_variant="H100", role_plan=plan
+            num_nodes=1, gpus_per_node=entry.gpus_per_node, gpu_variant="H100", role_plan=plan
         ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=SEED,

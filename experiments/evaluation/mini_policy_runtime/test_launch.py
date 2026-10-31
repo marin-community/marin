@@ -52,6 +52,51 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
     assert isinstance(result.exception, SystemExit)
 
 
+def test_launch_binds_the_model_topology_from_the_registry(tmp_path, monkeypatch):
+    manifest = {
+        "required_source_keys": ["dockerfile:one"],
+        "expected_source_keys": 1,
+        "validated_source_keys": ["dockerfile:one"],
+        "failures": [],
+        "data_uri": "s3://example/full",
+        "environment_overrides": {},
+        "agent_mcp_servers": {},
+        "verifier_env": {},
+        "credential_env": "DAYTONA_EVAL_API_KEY",
+    }
+    path = tmp_path / "environments.json"
+    path.write_text(json.dumps(manifest))
+
+    captured = {}
+
+    def capture(spec, execution, **kwargs):
+        captured["spec"] = spec
+        raise SystemExit(0)
+
+    monkeypatch.setattr(launch, "skyrl_step", capture)
+    result = CliRunner().invoke(
+        launch.main,
+        [
+            "--version",
+            "2026.10.31.15",
+            "--run",
+            "--model",
+            "snowball-67b-a2b",
+            "--model-uri",
+            "s3://example/model",
+            "--data-uri",
+            "s3://example/full",
+            "--environment-manifest",
+            str(path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    spec = captured["spec"]
+    assert spec.topology.gpus_per_node == 4
+    assert spec.name == "checkpoints/mini840-e2e-snowball-67b-a2b"
+    assert spec.model.tokenizer_uri == "open-athena/Snowball-67B-A2B-Chat-Aligned-Base-2026.10.22"
+
+
 @pytest.mark.parametrize(
     "key,tool_parser",
     [
