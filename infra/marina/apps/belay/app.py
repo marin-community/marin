@@ -208,9 +208,14 @@ def migrate(connection: Connection) -> None:
     connection.execute(text("INSERT INTO watcher (id) VALUES (1) ON CONFLICT (id) DO NOTHING"))
 
 
+LOCAL_CALLER = "maintainer (local preview)"
+
+
 def _caller() -> str:
     identity = get_verified_identity()
-    return identity.user_id if identity is not None else "local maintainer"
+    if identity is None or identity.user_id == "anonymous":
+        return LOCAL_CALLER
+    return identity.user_id
 
 
 def _now() -> datetime.datetime:
@@ -251,14 +256,29 @@ def _activity(conn: Connection, post: ActivityPost) -> int:
     ).scalar_one()
 
 
+def _requeue(conn: Connection, session_id: str) -> None:
+    """Offer a failed or lost session's events once more, so one crash does not drop an approval or a result."""
+    for event in _rows(conn, "SELECT kind, ref, summary, payload FROM events WHERE session_id = :s", s=session_id):
+        if event["payload"].get("retry_of"):
+            continue
+        payload = {**event["payload"], "retry_of": session_id}
+        _enqueue(conn, EventKind(event["kind"]), event["ref"], f"{event['summary']} (retry)", payload)
+
+
 def _expire_sessions(conn: Connection) -> None:
-    conn.execute(
+    lost = conn.execute(
         text(
             "UPDATE sessions SET state = 'lost', ended_at = now(), summary = 'No report within the session timeout.' "
-            "WHERE state = 'running' AND started_at < :cutoff"
+            "WHERE state = 'running' AND started_at < :cutoff RETURNING id"
         ),
         {"cutoff": _now() - SESSION_TIMEOUT},
-    )
+    ).scalars()
+    for session_id in list(lost):
+        _requeue(conn, session_id)
+
+
+def _events(count: int) -> str:
+    return "1 queued event waits" if count == 1 else f"{count} queued events wait"
 
 
 def _next_step(
@@ -270,7 +290,7 @@ def _next_step(
     if queued and not settings["dispatch_enabled"]:
         return {
             "tone": "blocked",
-            "text": f"Dispatch is off, so {len(queued)} queued event(s) wait. Turn dispatch on to start a session.",
+            "text": f"Dispatch is off, so {_events(len(queued))}. Turn dispatch on to start a session.",
         }
     if queued:
         return {"tone": "busy", "text": f"A session starts within a minute to handle: {queued[0]['summary']}."}
@@ -283,7 +303,8 @@ def _next_step(
             progress = f" (slowest at step {r['step']:,} of {r['total_steps']:,})"
         return {"tone": "waiting", "text": f"Waiting for {names} to finish{progress}; the next session records them."}
     if pending:
-        return {"tone": "idle", "text": f"{pending} suggestion(s) wait for a maintainer. Approve one to start it."}
+        waiting = "1 suggestion waits" if pending == 1 else f"{pending} suggestions wait"
+        return {"tone": "idle", "text": f"{waiting} for a maintainer. Approve one to start it."}
     return {"tone": "idle", "text": "Nothing is queued. Propose an idea or wait for a new intake suggestion."}
 
 
@@ -570,6 +591,8 @@ def create_api(services: Any) -> FastAPI:
             ).rowcount
             if not updated:
                 raise HTTPException(404, f"no session {session_id}")
+            if report.state is not SessionState.SUCCEEDED:
+                _requeue(conn, session_id)
             _activity(
                 conn,
                 ActivityPost(

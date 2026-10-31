@@ -386,8 +386,9 @@ Follow the Belay session guidelines in your system prompt.
 
 - Experiment checkout (your working directory): {agent_dir}, branch `{branch}`. Push with `git push origin {branch}`.
 - Registry checkout: {registry_dir}, branch `{registry_branch}` (a demo copy of the registry). Run registry commands as
-  `cd {registry_dir} && {python} -m experiments.belay.registry ...`; commit there and push with
-  `git push origin {registry_branch}`. Registry file URLs:
+  `{python} {registry_dir}/experiments/belay/registry.py ...` (e.g. `new`, `validate`). Use git there only as
+  `git -C {registry_dir} <add|commit|push origin {registry_branch}|pull --ff-only|status|log>`; do not `cd` into it.
+  Registry file URLs:
   https://github.com/{REPOSITORY}/blob/{registry_branch}/experiments/belay/registry/<file>
 - Belay page: {page_url} (use it as --comment-url for submit).
 - Iris: `uv run iris --cluster marin job list --prefix /{getpass.getuser()}/belay-`; runs go to cw-us-east-02a.
@@ -406,10 +407,14 @@ def run_session(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     guidelines = (REPO / "experiments/belay/AGENTS.md").read_text()
     python = agent_dir / ".venv/bin/python"
+    agent_branch, registry_branch = _branches(agent_dir, registry_dir)
+    registry_git = f"git -C {registry_dir}"
     allowed = [
         *ALLOWED_TOOLS,
-        f"Bash({python} -m experiments.belay.registry:*)",
-        *(f"Bash(git push origin {b}:*)" for b in _branches(agent_dir, registry_dir)),
+        f"Bash({python} {registry_dir}/experiments/belay/registry.py:*)",
+        f"Bash(git push origin {agent_branch}:*)",
+        *(f"Bash({registry_git} {verb}:*)" for verb in ("add", "commit", "status", "log", "diff", "pull --ff-only")),
+        f"Bash({registry_git} push origin {registry_branch}:*)",
     ]
     command = [
         "claude",
@@ -422,6 +427,8 @@ def run_session(
         "--verbose",
         "--permission-mode",
         "acceptEdits",
+        "--add-dir",
+        str(registry_dir),
         "--allowedTools",
         *allowed,
         "--max-turns",
@@ -576,7 +583,7 @@ def main(argv: list[str]) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("up", "down", "tick"):
+    for name in ("up", "down", "tick", "release"):
         p = sub.add_parser(name)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
         p.add_argument("--marina-checkout", type=Path, default=DEFAULT_MARINA_CHECKOUT)
@@ -608,6 +615,9 @@ def main(argv: list[str]) -> None:
     if args.command == "down":
         stop_stack(stack)
         print("stopped Marina and Postgres; state kept in", args.state_dir)
+        return
+    if args.command == "release":
+        print("released belay revision", release_app(stack))
         return
     if args.command == "tick":
         Watcher(args.agent_dir).tick()

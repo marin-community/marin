@@ -235,6 +235,8 @@ def record_trial(
 def commit_registry(registry_dir: Path, path: Path, message: str) -> None:
     subprocess.run([sys.executable, "-m", "experiments.belay.registry", "validate"], cwd=registry_dir, check=True)
     _git(registry_dir, "add", str(path))
+    if not _git(registry_dir, "status", "--porcelain", str(path)):
+        return  # e.g. a control run, which the variant's trial already names as its baseline
     _git(registry_dir, "commit", "--quiet", "-m", message)
     branch = _git(registry_dir, "rev-parse", "--abbrev-ref", "HEAD")
     _git(registry_dir, "push", "--quiet", "origin", branch)
