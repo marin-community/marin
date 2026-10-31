@@ -140,7 +140,6 @@ class SkyRLTopology:
         positive_fields = (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
-            "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
             "inference_engine_data_parallel_size",
@@ -154,6 +153,10 @@ class SkyRLTopology:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
+        if plan.num_inference_engines < 0:
+            raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
+        if plan.num_inference_engines == 0 and plan.colocate_all:
+            raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
