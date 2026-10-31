@@ -86,11 +86,16 @@ marin-finelog = { path = "../../lib/finelog", editable = true }
 timeout = 60
 testpaths = ["tests/unit"]
 pythonpath = ["."]
-addopts = ["-v", "--tb=short", "--strict-markers", "--strict-config"]
+addopts = [
+    "-v", "--tb=short", "--strict-markers", "--strict-config",
+    "-m", "not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not runtime and not windows_containers",
+]
 markers = [
     "asyncio: asynchronous tests",
     "unit: offline unit tests",
     "integration: tests requiring external services",
+    "docker: tests requiring a Docker daemon",
+    "manual: tests requiring explicit operator setup",
     "runtime: tests requiring a container runtime",
     "windows_containers: tests requiring Windows containers",
 ]
