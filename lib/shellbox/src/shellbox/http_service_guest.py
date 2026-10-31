@@ -110,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": request_id,
                     "method": self.command,
                     "path": self.path,
-                    "body": base64.b64encode(body).decode(),
+                    "body": base64.urlsafe_b64encode(body).decode(),
                 }
             )
             if not pending.ready.wait(REQUEST_TIMEOUT):
@@ -121,7 +121,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_body(502, b'{"error":"host service closed"}')
                 return
             self.send_body(
-                response["status"], base64.b64decode(response["body"], validate=True), response["content_type"]
+                response["status"],
+                base64.b64decode(response["body"], altchars=b"-_", validate=True),
+                response["content_type"],
             )
         finally:
             with self.server.lock:

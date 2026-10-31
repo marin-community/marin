@@ -4,13 +4,14 @@
 """Expose a bounded host HTTP capability inside a machine without network egress."""
 
 import asyncio
-import base64
-import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from shellbox import http_service_guest
 from shellbox.machine import Command, Machine, ProcessMachine, ProcessSession, UnsupportedMachineSpec
@@ -39,21 +40,41 @@ class HttpResponse:
     content_type: str = "application/json"
 
 
+class _WireFrame(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", val_json_bytes="base64", ser_json_bytes="base64")
+
+
+class _ReadyFrame(_WireFrame):
+    type: Literal["ready"]
+
+
+class _RequestFrame(_WireFrame):
+    type: Literal["request"]
+    id: str = Field(min_length=32, max_length=32)
+    method: Literal["GET", "POST"]
+    path: str = Field(max_length=MAX_PATH)
+    body: bytes = Field(max_length=MAX_BODY)
+
+
+class _ResponseFrame(_WireFrame):
+    id: str = Field(min_length=32, max_length=32)
+    status: int = Field(ge=100, le=599)
+    body: bytes = Field(max_length=MAX_BODY)
+    content_type: str = Field(default="application/json", max_length=MAX_PATH, pattern=r"^[^\r\n]*$")
+
+
 class _Frames:
     def __init__(self, session: ProcessSession):
         self.session = session
         self.buffer = bytearray()
 
-    async def receive(self) -> dict:
+    async def receive(self) -> bytes:
         while True:
             end = self.buffer.find(b"\n")
             if end >= 0:
                 frame = bytes(self.buffer[:end])
                 del self.buffer[: end + 1]
-                item = json.loads(frame)
-                if not isinstance(item, dict):
-                    raise ValueError("Invalid sandbox HTTP frame")
-                return item
+                return frame
             if len(self.buffer) >= WIRE_LIMIT:
                 raise ValueError("Sandbox HTTP frame exceeds its limit")
             data = await self.session.read(min(65536, WIRE_LIMIT - len(self.buffer)))
@@ -62,18 +83,18 @@ class _Frames:
             self.buffer.extend(data)
 
 
-async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request: HttpRequest) -> HttpResponse:
+async def _response(handler: Callable[[HttpRequest], Awaitable[HttpResponse]], request: _RequestFrame) -> _ResponseFrame:
     try:
-        response = await asyncio.wait_for(handler(request), timeout=http_service_guest.REQUEST_TIMEOUT)
-        if not 100 <= response.status <= 599 or len(response.body) > MAX_BODY:
-            raise ValueError("HTTP capability response exceeds its limits")
-        if len(response.content_type) > MAX_PATH or "\r" in response.content_type or "\n" in response.content_type:
-            raise ValueError("Invalid HTTP capability content type")
-        return response
+        response = await asyncio.wait_for(
+            handler(HttpRequest(request.method, request.path, request.body)), timeout=http_service_guest.REQUEST_TIMEOUT
+        )
+        return _ResponseFrame(
+            id=request.id, status=response.status, body=response.body, content_type=response.content_type
+        )
     except Exception as error:
         # Provider exception text and headers can contain host credentials.
         logger.warning("HTTP capability failed (%s)", type(error).__name__)
-        return HttpResponse(502, b'{"error":"host service failed"}')
+        return _ResponseFrame(id=request.id, status=502, body=b'{"error":"host service failed"}')
 
 
 async def _cancel(tasks: set[asyncio.Task]) -> None:
@@ -102,7 +123,7 @@ def _handler_finished(task: asyncio.Task) -> None:
 
 
 async def _pump(frames: _Frames, handler: Callable[[HttpRequest], Awaitable[HttpResponse]]) -> None:
-    pending: dict[str, asyncio.Task[HttpResponse]] = {}
+    pending: dict[str, asyncio.Task[_ResponseFrame]] = {}
     receive = asyncio.create_task(frames.receive())
     try:
         while True:
@@ -111,40 +132,14 @@ async def _pump(frames: _Frames, handler: Callable[[HttpRequest], Awaitable[Http
                 if task not in done:
                     continue
                 response = task.result()
-                frame = (
-                    json.dumps(
-                        {
-                            "id": request_id,
-                            "status": response.status,
-                            "body": base64.b64encode(response.body).decode(),
-                            "content_type": response.content_type,
-                        },
-                        separators=(",", ":"),
-                    ).encode()
-                    + b"\n"
-                )
                 async with asyncio.timeout(TRANSPORT_TIMEOUT):
-                    await frames.session.write(frame)
+                    await frames.session.write(response.model_dump_json().encode() + b"\n")
                 del pending[request_id]
             if receive in done:
-                item = receive.result()
-                request_id, method, path, encoded = (item[key] for key in ("id", "method", "path", "body"))
-                if (
-                    item.get("type") != "request"
-                    or not isinstance(request_id, str)
-                    or len(request_id) != 32
-                    or request_id in pending
-                    or method not in ("GET", "POST")
-                    or not isinstance(path, str)
-                    or len(path) > MAX_PATH
-                    or not isinstance(encoded, str)
-                    or len(pending) >= MAX_PENDING
-                ):
-                    raise ValueError("Invalid sandbox HTTP request")
-                body = base64.b64decode(encoded, validate=True)
-                if len(body) > MAX_BODY:
-                    raise ValueError("Sandbox HTTP request exceeds its limit")
-                pending[request_id] = asyncio.create_task(_response(handler, HttpRequest(method, path, body)))
+                request = _RequestFrame.model_validate_json(receive.result())
+                if request.id in pending or len(pending) >= MAX_PENDING:
+                    raise ValueError("Duplicate sandbox HTTP request or pending request limit exceeded")
+                pending[request.id] = asyncio.create_task(_response(handler, request))
                 receive = asyncio.create_task(frames.receive())
     finally:
         await finish_owned(own_cleanup(_cancel({receive, *pending.values()})))
@@ -190,8 +185,7 @@ async def serve_http(
     try:
         frames = _Frames(session)
         async with asyncio.timeout(TRANSPORT_TIMEOUT):
-            if await frames.receive() != {"type": "ready"}:
-                raise RuntimeError("Sandbox HTTP listener failed to start")
+            _ReadyFrame.model_validate_json(await frames.receive())
         pump = asyncio.create_task(_pump(frames, handler))
         pump.add_done_callback(finished)
         yield f"http://127.0.0.1:{port}"

@@ -82,7 +82,7 @@ def available_port() -> int:
         return listener.getsockname()[1]
 
 
-def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tmp_path):
+def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tmp_path, caplog):
     async def check():
         blocked = asyncio.Event()
         release = asyncio.Event()
@@ -96,6 +96,8 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
                 return HttpResponse(200, b'{"done":true}')
             if request.path == "/broken":
                 raise RuntimeError("provider rejected secret-host-key")
+            if request.path == "/invalid-response":
+                return HttpResponse(200, b"{}", "application/json\r\nsecret-host-key")
             body = json.loads(request.body)
             return HttpResponse(201, json.dumps({"answer": body["number"] + 1}).encode())
 
@@ -107,9 +109,11 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
                 answer = await client.post(url + "/answer", json={"number": 41})
                 assert answer.status_code == 201
                 assert answer.json() == {"answer": 42}
-                broken = await client.post(url + "/broken")
-                assert broken.status_code == 502
-                assert "secret-host-key" not in broken.text
+                for path in ("/broken", "/invalid-response"):
+                    broken = await client.post(url + path)
+                    assert broken.status_code == 502
+                    assert broken.json() == {"error": "host service failed"}
+                assert "secret-host-key" not in caplog.text
                 body = bytes(range(256)) * (MAX_BODY // 256)
                 echoed = await client.post(url + "/echo", content=body)
                 assert echoed.status_code == 200 and echoed.content == body
@@ -117,6 +121,37 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
                 assert (await slow).json() == {"done": True}
         assert list(tmp_path.iterdir()) == []
         assert len(machine.processes) == 1
+        assert machine.processes[0].returncode is not None
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("body", ["!!!", False])
+def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(tmp_path, body):
+    frame = json.dumps({"type": "request", "id": "a" * 32, "method": "POST", "path": "/score", "body": body})
+
+    class MalformedFrameMachine(ProcessMachine):
+        async def open_process(self, command):
+            script = (
+                "import sys\n"
+                'print(\'{"type":"ready"}\', flush=True)\n'
+                f"print({frame!r}, flush=True)\n"
+                "sys.stdin.buffer.read()\n"
+            )
+            return await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))
+
+    async def check():
+        machine = MalformedFrameMachine(tmp_path)
+        dispatched = []
+
+        async def handler(request):
+            dispatched.append(request)
+            return HttpResponse(200, b"{}")
+
+        with pytest.raises(ValueError):
+            async with serve_http(machine, handler, port=available_port()):
+                await asyncio.wait_for(asyncio.Event().wait(), 5)
+        assert dispatched == []
         assert machine.processes[0].returncode is not None
 
     asyncio.run(check())

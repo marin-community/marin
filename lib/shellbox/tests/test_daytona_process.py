@@ -202,7 +202,7 @@ def test_daytona_http_capability_uses_one_persistent_provider_session(session_ma
 
         try:
             async with serve_http(machine, handler, port=unused_tcp_port) as endpoint:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(trust_env=False) as client:
                     slow = asyncio.create_task(client.post(endpoint + "/blocked", content=b"slow"))
                     try:
                         await asyncio.wait_for(blocked.wait(), 5)
