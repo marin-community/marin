@@ -107,20 +107,36 @@ async def serve_process(reader: ProcessReader, writer: asyncio.StreamWriter, cap
 
     async def input_frames() -> None:
         assert process is not None and process.stdin is not None
-        while True:
-            kind, data = await read_frame(reader)
-            if kind == CLOSE and not data:
-                return
-            if kind == EOF and not data:
-                process.stdin.close()
-            elif kind == STDIN:
-                process.stdin.write(data)
-                await process.stdin.drain()
-                # One acknowledged frame at a time bounds stdin buffering and
-                # keeps the transport reading EOF when the child stops reading.
-                await send(WRITTEN)
-            else:
-                raise ValueError("Unexpected process input frame")
+        receiving = asyncio.create_task(read_frame(reader))
+        draining: asyncio.Task[None] | None = None
+        try:
+            while True:
+                if draining is not None:
+                    done, _ = await asyncio.wait((receiving, draining), return_when=asyncio.FIRST_COMPLETED)
+                    if draining in done:
+                        draining.result()
+                        await send(WRITTEN)
+                        draining = None
+                kind, data = await receiving
+                if kind == CLOSE and not data:
+                    return
+                if draining is not None:
+                    raise ValueError("Expected stdin acknowledgment before another input frame")
+                if kind == EOF and not data:
+                    process.stdin.close()
+                elif kind == STDIN:
+                    process.stdin.write(data)
+                    # Keep reading CLOSE while stdin is blocked. Acknowledging
+                    # only drained chunks bounds the sender to one pending chunk.
+                    draining = asyncio.create_task(process.stdin.drain())
+                else:
+                    raise ValueError("Unexpected process input frame")
+                receiving = asyncio.create_task(read_frame(reader))
+        finally:
+            pending = [receiving] if draining is None else [receiving, draining]
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def output_frames() -> None:
         assert process is not None and process.stdout is not None and process.stderr is not None
