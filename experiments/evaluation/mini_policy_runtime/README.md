@@ -23,12 +23,12 @@ Preparation reconstructs the repaired packages from the frozen initial exports a
 
 ## Prepare a fresh run
 
-Use runtime commit `92fc01f9ae271d937f976453a94ca1597869d0d3`, which contains the native environment launch path, runtime repairs and result-audit command:
+Use runtime commit `578b943a0c830ea2907cd1bd40d78fe752714e5f`, which contains the native environment launch path, runtime repairs and result-audit command:
 
 ```bash
 git clone --filter=blob:none https://github.com/marin-community/marin.git mini840-repro
 cd mini840-repro
-git checkout --detach 92fc01f9ae271d937f976453a94ca1597869d0d3
+git checkout --detach 578b943a0c830ea2907cd1bd40d78fe752714e5f
 ```
 
 Run the remaining commands from that repository root. Existing Iris, CoreWeave storage, Hugging Face, Daytona eval and Together access is required. See [installation](../../../docs/tutorials/installation.md), [CoreWeave access](../../../docs/tutorials/cloud-gpu.md), and [Iris authentication](../../../lib/iris/OPS.md#authentication-headless--ci). The GCP identity must already have access to the four secrets below; these instructions do not grant it. Before submitting any Iris job, export `CW_KEY_ID` and `CW_KEY_SECRET` for CoreWeave storage handoff, plus `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` for task execution, from the approved credential store; do not put them in files committed to Git. Public dataset downloads need no HF write token. With existing GCP access, the credential roles can be resolved without a local secrets file:
@@ -147,7 +147,9 @@ On RNO2A, the 21-benchmark smoke at runtime `d3c4ad178b625b992b69b9af346f97c03a1
 
 The first independent issue-only reproduction at `8636783665` completed 21 rollouts but verified only 19. TB2 exposed a context rejection that permanently disabled its inference session. SWE-bench received a 900-second eval default instead of the declared 1,800 seconds, and an outer agent timer canceled Harbor before verification finished. This run is rejected as full execution-path validation.
 
-The current runtime returns recoverable context errors to Pi, sets both agent timeout fields explicitly, and lets Harbor finish verification within the whole-attempt limit. It also binds privileged CUDA/Ray discovery to the task's device-plugin UUID allocation. Separate RNO2A controls passed:
+A subsequent real-Qwen smoke at `92fc01f9ae` exposed another context failure in TBLite: the serving adapter validated reconstructed message text before substituting the exact recorded token prefix. That smoke is also rejected as complete validation.
+
+The current runtime validates the actual token prefix with the pinned vLLM context validator, then uses its token-reuse path. Normal reconstructed requests and oversized exact prefixes still fail validation. It also returns recoverable context errors to Pi, sets both agent timeout fields explicitly, and lets Harbor finish verification within the whole-attempt limit. It also binds privileged CUDA/Ray discovery to the task's device-plugin UUID allocation. Separate RNO2A controls passed:
 
 - Real Pi and native Daytona: an injected context rejection triggered summarization, further tool use and an original verifier reward of 1. This uses a deterministic diagnostic model; it is a protocol test.
 - Real Pi and native Daytona: a controlled agent hang reached its 10-second diagnostic deadline, then the original verifier ran and recorded 0. The Mini840 agent deadline remains 1,800 seconds.
@@ -155,4 +157,4 @@ The current runtime returns recoverable context errors to Pi, sets both agent ti
 
 The controls are reproducible from `native_recovery_smoke.py` (`--mode context` or `--mode timeout`) and `gpu_allocation_smoke.py` in this directory. Run the native controls on an Iris CPU task using the frozen SkyRL CPU environment (`--extra cpu --group harbor-test --no-group dev`), with the repository root on `PYTHONPATH` and the Daytona eval credential passed to the task. Run the GPU control in a privileged two-H100 Iris task with the same pinned SkyRL bootstrap environment as the launcher. See [the GPU incident](https://marina.oa.dev/echo/wiki/907) for the allocation evidence.
 
-A fresh 21-path Qwen smoke and independent reproduction of this repaired runtime are in progress. These checks establish execution paths; no complete 1,626-rollout Mini840 or 450-rollout Micro210 quality score is claimed.
+The pinned-vLLM regression passed on RNO2A, including rejection of an oversized exact prefix; the SkyRL CPU suite passed 318 tests. A focused TBLite/TB2 canary is running. Full 21-path independent validation of this repaired pin remains pending. These checks establish execution paths; no complete 1,626-rollout Mini840 or 450-rollout Micro210 quality score is claimed.
