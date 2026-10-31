@@ -1,38 +1,54 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import math
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
 import pytest
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from jax.sharding import AxisType, Mesh
+from levanter.testing.devices import use_test_devices
+
+from experiments.grug.moe_hero_ep import model
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_ce_grad_in_forward_matches_default_loss_and_parameter_grads():
     # The grad-in-forward cross-entropy must leave the training loss and every parameter
     # gradient unchanged. Eight tokens per expert shard and a 3-row block exercise padding.
-    script = """
-        import dataclasses
-        import math
-
-        import equinox as eqx
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh
-
-        from experiments.grug.moe_hero_ep import model
-
+    with use_test_devices(4) as devices:
         config = model.GrugModelConfig(
-            vocab_size=128, hidden_dim=32, intermediate_dim=16, shared_expert_intermediate_dim=16,
-            num_shared_experts=1, num_experts=4, num_experts_per_token=2, num_layers=2, num_heads=4,
-            num_kv_heads=2, local_kv_heads=2, global_kv_heads=2, head_dim=8, max_seq_len=8,
-            sliding_window=4, global_every=2, capacity_factor=4.0, initializer_std=0.5 / math.sqrt(32),
-            qk_mult=1.3, attention_implementation="reference", moe_implementation="fixed_all_to_all",
+            vocab_size=128,
+            hidden_dim=32,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=2,
+            num_layers=2,
+            num_heads=4,
+            num_kv_heads=2,
+            local_kv_heads=2,
+            global_kv_heads=2,
+            head_dim=8,
+            max_seq_len=8,
+            sliding_window=4,
+            global_every=2,
+            capacity_factor=4.0,
+            initializer_std=0.5 / math.sqrt(32),
+            qk_mult=1.3,
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
         )
         rng = np.random.default_rng(0)
         tokens = jnp.asarray(rng.integers(0, config.vocab_size, size=(4, 8), dtype=np.int32))
         loss_weight = jnp.asarray(rng.uniform(0.0, 2.0, size=(4, 8)).astype(np.float32)).at[:, -1].set(0.0)
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 1, 4, 1),
+            np.asarray(devices).reshape(1, 1, 1, 4, 1),
             ("replica_dcn", "data", "context", "expert", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
@@ -52,6 +68,3 @@ def test_ce_grad_in_forward_matches_default_loss_and_parameter_grads():
         assert len(results[3][1]) == len(results[None][1]) > 0
         for actual, expected in zip(results[3][1], results[None][1], strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
-    """
-
-    run_on_cpu_devices(script, device_count=4)

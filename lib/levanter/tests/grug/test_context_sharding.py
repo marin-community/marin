@@ -3,14 +3,12 @@
 
 """Multi-device MoE drop accounting and loss reductions over context shards."""
 
-import os
-import subprocess
-import sys
-import textwrap
 
 import pytest
+from levanter.testing.devices import use_test_devices
+from levanter.grug.grug_moe import MoEExpertMlp
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
-_PRELUDE = """
 import itertools
 import math
 
@@ -27,9 +25,9 @@ _MESH_AXES = ("replica_dcn", "data", "context", "expert", "model")
 TOKEN_AXES = (*BATCH_AXES, "context")
 
 
-def mesh_of(shape):
-    devices = np.asarray(jax.devices()[: math.prod(shape)]).reshape(shape)
-    return Mesh(devices, _MESH_AXES, axis_types=(AxisType.Explicit,) * len(_MESH_AXES))
+def mesh_of(shape, devices):
+    mesh_devices = np.asarray(devices[: math.prod(shape)]).reshape(shape)
+    return Mesh(mesh_devices, _MESH_AXES, axis_types=(AxisType.Explicit,) * len(_MESH_AXES))
 
 
 def activation_spec(seq_sharded):
@@ -37,7 +35,7 @@ def activation_spec(seq_sharded):
 
 
 def equation_params(jaxpr, primitive):
-    \"\"\"Params of every equation named `primitive`, recursing into nested jaxprs.\"\"\"
+    """Params of every equation named `primitive`, recursing into nested jaxprs."""
     found = []
     for equation in jaxpr.eqns:
         if equation.primitive.name == primitive:
@@ -52,30 +50,13 @@ def equation_params(jaxpr, primitive):
 def count_hlo_collectives(lowered):
     text = lowered.compile().as_text()
     return {op: text.count("= " + op) + text.count(" " + op + "(") for op in ("all-gather", "all-reduce")}
-"""
-
-
-def _run(body: str) -> None:
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["JAX_NUM_CPU_DEVICES"] = "4"
-    result = subprocess.run(
-        [sys.executable, "-c", _PRELUDE + textwrap.dedent(body)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axis():
     # A context replica must not multiply drop counts for batch-sharded tokens.
-    _run(
-        """
-        from levanter.grug.grug_moe import MoEExpertMlp
-
+    with use_test_devices(4) as devices:
         num_experts, hidden_dim, top_k = 4, 16, 2
         x = jax.random.normal(jax.random.key(3), (16, hidden_dim), dtype=jnp.float32)
         selected = jax.random.randint(jax.random.key(6), (16, top_k), 0, num_experts, dtype=jnp.int32)
@@ -84,9 +65,13 @@ def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axi
         def dropped(mesh):
             with set_mesh(mesh):
                 experts = MoEExpertMlp.init(
-                    num_experts=num_experts, hidden_dim=hidden_dim, intermediate_dim=8,
-                    initializer_std=0.1, key=jax.random.key(0),
-                    implementation="fixed_all_to_all", capacity_factor=0.5,
+                    num_experts=num_experts,
+                    hidden_dim=hidden_dim,
+                    intermediate_dim=8,
+                    initializer_std=0.1,
+                    key=jax.random.key(0),
+                    implementation="fixed_all_to_all",
+                    capacity_factor=0.5,
                 )
 
                 def call(experts, tokens, selected, weights):
@@ -97,19 +82,17 @@ def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axi
                 overflow = jax.jit(call)(experts, x, selected, weights)
             return int(overflow.sender_dropped) + int(overflow.receiver_dropped)
 
-        context_drops = dropped(mesh_of((1, 1, 2, 2, 1)))
-        reference_drops = dropped(mesh_of((1, 1, 1, 2, 1)))
+        context_drops = dropped(mesh_of((1, 1, 2, 2, 1), devices))
+        reference_drops = dropped(mesh_of((1, 1, 1, 2, 1), devices))
         assert reference_drops > 0, "capacity_factor=0.5 must actually drop assignments"
         assert context_drops == reference_drops, (context_drops, reference_drops)
-        """
-    )
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.multidevice
 def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it():
     # Loss values alone miss a sequence all-gather; check compiled collectives too.
-    _run(
-        """
+    with use_test_devices(4) as devices:
         k_hidden, k_head, k_labels, k_weight = jax.random.split(jax.random.key(5), 4)
         hidden = jax.random.normal(k_hidden, (4, 4, 16), dtype=jnp.float32)
         lm_head = jax.random.normal(k_head, (16, 64), dtype=jnp.float32) * 0.1
@@ -125,9 +108,7 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
             total = jnp.sum(per_token * weight)
             return total if reduction == "sum" else total / jnp.sum(weight)
 
-        from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-
-        mesh = mesh_of((1, 1, 2, 2, 1))
+        mesh = mesh_of((1, 1, 2, 2, 1), devices)
         layouts = (
             (activation_spec(True), TOKEN_AXES),
             (P(None, "context", None), ("context",)),  # batch replicated, sequence split
@@ -135,9 +116,16 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
         # A 3-row grad-in-forward block pads the 4- and 8-token shards of the two layouts.
         for hidden_spec, expected_psum_axes in layouts:
             for reduction, grad_in_forward_block in itertools.product(("sum", "mean"), (None, 3)):
-                def sharded(hidden, lm_head, hidden_spec=hidden_spec, reduction=reduction, block=grad_in_forward_block):
+
+                def sharded(
+                    hidden, lm_head, hidden_spec=hidden_spec, reduction=reduction, block=grad_in_forward_block
+                ):
                     return fused_linear_softmax_cross_entropy_loss(
-                        reshard(hidden, hidden_spec), lm_head, labels, weight=weight, reduction=reduction,
+                        reshard(hidden, hidden_spec),
+                        lm_head,
+                        labels,
+                        weight=weight,
+                        reduction=reduction,
                         grad_in_forward_token_block_size=block,
                     )
 
@@ -159,5 +147,3 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
                 psum_axes = [tuple(params["axes"]) for params in equation_params(jaxpr, "psum")]
                 assert psum_axes and set(psum_axes) == {expected_psum_axes}, (context, psum_axes)
                 assert collectives == {"all-gather": 0, "all-reduce": 1}, (context, collectives)
-        """
-    )
