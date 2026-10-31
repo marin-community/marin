@@ -32,6 +32,7 @@ from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris import process_guest
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
+from shellbox.backends.iris.process import ProcessConnectionUnavailable
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec
@@ -283,6 +284,65 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     assert submitted_environments == [{}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("dropped SYN"), OSError("route not yet ready")])
+def test_factory_retries_tcp_startup_then_runs_side_effect_once(tmp_path, monkeypatch, failure):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    connect = asyncio.open_connection
+    failures = [failure]
+
+    async def delayed_tcp(*args, **kwargs):
+        if failures:
+            raise failures.pop()
+        return await connect(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "open_connection", delayed_tcp)
+    marker = tmp_path / "executions"
+
+    async def check():
+        machine = await IrisMachineFactory(controller_url="http://controller").create(
+            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
+        )
+        try:
+            result = await machine.run(Command(("sh", "-c", 'printf once >> "$1"', "fixture", str(marker))))
+            assert result.exit_code == 0 and marker.read_text() == "once"
+            assert not job.cancelled
+
+            # A later user command must surface even a safe TCP failure, rather
+            # than silently replaying it when connectivity returns.
+            failures.append(TimeoutError("later connection lost"))
+            with pytest.raises(ProcessConnectionUnavailable):
+                await machine.run(Command(("sh", "-c", 'printf twice >> "$1"', "fixture", str(marker))))
+            assert marker.read_text() == "once"
+        finally:
+            await machine.close()
+        assert job.cancelled
+
+    asyncio.run(check())
+
+
+def test_factory_tcp_startup_deadline_reclaims_allocation(tmp_path, monkeypatch):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+
+    async def unavailable_tcp(*args, **kwargs):
+        await asyncio.Event().wait()
+        raise AssertionError("Unavailable TCP dial cannot finish")
+
+    monkeypatch.setattr(asyncio, "open_connection", unavailable_tcp)
+
+    async def check():
+        factory = IrisMachineFactory(controller_url="http://controller", scheduling_timeout=1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(factory.create(MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))), 5)
+        assert job.cancelled
+        assert job.process is not None and job.process.returncode is not None
+
+    asyncio.run(check())
 
 
 def test_directory_upload_does_not_restore_host_ownership(tmp_path, monkeypatch):

@@ -167,6 +167,9 @@ Primary commands, file transfers and process sessions use bounded binary frames
 on these direct connections. Companion readiness and artifact transfers retain
 unary exec; companions do not expose `open_process`. A lost connection fails the
 machine rather than replaying an uncertain command. There is no shared gateway.
+During creation, TCP failures before command submission are retried within the
+scheduling deadline: a running Pod can precede network-policy enforcement.
+Authentication or command-start failures are not retried.
 
 The driver must explicitly use `NetworkAttachment.POD`, separately from its
 container profile and egress policy. One ingress policy per driver attempt and
