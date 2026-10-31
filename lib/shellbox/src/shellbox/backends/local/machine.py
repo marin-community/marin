@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from shellbox.backends.local import launch
+from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.backends.local.transfers import unpack_local_archive
@@ -410,6 +411,7 @@ class LocalMachine:
         environment: dict[str, str],
         image: PreparedLocalImage | None = None,
         bundle: Path | None = None,
+        cgroup_parent: Path | None = None,
     ):
         self.spec = spec
         self.root = root
@@ -417,6 +419,8 @@ class LocalMachine:
         self.mounts = mounts
         self.image = image
         self._bundle = bundle
+        self._cgroup_parent = cgroup_parent
+        self._cgroup: MachineCgroup | None = None
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
@@ -437,6 +441,8 @@ class LocalMachine:
             raise MachineTerminated("Machine is closed")
 
     async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
+        if self._cgroup_parent is not None:
+            self._cgroup = MachineCgroup.create(self._cgroup_parent, cpus=self.spec.cpus, memory_mb=self.spec.memory_mb)
         if self.image is None:
             arguments = _sandbox_argv(
                 self._bwrap,
@@ -527,7 +533,11 @@ class LocalMachine:
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
             ]
             prefix = () if peer is None else peer._network_namespaces
-            config = {"namespaces": prefix, "program": arguments}
+            config = {
+                "namespaces": prefix,
+                "program": arguments,
+                "cgroup": None if self._cgroup is None else str(self._cgroup.path / "cgroup.procs"),
+            }
             with tempfile.TemporaryFile() as configuration:
                 configuration.write(json.dumps(config).encode())
                 configuration.seek(0)
@@ -705,6 +715,7 @@ class LocalMachine:
             "cwd": command.cwd or self.spec.workdir or "/",
             "argv": command.argv,
             "environment": environment,
+            "cgroup": None if self._cgroup is None else str(self._cgroup.path / "cgroup.procs"),
         }
         if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
@@ -834,6 +845,8 @@ class LocalMachine:
         await asyncio.shield(self._closing)
 
     async def _destroy(self) -> None:
+        if self._cgroup is not None:
+            self._cgroup.kill()
         # Kill the verified, pinned guest init before its host launcher. An
         # immediate close can otherwise race bwrap's parent-death setup and
         # leave the init holding the launcher's stderr pipe open.
@@ -848,6 +861,8 @@ class LocalMachine:
             await self._keeper.wait()
         if self._commands:
             await asyncio.gather(*(process.wait() for process in tuple(self._commands)))
+        if self._cgroup is not None:
+            await self._cgroup.remove()
         if self._keeper_pidfd is not None:
             os.close(self._keeper_pidfd)
         if self._init_pidfd is not None:
@@ -879,14 +894,22 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
+def _check_spec(
+    spec: MachineSpec, cgroup_parent: Path | None = None
+) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
     if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
         raise UnsupportedMachineSpec(
             "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
             f"not {type(spec.source).__name__}"
         )
-    if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
-        raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+    if spec.storage_mb is not None or spec.gpus:
+        raise UnsupportedMachineSpec("The local backend does not provide disk quotas or GPU allocations")
+    if spec.cpus is not None or spec.memory_mb is not None:
+        if cgroup_parent is None:
+            raise UnsupportedMachineSpec("Local CPU and memory limits require an explicit delegated cgroup parent")
+        check_cgroup_parent(cgroup_parent)
+    if spec.memory_mb is not None and spec.memory_mb <= 0:
+        raise ValueError("Local memory_mb must be positive")
     if (
         isinstance(spec.source, RegistryImage)
         and re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", spec.source.reference) is None
@@ -895,9 +918,11 @@ def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | 
     return spec.source
 
 
-def check_local_environment(requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+def check_local_environment(
+    requirements: ExecutionRequirements, spec: MachineSpec, *, cgroup_parent: Path | None = None
+) -> None:
     """Check local execution support without acquiring a bubblewrap sandbox."""
-    source = _check_spec(spec)
+    source = _check_spec(spec, cgroup_parent)
     origin = source.source if isinstance(source, PreparedImage) else source
     reference = origin.reference if isinstance(origin, RegistryImage) else None
     check_execution_requirements(
@@ -924,7 +949,8 @@ class LocalMachineFactory:
     Commands never inherit the host's environment: they get ``bin_dirs`` ahead of a standard ``PATH``,
     ``HOME``, ``LANG``, ``PYTHONHASHSEED`` when the factory has a ``hash_seed``, and the spec's and
     command's variables. ``bin_dirs`` only sets ``PATH``; a directory outside the mounted ones is not
-    visible to commands. A spec with ``memory_mb`` is rejected, since the backend enforces no memory limit.
+    visible to commands. An explicit delegated ``cgroup_parent`` enables aggregate CPU and memory limits
+    for every process in each machine. Disk quotas remain unsupported.
 
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
@@ -952,10 +978,14 @@ class LocalMachineFactory:
         authfile: Path | None = None,
         policy: Path | None = None,
         umoci: Path = Path("umoci"),
+        cgroup_parent: Path | None = None,
     ):
         if ttl is not None and ttl <= 0:
             raise ValueError("Local machine TTL must be positive")
         self.ttl = ttl
+        self.cgroup_parent = None if cgroup_parent is None else cgroup_parent.resolve()
+        if self.cgroup_parent is not None:
+            check_cgroup_parent(self.cgroup_parent)
         self.image_cache = process_image_cache(image_cache or Path.home() / ".cache/shellbox/images", authfile, policy)
         self.umoci = umoci
         self.read_only = tuple(directory.absolute() for directory in read_only)
@@ -971,7 +1001,7 @@ class LocalMachineFactory:
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
-        check_local_environment(requirements, spec)
+        check_local_environment(requirements, spec, cgroup_parent=self.cgroup_parent)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
         task = await self.create_task(single_container_task(spec))
@@ -980,7 +1010,7 @@ class LocalMachineFactory:
     async def create_task(self, spec: TaskSpec) -> Task:
         """Start named containers with private filesystems and one network."""
         for container in spec.containers:
-            _check_spec(container.machine)
+            _check_spec(container.machine, self.cgroup_parent)
         if len(spec.containers) > 1 and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Local multi-container tasks require denied external networking")
         if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container.name) is None for container in spec.containers):
@@ -1044,7 +1074,7 @@ class LocalMachineFactory:
     async def _create(
         self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
     ) -> LocalMachine:
-        source = _check_spec(spec)
+        source = _check_spec(spec, self.cgroup_parent)
         if isinstance(source, (PreparedImage, RegistryImage)):
             return await self._create_image(spec, source, peer, aliases)
 
@@ -1089,7 +1119,15 @@ class LocalMachineFactory:
         }
         if self.hash_seed is not None:
             environment["PYTHONHASHSEED"] = self.hash_seed
-        machine = LocalMachine(spec, bwrap=self.bwrap, root=root, layers=layers, mounts=mounts, environment=environment)
+        machine = LocalMachine(
+            spec,
+            bwrap=self.bwrap,
+            root=root,
+            layers=layers,
+            mounts=mounts,
+            environment=environment,
+            cgroup_parent=self.cgroup_parent,
+        )
         tools = source.tools if isinstance(source, PackageSpec) else ()
         try:
             await machine._start_keeper(peer)
@@ -1131,6 +1169,7 @@ class LocalMachineFactory:
                 environment={"PATH": DEFAULT_PATH, "HOME": "/root", **image.environment},
                 image=image,
                 bundle=parent,
+                cgroup_parent=self.cgroup_parent,
             )
             await machine._start_keeper(peer)
             if aliases is not None:

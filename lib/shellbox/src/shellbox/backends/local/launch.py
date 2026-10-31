@@ -34,6 +34,11 @@ def enter(configuration_fd: int) -> None:
     if status is not None:
         os.set_inheritable(status, False)
     try:
+        if config.get("cgroup") is not None:
+            # Joining a cgroup namespace changes visibility, not membership.
+            # Move the trusted launcher before it can fork any guest process.
+            with open(config["cgroup"], "w") as membership:
+                membership.write(str(os.getpid()))
         entered = {
             os.stat(f"/proc/self/ns/{name}").st_ino for name in ("user", "net", "ipc", "uts", "mnt", "pid", "cgroup")
         }
