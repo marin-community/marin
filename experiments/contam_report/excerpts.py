@@ -43,6 +43,9 @@ def make_fetcher(out_prefix: str):
     def fetch(groups, shard):
         for group in groups:
             path, wanted = group["path"], group["wanted"]
+            out_path = f"{out_prefix}/{hashlib.sha1(path.encode()).hexdigest()[:16]}.parquet"
+            if StoragePath(out_path).exists():
+                continue
             hero = {
                 str(r["id"]): bool(r["contaminated"])
                 for r in load_file(InputFileSpec(path=group["decon_path"], columns=["id", "contaminated"]))
@@ -61,8 +64,7 @@ def make_fetcher(out_prefix: str):
                             "hero_contaminated": hero.get(doc_id),
                         }
 
-            name = hashlib.sha1(path.encode()).hexdigest()[:16]
-            yield write_parquet_file(rows(), output_path=f"{out_prefix}/{name}.parquet", schema=SCHEMA)
+            yield write_parquet_file(rows(), output_path=out_path, schema=SCHEMA)
 
     return fetch
 
@@ -72,6 +74,7 @@ def main() -> None:
     parser.add_argument("requests")
     parser.add_argument("out_prefix")
     parser.add_argument("--max-workers", type=int, default=50)
+    parser.add_argument("--worker-ram", default="16g")
     args = parser.parse_args()
     with StoragePath(args.requests).open("r") as f:
         requests = json.load(f)
@@ -81,7 +84,7 @@ def main() -> None:
         by_path[r["path"]][r["id"]].append(r["eval_id"])
         decon[r["path"]] = r["decon_path"]
     groups = [{"path": p, "decon_path": decon[p], "wanted": dict(w)} for p, w in sorted(by_path.items())]
-    ctx = ZephyrContext(name="contam-excerpts", resources=ResourceConfig(cpu=1, ram="4g"), max_workers=args.max_workers)
+    ctx = ZephyrContext(name="contam-excerpts", resources=ResourceConfig(cpu=1, ram=args.worker_ram), max_workers=args.max_workers)
     ctx.execute(Dataset.from_list(groups).map_shard(make_fetcher(args.out_prefix)))
 
 
