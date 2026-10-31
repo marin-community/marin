@@ -30,6 +30,8 @@ from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.launch import recipe
 from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION, SEED
 
+VALIDATION_VERSION = "config-check-dev"
+
 
 def main(manifest_uri: str):
     fs, key = filesystem_for(manifest_uri)
@@ -43,10 +45,10 @@ def main(manifest_uri: str):
         manifest["credential_env"],
     )
     model_directory = str(Path(hf_hub_download(MODEL, "config.json", revision=MODEL_REVISION)).parent)
-    model = ArtifactStep.adopt("mini840-validation-model", "1", MODEL)
+    model = ArtifactStep.adopt("mini840-validation-model", VALIDATION_VERSION, MODEL)
     spec = SkyRLSpec(
         name="mini840-config-validation",
-        version="1",
+        version=VALIDATION_VERSION,
         config_yaml=yaml.safe_dump(config),
         model=ArtifactHfModel(model, relative_path="", tokenizer_uri=MODEL, tokenizer_revision=MODEL_REVISION),
         train_data=(),
