@@ -20,7 +20,7 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
-  arrive grouped by expert, and local experts run in two chunks that share the 1.15 receiver
+  arrive grouped by expert, and local experts run in two chunks that share the 1.5 receiver
   capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
   PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
   reaches the stock plugin fails at startup.

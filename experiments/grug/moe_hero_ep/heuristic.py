@@ -10,7 +10,7 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
 the router selects eight experts per token. Expert parallelism moves tokens with the ragged
-all-to-all transport at a 1.15 receiver capacity factor.
+all-to-all transport at a 1.5 receiver capacity factor (1.15 before the 65K switch).
 """
 
 import math
