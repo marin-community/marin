@@ -11,7 +11,7 @@ The Daytona eval account can build the embedded environment recipes directly. Na
 - Grading wheels: `open-athena/Marin-Mini-Eval-Policy-Index@d5dd315d58f0f47514dd0a2208e90e2a48541328`, directory `runtime-v4/wheels`.
 - Candidate: `Qwen/Qwen3.6-35B-A3B@995ad96eacd98c81ed38be0c5b274b04031597b0`, compiled vLLM, TP2, two H100s, automatic tool calling with `qwen3_coder`.
 - Context: 65,536 total tokens; maximum 16,384 output tokens per turn; thinking enabled. Pi reserves the output budget for compaction and retains 24,576 tokens. There is no cumulative episode-token cap.
-- Trial limits: agent 1,800 seconds; verifier 300; setup 360; cleanup 60. The outer job allows 24 hours for the whole cohort.
+- Trial limits: agent 1,800 seconds in both training and eval; verifier 300; setup 360; cleanup 60; whole attempt 2,460. Harbor owns the agent and verifier deadlines separately so an agent timeout still reaches verification. The outer job allows 24 hours for the whole cohort.
 - Judge: the pinned [MiniMax-M3-MXFP8 configuration](../campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml), 131,072 total context tokens, TP8 on eight H100s. The launcher co-hosts it for BixBench and OlympiadBench fallback.
 - Tau3's original counterpart remains Together `openai/gpt-oss-120b` with low reasoning effort. Its LiteLLM identifier is `openai/openai/gpt-oss-120b`; LiteLLM consumes the first provider prefix.
 
@@ -23,12 +23,12 @@ Preparation reconstructs the repaired packages from the frozen initial exports a
 
 ## Prepare a fresh run
 
-Use runtime commit `863678366542eb6191de63225268e284a1ccbc46`, which contains the Tau3 correction and the result-audit command:
+Use runtime commit `92fc01f9ae271d937f976453a94ca1597869d0d3`, which contains the native environment launch path, runtime repairs and result-audit command:
 
 ```bash
 git clone --filter=blob:none https://github.com/marin-community/marin.git mini840-repro
 cd mini840-repro
-git checkout --detach 863678366542eb6191de63225268e284a1ccbc46
+git checkout --detach 92fc01f9ae271d937f976453a94ca1597869d0d3
 ```
 
 Run the remaining commands from that repository root. Existing Iris, CoreWeave storage, Hugging Face, Daytona eval and Together access is required. See [installation](../../../docs/tutorials/installation.md), [CoreWeave access](../../../docs/tutorials/cloud-gpu.md), and [Iris authentication](../../../lib/iris/OPS.md#authentication-headless--ci). The GCP identity must already have access to the four secrets below; these instructions do not grant it. Before submitting any Iris job, export `CW_KEY_ID` and `CW_KEY_SECRET` for CoreWeave storage handoff, plus `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` for task execution, from the approved credential store; do not put them in files committed to Git. Public dataset downloads need no HF write token. With existing GCP access, the credential roles can be resolved without a local secrets file:
@@ -145,4 +145,14 @@ On RNO2A, the 21-benchmark smoke at runtime `d3c4ad178b625b992b69b9af346f97c03a1
 - Read-only verifier controls passed MATH500 reference grading and IFBench positive/negative grading. A deliberately incorrect OlympiadBench response called the co-hosted MiniMax judge over HTTP successfully and received 0.0.
 - Private native evidence and control receipts are preserved outside temporary storage under `s3://marin-rno2a/marin/experiments/mini-eval-policy/e2e-20261031`.
 
-The independent reproduction from issue #10804 is pending. These checks establish execution paths; no complete 1,626-rollout Mini840 or 450-rollout Micro210 quality score is claimed.
+The first independent issue-only reproduction at `8636783665` completed 21 rollouts but verified only 19. TB2 exposed a context rejection that permanently disabled its inference session. SWE-bench received a 900-second eval default instead of the declared 1,800 seconds, and an outer agent timer canceled Harbor before verification finished. This run is rejected as full execution-path validation.
+
+The current runtime returns recoverable context errors to Pi, sets both agent timeout fields explicitly, and lets Harbor finish verification within the whole-attempt limit. It also binds privileged CUDA/Ray discovery to the task's device-plugin UUID allocation. Separate RNO2A controls passed:
+
+- Real Pi and native Daytona: an injected context rejection triggered summarization, further tool use and an original verifier reward of 1. This uses a deterministic diagnostic model; it is a protocol test.
+- Real Pi and native Daytona: a controlled agent hang reached its 10-second diagnostic deadline, then the original verifier ran and recorded 0. The Mini840 agent deadline remains 1,800 seconds.
+- Two real CUDA/Ray actors discovered exactly the two GPU UUIDs assigned to their privileged task.
+
+The controls are reproducible from `native_recovery_smoke.py` (`--mode context` or `--mode timeout`) and `gpu_allocation_smoke.py` in this directory. Run the native controls on an Iris CPU task using the frozen SkyRL CPU environment (`--extra cpu --group harbor-test --no-group dev`), with the repository root on `PYTHONPATH` and the Daytona eval credential passed to the task. Run the GPU control in a privileged two-H100 Iris task with the same pinned SkyRL bootstrap environment as the launcher. See [the GPU incident](https://marina.oa.dev/echo/wiki/907) for the allocation evidence.
+
+A fresh 21-path Qwen smoke and independent reproduction of this repaired runtime are in progress. These checks establish execution paths; no complete 1,626-rollout Mini840 or 450-rollout Micro210 quality score is claimed.
