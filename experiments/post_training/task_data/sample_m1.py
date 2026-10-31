@@ -14,6 +14,10 @@ the graded-correct ones become rows in WP1's tokenized format: the prompt ids pl
 sampled ids, with the assistant mask over the sampled ids, so the rows hold exactly the
 expert's tokens.
 
+For the procedure null, ``--task general`` keeps B's turn-ended samples without
+answer grading and tags their teacher route as B. The same response cap and
+fixed decode apply.
+
 Run as a small CPU job; serving dispatches its own 8-GPU job::
 
     python -m experiments.post_training.task_data.sample_m1 --checkpoint s3://.../hf \\
@@ -42,6 +46,7 @@ from marin.inference.iris import remote_inference
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS
 from experiments.post_training.mismatch_probe.protocol import request_seed
+from experiments.post_training.phase1a.matrix import RESPONSE_CAP_TOKENS, TEACHER_ROUTES, Task
 from experiments.post_training.probe_sets.buckets import decode_token_bytes
 from experiments.post_training.probe_sets.continuations import (
     SNOWBALL_DECODE,
@@ -53,7 +58,6 @@ from experiments.post_training.probe_sets.continuations import (
     write_jsonl,
 )
 from experiments.post_training.stage0.protocol_gate import checkpoint_model
-from experiments.post_training.task_data.build import DATA_SOURCES, TEACHER_ROUTES, TOKEN_CAPS
 from experiments.post_training.task_data.expert_outputs import GRADERS, bounded_grade
 from experiments.post_training.task_data.terminus_answers import answer_text
 
@@ -61,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 MASTER_SEED = 20261024
 CONCURRENT_REQUESTS = 128
+SAMPLING_TASKS = {"X": Task.X, "R": Task.R, "general": Task.GENERAL}
 
 
 def m1_row(
@@ -69,8 +74,8 @@ def m1_row(
     return {
         "task_id": task["task_id"],
         "prompt": prompt,
-        "data_source": DATA_SOURCES[task_name],
-        "teacher_route": TEACHER_ROUTES[task_name],
+        "data_source": str(SAMPLING_TASKS[task_name]),
+        "teacher_route": TEACHER_ROUTES[SAMPLING_TASKS[task_name]],
         "input_ids": prompt_ids + response_ids,
         "assistant_masks": [0] * len(prompt_ids) + [1] * len(response_ids),
     }
@@ -81,6 +86,8 @@ def verdict(tokenizer, family: str, task_name: str, task: dict[str, Any], respon
     close = tokenizer.convert_tokens_to_ids(FAMILY_TOKEN_MAPS[family].turn_close)
     if not response_ids or response_ids[-1] != close:
         return "over_cap", False
+    if SAMPLING_TASKS[task_name] is Task.GENERAL:
+        return "ended", True
     reply = decode_token_bytes(tokenizer, response_ids[:-1])
     answer = answer_text(reply, FAMILY_TOKEN_MAPS[family].think_close)
     return "ended", bool(bounded_grade(GRADERS[task_name], task, answer.text))
@@ -92,7 +99,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True, help="the expert's HF export")
     parser.add_argument("--name", required=True, help="slash-free serving name")
     parser.add_argument("--family", default="grug", choices=["grug"])
-    parser.add_argument("--task", required=True, choices=sorted(DATA_SOURCES))
+    parser.add_argument("--task", required=True, choices=sorted(SAMPLING_TASKS))
     parser.add_argument("--tasks", required=True, help="WP7 task split (task_id, prompt, answer, ...)")
     parser.add_argument("--skip", type=int, required=True, help="leading split rows to skip (the expert's own)")
     parser.add_argument("--count", type=int, required=True, help="prompts to sample")
@@ -107,7 +114,7 @@ def main() -> None:
         raise ValueError(f"{args.tasks} has only {len(tasks)} rows after skipping {args.skip}")
     prompts = [[{"role": "user", "content": task["prompt"]}] for task in tasks]
     prompt_ids = [render_prompt_ids(tokenizer, args.family, prompt) for prompt in prompts]
-    decode = dataclasses.replace(SNOWBALL_DECODE, max_tokens=TOKEN_CAPS[args.task])
+    decode = dataclasses.replace(SNOWBALL_DECODE, max_tokens=RESPONSE_CAP_TOKENS[SAMPLING_TASKS[args.task]])
     work = [(index, sample) for index in range(len(tasks)) for sample in range(args.samples)]
 
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a")

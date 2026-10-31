@@ -168,8 +168,9 @@ def test_a_short_prompt_pool_raises():
 
 
 @pytest.mark.timeout(300)  # A cold cache installs the independently locked launcher.
+@pytest.mark.parametrize("max_steps", [10, 100])
 @pytest.mark.parametrize("resume_from", [None, "s3://bucket/previous-run/checkpoints/global_step_10"])
-def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resume_from):
+def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resume_from, max_steps):
     model = ArtifactStep.adopt("models/phase1a-test-b", "2026.10.23", "s3://bucket/b", kind=LevanterCheckpoint)
     data = ArtifactStep.adopt("documents/phase1a-test-data", "2026.10.23", "s3://bucket/data")
     cells = [(condition, 1) for condition in PHASE1A_CONDITIONS] + [(Condition.PROCEDURE_NULL, 0)]
@@ -179,7 +180,9 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resu
             for method in Method:
                 run = RunPlan(method, condition, seed, 2e-6)
                 teachers = {task: TEACHERS[task] for task in run.tasks} if method is Method.M4 else {}
-                spec = run_spec(run, model=model, run_data=data, teachers=teachers, resume_from=resume_from)
+                spec = run_spec(
+                    run, model=model, run_data=data, teachers=teachers, resume_from=resume_from, max_steps=max_steps
+                )
                 step = skyrl_step(spec, execution(CLUSTER), export_hf=True)
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
                 path = tmp_path / f"{run.name}.yaml"
@@ -193,7 +196,20 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path, resu
     for index, (condition, _) in enumerate(cells):
         m1, m4 = composed[2 * index], composed[2 * index + 1]
         assert m1.pop("env_class") == "fixed_completion" and m4.pop("env_class") == "prompt_only"
+        assert m1.pop("checkpoints") == [
+            [s for s in [10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
+            [s for s in [10, 50, 100] if s <= max_steps],
+        ]
+        assert m4.pop("checkpoints") == [
+            [s for s in [2, 4, 6, 8, 10, 20, 30, 40, 50, 75, 100] if s <= max_steps],
+            [s for s in [10, 50, 100] if s <= max_steps],
+        ]
+        assert m1.pop("exports") == [s for s in [10, 30, 50, 100] if s <= max_steps]
+        assert m4.pop("exports") == [s for s in [2, 4, 6, 8, 10, 30, 50, 100] if s <= max_steps]
+        assert m1.pop("retention") == (1 if max_steps == 10 else 7)
+        assert m4.pop("retention") == (5 if max_steps == 10 else 11)
         assert m1 == m4, condition
+        assert m4["steps"][0] == max_steps
         assert m4["order"] == [False, None]
         assert m4["resume"] == (["latest", None] if resume_from is None else ["from_path", resume_from])
         assert m4["optimizer"] == ["AdamW", 2e-6, [0.9, 0.999], 0.0, 1.0, 5, "constant_with_warmup"]

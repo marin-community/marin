@@ -46,6 +46,7 @@ from experiments.post_training.chat_template import FAMILY_TOKENIZER_REVISIONS
 from experiments.post_training.phase1a.data import M1_FILE, M4_FILE
 from experiments.post_training.phase1a.matrix import (
     CHECKPOINT_STEPS,
+    STEPS,
     Condition,
     Method,
     RunPlan,
@@ -113,12 +114,19 @@ def run_spec(
     run_data: ArtifactStep,
     teachers: dict[Task, TeacherModel],
     resume_from: str | None = None,
+    max_steps: int = STEPS,
 ) -> SkyRLSpec:
     repo, revision = FAMILY_TOKENIZER_REVISIONS["grug"]
     recipe = skyrl_recipe(run, teachers)
+    if max_steps != STEPS:
+        trainer = recipe["trainer"]
+        trainer["max_steps"] = max_steps
+        for field in ("checkpoint_steps", "optimizer_checkpoint_steps", "hf_export_steps"):
+            trainer[field] = [step for step in trainer[field] if step <= max_steps]
     if resume_from is not None:
         recipe["trainer"].update(resume_mode="from_path", resume_path=resume_from)
-    name = user_owned_name(f"checkpoints/phase1a/{run.name}")
+    suffix = f"-smoke{max_steps}" if max_steps != STEPS else ""
+    name = user_owned_name(f"checkpoints/phase1a/{run.name}{suffix}")
     return SkyRLSpec(
         name=name,
         version=resolve_version(name, None),
@@ -129,7 +137,10 @@ def run_spec(
         train_data=(ArtifactDataSource(run_data, relative_path=run_data_relative_path(run)),),
         validation_data=(),
         topology=topology(run),
-        retention=RETENTION,
+        retention=SkyRLRetentionPolicy(
+            resume_checkpoint_count=len(recipe["trainer"]["checkpoint_steps"]),
+            temporary_storage_ttl_days=90,
+        ),
         seed=run.seed,
     )
 
@@ -198,6 +209,9 @@ def selected_runs(
 @click.option(
     "--resume-from", help="Full optimizer checkpoint global_step directory; requires exactly one selected run."
 )
+@click.option(
+    "--max-steps", type=click.Choice([10, STEPS]), default=STEPS, help="10 for setup smokes; 100 for full runs."
+)
 @rl_build_options
 def main(
     stage: str,
@@ -213,6 +227,7 @@ def main(
     expert_r: TeacherModel | None,
     b_teacher: TeacherModel | None,
     resume_from: str | None,
+    max_steps: int,
 ) -> list[ArtifactStep[SkyRLRun]]:
     model = ArtifactStep.adopt(user_owned_name("models/phase1a-snowball-b"), b_version, b_uri, kind=LevanterCheckpoint)
     run_data = ArtifactStep.adopt(user_owned_name("documents/phase1a-run-data"), run_data_version, run_data_uri)
@@ -228,7 +243,9 @@ def main(
     steps = []
     for run in runs:
         teachers = {task: pool[task] for task in run.tasks} if run.method is Method.M4 else {}
-        spec = run_spec(run, model=model, run_data=run_data, teachers=teachers, resume_from=resume_from)
+        spec = run_spec(
+            run, model=model, run_data=run_data, teachers=teachers, resume_from=resume_from, max_steps=max_steps
+        )
         steps.append(skyrl_step(spec, execution(CLUSTER), export_hf=True))
     return steps
 

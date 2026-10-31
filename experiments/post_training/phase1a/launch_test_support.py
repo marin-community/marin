@@ -27,6 +27,8 @@ def matched(path):
         "packing": cfg.trainer.use_sample_packing,
         "order": [cfg.data.shuffle, cfg.data.sampling.kind],
         "checkpoints": [list(cfg.trainer.checkpoint_steps), list(cfg.trainer.optimizer_checkpoint_steps)],
+        "exports": list(cfg.trainer.hf_export_steps),
+        "retention": cfg.trainer.max_ckpts_to_keep,
         "router_telemetry": cfg.trainer.router_telemetry.enabled,
         "strategy": cfg.trainer.strategy,
         "env_class": cfg.environment.env_class,

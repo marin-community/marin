@@ -87,6 +87,9 @@ OPTIMIZER_CHECKPOINT_STEPS = (10, 50, 100)
 EXPORT_CHECKPOINT_STEPS = tuple(
     step for index, step in enumerate(CHECKPOINT_STEPS) if index % 2 == 0 or index == len(CHECKPOINT_STEPS) - 1
 )
+# Phase 1a decision 2026-10-31: resolve OPD's early reverse-progress crossings.
+M4_EXPORT_CHECKPOINT_STEPS = (2, 4, 6, 8, *EXPORT_CHECKPOINT_STEPS)
+M4_CHECKPOINT_STEPS = tuple(sorted({2, 4, 6, 8, *CHECKPOINT_STEPS}))
 SEEDS = (0, 1, 2)
 PHASE1A_CONDITIONS = (Condition.X, Condition.R, Condition.XR, Condition.X_PRIME, Condition.R_PRIME)
 # The user cut the batch-noise controls to one seed (DESIGN decision log, 2026-10-30):
@@ -255,6 +258,8 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
     if run.method is Method.M4 and set(teachers) != set(run.tasks):
         raise ValueError(f"{run.name} needs teachers for {sorted(run.tasks)}, got {sorted(teachers)}")
     recipe = _base_recipe()
+    checkpoints = M4_CHECKPOINT_STEPS if run.method is Method.M4 else CHECKPOINT_STEPS
+    exports = M4_EXPORT_CHECKPOINT_STEPS if run.method is Method.M4 else EXPORT_CHECKPOINT_STEPS
     caps = {str(task): RESPONSE_CAP_TOKENS[task] for task in run.tasks}
     longest = max(caps.values())
     trainer = recipe["trainer"]
@@ -264,10 +269,10 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
         max_steps=STEPS,
         update_epochs_per_batch=1,
         seed=run.seed,
-        checkpoint_steps=list(CHECKPOINT_STEPS),
+        checkpoint_steps=list(checkpoints),
         optimizer_checkpoint_steps=list(OPTIMIZER_CHECKPOINT_STEPS),
-        hf_export_steps=list(EXPORT_CHECKPOINT_STEPS),
-        ckpt_interval=CHECKPOINT_STEPS[0],
+        hf_export_steps=list(exports),
+        ckpt_interval=checkpoints[0],
         resume_mode="latest",
         micro_forward_batch_size_per_gpu=1,
         evaluation_runner="training",

@@ -26,3 +26,19 @@ def test_a_completion_that_never_closed_its_turn_is_over_the_cap():
     tokenizer = byte_level_tokenizer()
     response = tokenizer.encode(r"it is \boxed{7}", add_special_tokens=False)
     assert verdict(tokenizer, "grug", "R", TASK, response) == ("over_cap", False)
+
+
+def test_procedure_null_keeps_ungraded_base_samples_with_b_teacher_route():
+    tokenizer = byte_level_tokenizer()
+    task = {"task_id": "general-0", "prompt": "Tell me a story"}
+    prompt = [{"role": "user", "content": task["prompt"]}]
+    prompt_ids = render_prompt_ids(tokenizer, "grug", prompt)
+    response = [
+        *tokenizer.encode("Once upon a time", add_special_tokens=False),
+        tokenizer.convert_tokens_to_ids(GRUG_TOKENS.turn_close),
+    ]
+    assert verdict(tokenizer, "grug", "general", task, response) == ("ended", True)
+    assert verdict(tokenizer, "grug", "general", task, response[:-1]) == ("over_cap", False)
+    row = m1_row(task, prompt, prompt_ids, response, "general")
+    assert (row["data_source"], row["teacher_route"]) == ("general", "B")
+    assert row["input_ids"] == prompt_ids + response

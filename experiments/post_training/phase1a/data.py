@@ -34,6 +34,7 @@ from experiments.post_training.phase1a.matrix import (
     Method,
     RunPlan,
     Task,
+    condition_seeds,
 )
 
 M1_FILE = "m1.parquet"
@@ -147,7 +148,7 @@ def main(
     """Write every Phase 1a cell's files and a manifest of their inputs and counts."""
     task_files = {Task.X: x_tasks, Task.R: r_tasks, Task.GENERAL: general_prompts}
     m1_files = {Task.X: x_m1, Task.R: r_m1, Task.GENERAL: general_m1}
-    cells = [(condition, seed) for condition in PHASE1A_CONDITIONS for seed in SEEDS]
+    cells = [(condition, seed) for condition in PHASE1A_CONDITIONS for seed in condition_seeds(condition)]
     cells.append((Condition.PROCEDURE_NULL, SEEDS[0]))
     record: dict[str, Any] = {"inputs": {}, "cells": {}}
     for task in Task:
