@@ -23,7 +23,6 @@ import ray
 import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
-from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.transformer.module import Float16Module
 from ray.util.placement_group import placement_group
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -33,6 +32,7 @@ import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Gr
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
+from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
