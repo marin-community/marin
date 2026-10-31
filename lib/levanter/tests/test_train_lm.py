@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import pytest
+from transformers import AutoTokenizer
 from chex import assert_trees_all_close
 
 from haliax import Axis
@@ -51,12 +52,16 @@ def _assert_training_recorded(output_path: str) -> dict:
 
 
 @pytest.mark.tpu
-def test_train_lm():
+def test_train_lm(local_gpt2_tokenizer_path):
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir, tokenizer=local_gpt2_tokenizer_path)
         config = train_lm.TrainLmConfig(
             data=data_config,
+            hf_save_path=os.path.join(tmpdir, "hf"),
+            hf_save_steps=3,
+            hf_save_chat_template="{% for m in messages %}{{ m['role'] }}:{{ m['content'] }};{% endfor %}",
             model=train_lm.LlamaConfig(
+                reference_checkpoint=local_gpt2_tokenizer_path,
                 num_layers=2,
                 num_heads=2,
                 num_kv_heads=2,
@@ -65,6 +70,7 @@ def test_train_lm():
                 attn_backend=None,  # use default for platform
             ),
             trainer=train_lm.TrainerConfig(
+                id="template-export",
                 num_train_steps=2,
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
@@ -76,6 +82,8 @@ def test_train_lm():
         )
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
+        tokenizer = AutoTokenizer.from_pretrained(os.path.join(tmpdir, "hf", "template-export", "step-1"))
+        assert tokenizer.apply_chat_template([{"role": "user", "content": "hello"}], tokenize=False) == "user:hello;"
 
 
 def test_train_lm_fp8():

@@ -37,7 +37,7 @@ def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
         ]
         assert component.format.pack is False
 
-    assert train_config.hf_save_steps == train_config.trainer.num_train_steps
+    assert train_config.hf_save_steps == train_config.trainer.num_train_steps + 1
     assert train_config.hf_save_dtype.name == "bfloat16"
     assert trial["after"].deps == (trained,)
     after_config = materialized_config(trial["after"], "s3://test-prefix")
