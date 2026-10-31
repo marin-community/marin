@@ -25,7 +25,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_process
+from shellbox.process_session import SubprocessSession, acquire_owned
 
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
@@ -206,7 +206,7 @@ class DockerMachine:
                 await session.close()
                 raise
 
-        return await acquire_process(asyncio.create_task(acquire()))
+        return await acquire_owned(asyncio.create_task(acquire()))
 
     async def run(self, command: Command) -> Result:
         if self._closed:

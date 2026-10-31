@@ -51,7 +51,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_process
+from shellbox.process_session import SubprocessSession, acquire_owned
 from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
@@ -666,7 +666,7 @@ class LocalMachine:
 
             return SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
 
-        return await acquire_process(asyncio.create_task(acquire()))
+        return await acquire_owned(asyncio.create_task(acquire()))
 
     async def _control(
         self,

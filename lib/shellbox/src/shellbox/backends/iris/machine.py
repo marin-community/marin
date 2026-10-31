@@ -49,7 +49,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import acquire_process, await_cleanup, finish_owned, own_cleanup
+from shellbox.process_session import acquire_owned, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task as ContainerTask
 from shellbox.task import TaskSpec, single_container_task
 
@@ -192,7 +192,7 @@ class IrisMachine:
                     self.execution.admission.notify_all()
 
         try:
-            return await acquire_process(asyncio.create_task(acquire()))
+            return await acquire_owned(asyncio.create_task(acquire()))
         except BaseException as error:
             if uncertain_open:
                 # The gateway may have accepted Open without returning a session
