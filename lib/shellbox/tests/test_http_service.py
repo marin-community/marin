@@ -4,7 +4,6 @@
 import asyncio
 import json
 import os
-import shutil
 import signal
 import socket
 from dataclasses import replace
@@ -36,8 +35,7 @@ finally:
 class ProcessMachine:
     """Exercise the exec/transfer boundary with local child processes."""
 
-    def __init__(self, root: Path):
-        self.root = root
+    def __init__(self):
         self.processes = []
 
     async def open_process(self, command: Command) -> SubprocessSession:
@@ -58,19 +56,14 @@ class ProcessMachine:
 
         return SubprocessSession(process, stop=stop)
 
-    def path(self, value: str) -> str:
-        if value.startswith("/tmp/shellbox-http-"):
-            return str(self.root / Path(value).name)
-        return value
-
     async def run(self, command: Command) -> Result:
         raise AssertionError("HTTP relaying must not execute per-request or idle commands")
 
     async def upload(self, source: Path, target: str) -> None:
-        shutil.copyfile(source, self.path(target))
+        raise AssertionError("HTTP relaying must not upload helper files")
 
     async def download(self, source: str, target: Path) -> None:
-        shutil.copyfile(self.path(source), target)
+        raise AssertionError("HTTP relaying must not download helper files")
 
     async def close(self) -> None:
         pass
@@ -82,7 +75,7 @@ def available_port() -> int:
         return listener.getsockname()[1]
 
 
-def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tmp_path, caplog):
+def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(caplog):
     async def check():
         blocked = asyncio.Event()
         release = asyncio.Event()
@@ -101,7 +94,7 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
             body = json.loads(request.body)
             return HttpResponse(201, json.dumps({"answer": body["number"] + 1}).encode())
 
-        machine = ProcessMachine(tmp_path)
+        machine = ProcessMachine()
         async with serve_http(machine, handler, port=available_port()) as url:
             async with httpx.AsyncClient(trust_env=False) as client:
                 slow = asyncio.create_task(client.post(url + "/slow", timeout=30))
@@ -119,7 +112,6 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
                 assert echoed.status_code == 200 and echoed.content == body
                 release.set()
                 assert (await slow).json() == {"done": True}
-        assert list(tmp_path.iterdir()) == []
         assert len(machine.processes) == 1
         assert machine.processes[0].returncode is not None
 
@@ -127,7 +119,7 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
 
 
 @pytest.mark.parametrize("body", ["!!!", False])
-def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(tmp_path, body):
+def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(body):
     frame = json.dumps({"type": "request", "id": "a" * 32, "method": "POST", "path": "/score", "body": body})
 
     class MalformedFrameMachine(ProcessMachine):
@@ -141,7 +133,7 @@ def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(tmp_p
             return await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))
 
     async def check():
-        machine = MalformedFrameMachine(tmp_path)
+        machine = MalformedFrameMachine()
         dispatched = []
 
         async def handler(request):
@@ -157,9 +149,9 @@ def test_http_capability_rejects_malformed_guest_body_before_host_dispatch(tmp_p
     asyncio.run(check())
 
 
-def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process(tmp_path):
+def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process():
     async def check():
-        machine = ProcessMachine(tmp_path)
+        machine = ProcessMachine()
 
         async def handler(request):
             return HttpResponse(200, b"{}")
@@ -173,7 +165,7 @@ def test_http_capability_helper_exit_interrupts_idle_context_and_reaps_process(t
     asyncio.run(check())
 
 
-def test_http_capability_preserves_body_error_when_helper_close_fails(tmp_path):
+def test_http_capability_preserves_body_error_when_helper_close_fails():
     class BrokenCloseMachine(ProcessMachine):
         async def open_process(self, command):
             session = await super().open_process(command)
@@ -187,7 +179,7 @@ def test_http_capability_preserves_body_error_when_helper_close_fails(tmp_path):
             return session
 
     async def check():
-        machine = BrokenCloseMachine(tmp_path)
+        machine = BrokenCloseMachine()
 
         async def handler(request):
             return HttpResponse(200, b"{}")
@@ -200,7 +192,7 @@ def test_http_capability_preserves_body_error_when_helper_close_fails(tmp_path):
     asyncio.run(check())
 
 
-def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup(tmp_path):
+def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup():
     async def check():
         closing, release, entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
@@ -217,7 +209,7 @@ def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup(tm
                 session.close = delayed_close
                 return session
 
-        machine = DelayedCloseMachine(tmp_path)
+        machine = DelayedCloseMachine()
 
         async def handler(request):
             return HttpResponse(200, b"{}")
@@ -244,7 +236,7 @@ def test_http_capability_repeated_cancellation_finishes_owned_process_cleanup(tm
     asyncio.run(check())
 
 
-def test_http_capability_rejects_oversized_guest_frames_and_reaps_process(tmp_path):
+def test_http_capability_rejects_oversized_guest_frames_and_reaps_process():
     class OversizedFrameMachine(ProcessMachine):
         async def open_process(self, command):
             script = (
@@ -254,7 +246,7 @@ def test_http_capability_rejects_oversized_guest_frames_and_reaps_process(tmp_pa
             return await super().open_process(replace(command, argv=("python3", "-u", "-c", script)))
 
     async def check():
-        machine = OversizedFrameMachine(tmp_path)
+        machine = OversizedFrameMachine()
 
         async def handler(request):
             raise AssertionError("Invalid guest frames must not reach the host handler")
@@ -267,12 +259,12 @@ def test_http_capability_rejects_oversized_guest_frames_and_reaps_process(tmp_pa
     asyncio.run(check())
 
 
-def test_http_capability_bounds_close_when_host_handler_defers_cancellation(tmp_path, monkeypatch):
+def test_http_capability_bounds_close_when_host_handler_defers_cancellation(monkeypatch):
     monkeypatch.setattr(http_service, "CLEANUP_TIMEOUT", 0.05)
 
     async def check():
         entered, cancelled, release, finished = (asyncio.Event() for _ in range(4))
-        machine = ProcessMachine(tmp_path)
+        machine = ProcessMachine()
 
         async def handler(request):
             entered.set()
@@ -306,7 +298,7 @@ def test_http_capability_bounds_close_when_host_handler_defers_cancellation(tmp_
     asyncio.run(check())
 
 
-def test_http_capability_close_cancels_pending_host_work(tmp_path):
+def test_http_capability_close_cancels_pending_host_work():
     async def check():
         entered = asyncio.Event()
         cancelled = asyncio.Event()
@@ -320,13 +312,12 @@ def test_http_capability_close_cancels_pending_host_work(tmp_path):
             raise AssertionError("unreachable")
 
         async with httpx.AsyncClient(trust_env=False) as client:
-            async with serve_http(ProcessMachine(tmp_path), handler, port=available_port()) as url:
+            async with serve_http(ProcessMachine(), handler, port=available_port()) as url:
                 request = asyncio.create_task(client.post(url + "/wait"))
                 await asyncio.wait_for(entered.wait(), 5)
             assert cancelled.is_set()
             request.cancel()
             await asyncio.gather(request, return_exceptions=True)
-        assert list(tmp_path.iterdir()) == []
 
     asyncio.run(check())
 
