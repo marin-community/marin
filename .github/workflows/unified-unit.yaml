@@ -379,16 +379,23 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install local sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      # The Iris adapter tests use the locked Shellbox Iris extra.
       - name: Install Shellbox test environment
-        run: uv sync --package marin-taskcompendium --package marin-shellbox --extra iris --group test --frozen
+        run: uv sync --package marin-taskcompendium --package marin-shellbox --extra iris --extra shellsim --group test --frozen
+      - name: Require local namespace support
+        run: |
+          uv run --no-sync --package marin-shellbox --frozen python -c \
+            'from shellbox.backends.local.machine import LocalMachineFactory; LocalMachineFactory()'
       - name: Test Shellbox
-        run: uv run --no-sync --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+        run: uv run --no-sync --package marin-shellbox --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
   taskcompendium:
     name: taskcompendium-unit
@@ -433,12 +440,13 @@ jobs:
         # Pull through Google's Docker Hub mirror: unauthenticated Docker Hub pulls from
         # shared runner addresses hit its rate limit. The tag keeps the names the tests use.
         run: |
-          for image in busybox:1.36 ubuntu:24.04; do
+          for image in busybox:1.36 ubuntu:24.04 python:3.12-slim; do
             docker pull "mirror.gcr.io/library/$image"
             docker tag "mirror.gcr.io/library/$image" "$image"
           done
           uv run --package marin-rolloutengine --frozen --group test pytest \
             -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_http_service.py \
             lib/shellbox/tests/test_daytona_machine.py \
             lib/rolloutengine/tests/test_rollout.py -m docker -q
 

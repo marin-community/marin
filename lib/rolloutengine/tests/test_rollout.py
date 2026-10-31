@@ -2116,10 +2116,16 @@ async def test_resource_cleanup_retains_failure_cause_after_cancellation(tmp_pat
 
 
 @pytest.mark.parametrize("phase", ["advance", "grade"])
-async def test_external_cancellation_at_attempt_deadline_remains_cancellation(phase):
+async def test_external_cancellation_at_attempt_deadline_remains_cancellation(phase, monkeypatch):
     closed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    now = loop.time()
 
     async def wait_for_deadline():
+        nonlocal now
+        # Expire the attempt only once it reaches the selected phase. Startup
+        # includes executor-backed I/O and need not finish within 10ms.
+        now += 1
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
@@ -2157,12 +2163,14 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
             return CaptureMachine()
 
     task = arithmetic_task(environment_requirements=GRADER_ENVIRONMENT, output_paths=("/workspace/out",))
-    with pytest.raises(asyncio.CancelledError):
-        await engine(
-            ReplayModel([{"role": "assistant", "content": "12"}]),
-            {"local": Factory()},
-            harnesses={"fixture": StepHarness(lambda _context: Episode())},
-        ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
+    with monkeypatch.context() as clock:
+        clock.setattr(loop, "time", lambda: now)
+        with pytest.raises(asyncio.CancelledError):
+            await engine(
+                ReplayModel([{"role": "assistant", "content": "12"}]),
+                {"local": Factory()},
+                harnesses={"fixture": StepHarness(lambda _context: Episode())},
+            ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
 
