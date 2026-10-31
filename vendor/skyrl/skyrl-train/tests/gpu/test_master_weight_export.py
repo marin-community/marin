@@ -13,6 +13,8 @@ model weights instead of the masters fails the second check.
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,9 @@ from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_tiny_checkpoint import TOKENIZER, write_tiny_checkpoint
 from tests.gpu.test_megatron_worker import get_test_training_batch
 from tests.gpu.utils import get_test_actor_config, init_worker_with_type
+
+
+S3_SCRATCH_ENV = "SKYRL_GPU_TEST_S3_SCRATCH"
 
 
 def _training_config(model_path: str, *, world_size: int) -> object:
@@ -122,3 +127,64 @@ def load_dir(directory: Path) -> dict[str, torch.Tensor]:
     for shard in sorted(directory.glob("*.safetensors")):
         tensors.update(load_file(str(shard)))
     return tensors
+
+
+@pytest.mark.parametrize("world_size", [2], ids=["dp2"])
+def test_masters_save_without_a_gather_and_survive_a_full_checkpoint_round_trip(tmp_path, world_size: int):
+    """Masters-only and dp_reshardable full saves carry the same FP32 masters, bit for bit.
+
+    With two data-parallel ranks each rank holds half of every master. A masters-only
+    save assembles them per parameter (no optimizer-state gather); a full save writes
+    the optimizer in DP-local shards plus the same master records. Reloading the full
+    checkpoint into a fresh policy and saving its masters again must reproduce them.
+    """
+    require_hoppers(world_size)
+    # Megatron restores only from CoreWeave S3, so the round trip needs an S3 scratch prefix.
+    s3_prefix = os.environ.get(S3_SCRATCH_ENV)
+    if not s3_prefix:
+        pytest.skip(f"set {S3_SCRATCH_ENV} to an s3:// scratch prefix for the checkpoint round trip")
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    write_tiny_checkpoint(model_path)
+    training_cfg = _training_config(str(model_path), world_size=world_size)
+    training_cfg.trainer.policy.megatron_config.optimizer_checkpoint_sharding_type = "dp_reshardable"
+    run_root = f"{s3_prefix.rstrip('/')}/{uuid.uuid4().hex}"
+    initialize_ray(training_cfg)
+    try:
+        masters_dir, full_dir, reloaded_dir = (f"{run_root}/{name}/policy" for name in ("masters", "full", "reloaded"))
+        batch = get_test_training_batch(4)
+        batch.metadata["global_step"] = 0
+
+        def save(policy, ckpt_dir, mode):
+            ray.get(
+                policy.async_run_ray_method(
+                    "pass_through", "save_checkpoint", ckpt_dir=str(ckpt_dir), tokenizer=None, optimizer_state=mode
+                )
+            )
+            ray.get(policy.async_run_ray_method("pass_through", "wait_checkpoint_upload"))
+
+        policy = init_worker_with_type("policy", cfg=training_cfg, num_gpus_per_node=world_size, num_nodes=1)
+        try:
+            ray.get(policy.async_run_ray_method("pass_through", "init_model", str(model_path)))
+            ray.get(policy.async_run_ray_method("pass_through", "ppo_train", batch))
+            save(policy, masters_dir, OptimizerStateMode.MASTERS_ONLY)
+            save(policy, full_dir, OptimizerStateMode.FULL)
+        finally:
+            policy.kill_actors()
+
+        fresh = init_worker_with_type("policy", cfg=training_cfg, num_gpus_per_node=world_size, num_nodes=1)
+        try:
+            ray.get(fresh.async_run_ray_method("pass_through", "init_model", str(model_path)))
+            ray.get(fresh.async_run_ray_method("pass_through", "load_checkpoint", str(full_dir)))
+            save(fresh, reloaded_dir, OptimizerStateMode.MASTERS_ONLY)
+        finally:
+            fresh.kill_actors()
+
+        masters = load_fp32_masters(str(masters_dir))
+        assert masters and {tensor.dtype for tensor in masters.values()} == {torch.float32}
+        for other in (load_fp32_masters(str(full_dir)), load_fp32_masters(str(reloaded_dir))):
+            assert set(other) == set(masters)
+            for name, tensor in masters.items():
+                assert torch.equal(other[name], tensor), name
+    finally:
+        ray.shutdown()
