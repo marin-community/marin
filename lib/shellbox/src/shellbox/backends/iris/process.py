@@ -12,7 +12,7 @@ from iris.rpc import exec_gateway_pb2
 from iris.rpc.exec_gateway_connect import ExecGatewayServiceClient
 
 from shellbox.machine import MachineTerminated
-from shellbox.process_session import finish_owned, own_cleanup
+from shellbox.process_session import await_cleanup, own_cleanup
 
 CHUNK_BYTES = 65536
 BUFFER_CHUNKS = 16
@@ -120,14 +120,7 @@ class IrisProcessSession:
     async def close(self) -> None:
         if self._closing is None:
             self._closing = own_cleanup(self._close())
-        try:
-            await asyncio.shield(self._closing)
-        except asyncio.CancelledError as cancellation:
-            try:
-                await finish_owned(self._closing)
-            except Exception as error:
-                cancellation.add_note(f"Iris process cleanup failed ({type(error).__name__})")
-            raise
+        await await_cleanup(self._closing)
 
     async def _close(self) -> None:
         self._receiver.cancel()

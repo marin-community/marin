@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 import ssl
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from iris.cluster.platforms.k8s.service import CloudK8sService
 
 _CHANNEL_PROTOCOL = "v5.channel.k8s.io"
 _SETUP_PARALLELISM = 8
+logger = logging.getLogger(__name__)
 _ATTEMPT_UID_LABEL = "iris.attempt_uid"
 
 
@@ -36,7 +38,7 @@ class _ConnectionConfig:
 
 
 class KubernetesExecConnector:
-    """Only metadata/auth setup uses threads; open streams use async sockets."""
+    """Open binary process pipes to one verified live Kubernetes container."""
 
     def __init__(self, service: CloudK8sService):
         self._service = service
@@ -182,7 +184,8 @@ class _KubernetesExecTransport:
         try:
             if not self._stdin_closed:
                 await self.send(b"", eof=True)
-        except OSError:
-            pass
+        except OSError as error:
+            # Exec can disappear with the Pod; disconnect still owns cleanup.
+            logger.debug("Kubernetes exec stdin already closed during cleanup (%s)", type(error).__name__)
         finally:
             await self._socket.close()

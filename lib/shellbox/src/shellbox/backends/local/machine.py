@@ -51,7 +51,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, finish_owned, own_cleanup
+from shellbox.process_session import SubprocessSession, acquire_process
 from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
@@ -666,20 +666,7 @@ class LocalMachine:
 
             return SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
 
-        acquisition = asyncio.create_task(acquire())
-        try:
-            return await asyncio.shield(acquisition)
-        except BaseException as error:
-
-            async def reclaim() -> None:
-                session = await acquisition
-                await session.close()
-
-            try:
-                await finish_owned(own_cleanup(reclaim()))
-            except BaseException as cleanup_error:
-                error.add_note(f"Process acquisition cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        return await acquire_process(asyncio.create_task(acquire()))
 
     async def _control(
         self,

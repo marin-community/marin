@@ -25,7 +25,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, finish_owned, own_cleanup
+from shellbox.process_session import SubprocessSession, acquire_process
 
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
@@ -206,20 +206,7 @@ class DockerMachine:
                 await session.close()
                 raise
 
-        acquisition = asyncio.create_task(acquire())
-        try:
-            return await asyncio.shield(acquisition)
-        except BaseException as error:
-
-            async def reclaim() -> None:
-                session = await acquisition
-                await session.close()
-
-            try:
-                await finish_owned(own_cleanup(reclaim()))
-            except BaseException as cleanup_error:
-                error.add_note(f"Process acquisition cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        return await acquire_process(asyncio.create_task(acquire()))
 
     async def run(self, command: Command) -> Result:
         if self._closed:

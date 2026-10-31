@@ -7,6 +7,8 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
+from shellbox.machine import ProcessSession
+
 logger = logging.getLogger(__name__)
 _CLEANUPS: set[asyncio.Task[None]] = set()
 
@@ -38,6 +40,32 @@ def own_cleanup(cleanup: Awaitable[None]) -> asyncio.Task[None]:
 
     task.add_done_callback(finished)
     return task
+
+
+async def await_cleanup(task: asyncio.Task[None]) -> None:
+    """Finish cleanup before propagating its caller's original cancellation."""
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError as cancellation:
+        try:
+            await finish_owned(task)
+        except BaseException as error:
+            cancellation.add_note(f"Cleanup failed ({type(error).__name__})")
+        raise
+
+
+async def acquire_process[T: ProcessSession](acquisition: asyncio.Task[T]) -> T:
+    """Own a process acquisition, reclaiming any late handle after interruption."""
+    try:
+        return await asyncio.shield(acquisition)
+    except BaseException as error:
+        try:
+            session = await finish_owned(acquisition)
+            await finish_owned(own_cleanup(session.close()))
+        except BaseException as cleanup_error:
+            if cleanup_error is not error:
+                error.add_note(f"Process acquisition cleanup failed ({type(cleanup_error).__name__})")
+        raise
 
 
 class SubprocessSession:
@@ -85,14 +113,7 @@ class SubprocessSession:
     async def close(self) -> None:
         if self._closing is None:
             self._closing = own_cleanup(self._close())
-        try:
-            await asyncio.shield(self._closing)
-        except asyncio.CancelledError as error:
-            try:
-                await finish_owned(self._closing)
-            except Exception as cleanup_error:
-                error.add_note(f"Process cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        await await_cleanup(self._closing)
 
     async def _close(self) -> None:
         assert self.process.stdin is not None and self.process.stdout is not None

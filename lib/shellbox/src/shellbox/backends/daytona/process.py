@@ -16,7 +16,7 @@ from daytona._async.process import AsyncProcess
 from shellbox.backends.daytona import bridge
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
-from shellbox.process_session import finish_owned, own_cleanup
+from shellbox.process_session import await_cleanup, own_cleanup
 
 BRIDGE_SOURCE = Path(bridge.__file__).read_text()
 BUFFER_BYTES = bridge.CHUNK_BYTES * 2
@@ -170,14 +170,7 @@ class DaytonaProcessSession:
     async def close(self) -> None:
         if self._closing is None:
             self._closing = own_cleanup(self._close())
-        try:
-            await asyncio.shield(self._closing)
-        except asyncio.CancelledError as error:
-            try:
-                await finish_owned(self._closing)
-            except Exception as cleanup_error:
-                error.add_note(f"Daytona process cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        await await_cleanup(self._closing)
 
     async def _close(self) -> None:
         self._release(self)

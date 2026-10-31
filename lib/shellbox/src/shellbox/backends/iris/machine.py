@@ -49,7 +49,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import finish_owned, own_cleanup
+from shellbox.process_session import acquire_process, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task as ContainerTask
 from shellbox.task import TaskSpec, single_container_task
 
@@ -191,19 +191,9 @@ class IrisMachine:
                     del self.execution.in_flight[attempt_id]
                     self.execution.admission.notify_all()
 
-        acquisition = asyncio.create_task(acquire())
         try:
-            return await asyncio.shield(acquisition)
+            return await acquire_process(asyncio.create_task(acquire()))
         except BaseException as error:
-
-            async def reclaim() -> None:
-                session = await acquisition
-                await session.close()
-
-            try:
-                await finish_owned(own_cleanup(reclaim()))
-            except BaseException as cleanup_error:
-                error.add_note(f"Iris process acquisition cleanup failed ({type(cleanup_error).__name__})")
             if uncertain_open:
                 # The gateway may have accepted Open without returning a session
                 # ID. Reclaim its container instead of repeating an ambiguous exec.
@@ -393,14 +383,7 @@ class IrisMachine:
                 self.execution.closed = True
                 self.execution.closing = own_cleanup(self._close())
             closing = self.execution.closing
-        try:
-            await asyncio.shield(closing)
-        except asyncio.CancelledError as cancellation:
-            try:
-                await finish_owned(closing)
-            except BaseException as cleanup_error:
-                cancellation.add_note(f"Iris machine cleanup failed ({type(cleanup_error).__name__})")
-            raise
+        await await_cleanup(closing)
 
     async def _close(self) -> None:
         try:

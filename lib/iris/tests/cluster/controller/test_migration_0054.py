@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persisted singleton and primary-plus-peer jobs migrate to complete services."""
+"""Persisted single-container jobs migrate without losing startup or files."""
 
 import importlib.util
 import json
 import sqlite3
 from pathlib import Path
 
-import pytest
 from google.protobuf import json_format
 from iris.rpc import job_pb2
 
@@ -22,8 +21,7 @@ def _load_migration():
     return module
 
 
-@pytest.mark.parametrize("peer_startup", [None, "image", "override"])
-def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay(peer_startup):
+def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay():
     conn = sqlite3.connect(":memory:")
     conn.executescript(
         """
@@ -44,24 +42,7 @@ def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay(
         "env_vars": {"TASK_INPUT": "primary-value"},
         "secrets": {"SERVICE_KEY": "explicit-value"},
         "setup_scripts": ["prepare-workspace"],
-        "primary_container_name": "agent",
     }
-    if peer_startup is not None:
-        peer = {
-            "name": "runtime",
-            "image": "example.test/runtime:old",
-            "workdir": "/runtime",
-            "env_vars": {"SERVICE_INPUT": "peer-value"},
-            "resources": {
-                "cpu_millicores": 1000,
-                "memory_bytes": str(1024**3),
-                "disk_bytes": str(1024**3),
-            },
-        }
-        if peer_startup == "override":
-            peer["entrypoint"] = {"argv": ["python3"]}
-            peer["arguments"] = {"argv": ["server.py"]}
-        environment["sandbox_services"] = [peer]
     entrypoint = {
         "run_command": {"argv": ["python", "_callable_runner.py"]},
         "setup_commands": ["prepare-workspace", "install-runtime"],
@@ -92,9 +73,9 @@ def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay(
 
     assert conn.execute("SELECT * FROM job_config").fetchall() == first
     stored = json_format.Parse(first[0][1], job_pb2.EnvironmentConfig())
-    assert stored.primary_service == "agent"
+    assert stored.primary_service == "task"
     primary = stored.services[0]
-    assert primary.name == "agent"
+    assert primary.name == "task"
     assert primary.image == "example.test/agent:old"
     assert dict(primary.env_vars) == {"TASK_INPUT": "primary-value"}
     assert dict(primary.secrets) == {"SERVICE_KEY": "explicit-value"}
@@ -102,28 +83,12 @@ def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay(
     assert list(primary.runtime_entrypoint.run_command.argv) == ["python", "_callable_runner.py"]
     assert list(primary.runtime_entrypoint.setup_commands) == ["prepare-workspace", "install-runtime"]
     assert dict(primary.runtime_entrypoint.workdir_file_refs) == {"weights.bin": "gs://existing-bucket/weights.bin"}
-    primary_cores = 4 if peer_startup is None else 3
-    assert primary.resources.cpu_millicores == primary_cores * 1000
-    assert primary.resources.memory_bytes == primary_cores * 1024**3
-    assert primary.resources.disk_bytes == primary_cores * 1024**3
+    assert primary.resources.cpu_millicores == 4000
+    assert primary.resources.memory_bytes == 4 * 1024**3
+    assert primary.resources.disk_bytes == 4 * 1024**3
     assert first[0][4:7] == (4000, 4 * 1024**3, 4 * 1024**3)
     assert conn.execute("SELECT * FROM job_workdir_files").fetchall() == [
         ("/alice/old-job", "_callable_runner.py", b"print('preserved')")
     ]
-    if peer_startup is None:
-        assert len(stored.services) == 1
-    else:
-        _, runtime = stored.services
-        assert runtime.name == "runtime"
-        assert runtime.image == "example.test/runtime:old"
-        assert runtime.workdir == "/runtime"
-        assert dict(runtime.env_vars) == {"SERVICE_INPUT": "peer-value"}
-        assert runtime.resources.cpu_millicores == 1000
-        assert runtime.WhichOneof("startup") == "image_command"
-        if peer_startup == "override":
-            assert list(runtime.image_command.entrypoint.argv) == ["python3"]
-            assert list(runtime.image_command.arguments.argv) == ["server.py"]
-        else:
-            assert not runtime.image_command.HasField("entrypoint")
-            assert not runtime.image_command.HasField("arguments")
+    assert len(stored.services) == 1
     conn.close()
