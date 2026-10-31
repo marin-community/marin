@@ -157,3 +157,7 @@ time { color: var(--muted); font-size: .82rem; white-space: nowrap; }
 .md li { margin: .15rem 0; }
 .md h4 { margin: .5rem 0 .2rem; font-size: .9rem; }
 .md table { margin: .35rem 0; }
+
+/* Grid items default to their content's width; let tables scroll inside them instead of widening the page. */
+.ideas > *, .cards > *, .sessions > *, .meters > *, .step-body, .facts dd { min-width: 0; }
+.step-sub { overflow-wrap: anywhere; }

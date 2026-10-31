@@ -265,6 +265,7 @@ class Watcher:
         }
 
     def runs(self) -> list[dict]:
+        self.wandb = wandb.Api()  # a fresh client per tick: Api caches each Run it has loaded
         coords, trains, submitted = {}, {}, {}
         for job_id, state, submitted_at in iris_jobs(f"/{getpass.getuser()}/{RUN_PREFIX}"):
             parts = job_id.strip("/").split("/")
