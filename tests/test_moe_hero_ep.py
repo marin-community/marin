@@ -165,14 +165,14 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         3072,
         8,
         3072,
-        1.15,
+        1.5,
         1.15,
         3,
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        256,
-        16384,
+        64,
+        65536,
         4,
         10,
         1_000_000_000,
@@ -245,7 +245,7 @@ def test_hero_batch_validation_matches_default_mesh():
         default_mesh_trainer._validate_and_set_defaults()
 
     assert data_axis_size == default_mesh_trainer.data_axis_size == 64
-    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 4
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 1
     assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
@@ -316,8 +316,9 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
-    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, version="dev")
-    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    # At 16K the one-rack batch spans two racks; at 65K it holds one sequence per device and cannot.
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, max_seq_len=16384, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, max_seq_len=16384, version="dev")
     one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 

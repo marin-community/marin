@@ -10,7 +10,7 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
 the router selects eight experts per token. Expert parallelism moves tokens with the ragged
-all-to-all transport at a 1.15 receiver capacity factor.
+all-to-all transport at a 1.5 receiver capacity factor (1.15 before the 65K switch).
 """
 
 import math
@@ -97,12 +97,12 @@ HERO_MODEL = GrugModelConfig(
     local_kv_heads=12,
     global_kv_heads=6,
     head_dim=128,
-    max_seq_len=16384,
+    max_seq_len=65536,
     sliding_window=2048,
     global_every=4,
-    capacity_factor=1.15,
+    capacity_factor=1.5,
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
-    qk_mult=1.48,
+    qk_mult=1.66,
     sconv=True,
     attention_implementation="gpu_fa4_cute_sm100",
     moe_implementation="ragged_all_to_all",
