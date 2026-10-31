@@ -23,16 +23,16 @@ class JudgedEvaluation:
 
 
 def run_judged(config: JudgedEvaluation) -> SkyRLRun:
+    launch = yaml.safe_load(config.skyrl.launch_config_yaml)
     inference = inference_config_for_model(
         config.judge,
         AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a"),
         env_vars={},
-        priority=priority_band_value("batch"),
+        priority=priority_band_value(launch["iris"]["priority"]),
         capability_origin=config.capability_origin,
         api_model=config.judge.location,
     )
     with remote_inference(inference) as judge:
-        launch = yaml.safe_load(config.skyrl.launch_config_yaml)
         base_url = judge.model.endpoint.base_url
         launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] = base_url
         launch["skyrl"]["extra_env"]["JUDGE_BASE_URL"] = base_url

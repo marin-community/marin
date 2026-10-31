@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import yaml
 from daytona import AsyncDaytona
 from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
@@ -23,7 +24,13 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.models import TaskSpec
 
-from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, REVISION
+from experiments.evaluation.mini_policy_runtime.profile import (
+    DATASET,
+    DESTINATION,
+    POLICY_INDEX,
+    POLICY_INDEX_REVISION,
+    REVISION,
+)
 
 
 def publish(name, data):
@@ -45,6 +52,7 @@ class EnvironmentRecord:
     cpus: int | None
     memory_mb: int | None
     storage_mb: int | None
+    storage_override_mb: int | None
 
 
 def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
@@ -57,6 +65,8 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
     importer_spec.loader.exec_module(importer)
     parquet = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
     rows = pq.read_table(parquet).to_pylist()
+    index = hf_hub_download(POLICY_INDEX, "index/tasks.jsonl", repo_type="dataset", revision=POLICY_INDEX_REVISION)
+    policies = {row["task_id"]: row["policy"] for row in map(json.loads, Path(index).read_text().splitlines())}
     inventory = []
     for row in rows:
         if row["agent"] != "pi":
@@ -83,6 +93,9 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
                 cpus=config.environment.cpus,
                 memory_mb=config.environment.memory_mb,
                 storage_mb=config.environment.storage_mb,
+                storage_override_mb=yaml.safe_load(policies[row["task_id"]]["original_config"])
+                .get("environment", {})
+                .get("override_storage_mb"),
             )
         )
     return inventory

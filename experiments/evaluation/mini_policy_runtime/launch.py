@@ -12,6 +12,7 @@ import yaml
 from iris.rpc import job_pb2
 from marin.evaluation.model_config import load_model_config
 from marin.execution.build_context import resolve_version
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -32,7 +33,9 @@ from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, r
 from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION
 
 
-def recipe(snapshots: dict[str, str], judge_base_url: str, credential_env: str) -> tuple[dict, SkyRLRolePlan]:
+def recipe(
+    snapshots: dict[str, str], environment_overrides: dict, judge_base_url: str, credential_env: str
+) -> tuple[dict, SkyRLRolePlan]:
     plan = SkyRLRolePlan(
         colocate_all=True,
         policy_num_nodes=1,
@@ -117,6 +120,7 @@ def recipe(snapshots: dict[str, str], judge_base_url: str, credential_env: str) 
                 "service_startup_timeout": 60,
                 "service_shutdown_timeout": 60,
                 "environment_snapshots": snapshots,
+                "environment_overrides": environment_overrides,
                 "trial_reward_key": "reward",
             },
         },
@@ -144,16 +148,24 @@ def approved_snapshots(manifest: dict, data_uri: str) -> dict[str, str]:
 @click.option("--model-uri", required=True, help="Complete, revision-pinned RNO2A weight mirror.")
 @click.option("--data-uri", required=True, help="Preflight-validated rollouts.parquet on RNO2A storage.")
 @click.option("--environment-manifest", required=True, help="Immutable approved JSON manifest URI.")
+@click.option("--priority", type=click.Choice(["batch", "production"]), default="batch")
 @click.option("--judge-base-url", help="Existing MiniMax endpoint; otherwise co-host the pinned 131k judge.")
 @rl_build_options
-def main(model_uri: str, data_uri: str, environment_manifest: str, judge_base_url: str | None) -> ArtifactStep:
+def main(
+    model_uri: str, data_uri: str, environment_manifest: str, judge_base_url: str | None, priority: str
+) -> ArtifactStep:
     # StoragePath.open does not route named CoreWeave buckets to their credentials.
     fs, path = filesystem_for(environment_manifest)
     with fs.open(path, "r") as file:
         manifest = json.load(file)
     snapshots = approved_snapshots(manifest, data_uri)
-    config, plan = recipe(snapshots, judge_base_url or "runtime://minimax-judge", manifest["credential_env"])
-    data = ArtifactStep.adopt("documents/mini840-e2e", "2026.10.31", data_uri)
+    config, plan = recipe(
+        snapshots,
+        manifest["environment_overrides"],
+        judge_base_url or "runtime://minimax-judge",
+        manifest["credential_env"],
+    )
+    data = ArtifactStep.adopt("documents/mini840-" + fingerprint_hash(data_uri), "2026.10.31", data_uri)
     model = ArtifactStep.adopt(
         "checkpoints/mini840-qwen36", "2026.10.31", model_uri, config={"revision": MODEL_REVISION}
     )
@@ -175,7 +187,7 @@ def main(model_uri: str, data_uri: str, environment_manifest: str, judge_base_ur
             cpu=32,
             memory="256GB",
             disk="256GB",
-            priority="batch",
+            priority=priority,
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,

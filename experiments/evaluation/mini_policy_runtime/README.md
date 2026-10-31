@@ -6,14 +6,17 @@ TaskRolloutSpecs, uses Pi 0.87.0 for Harbor tasks, and runs SkyRL's `generate` e
 
 **Full end-to-end validation is pending.** The released 840 unique tasks expand to 1,626 rollouts.
 Their 287 agentic tasks require 197 environment source keys. The available eval account reached its
-45-snapshot quota. All three available credential roles reject BixBench's published 20 GB disk
-requirement because their per-sandbox maximum is 10 GB. A diagnostic smoke that omits BixBench must
-not be reported as full Mini840 validation. No complete approved environment map is published yet.
+45-snapshot quota. CPU preparation is now testing the RL account's capacity for the complete map.
+A diagnostic smoke that omits BixBench must not be reported as full Mini840 validation. No complete
+approved environment map is published yet.
 
-The environment-key and original-trial code is unchanged between runtime
-`815c4b2c8197bcf1613b405d3cad144dbe0b9f81` and this directory's base revision. The new launcher uses its
-own checked-out revision; record that revision with results. Earlier package and grader checks did
-not exercise this full execution path.
+BixBench's embedded task manifest requests 20 GB, but its original policy config explicitly overrides
+that request to 10 GB. Preparation reads this override from the frozen policy index and records it
+by environment source key. The installed-agent runtime applies the same override to the original
+Harbor trial. Other tasks retain their own resource budgets, including TBLite's 2 GB task. The older
+`815c4b2c8197bcf1613b405d3cad144dbe0b9f81` runtime lacks these source-specific overrides; use the
+repair revision when running the new launcher. Earlier package and grader checks did not exercise
+this full execution path.
 
 ## Frozen inputs
 
@@ -51,7 +54,7 @@ It records snapshot IDs, source keys, package hashes, credential role, dataset r
 It stops launching further builds when the snapshot quota is reached. Existing shared snapshots are
 not deleted.
 
-Once account limits permit the full cohort:
+Prepare the complete cohort before allocation:
 
 ```bash
 uv run iris --cluster=marin job run --no-wait --enable-extra-resources \
@@ -72,7 +75,7 @@ full dataset. The launcher's missing-key and dataset-scope checks run before GPU
 
 After the CPU reports succeed, use the model URI in the staging report and the complete environment
 manifest URI. Pin the published manifest to immutable storage before sharing it with other users.
-The example below still fails while the account limits above are unresolved.
+An incomplete manifest fails before GPU artifact construction.
 
 ```bash
 uv run python -m experiments.evaluation.mini_policy_runtime.launch \

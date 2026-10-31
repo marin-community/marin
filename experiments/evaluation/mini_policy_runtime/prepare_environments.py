@@ -75,7 +75,7 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
                             resources = Resources(
                                 cpu=row.cpus or 4,
                                 memory=math.ceil((row.memory_mb or 4096) / 1024),
-                                disk=math.ceil((row.storage_mb or 10240) / 1024),
+                                disk=math.ceil((row.storage_override_mb or row.storage_mb or 10240) / 1024),
                             )
                             async with asyncio.timeout(BUILD_TIMEOUT):
                                 snapshot = await client.snapshot.create(
@@ -122,8 +122,14 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
         report = {
             "dataset": DATASET,
             "revision": REVISION,
-            "runtime_commit": "815c4b2c8197bcf1613b405d3cad144dbe0b9f81",
+            "source_runtime_commit": "815c4b2c8197bcf1613b405d3cad144dbe0b9f81",
+            "required_runtime_feature": "installed_agent.environment_overrides",
             "credential_env": credential_env,
+            "environment_overrides": {
+                key: {"override_storage_mb": unique[key].storage_override_mb}
+                for key in ordered
+                if unique[key].storage_override_mb is not None
+            },
             "environment_snapshots": {r["image_source_key"]: r["snapshot_id"] for r in receipts},
             "receipts": receipts,
             "failures": failures,
