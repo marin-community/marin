@@ -21,7 +21,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from rolloutengine.models import TaskRolloutSpec
 
 from experiments.evaluation.mini_policy_runtime.artifacts import publish
-from experiments.evaluation.mini_policy_runtime.profile import DATASET, POLICY_INDEX, REVISION
+from experiments.evaluation.mini_policy_runtime.profile import DATASET, POLICY_INDEX, SOURCE_REVISION
 
 SOURCE_REQUIREMENTS = (
     "rouge-score==0.1.2",
@@ -35,7 +35,7 @@ ASSET_PATH = "runtime-v3/wheels"
 
 def retarget_evalchemy(output: Path) -> None:
     """Keep evaluator code identical while replacing its Git dependency with the pinned wheel."""
-    parquet = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
+    parquet = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=SOURCE_REVISION)
     row = next(row for row in pq.read_table(parquet).to_pylist() if row["benchmark"] == "math500")
     rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
     requirements = rollout.task.grader.environment.package_spec.pypi_packages
@@ -155,7 +155,7 @@ def repaired_table(table: pa.Table, wheels_revision: str) -> pa.Table:
 def export_repaired(output: Path, wheels_revision: str) -> None:
     """Rebuild both releases with identical task membership, prompts and repetitions."""
     releases = (
-        ("mini", DATASET, REVISION, 840, 1626),
+        ("mini", DATASET, SOURCE_REVISION, 840, 1626),
         ("micro", "open-athena/Marin-Micro-Eval-210", "4564ed081c316bc3231ae5c3a53a46b39248c819", 210, 450),
     )
     receipts = []

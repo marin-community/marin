@@ -4,7 +4,8 @@
 """Frozen inputs shared by Mini840 preparation, budgeting and execution."""
 
 DATASET = "open-athena/Marin-Mini-Eval-840"
-REVISION = "bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7"
+SOURCE_REVISION = "bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7"
+REVISION = SOURCE_REVISION
 DESTINATION = "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031"
 SEED = 20261030
 TOTAL_CONTEXT_LENGTH = 65536
