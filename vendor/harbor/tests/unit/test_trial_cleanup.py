@@ -97,7 +97,7 @@ class SlowStopEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -148,7 +148,7 @@ class HangingStopEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -193,7 +193,7 @@ class MountedEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -273,7 +273,7 @@ async def _make_trial(
         trials_dir=trials_dir,
         agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:HangingAgent"),
         environment=EnvironmentConfig(
-            type=EnvironmentType.IRIS,
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(disable=True),
@@ -359,7 +359,7 @@ class TestStopBoundedByWallClock:
                     import_path="tests.unit.test_trial_cleanup:QuickAgent"
                 ),
                 environment=EnvironmentConfig(
-                    type=EnvironmentType.IRIS,
+                    type=EnvironmentType.LOCAL,
                     delete=True,
                 ),
                 verifier=VerifierConfig(disable=True),
@@ -400,7 +400,7 @@ class TestPrepareLogsForHostCalledDuringTrial:
                     import_path="tests.unit.test_trial_cleanup:QuickAgent"
                 ),
                 environment=EnvironmentConfig(
-                    type=EnvironmentType.IRIS,
+                    type=EnvironmentType.LOCAL,
                     delete=False,
                 ),
                 verifier=VerifierConfig(disable=True),
@@ -437,7 +437,7 @@ async def test_environment_failure_logs_error_with_traceback(
         trials_dir=trials_dir,
         agent=AgentConfig(import_path="tests.unit.test_trial_cleanup:QuickAgent"),
         environment=EnvironmentConfig(
-            type=EnvironmentType.IRIS,
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(disable=True),
@@ -474,7 +474,7 @@ async def test_output_recovery_failure_is_persisted_as_secondary_exception(
             import_path="tests.unit.test_trial_cleanup:TruncatedOutputAgent"
         ),
         environment=EnvironmentConfig(
-            type=EnvironmentType.IRIS,
+            type=EnvironmentType.LOCAL,
             delete=False,
         ),
         verifier=VerifierConfig(disable=True),

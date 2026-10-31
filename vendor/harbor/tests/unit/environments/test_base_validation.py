@@ -18,7 +18,7 @@ from harbor.models.trial.paths import TrialPaths
 class _StubEnvironment(BaseEnvironment):
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @classmethod
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
@@ -87,7 +87,7 @@ def _make_legacy_environment_class() -> type[BaseEnvironment]:
     class LegacyPropertyEnvironment(BaseEnvironment):
         @staticmethod
         def type() -> EnvironmentType:
-            return EnvironmentType.IRIS
+            return EnvironmentType.LOCAL
 
         @property
         def supports_gpus(self) -> bool:

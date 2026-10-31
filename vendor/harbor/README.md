@@ -32,15 +32,15 @@ Marin FineStore and Rigging packages. The normal Marin environment and Iris
 `--all-packages` environments do not install Harbor. The `runtime` extra preserves
 the deployed Daytona SDK version, 0.200.2.
 
-Harbor executes tasks only through Shellbox. Its environment types are `iris`
+Harbor executes tasks only through Shellbox. Its environment types are `local`
 (the default), `daytona`, `qemu` and `shellsim`; other provider names and
 custom environment import paths fail validation. The adapters depend on
 Shellbox's generic machine API; Shellbox does not import Harbor. The `runtime`
-extra includes Iris and Daytona; `qemu` and `shellsim` install those optional
+extra includes Daytona; `qemu` and `shellsim` install those optional
 backends. The external `harbor.agents.shellbox:BashAgent` also uses this API.
 
 Policies must select prepared task images or a supported trusted image-preparation
-path. Iris supports private service groups imported from the validated Compose
+path. Local bubblewrap supports private container groups imported from the validated Compose
 subset. Daytona runs one Shellbox machine and rejects Compose; its image builds
 run in provider preparation, never in a privileged guest daemon. See
 [Harbor execution](../../docs/harbor-integration.md) for preparation requirements.

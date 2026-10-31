@@ -17,7 +17,6 @@ from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT
 from marin.evaluation.records import BenchmarkMetadataRef
 from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.inference.iris import InferenceBackendState
@@ -26,12 +25,6 @@ _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
-_DRIVER_IRIS_ENV_KEYS = (
-    "IRIS_CONTROLLER_ADDRESS",
-    "IRIS_CONTROLLER_URL",
-    "IRIS_TASK_ID",
-    "IRIS_TASK_TOKEN",
-)
 _DRIVER_SYSTEM_ENV_KEYS = (
     *DAYTONA_RUNTIME_ENV_KEYS,
     "CURL_CA_BUNDLE",
@@ -407,7 +400,4 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        runtime_env = dict(driver_env)
-        if config.environment == IRIS_ENVIRONMENT:
-            runtime_env.update(env_vars_from_keys(_DRIVER_IRIS_ENV_KEYS))
-        _stream_driver(command, runtime_env, backend_state)
+        _stream_driver(command, driver_env, backend_state)

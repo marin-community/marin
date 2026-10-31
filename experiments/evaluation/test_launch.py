@@ -63,8 +63,7 @@ def _command(tmp_path: Path) -> list[str]:
     ]
 
 
-@pytest.mark.parametrize("environment", ["iris", "local"])
-def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_batches, monkeypatch, environment):
+def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_batches, monkeypatch):
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
     for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
         monkeypatch.delenv(key, raising=False)
@@ -92,7 +91,7 @@ def test_launch_preflights_prepared_task_with_hosted_judge(tmp_path, submitted_b
         policy.write_text(
             json.dumps(
                 {
-                    "environment": {"type": environment},
+                    "environment": {"type": "local"},
                     "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
                     "datasets": [{"path": "dataset"}],
                 }

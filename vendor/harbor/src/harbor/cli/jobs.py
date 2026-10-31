@@ -536,7 +536,7 @@ def start(
         Option(
             "-e",
             "--env",
-            help=f"Environment type (default: {EnvironmentType.IRIS.value})",
+            help=f"Environment type (default: {EnvironmentType.LOCAL.value})",
             rich_help_panel="Environment",
             show_default=False,
         ),

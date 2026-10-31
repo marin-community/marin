@@ -26,7 +26,6 @@ _PERSISTED_EXCEPTION_MODULES = [
     "harbor.verifier.verifier",
     "harbor.environments.base",
     "harbor.environments.daytona",
-    "harbor.environments.iris",
     "harbor.environments.qemu",
     "harbor.environments.shellsim",
     "harbor.agents.installed.base",

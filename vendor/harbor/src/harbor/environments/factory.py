@@ -22,7 +22,6 @@ class _EnvEntry(NamedTuple):
 
 # Optional Shellbox backends load only when selected.
 _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
-    EnvironmentType.IRIS: _EnvEntry("harbor.environments.iris", "IrisEnvironment"),
     EnvironmentType.LOCAL: _EnvEntry("harbor.environments.local", "LocalEnvironment"),
     EnvironmentType.DAYTONA: _EnvEntry("harbor.environments.daytona", "DaytonaEnvironment"),
     EnvironmentType.QEMU: _EnvEntry("harbor.environments.qemu", "QemuEnvironment"),

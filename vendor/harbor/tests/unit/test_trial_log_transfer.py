@@ -38,7 +38,7 @@ class _QuickAgent(BaseAgent):
 class _DiagnosticLogFailureEnvironment(BaseEnvironment):
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -134,7 +134,7 @@ def _scored_trial_config(tmp_path: Path) -> TrialConfig:
         trials_dir=trials_dir,
         agent=AgentConfig(import_path="tests.unit.test_trial_log_transfer:_QuickAgent"),
         environment=EnvironmentConfig(
-            type=EnvironmentType.IRIS,
+            type=EnvironmentType.LOCAL,
             delete=True,
         ),
         verifier=VerifierConfig(),

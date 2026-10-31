@@ -84,7 +84,7 @@ class UploadFailsEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -154,7 +154,7 @@ async def _make_trial(tmp_path: Path) -> Trial:
         agent=AgentConfig(
             import_path="tests.unit.test_trial_verifier_invariant:TimeoutAgent"
         ),
-        environment=EnvironmentConfig(type=EnvironmentType.IRIS, delete=True),
+        environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=True),
         # Verification ENABLED: this is the path that must never silently drop.
         verifier=VerifierConfig(disable=False),
     )

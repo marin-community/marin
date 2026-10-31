@@ -10,11 +10,8 @@ import shlex
 from pathlib import Path
 
 import httpx
-import pytest
 
-from harbor.environments import iris
 from harbor.environments import prepared
-from harbor.environments.iris import IrisEnvironment
 from harbor.environments.local import LocalEnvironment
 from harbor.environments import model_relay
 from harbor.environments.model_relay import host_model_authentication
@@ -84,8 +81,7 @@ class ProcessTaskFactory:
         return Task({spec.primary: actor, runtime_spec.name: runtime}, spec, close)
 
 
-@pytest.mark.parametrize("backend", ["iris", "local"])
-def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch, backend):
+def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch):
     runtime_port, relay_port = available_port(), available_port()
     monkeypatch.setattr(prepared, "MODEL_RELAY_PORT", relay_port)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
@@ -147,12 +143,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
         lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
     )
     factory = ProcessTaskFactory(tmp_path, runtime_port)
-    if backend == "iris":
-        environment_class, factory_kwargs = IrisEnvironment, {"cluster": "test"}
-        monkeypatch.setattr(iris, "IrisMachineFactory", lambda **kwargs: factory)
-    else:
-        environment_class, factory_kwargs = LocalEnvironment, {}
-        monkeypatch.setattr("harbor.environments.local.LocalMachineFactory", lambda **kwargs: factory)
+    monkeypatch.setattr("harbor.environments.local.LocalMachineFactory", lambda **kwargs: factory)
 
     async def check() -> None:
         with (
@@ -164,12 +155,11 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
             ),
             host_model_authentication({"https://judge.test/v1": "explicit-host-key"}),
         ):
-            adapter = environment_class(
+            adapter = LocalEnvironment(
                 environment_dir=environment_dir,
                 environment_name="tau3",
                 session_id="trial",
                 trial_paths=TrialPaths(tmp_path / "trial"),
-                **factory_kwargs,
                 model_endpoint="https://judge.test/v1",
                 model_name="judge-model",
                 task_env_config=EnvironmentConfig(

@@ -228,7 +228,7 @@ def start_env(
             help="Environment type to start.",
             rich_help_panel="Environment",
         ),
-    ] = EnvironmentType.IRIS,
+    ] = EnvironmentType.LOCAL,
     mounts: Annotated[
         str | None,
         Option(

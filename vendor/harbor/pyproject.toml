@@ -37,7 +37,7 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona]", "marin-shellbox[iris]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
 analysis = ["claude-agent-sdk>=0.1.17"]
@@ -79,7 +79,6 @@ module-name = ["harbor", "harbor_config"]
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }
-marin-iris = { path = "../../lib/iris", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
 
 [tool.pytest.ini_options]

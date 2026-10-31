@@ -109,7 +109,7 @@ async def _run(task_dir, trials_dir, agent_env, verifier_env):
         task=TrialTaskConfig(path=task_dir),
         trials_dir=trials_dir,
         agent=AgentConfig(name="oracle"),
-        environment=EnvironmentConfig(type=EnvironmentType.IRIS, delete=False),
+        environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=False),
         verifier=VerifierConfig(),
     )
     call_index = [0]

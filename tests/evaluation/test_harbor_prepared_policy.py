@@ -14,7 +14,7 @@ from tests.evaluation.harbor_runtime import preflight as _preflight
 
 
 @pytest.fixture
-def iris_policy(tmp_path):
+def prepared_policy(tmp_path):
     task = tmp_path / "dataset" / "task"
     (task / "environment").mkdir(parents=True)
     (task / "tests").mkdir()
@@ -28,21 +28,13 @@ def iris_policy(tmp_path):
     policy.write_text(
         json.dumps(
             {
-                "environment": {"type": "iris"},
+                "environment": {"type": "local"},
                 "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
                 "datasets": [{"path": "dataset"}],
             }
         )
     )
     return policy
-
-
-@pytest.fixture(params=["iris", "local"])
-def prepared_policy(request, iris_policy):
-    document = json.loads(iris_policy.read_text())
-    document["environment"]["type"] = request.param
-    iris_policy.write_text(json.dumps(document))
-    return iris_policy
 
 
 def test_prepared_preflight_resolves_offline_tasks_without_allocating_a_sandbox(tmp_path, prepared_policy):
@@ -77,22 +69,22 @@ def test_prepared_compose_preflight_accepts_pinned_peers_without_building(tmp_pa
     assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
 
 
-def test_local_preflight_applies_resource_overrides_before_admission(tmp_path, iris_policy):
-    document = json.loads(iris_policy.read_text())
+def test_local_preflight_applies_resource_overrides_before_admission(tmp_path, prepared_policy):
+    document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "local", "override_cpus": 2}
-    iris_policy.write_text(json.dumps(document))
-    rejected = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    prepared_policy.write_text(json.dumps(document))
+    rejected = _preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert rejected.returncode == 2
     assert rejected.stdout == ""
 
     document["environment"]["cpu_enforcement_policy"] = "ignore"
-    iris_policy.write_text(json.dumps(document))
-    accepted = _preflight(tmp_path, [(iris_policy, {})])
+    prepared_policy.write_text(json.dumps(document))
+    accepted = _preflight(tmp_path, [(prepared_policy, {})])
     assert json.loads(accepted.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
 
     document["environment"]["override_storage_mb"] = 128
-    iris_policy.write_text(json.dumps(document))
-    rejected = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    prepared_policy.write_text(json.dumps(document))
+    rejected = _preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert rejected.returncode == 2
     assert rejected.stdout == ""
 
@@ -104,12 +96,12 @@ def test_local_preflight_applies_resource_overrides_before_admission(tmp_path, i
         {"import_path": "harbor.environments.docker.docker:DockerEnvironment"},
     ],
 )
-def test_preflight_rejects_docker_execution_before_task_launch(tmp_path, iris_policy, environment):
-    document = json.loads(iris_policy.read_text())
+def test_preflight_rejects_docker_execution_before_task_launch(tmp_path, prepared_policy, environment):
+    document = json.loads(prepared_policy.read_text())
     document["environment"] = environment
-    iris_policy.write_text(json.dumps(document))
+    prepared_policy.write_text(json.dumps(document))
 
-    completed = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    completed = _preflight(tmp_path, [(prepared_policy, {})], check=False)
 
     assert completed.returncode == 2
     assert completed.stdout == ""
@@ -169,10 +161,7 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
     preflight = json.loads(_preflight(tmp_path, [(prepared_policy, {})]).stdout)[0]
     policy = tmp_path / "stable-policy.json"
     stable_policy = json.loads(preflight["stable_policy_json"])
-    iris = stable_policy["environment"]["type"] == "iris"
-    stable_policy["environment"]["kwargs"] = (
-        {"cluster": "configured-cluster"} if iris else {"image_cache": str(tmp_path / "image-cache")}
-    )
+    stable_policy["environment"]["kwargs"] = {"image_cache": str(tmp_path / "image-cache")}
     policy.write_text(json.dumps(stable_policy))
     overlay = tmp_path / "overlay.json"
     overlay.write_text(
@@ -199,21 +188,11 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
         "-c",
         textwrap.dedent(
             f"""
-            import json, os
+            import json
             from pathlib import Path
             from marin.evaluation.harbor.trial_driver import effective_job_config
             policy, overlay = Path({str(policy)!r}), Path({str(overlay)!r})
             config = effective_job_config(policy, overlay)
-            os.environ.update(IRIS_TASK_ID='ambient-task', IRIS_CONTROLLER_ADDRESS='http://ambient.invalid')
-            again = effective_job_config(policy, overlay)
-            assert again.environment.kwargs == config.environment.kwargs
-            bound = effective_job_config(policy, overlay, enclosing_controller_url='http://enclosing.test')
-            if {iris!r}:
-                assert config.environment.kwargs['cluster'] == 'configured-cluster'
-                assert bound.environment.kwargs['controller_url'] == 'http://enclosing.test'
-                assert 'cluster' not in bound.environment.kwargs
-            else:
-                assert bound.environment.kwargs == config.environment.kwargs
             print(json.dumps(config.verifier.env))
             """
         ),
@@ -227,8 +206,8 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
     assert "hosted-judge-secret" not in completed.stdout
 
 
-def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, iris_policy):
-    document = json.loads(iris_policy.read_text())
+def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, prepared_policy):
+    document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "daytona"}
     document["verifier"] = {
         "env": {
@@ -238,14 +217,16 @@ def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tm
             "REFUSAL_JUDGE_MODEL": "together_ai/another-model",
         }
     }
-    iris_policy.write_text(json.dumps(document))
-    completed = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    prepared_policy.write_text(json.dumps(document))
+    completed = _preflight(tmp_path, [(prepared_policy, {})], check=False)
     assert completed.returncode == 2
     assert completed.stdout == ""
 
 
 @pytest.mark.parametrize("agent_name", ["terminus-2", "sotopia"])
-def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_routing(tmp_path, agent_name, iris_policy):
+def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_routing(
+    tmp_path, agent_name, prepared_policy
+):
     agent = {"name": agent_name}
     verifier = {
         "env": {

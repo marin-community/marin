@@ -706,7 +706,7 @@ def test_lock_uses_pruned_trial_locks_without_job_level_duplicates() -> None:
     task = TaskConfig(name="test-org/test-task", ref=_sha("e"))
     agent = AgentConfig(name="claude-code", model_name="claude-opus-4-1")
     environment = EnvironmentConfig(
-        type="iris",
+        type="local",
         env={"ENV_SECRET": "secret-value-123"},
     )
     verifier = VerifierConfig(
@@ -773,7 +773,7 @@ def test_lock_uses_pruned_trial_locks_without_job_level_duplicates() -> None:
     assert trial_lock["agent_setup_timeout_multiplier"] == 5.0
     assert trial_lock["environment_build_timeout_multiplier"] == 6.0
     assert trial_lock["agent"]["model_name"] == "claude-opus-4-1"
-    assert trial_lock["environment"]["type"] == "iris"
+    assert trial_lock["environment"]["type"] == "local"
     assert trial_lock["environment"]["env"]["ENV_SECRET"] == "secr****123"
     assert trial_lock["verifier"] == {
         "override_timeout_sec": 7.0,

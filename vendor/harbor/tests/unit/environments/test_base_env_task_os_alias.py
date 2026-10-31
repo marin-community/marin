@@ -13,7 +13,7 @@ from harbor.models.trial.paths import TrialPaths
 class _StubEnv(BaseEnvironment):
     @staticmethod
     def type() -> str:
-        return EnvironmentType.IRIS
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:

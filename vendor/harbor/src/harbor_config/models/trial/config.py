@@ -183,7 +183,7 @@ class UserAgentConfig(AgentConfig):
 class EnvironmentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: EnvironmentType = EnvironmentType.IRIS
+    type: EnvironmentType = EnvironmentType.LOCAL
     force_build: bool = False
     delete: bool = True
     cpu_enforcement_policy: ResourceMode = ResourceMode.AUTO

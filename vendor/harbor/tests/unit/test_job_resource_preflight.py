@@ -38,19 +38,19 @@ def _job_config(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_job_create_rejects_unsupported_cpu_limit_on_iris(
+async def test_job_create_rejects_unsupported_cpu_request_on_local(
     tmp_path: Path,
 ) -> None:
     config = _job_config(
         tmp_path,
         _write_task(tmp_path),
         RuntimeEnvironmentConfig(
-            type=EnvironmentType.IRIS,
-            cpu_enforcement_policy=ResourceMode.LIMIT,
+            type=EnvironmentType.LOCAL,
+            cpu_enforcement_policy=ResourceMode.REQUEST,
         ),
     )
 
-    with pytest.raises(ValueError, match="iris environment does not support CPU"):
+    with pytest.raises(ValueError, match="local environment does not support CPU"):
         await Job.create(config)
 
     assert not (tmp_path / "jobs" / "resource-preflight-test").exists()
@@ -58,15 +58,15 @@ async def test_job_create_rejects_unsupported_cpu_limit_on_iris(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_job_create_succeeds_with_supported_cpu_request_on_iris(
+async def test_job_create_succeeds_with_supported_cpu_limit_on_local(
     tmp_path: Path,
 ) -> None:
     config = _job_config(
         tmp_path,
         _write_task(tmp_path),
         RuntimeEnvironmentConfig(
-            type=EnvironmentType.IRIS,
-            cpu_enforcement_policy=ResourceMode.REQUEST,
+            type=EnvironmentType.LOCAL,
+            cpu_enforcement_policy=ResourceMode.LIMIT,
         ),
     )
     job = await Job.create(config)

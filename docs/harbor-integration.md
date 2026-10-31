@@ -6,7 +6,9 @@ server and, when requested, a second shared judge server; gives Harbor their Iri
 finish.
 
 Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
-GAIA, BFCL, and Aider. Harbor executes tasks only through Marin Shellbox adapters: `iris` (the default), `local`, `daytona`, `qemu` and `shellsim`. Removed provider names and custom environment import paths fail validation.
+GAIA, BFCL, and Aider. Harbor executes tasks only through Marin Shellbox adapters:
+`local` (the default), `daytona`, `qemu` and `shellsim`. Removed provider names and
+custom environment import paths fail validation.
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
@@ -114,8 +116,8 @@ outcomes and unknown errors.
 
 ## Maintained execution types
 
-Harbor's CLI and policies select `environment.type` from `iris`, `local`, `daytona`,
-`qemu` and `shellsim`. They default to Iris. Environment classes cannot be loaded
+Harbor's CLI and policies select `environment.type` from `local`, `daytona`,
+`qemu` and `shellsim`. They default to local bubblewrap. Environment classes cannot be loaded
 from a policy or CLI import path. Agent import paths remain a separate trusted
 harness extension.
 
@@ -129,7 +131,7 @@ The Daytona adapter accepts `network_policy` (`mode` and optional
 `value`), `ttl_minutes` and `create_timeout`. Model endpoint settings are supplied
 by the trusted launcher. Snapshot names, automatic snapshot toggles, provider target
 overrides and forced rebuilds are unsupported. Compose tasks must use prepared
-Iris or local container groups; Daytona rejects every Compose filename and extra overlay.
+local container groups; Daytona rejects every Compose filename and extra overlay.
 The host entry point resolves `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
 once and supplies the connection privately. The public API URL defaults to
 `https://app.daytona.io/api`; a live Daytona run requires an explicit target:
@@ -165,14 +167,14 @@ it does not grant the file's variables to task templates. The Marin launcher bin
 task capabilities and host model authentication. A missing capability fails instead of
 prompting to inherit a host variable. Use the Marin launcher for hosted judge authentication.
 
-## Offline execution through Shellbox and Iris
+## Offline execution through Shellbox
 
-For prepared tasks and private container groups, select Harbor's Iris adapter over Shellbox:
+For prepared tasks and private container groups, select Harbor's local bubblewrap adapter:
 
 ```yaml
 n_concurrent_trials: 4
 environment:
-  type: iris
+  type: local
 agents:
   - name: terminus-2
 datasets:
@@ -210,13 +212,11 @@ artifact. Evaluation reads the prepared references and never executes their buil
 The importer produces one Shellbox `TaskSpec` containing named containers and an
 explicit primary named `main`. A task without peers has that same representation
 with one container. Both use `factory.create_task`; startup, readiness, artifact
-transfer and cleanup share the same path. Iris lowers this to its existing wire
-format and normalizes it before container construction.
+transfer and cleanup share the same path.
 
 Build images separately with the task's dependencies, verifier dependencies and terminal utilities
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
-Iris tasks need Python 3.11 or newer in the main image for the process broker.
-Other tasks using the model relay need Python 3 in their main image.
+Tasks using the model relay need Python 3 in their main image.
 Containers with timed readiness checks need Python 3 in their own images to supervise
 individual probes without stopping the container on the first timeout.
 For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
@@ -253,33 +253,24 @@ Use an existing authenticated registry namespace in place of `registry.example`.
 Dockerfiles before building, set `allow_internet = false` in the prepared task's `task.toml`, and
 retain the prepared snapshot and manifest as Marin artifacts. These preparation commands require
 trusted build infrastructure; they are never run by the evaluation sandbox.
-The image must run as root inside the sandbox because Harbor setup and verification request that
-user, and Iris exec cannot switch the image's user.
-Iris replaces the main image's entrypoint with its process helper. Sidecars retain their prepared
-image's ENTRYPOINT/CMD unless Compose explicitly overrides them.
-The adapter does not build images or install a nested container runtime.
-The shared launcher's host entry point resolves its enclosing Iris controller once and passes
-that binding explicitly into job configuration. Sandboxes use the enclosing job's scoped task
-token. An explicit controller must match this binding; a cluster selector is replaced by the
-enclosing controller. Online Iris execution requires a trusted driver inside that
-Kubernetes cluster with `NetworkAttachment.POD`; the shared evaluation launcher
-selects this attachment for Iris-backed Harbor policies. An external controller
-URL or a controller port-forward alone does not provide access to private Pod addresses.
+The primary stays alive for agent commands and verification. Sidecars retain their prepared
+image's ENTRYPOINT/CMD unless Compose explicitly overrides them. The adapter does not build
+images or install a nested container runtime.
 
-The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
-`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Container groups deny
-external traffic including DNS; single-container Kubernetes jobs retain platform DNS. No controller token, storage credential,
-workspace bundle, shared host cache or service-account token is supplied to the task by this adapter.
+The agent makes model calls in the trusted Harbor process. Shellbox runs task commands and
+verification in persistent bubblewrap containers. Members share private loopback and retain
+separate filesystems and PID namespaces. External traffic is denied, including DNS.
+Provider credentials stay in the trusted harness.
 Task environment templates resolve only against explicit task capabilities. They never read the
 driver's ambient environment, including through differently named aliases.
 Image contents and explicit task inputs must themselves be free of production credentials.
 
-The runtime has no independent Docker or other provider execution backend. The prepared Iris and local paths also reject installed agents,
+The runtime has no independent Docker or other provider execution backend. The prepared local path also rejects installed agents,
 custom agent imports and custom host mounts. Its Compose importer supports `main` plus prepared
 sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
 on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
 Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
-between sidecars fail explicitly. The controller must advertise `task-containers` support.
+between sidecars fail explicitly.
 
 Containers share only the group's loopback network. External egress remains denied. Tau3's user model
 and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
@@ -292,16 +283,8 @@ Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint 
 `harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
 
 The relay starts one Python HTTP helper and exchanges bounded request/response
-frames over a persistent process session. On Iris, a process broker in the
-primary connects directly to its trusted driver over native Pod networking.
-The controller authorizes the exact driver and sandbox attempts and resolves the
-Pod address; ongoing primary commands, transfers and model messages do not pass
-through the controller or Kubernetes exec streams. Per-driver ingress policy
-admits only the owning driver, while sandbox egress remains denied. There is no
-shared execution gateway. Companion readiness and log handoff retain unary exec.
-See [direct connection operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#direct-sandbox-connections)
-for RBAC, networking and rollout requirements. The same HTTP relay uses owned
-local process pipes or Daytona's SDK session; provider credentials remain on the host.
+frames over a persistent process session. The session uses owned local process
+pipes or Daytona's SDK transport; provider credentials remain on the host.
 
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
 `agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
@@ -317,13 +300,7 @@ This boundary protects the trusted driver from task code. Harbor and its depende
 in the trusted driver and retain its storage authority. Moving orchestration to TaskCompendium, or
 isolating that driver behind model and artifact brokers, is separate work.
 
-### Local bubblewrap execution
-
-The `local` adapter uses the same prepared images, `shellbox-images.json`, Compose importer,
-host model relay and verifier scripts as Iris. It keeps each member's processes running between
-commands. Members share a private loopback network and retain separate filesystems and PID
-namespaces. Tau3's runtime remains available while the agent runs, and its declared logs are
-copied into the agent filesystem before verification.
+### Local factory settings
 
 Use an isolated Linux worker with working bubblewrap namespaces, `skopeo` and `umoci`.
 The prepared images must use numeric root (`USER 0` or `USER 0:0`) or omit `USER`.
@@ -434,22 +411,18 @@ Harbor infrastructure values name images, resource limits and log mount paths.
 | Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
 | Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
 | Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
-| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. Model and judge authentication stays in the trusted host relay handler. |
 | Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
 | Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
 
-Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
-trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.
-See the [Iris profile reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/container-profiles.md)
-and the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md).
+See the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md)
+for each backend's isolation and resource limits.
 
 These contracts describe repository launch paths. They do not certify deployed
 images, existing snapshots, provider-side injected settings or Docker daemon
-configuration. Keep those inputs free of credentials. Local bubblewrap is for
-trusted commands; its `ALLOW` network policy shares the host network. Local
-Docker/gVisor bridge networking can also reach host or cloud metadata services.
-Use denied networking when unnecessary, or Iris's filtered sandbox egress for
-model-controlled workloads on production infrastructure.
+configuration. Keep those inputs free of credentials. Bubblewrap shares the
+worker's kernel and should run on an isolated worker. Its `ALLOW` network policy
+shares the host network. Docker/gVisor bridge networking can also reach host or
+cloud metadata services. Use denied networking and the host relay for task code.
 
 ## Endpoint lifecycle
 
