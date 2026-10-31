@@ -35,7 +35,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cloud.iris.artifacts import terminal_checkpoint_step
+from cloud.iris.artifacts import fs_and_path
 from cloud.iris.launch_config import RunMode, SubmissionMode, load_launch_config
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
@@ -393,17 +393,10 @@ def submit_requested_export(spec: ExportJobSpec, command: list[str]) -> None:
     _write_hf_export_request(request.with_status(HFExportStatus.COMPLETE, last_exit_code=0))
 
 
-def export_terminal_policy(training_config_path: Path) -> None:
-    """Derive and run the terminal policy export from one training launch document."""
-    training_config = load_launch_config(training_config_path)
-    checkpoint_root = str(training_config.artifacts.checkpoint_root)
-    step = terminal_checkpoint_step(checkpoint_root)
-    checkpoint_path = join_resource_path(checkpoint_root, f"{GLOBAL_STEP_PREFIX}{step}")
-    request = _read_hf_export_request(checkpoint_path)
-    if request is None:
-        raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
-    if request.status is HFExportStatus.COMPLETE:
-        return
+def _submit_conversion(
+    training_config_path: Path, training_config: DictConfig, request: HFExportRequest, step: int
+) -> None:
+    """Build, submit, and wait out one checkpoint conversion gang."""
     allocation = training_config.iris.allocation
     spec = ExportJobSpec(
         request=request,
@@ -423,6 +416,55 @@ def export_terminal_policy(training_config_path: Path) -> None:
     )
     resolved_spec = _with_checkpoint_export_config(training_config_path, spec)
     submit_requested_export(resolved_spec, build_command(resolved_spec))
+
+
+def pending_export_steps(training_config: DictConfig) -> list[tuple[int, str]]:
+    """Committed checkpoints whose HF export request is banked but not complete.
+
+    Returns (step, checkpoint path) ascending. A checkpoint without a request was
+    never selected for export and is skipped. Raises when the run committed no
+    checkpoint at all — a successful run that banked no weights is not exportable.
+    """
+    checkpoint_root = str(training_config.artifacts.checkpoint_root)
+    filesystem, root_path = fs_and_path(checkpoint_root)
+    if not filesystem.exists(root_path):
+        raise ValueError(f"Successful Iris job did not commit a checkpoint marker: {checkpoint_root}")
+    # detail=True keeps the entry shape deterministic: the guarded remote-I/O
+    # filesystem's listdir returned detail dicts, which sorted() cannot order.
+    entries = filesystem.ls(root_path, detail=True)
+    names = sorted(str(entry["name"] if isinstance(entry, dict) else entry) for entry in entries)
+    pending: list[tuple[int, str]] = []
+    for name in names:
+        directory = name.rstrip("/").rsplit("/", 1)[-1]
+        if not directory.startswith(GLOBAL_STEP_PREFIX) or not directory[len(GLOBAL_STEP_PREFIX) :].isdigit():
+            continue
+        checkpoint_path = join_resource_path(checkpoint_root, directory)
+        request = _read_hf_export_request(checkpoint_path)
+        if request is not None and request.status is not HFExportStatus.COMPLETE:
+            pending.append((int(directory[len(GLOBAL_STEP_PREFIX) :]), checkpoint_path))
+    if not pending:
+        raise ValueError(f"Successful Iris job committed no exportable checkpoint under {checkpoint_root}")
+    return sorted(pending)
+
+
+def export_pending_policies(training_config_path: Path) -> None:
+    """Convert every committed checkpoint whose HF export request is still pending.
+
+    The trainer banks one request beside each checkpoint it exports (the launcher's
+    ``hf_export_steps``, the scored checkpoints); after the run ends this submits one
+    conversion gang per pending request, terminal step included, and records each
+    request's completion. A failed conversion stays pending and is re-submitted on
+    the next call.
+    """
+    training_config = load_launch_config(training_config_path)
+    for step, checkpoint_path in pending_export_steps(training_config):
+        request = _read_hf_export_request(checkpoint_path)
+        if request is None:
+            raise ValueError(f"checkpoint {checkpoint_path} has no hf_export_request.json")
+        if request.status is HFExportStatus.COMPLETE:
+            continue
+        print(f"[export-hf] converting checkpoint step {step}")
+        _submit_conversion(training_config_path, training_config, request, step)
 
 
 def main() -> None:

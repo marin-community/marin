@@ -20,15 +20,13 @@ from types import SimpleNamespace
 
 import pytest
 import ray
+import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer.module import Float16Module
 from ray.util.placement_group import placement_group
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from transformers import AutoTokenizer
-
-import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offloaded_muon_direction_in_grad_
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
@@ -36,15 +34,23 @@ from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
-from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from skyrl_train.utils.torch_utils import logprobs_from_logits
+from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
+from transformers import AutoTokenizer
+
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_serving import (
     GRUG_BIAS_NAMES as BIAS_NAMES,
+)
+from tests.gpu.grug_serving import (
     GRUG_PARAMETER_NAMES as PARAMETER_NAMES,
+)
+from tests.gpu.grug_serving import (
     GRUG_SERVING_EXPERT_INDEX_BY_NAME as SERVING_EXPERT_INDEX_BY_NAME,
+)
+from tests.gpu.grug_serving import (
     LM_HEAD_NAME,
     ROUTER_NAME,
     assert_engine_weights,

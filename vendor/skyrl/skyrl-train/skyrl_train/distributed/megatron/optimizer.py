@@ -23,12 +23,10 @@ import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
 from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
-from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
+from megatron.core.optimizer.emerging_optimizers import _EMERGING_OPTIMIZERS, EmergingOptimizerEntry
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
-
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megatron_grug_route
-
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
