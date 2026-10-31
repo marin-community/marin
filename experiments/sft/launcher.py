@@ -223,8 +223,11 @@ def _levanter_train_config(
         # A converted checkpoint emits a tokenizer already padded to its model vocab. Native init
         # has no HF reference from which the generic padding helper could re-derive that vocab.
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
-        hf_save_steps=num_train_steps,  # one HF export at the end
+        # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
+        # length would also fire on the last step and export the same step twice.
+        hf_save_steps=num_train_steps + 1,
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )
@@ -648,6 +651,11 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=False)
 
 
+def sft_run_id(spec: SFTSpec) -> str:
+    """Include the artifact name so a shared version does not merge tracker histories."""
+    return f"{spec.name.split('/', 1)[-1].replace('/', '-')}-{spec.version}"
+
+
 def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
@@ -658,6 +666,7 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        id=sft_run_id(spec),
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
         steps_per_eval=500,
