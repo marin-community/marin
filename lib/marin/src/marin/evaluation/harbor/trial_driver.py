@@ -90,7 +90,7 @@ _PREPARED_ENVIRONMENT_KWARGS = {
     ),
     EnvironmentType.LOCAL: (
         _MODEL_RELAY_ENVIRONMENT_KWARGS
-        | {"bwrap", "umoci", "image_cache", "registry_authfile", "signature_policy", "ttl"}
+        | {"bwrap", "umoci", "image_cache", "registry_authfile", "signature_policy", "cgroup_parent", "ttl"}
     ),
 }
 _MODEL_RELAY_ENVIRONMENTS = frozenset(_PREPARED_ENVIRONMENT_KWARGS) | {EnvironmentType.DAYTONA}
@@ -277,6 +277,11 @@ def _validate_job_tasks(job: Job) -> None:
                     task_environment_config,
                     cpu_enforcement_policy=environment.cpu_enforcement_policy,
                     memory_enforcement_policy=environment.memory_enforcement_policy,
+                    cgroup_parent=(
+                        Path(environment.kwargs["cgroup_parent"])
+                        if environment.kwargs.get("cgroup_parent") is not None
+                        else None
+                    ),
                 )
             if task.config.steps:
                 raise ValueError("Prepared Shellbox environments do not yet support multi-step tasks")

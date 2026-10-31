@@ -321,15 +321,30 @@ copied into the agent filesystem before verification.
 
 Use an isolated Linux worker with working bubblewrap namespaces, `skopeo` and `umoci`.
 The prepared images must use numeric root (`USER 0` or `USER 0:0`) or omit `USER`.
-The adapter accepts `bwrap`, `umoci`, `image_cache` and `ttl` factory settings.
+The adapter accepts `bwrap`, `umoci`, `image_cache`, `cgroup_parent` and `ttl` factory settings.
 Optional `registry_authfile` and `signature_policy` files configure host-side image acquisition;
 they are never mounted into guests. Host mounts are unsupported. The guest has no external
 network route.
 
-Local execution cannot enforce aggregate CPU, memory or storage allocations. If a task declares
-CPU or memory values, explicitly select `ignore` for those policies; `auto` does not silently
-discard them. Storage, GPU and TPU requests must be absent. For example, replace the environment
-in a prepared task policy with:
+An explicitly delegated cgroup v2 `cgroup_parent` enables CPU and memory limits
+across each container's processes and descendants. Use `limit` or `auto` to
+apply the task's declarations. The worker must run within that delegated
+hierarchy; see the [Shellbox delegation instructions](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md#local-backend).
+For example:
+
+```yaml
+environment:
+  type: local
+  cpu_enforcement_policy: limit
+  memory_enforcement_policy: limit
+  kwargs:
+    cgroup_parent: /sys/fs/cgroup/path/to/delegated-worker
+    ttl: 3600
+```
+
+Without delegation, explicitly select `ignore` for declared CPU or memory values;
+`auto` does not silently discard them. Storage quotas, GPU and TPU allocations
+remain unsupported. For a worker without delegation:
 
 ```yaml
 environment:
@@ -350,6 +365,36 @@ uv run --isolated --project vendor/harbor --frozen --extra runtime \
 Model and judge settings follow the host bindings described above. A command timeout or
 cancellation closes the entire local machine or group. Local execution shares the host kernel;
 use it for trusted tasks on isolated workers. Iris remains the default production boundary.
+
+The local backend uses the same Docker/OCI image contents; it unpacks the layers
+instead of starting a Docker container. A prepared image can remain local.
+Export the host-built image with Skopeo into an OCI layout tagged `image`, put
+that layout at `<image_cache>/sha256-<platform-manifest-digest>`, and reference
+the same platform manifest digest in `shellbox-images.json`. Shellbox verifies
+the manifest, configuration and every layer before using that cache offline.
+An explicit signature policy still requires registry verification.
+
+To exercise the complete local Tau3 path with a real candidate, simulated user
+and assertion judge, use a prepared task whose canonical reward includes an
+NL assertion, such as `tau3-retail-2` from Tau3 1.0.1. Keep its runtime
+`task_config.json`, instructions and verifier unchanged. Select Terminus 2,
+configure a local tokenizer encoding for a hosted endpoint without `/tokenize`,
+and put the upstream `model_endpoint` and `model_name` in the local environment
+kwargs. The candidate's OpenAI client uses the host endpoint; the runtime and
+verifier receive the loopback relay and an inert key. Supply CPU/memory policies
+as above and omit the unsupported storage declaration from the prepared task.
+
+```bash
+uv run --isolated --project vendor/harbor --frozen --extra runtime \
+  python vendor/harbor/tests/local_tau3_smoke.py local-tau3.json \
+  --api-key-env GLM_BULK_TOKEN
+```
+
+The command retains normal Harbor trial artifacts and checks that Tau2 evaluated
+a real runtime trajectory and returned NL assertion results. A model reward of
+zero is a scored outcome; an infrastructure error or skipped evaluator fails
+the smoke run. Task images contain the same MCP client and terminal dependencies
+used by the candidate. No oracle solution is uploaded.
 
 To inventory a local task snapshot without executing it:
 

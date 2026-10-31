@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
@@ -8,11 +10,12 @@ def validate_local_resources(
     *,
     cpu_enforcement_policy: ResourceMode,
     memory_enforcement_policy: ResourceMode,
+    cgroup_parent: Path | None = None,
 ) -> None:
-    """Require explicit consent for CPU and memory declarations the local backend cannot enforce."""
+    """Require delegated cgroups or explicit ignore policies for local resource declarations."""
     validate_resource_capabilities(
         environment_label="local",
-        resource_capabilities=EnvironmentResourceCapabilities(),
+        resource_capabilities=EnvironmentResourceCapabilities(cpu_limit=True, memory_limit=True),
         cpu_enforcement_policy=cpu_enforcement_policy,
         memory_enforcement_policy=memory_enforcement_policy,
     )
@@ -22,8 +25,8 @@ def validate_local_resources(
         ("CPU", task.cpus, cpu_enforcement_policy),
         ("memory", task.memory_mb, memory_enforcement_policy),
     ):
-        if value is not None and mode is not ResourceMode.IGNORE:
-            raise ValueError(f"Local {name} declarations require explicit enforcement_policy=ignore")
+        if value is not None and mode is not ResourceMode.IGNORE and cgroup_parent is None:
+            raise ValueError(f"Local {name} limits require cgroup_parent or explicit enforcement_policy=ignore")
 
 
 def validate_resource_capabilities(
@@ -51,18 +54,9 @@ def validate_resource_capabilities(
         if mode in (ResourceMode.AUTO, ResourceMode.IGNORE):
             continue
         if mode in (ResourceMode.LIMIT, ResourceMode.GUARANTEE) and not supports_limit:
-            raise ValueError(
-                f"{environment_label} environment does not support "
-                f"{label} resource limits."
-            )
-        if (
-            mode in (ResourceMode.REQUEST, ResourceMode.GUARANTEE)
-            and not supports_request
-        ):
-            raise ValueError(
-                f"{environment_label} environment does not support "
-                f"{label} resource requests."
-            )
+            raise ValueError(f"{environment_label} environment does not support {label} resource limits.")
+        if mode in (ResourceMode.REQUEST, ResourceMode.GUARANTEE) and not supports_request:
+            raise ValueError(f"{environment_label} environment does not support {label} resource requests.")
 
 
 def validate_resource_values(
@@ -80,7 +74,4 @@ def validate_resource_values(
         if mode in (ResourceMode.AUTO, ResourceMode.IGNORE):
             continue
         if value is None:
-            raise ValueError(
-                f"{label} resource mode '{mode.value}' requires a task value "
-                "or numeric override."
-            )
+            raise ValueError(f"{label} resource mode '{mode.value}' requires a task value or numeric override.")
