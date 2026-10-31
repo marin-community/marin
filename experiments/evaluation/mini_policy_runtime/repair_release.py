@@ -152,10 +152,55 @@ def repaired_table(table: pa.Table, wheels_revision: str) -> pa.Table:
     return pa.Table.from_pylist([repaired_row(row, requirements) for row in table.to_pylist()], schema=table.schema)
 
 
+def export_repaired(output: Path, wheels_revision: str) -> None:
+    """Rebuild both releases with identical task membership, prompts and repetitions."""
+    releases = (
+        ("mini", DATASET, REVISION, 840, 1626),
+        ("micro", "open-athena/Marin-Micro-Eval-210", "4564ed081c316bc3231ae5c3a53a46b39248c819", 210, 450),
+    )
+    receipts = []
+    for name, dataset, revision, unique_count, rollout_count in releases:
+        for filename, expected in (("validation.parquet", unique_count), ("validation-rollouts.parquet", rollout_count)):
+            source = hf_hub_download(dataset, "data/" + filename, repo_type="dataset", revision=revision)
+            original = pq.read_table(source)
+            repaired = repaired_table(original, wheels_revision)
+            if repaired.num_rows != expected:
+                raise ValueError(f"Unexpected {dataset} row count")
+            for before, after in zip(original.to_pylist(), repaired.to_pylist(), strict=True):
+                before_task = TaskRolloutSpec.model_validate_json(before["task_rollout_spec"]).task
+                after_task = TaskRolloutSpec.model_validate_json(after["task_rollout_spec"]).task
+                if before_task.model_copy(update={"grader": after_task.grader}) != after_task:
+                    raise ValueError(f"Repair changed task content: {before['task_id']}")
+                if any(before[key] != after[key] for key in before if key not in ("task_spec", "task_rollout_spec")):
+                    raise ValueError(f"Repair changed row membership or provenance: {before['task_id']}")
+            destination = output / name / "data" / filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(repaired, destination)
+            receipts.append(
+                {
+                    "dataset": dataset,
+                    "source_revision": revision,
+                    "file": str(destination.relative_to(output)),
+                    "rows": expected,
+                    "source_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest(),
+                    "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                }
+            )
+    (output / "repair-manifest.json").write_text(
+        json.dumps({"wheels_revision": wheels_revision, "files": receipts}, indent=2)
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--build-wheels", action="store_true")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--build-wheels", action="store_true")
+    group.add_argument("--output", type=Path)
+    parser.add_argument("--wheels-revision")
     args = parser.parse_args()
-    if not args.build_wheels:
-        parser.error("Select --build-wheels; dataset repair is called by stage_inputs")
-    build_wheels()
+    if args.build_wheels:
+        build_wheels()
+    elif args.wheels_revision:
+        export_repaired(args.output, args.wheels_revision)
+    else:
+        parser.error("Dataset export requires --wheels-revision")
