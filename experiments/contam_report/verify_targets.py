@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Check the target eval corpus against its sources (gate: verify eval data).
 
 Reads the corpus back from DIR (a copy downloaded from S3) and checks, for each

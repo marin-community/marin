@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Turn scan hits into per-eval-item contamination (Gate 5, also used on the pilot).
 
 For each eval item, with ``n`` its indexed features:
@@ -33,12 +36,15 @@ def main() -> None:
         FROM read_parquet('{bloom_dir}/_bloom/eval_hash_index.parquet')
         """
     )
-    con.execute("UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) WHERE eval_id LIKE 'uncheatable-%'")
+    con.execute(
+        "UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) WHERE eval_id LIKE 'uncheatable-%'"
+    )
     con.execute("CREATE TABLE item_n AS SELECT eval, eval_id, count(DISTINCT hash) AS n FROM idx GROUP BY ALL")
     con.execute(
         f"""
         CREATE TABLE doc_hash AS
-        SELECT regexp_extract(filename, '{hits_dir}/(.+)/hits/', 1) AS source, id, unnest(hits) AS hash, marked
+        SELECT regexp_extract(filename, '{hits_dir}/(.+)/hits/', 1) AS source,
+               regexp_extract(filename, '/hits/([^/]+)$', 1) AS file, id, unnest(hits) AS hash, marked
         FROM read_parquet('{hits_dir}/**/hits/*.parquet', filename = true)
         """
     )
@@ -51,7 +57,7 @@ def main() -> None:
     con.execute(
         """
         CREATE TABLE doc_item AS
-        SELECT d.source, d.id, d.marked, i.eval, i.eval_id, count(DISTINCT d.hash) AS k
+        SELECT d.source, d.file, d.id, d.marked, i.eval, i.eval_id, count(DISTINCT d.hash) AS k
         FROM doc_hash d JOIN idx i USING (hash)
         WHERE d.hash NOT IN (SELECT hash FROM common)
         GROUP BY ALL
@@ -64,7 +70,8 @@ def main() -> None:
                coalesce(max(di.k), 0) / n.n AS best_doc_coverage,
                count(DISTINCT di.source || di.id) AS docs,
                arg_max(di.source, di.k) AS best_source,
-               arg_max(di.id, di.k) AS best_doc
+               arg_max(di.id, di.k) AS best_doc,
+               arg_max(di.file, di.k) AS best_file
         FROM item_n n LEFT JOIN doc_item di USING (eval, eval_id)
         GROUP BY n.eval, n.eval_id, n.n
         """

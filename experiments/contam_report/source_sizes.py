@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """List each hero source's normalized Parquet files and sizes."""
 
 import json

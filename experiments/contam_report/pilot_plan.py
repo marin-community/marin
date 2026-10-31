@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Choose the files the pilot scan reads (Gate 3).
 
 Takes a deterministic sample of each hero source's normalized files, and every

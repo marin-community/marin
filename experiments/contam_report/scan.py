@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Record every target-eval Bloom hit in hero training documents (Gates 3 and 4).
 
 For each input Parquet file this writes, under ``<out>/<source>/``:

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Build the target eval corpus for the hero contamination study (Gate 2).
 
 Writes one Parquet file per eval with columns ``id`` and ``text`` to OUT_DIR,

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Build the 13-gram Bloom filter and eval_id index for the target corpus (Gate 2)."""
 
 import sys
@@ -11,4 +14,12 @@ NGRAM = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features
 
 if __name__ == "__main__":
     targets, out = sys.argv[1], sys.argv[2]
-    print(build_eval_bloom(eval_data_sources=targets, output_path=out, ngram=NGRAM, estimated_doc_count=ESTIMATED_FEATURES, max_workers=4))
+    print(
+        build_eval_bloom(
+            eval_data_sources=targets,
+            output_path=out,
+            ngram=NGRAM,
+            estimated_doc_count=ESTIMATED_FEATURES,
+            max_workers=4,
+        )
+    )
