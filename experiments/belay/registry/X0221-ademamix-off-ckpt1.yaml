@@ -5,7 +5,7 @@ category: Optimizers
 summary: Ablate AdEMAMix (X0120, alpha 5, beta3 0.98) on the Adam groups of Belay Ckpt 1 at the 8821-step d512 budget, to
   check whether the adoption still holds.
 source: maintainer
-status: running
+status: done
 trials:
 - id: t001
   variant: AdEMAMix off
@@ -14,9 +14,14 @@ trials:
   batch: X0221
   date: '2026-10-31'
   comment_url: http://127.0.0.1:8091/belay/
-  baseline: belay-X0221-control (same commit)
+  baseline: belay-X0221-control 2.8717 (same commit, seed 0)
   wandb:
   - belay-X0221-seed0
   settings:
     adam_ademamix_alpha: '0'
   commit: 1c4d6c8b21
+  loss:
+  - 2.8775
+  delta:
+  - 0.0058
+  steps: 8820
