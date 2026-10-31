@@ -25,18 +25,16 @@ JUDGE_BASE_URL="${JUDGE_BASE_URL:-https://api.together.xyz/v1}"
 TAU2_JUDGE_MODEL="${TAU2_JUDGE_MODEL:-openai/openai/gpt-oss-120b}"
 
 CAMPAIGN_SHA_MARIN=$(git -C "$MARIN_DIR" rev-parse HEAD)
+CAMPAIGN_DATASET_REGISTRY_REVISION="38742b0f9f411c95e0c01468785cac7bb77c9894"
 eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor
 
 print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_hash())}")
-print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR_SOURCE.commit)}")
-print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
 PY
 )"
-export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
+export CAMPAIGN_SHA_MARIN CAMPAIGN_EVALCHEMY_SOURCE_HASH
 
 die() {
   echo "error: $*" >&2
@@ -230,7 +228,7 @@ validate_campaign_configs() {
   HARBOR_CONFIG_DIR="$HARBOR_CONFIG_DIR" \
   CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" \
   JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG" \
-  CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
+  CAMPAIGN_DATASET_REGISTRY_REVISION="$CAMPAIGN_DATASET_REGISTRY_REVISION" \
   uv run python - <<'PY'
 import os
 import re
@@ -429,7 +427,7 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/registry.json",
     }
 ]
 for name in (
@@ -446,7 +444,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_DATASET_REGISTRY_REVISION']}/"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
@@ -469,8 +467,6 @@ PY
 snapshot_launch_configs() {
   mkdir -p "$CONFIG_SNAPSHOT_DIR"
   CAMPAIGN_SHA_MARIN="$CAMPAIGN_SHA_MARIN" \
-  CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
-  CAMPAIGN_HARBOR_RUNTIME="$CAMPAIGN_HARBOR_RUNTIME" \
   CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
   python3 - "$@" <<'PY'
@@ -492,8 +488,6 @@ payload = {
     "argv": arguments,
     "pins": {
         "marin": os.environ["CAMPAIGN_SHA_MARIN"],
-        "harbor": os.environ["CAMPAIGN_SHA_HARBOR"],
-        "harbor_runtime": os.environ["CAMPAIGN_HARBOR_RUNTIME"],
         "evalchemy_source_hash": os.environ["CAMPAIGN_EVALCHEMY_SOURCE_HASH"],
     },
     "files": [

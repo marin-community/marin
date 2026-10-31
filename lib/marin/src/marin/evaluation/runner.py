@@ -198,7 +198,7 @@ class EvaluationIdentity:
     created_at: str
     output_dir: str
     eval_ref: EvalRef
-    eval_runtime: str
+    eval_runtime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -551,7 +551,7 @@ def _run_one_evaluation(
             job_id=orchestrator_job_id,
             attributes={
                 "eval_name": evaluation.identity.eval_ref.name,
-                "eval_runtime": evaluation.identity.eval_runtime,
+                **({"eval_runtime": evaluation.identity.eval_runtime} if evaluation.identity.eval_runtime else {}),
                 "group_id": batch.group_id,
             },
         )

@@ -213,7 +213,7 @@ Agentic launcher runs pass the same `RunningModel` boundary to
 inference session.
 
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
-- Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.
+- Marin's Harbor integration executes through Shellbox adapters for Iris, local bubblewrap, Daytona, QEMU and ShellSim.
 - Setup, examples, and environment requirements are documented in [Harbor Framework Integration](../harbor-integration.md).
 
 ## Where to go next

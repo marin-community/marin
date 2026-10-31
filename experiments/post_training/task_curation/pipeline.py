@@ -30,10 +30,7 @@ from marin.datakit.download.huggingface import (
     plan_download,
     stream_file_to_fsspec,
 )
-from marin.evaluation.harbor.driver_config import (
-    harbor_runtime_command,
-    harbor_runtime_descriptor,
-)
+from marin.evaluation.harbor.driver_config import harbor_runtime_command
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -608,8 +605,6 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
         return {
             "harbor_hub": source.name,
             "revision": source.revision,
-            "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
-            "harbor_runtime": harbor_runtime_descriptor(),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 

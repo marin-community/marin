@@ -271,7 +271,7 @@ url = "https://download.pytorch.org/whl/cpu/torch/"
 format = "flat"
 
 [tool.iris.bundle]
-include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*", "lib/shellbox/src/**/*", "lib/iris/src/**/*", "lib/iris/hatch_build.py", "lib/iris/config/**/*", "lib/finelog/src/**/*", "lib/finelog/config/**/*"]
 exclude = ["^vendor/harbor/tests(/|$)"]
 
 [tool.black]

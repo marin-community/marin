@@ -22,6 +22,7 @@ from harbor.agents.installed.mini_swe_agent import (
     convert_mini_swe_agent_to_atif,
 )
 from harbor.models.agent.context import AgentContext
+from harbor.utils.env import task_environment
 
 # ---------------------------------------------------------------------------
 # Fixtures: realistic v2 tool-calling trajectory data
@@ -85,7 +86,9 @@ V2_TOOL_CALLING_TRAJECTORY = {
                     "type": "function",
                     "function": {
                         "name": "bash",
-                        "arguments": '{"command": "sed -i \'s/OrderedDcit/OrderedDict/\' baz.py"}',
+                        "arguments": (
+                            '{"command": "sed -i \'s/OrderedDcit/OrderedDict/\' baz.py"}'
+                        ),
                     },
                 }
             ],
@@ -255,7 +258,9 @@ V2_WITH_EXIT_MESSAGE = {
                     "type": "function",
                     "function": {
                         "name": "bash",
-                        "arguments": '{"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}',
+                        "arguments": (
+                            '{"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}'
+                        ),
                     },
                 }
             ],
@@ -272,7 +277,9 @@ V2_WITH_EXIT_MESSAGE = {
         },
         {
             "role": "tool",
-            "content": '{"returncode": -1, "output": "", "exception_info": "action was not executed"}',
+            "content": (
+                '{"returncode": -1, "output": "", "exception_info": "action was not executed"}'
+            ),
             "tool_call_id": "call_1",
             "extra": {},
         },
@@ -701,7 +708,7 @@ class TestPopulateContextPostRun:
 class TestCreateRunAgentCommands:
     @pytest.mark.asyncio
     async def test_uses_mini_command(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
+        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
             agent = MiniSweAgent(
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )
@@ -720,7 +727,7 @@ class TestCreateRunAgentCommands:
 
     @pytest.mark.asyncio
     async def test_mswea_configured_env(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
+        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
             agent = MiniSweAgent(
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )
@@ -732,15 +739,45 @@ class TestCreateRunAgentCommands:
         assert exec_calls[-1].kwargs["env"]["MSWEA_CONFIGURED"] == "true"
 
     @pytest.mark.asyncio
-    async def test_mswea_api_key_passthrough(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "sk-test"}, clear=False):
+    @pytest.mark.parametrize(
+        "key_name, base_name",
+        [
+            ("MSWEA_API_KEY", "OPENAI_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_API_BASE"),
+        ],
+    )
+    async def test_explicit_capability_excludes_ambient_credentials(
+        self, temp_dir, key_name, base_name
+    ):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MSWEA_API_KEY": "host-mini-canary",
+                    "OPENAI_API_KEY": "host-provider-canary",
+                    "OPENAI_BASE_URL": "https://ambient-provider.invalid/v1",
+                    "OPENAI_API_BASE": "https://ambient-provider.invalid/v1",
+                },
+                clear=False,
+            ),
+            task_environment(
+                {key_name: "EMPTY", base_name: "http://127.0.0.1:8787/v1"}
+            ),
+        ):
             agent = MiniSweAgent(logs_dir=temp_dir, model_name="openai/gpt-4o")
             mock_env = AsyncMock()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
-        assert exec_calls[-1].kwargs["env"]["MSWEA_API_KEY"] == "sk-test"
+        assert exec_calls[-1].kwargs["env"]["MSWEA_API_KEY"] == "EMPTY"
+        assert "http://127.0.0.1:8787/v1" in exec_calls[-1].kwargs["command"]
+        for private in (
+            "host-mini-canary",
+            "host-provider-canary",
+            "ambient-provider.invalid",
+        ):
+            assert private not in str(exec_calls)
 
     @pytest.mark.asyncio
     async def test_hosted_vllm_runs_without_external_api_key(self, temp_dir):
@@ -767,7 +804,7 @@ class TestCreateRunAgentCommands:
 
     @pytest.mark.asyncio
     async def test_instruction_shell_escaped(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
+        with task_environment({"MSWEA_API_KEY": "EMPTY"}):
             agent = MiniSweAgent(
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )

@@ -181,8 +181,9 @@ class UserAgentConfig(AgentConfig):
 
 
 class EnvironmentConfig(BaseModel):
-    type: EnvironmentType | None = None
-    import_path: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    type: EnvironmentType = EnvironmentType.LOCAL
     force_build: bool = False
     delete: bool = True
     cpu_enforcement_policy: ResourceMode = ResourceMode.AUTO
@@ -283,12 +284,6 @@ class EnvironmentConfig(BaseModel):
                 out[key.strip()] = value.strip()
             return out
         return v
-
-    @model_validator(mode="after")
-    def set_default_type(self):
-        if self.type is None and self.import_path is None:
-            self.type = EnvironmentType.DOCKER
-        return self
 
 
 class VerifierConfig(BaseModel):

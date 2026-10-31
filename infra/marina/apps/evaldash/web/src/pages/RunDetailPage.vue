@@ -343,7 +343,7 @@ async function copyPath() {
                 >{{ shortSha(data.provenance.git_sha) }} ↗</a>
               </dd>
             </div>
-            <div class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
+            <div v-if="data.provenance.eval_runtime" class="flex gap-2"><dt class="text-text-muted w-28">eval runtime</dt><dd class="font-mono break-all">{{ data.provenance.eval_runtime }}</dd></div>
             <div class="flex gap-2"><dt class="text-text-muted w-28">launch host</dt><dd class="font-mono break-all">{{ data.provenance.launch_host }}</dd></div>
           </dl>
         </div>
