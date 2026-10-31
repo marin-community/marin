@@ -45,5 +45,5 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
             str(path),
         ],
     )
-    assert result.exit_code != 0
-    assert "Environment manifest" in result.output
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)

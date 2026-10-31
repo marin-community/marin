@@ -8,7 +8,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import click
-import fsspec
 import yaml
 from iris.rpc import job_pb2
 from marin.evaluation.model_config import load_model_config
@@ -27,11 +26,10 @@ from marin.rl.skyrl import (
     _materialize_role_plan_config,
     skyrl_step,
 )
+from rigging.filesystem.buckets import filesystem_for
 
 from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged
-
-MODEL = "Qwen/Qwen3.6-35B-A3B"
-MODEL_REVISION = "995ad96eacd98c81ed38be0c5b274b04031597b0"
+from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION
 
 
 def recipe(snapshots: dict[str, str], judge_base_url: str, credential_env: str) -> tuple[dict, SkyRLRolePlan]:
@@ -149,7 +147,9 @@ def approved_snapshots(manifest: dict, data_uri: str) -> dict[str, str]:
 @click.option("--judge-base-url", help="Existing MiniMax endpoint; otherwise co-host the pinned 131k judge.")
 @rl_build_options
 def main(model_uri: str, data_uri: str, environment_manifest: str, judge_base_url: str | None) -> ArtifactStep:
-    with fsspec.open(environment_manifest, "r") as file:
+    # StoragePath.open does not route named CoreWeave buckets to their credentials.
+    fs, path = filesystem_for(environment_manifest)
+    with fs.open(path, "r") as file:
         manifest = json.load(file)
     snapshots = approved_snapshots(manifest, data_uri)
     config, plan = recipe(snapshots, judge_base_url or "runtime://minimax-judge", manifest["credential_env"])

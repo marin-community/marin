@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 from collections import Counter
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -18,22 +19,35 @@ from daytona import AsyncDaytona
 from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.models import TaskSpec
 
-DATASET = "open-athena/Marin-Mini-Eval-840"
-REVISION = "bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7"
-DESTINATION = "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031"
+from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, REVISION
 
 
 def publish(name, data):
     content = json.dumps(data, indent=2).encode()
     (Path(os.environ["IRIS_OUTPUT_DIR"]) / name).write_bytes(content)
-    fs, key = filesystem_for(DESTINATION + "/" + name)
+    fs, key = filesystem_for(str(StoragePath(DESTINATION) / name))
     fs.pipe_file(key, content)
 
 
-def restored_environments(temporary: Path):
+@dataclass(frozen=True)
+class EnvironmentRecord:
+    task_id: str
+    benchmark: str
+    image_source_key: str
+    environment_hash: str
+    docker_image: str | None
+    package_sha256: str
+    context: str
+    cpus: int | None
+    memory_mb: int | None
+    storage_mb: int | None
+
+
+def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
     root = Path(__file__).resolve().parents[3]
     importer_spec = importlib.util.spec_from_file_location(
         "mini_runtime_harbor_import", root / "vendor/skyrl/skyrl-train/skyrl_train/dataset/harbor_import.py"
@@ -58,25 +72,25 @@ def restored_environments(temporary: Path):
             else DockerfileSource(context, context / "Dockerfile")
         )
         inventory.append(
-            {
-                "task_id": row["task_id"],
-                "benchmark": row["benchmark"],
-                "image_source_key": image_source_key(source),
-                "environment_hash": environment_dir_hash_truncated(context),
-                "docker_image": config.environment.docker_image,
-                "package_sha256": hashlib.sha256(row["task_spec"].encode()).hexdigest(),
-                "context": str(context),
-                "cpus": config.environment.cpus,
-                "memory_mb": config.environment.memory_mb,
-                "storage_mb": config.environment.storage_mb,
-            }
+            EnvironmentRecord(
+                task_id=row["task_id"],
+                benchmark=row["benchmark"],
+                image_source_key=image_source_key(source),
+                environment_hash=environment_dir_hash_truncated(context),
+                docker_image=config.environment.docker_image,
+                package_sha256=hashlib.sha256(row["task_spec"].encode()).hexdigest(),
+                context=str(context),
+                cpus=config.environment.cpus,
+                memory_mb=config.environment.memory_mb,
+                storage_mb=config.environment.storage_mb,
+            )
         )
     return inventory
 
 
 async def main():
     with tempfile.TemporaryDirectory() as temporary:
-        inventory = restored_environments(Path(temporary))
+        inventory = [asdict(row) for row in restored_environments(Path(temporary))]
     snapshots = []
     async with AsyncDaytona() as client:
         page = 1

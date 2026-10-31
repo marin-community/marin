@@ -40,12 +40,12 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
     with tempfile.TemporaryDirectory() as temporary:
         rows = restored_environments(Path(temporary))
         if benchmarks:
-            rows = [row for row in rows if row["benchmark"] in benchmarks]
+            rows = [row for row in rows if row.benchmark in benchmarks]
         if not rows:
             raise ValueError("No matching published Harbor tasks")
-        unique = {row["image_source_key"]: row for row in reversed(rows)}
+        unique = {row.image_source_key: row for row in reversed(rows)}
         # Prepare one source for each benchmark first, then the remaining sources.
-        leading = {row["benchmark"]: row["image_source_key"] for row in reversed(rows)}
+        leading = {row.benchmark: row.image_source_key for row in reversed(rows)}
         ordered = list(dict.fromkeys(leading.values() if smoke else [*leading.values(), *unique]))
         quota_exhausted = asyncio.Event()
         async with AsyncDaytona(DaytonaConfig(api_key=os.environ[credential_env])) as client:
@@ -68,14 +68,14 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
                         snapshot = existing.get(name)
                         if snapshot is None:
                             image = (
-                                Image.base(row["docker_image"])
-                                if row["docker_image"]
-                                else Image.from_dockerfile(str(Path(row["context"]) / "Dockerfile"))
+                                Image.base(row.docker_image)
+                                if row.docker_image
+                                else Image.from_dockerfile(str(Path(row.context) / "Dockerfile"))
                             )
                             resources = Resources(
-                                cpu=row["cpus"] or 4,
-                                memory=math.ceil((row["memory_mb"] or 4096) / 1024),
-                                disk=math.ceil((row["storage_mb"] or 10240) / 1024),
+                                cpu=row.cpus or 4,
+                                memory=math.ceil((row.memory_mb or 4096) / 1024),
+                                disk=math.ceil((row.storage_mb or 10240) / 1024),
                             )
                             async with asyncio.timeout(BUILD_TIMEOUT):
                                 snapshot = await client.snapshot.create(
@@ -93,21 +93,21 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
                                 "snapshot": name,
                                 "snapshot_id": snapshot.id,
                                 "image_name": snapshot.image_name,
-                                "benchmark": row["benchmark"],
-                                "environment_hash": row["environment_hash"],
-                                "package_sha256": row["package_sha256"],
+                                "benchmark": row.benchmark,
+                                "environment_hash": row.environment_hash,
+                                "package_sha256": row.package_sha256,
                             }
                         )
-                        logging.info("Ready %s (%s), %d/%d", name, row["benchmark"], len(receipts), len(unique))
+                        logging.info("Ready %s (%s), %d/%d", name, row.benchmark, len(receipts), len(unique))
                     except Exception as error:
-                        message = str(error).replace(os.environ.get("DAYTONA_API_KEY", "no-key-present"), "[redacted]")
+                        message = str(error).replace(os.environ[credential_env], "[redacted]")
                         if "snapshot quota" in message.lower():
                             quota_exhausted.set()
                         failures.append(
                             {
                                 "image_source_key": key,
                                 "snapshot": name,
-                                "benchmark": row["benchmark"],
+                                "benchmark": row.benchmark,
                                 "error_type": type(error).__name__,
                                 "message": message[:1000],
                             }
@@ -132,13 +132,13 @@ async def main(smoke: bool, credential_env: str, benchmarks: list[str], data_uri
             "scope": "smoke" if smoke else "full",
             "required_source_keys": ordered,
             "data_uri": data_uri,
-            "tasks": [{"task_id": row["task_id"], "image_source_key": row["image_source_key"]} for row in rows],
+            "tasks": [{"task_id": row.task_id, "image_source_key": row.image_source_key} for row in rows],
             "agentic_tasks": len(rows),
             "auto_build_during_eval": False,
         }
         publish(("smoke-" if smoke else "approved-") + credential_env.lower() + "-environments.json", report)
         if failures:
-            raise RuntimeError(f"{len(failures)} of {len(unique)} environments failed CPU preparation")
+            raise RuntimeError(f"{len(failures)} of {len(ordered)} environments failed CPU preparation")
         print(json.dumps({"approved": len(receipts), "agentic_tasks": len(rows)}), flush=True)
 
 

@@ -12,9 +12,10 @@ import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.mini_policy_runtime.environment_inventory import DATASET, DESTINATION, REVISION, publish
-from experiments.evaluation.mini_policy_runtime.launch import MODEL, MODEL_REVISION
+from experiments.evaluation.mini_policy_runtime.environment_inventory import publish
+from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, MODEL, MODEL_REVISION, REVISION
 
 
 def main(excluded: list[str]):
@@ -33,8 +34,8 @@ def main(excluded: list[str]):
     if table.num_rows != 840 or expanded.num_rows != 1626:
         raise ValueError("Published dataset cardinality changed")
     for name, rows in ((smoke_name, table.take(pa.array(chosen))), ("full", expanded)):
-        destination = DESTINATION + "/" + name + "/rollouts.parquet"
-        fs, key = filesystem_for(destination)
+        destination = StoragePath(DESTINATION) / name / "rollouts.parquet"
+        fs, key = filesystem_for(str(destination))
         with fs.open(key, "wb") as output:
             pq.write_table(rows, output)
     logging.info("Dataset staged; resolving pinned model mirror")
@@ -44,9 +45,9 @@ def main(excluded: list[str]):
         "revision": REVISION,
         "smoke_task_ids": [table.to_pylist()[i]["task_id"] for i in chosen],
         "smoke_benchmarks": sorted(seen),
-        "smoke_data_uri": DESTINATION + "/" + smoke_name,
+        "smoke_data_uri": str(StoragePath(DESTINATION) / smoke_name),
         "smoke_excluded_benchmarks": excluded,
-        "full_data_uri": DESTINATION + "/full",
+        "full_data_uri": str(StoragePath(DESTINATION) / "full"),
         "model": MODEL,
         "model_revision": MODEL_REVISION,
         "model_uri": model_uri,

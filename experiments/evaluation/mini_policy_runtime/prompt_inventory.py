@@ -11,20 +11,17 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 from transformers import AutoTokenizer
 
-DATASET = "open-athena/Marin-Mini-Eval-840"
-REVISION = "bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7"
-TOKENIZER = "Qwen/Qwen3.6-35B-A3B"
-TOKENIZER_REVISION = "995ad96eacd98c81ed38be0c5b274b04031597b0"
-DESTINATION = "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031/prompt-inventory.json"
+from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, MODEL, MODEL_REVISION, REVISION
 
 
 def main():
     data = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION)
     rows = []
     counts = defaultdict(list)
     for row in pq.read_table(data).to_pylist():
@@ -39,8 +36,8 @@ def main():
     report = {
         "dataset": DATASET,
         "revision": REVISION,
-        "tokenizer": TOKENIZER,
-        "tokenizer_revision": TOKENIZER_REVISION,
+        "tokenizer": MODEL,
+        "tokenizer_revision": MODEL_REVISION,
         "thinking": True,
         "summary": {
             b: {
@@ -55,7 +52,7 @@ def main():
     }
     encoded = json.dumps(report, indent=2).encode()
     (Path(os.environ["IRIS_OUTPUT_DIR"]) / "prompt-inventory.json").write_bytes(encoded)
-    fs, key = filesystem_for(DESTINATION)
+    fs, key = filesystem_for(str(StoragePath(DESTINATION) / "prompt-inventory.json"))
     fs.pipe_file(key, encoded)
     print(json.dumps(report["summary"]), flush=True)
 
