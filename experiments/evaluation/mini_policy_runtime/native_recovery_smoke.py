@@ -21,6 +21,8 @@ from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_runtime import InstalledAgentRuntime, InstalledAgentSettings
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.rollouts.training_record import training_rollout
 from taskcompendium.models import Source
 
@@ -45,7 +47,8 @@ async def main(mode: str) -> None:
         )
         (task_dir / "tests/test.sh").write_text(
             "#!/bin/bash\nmkdir -p /logs/verifier\n"
-            'if [ "$(cat /app/answer 2>/dev/null)" = 12 ]; then echo 1; else echo 0; fi > /logs/verifier/reward.txt\n'
+            + ("sleep 6\n" if mode == "timeout" else "")
+            + 'if [ "$(cat /app/answer 2>/dev/null)" = 12 ]; then echo 1; else echo 0; fi > /logs/verifier/reward.txt\n'
         )
         task = harbor_trial_task(
             task_dir, source=Source(dataset="runtime-control", revision="1", row="context", importer_revision="1")
@@ -53,8 +56,8 @@ async def main(mode: str) -> None:
         limits = RolloutLimits(
             max_turns=8,
             max_total_tokens=None,
-            model_turn_timeout=None,
-            tool_turn_timeout=None,
+            model_turn_timeout=10 if mode == "timeout" else 1800,
+            tool_turn_timeout=10 if mode == "timeout" else 1800,
             total_turn_timeout=10 if mode == "timeout" else 1800,
             attempt_timeout=2460,
             verifier_timeout=300,
@@ -94,9 +97,18 @@ async def main(mode: str) -> None:
             )
         )
         await runtime.startup()
+        config = OmegaConf.create({"sampling_params": {}, "apply_overlong_filtering": False})
+        worker = TaskRolloutWorker(
+            config,
+            WholeTaskProjection(config, None),
+            None,
+            {},
+            shutdown_timeout=60,
+            installed_agents=runtime,
+        )
         try:
-            harness = runtime.original_harness(spec, "diagnostic", settings, "eval")
-            outer = spec.model_copy(update={"limits": limits.model_copy(update={"total_turn_timeout": None})})
+            outer, harnesses = worker._configured_task_and_harnesses(spec, settings, "diagnostic", "eval")
+            harness = harnesses["harbor_trial"]
             calls = []
 
             async def model(request):
@@ -162,7 +174,7 @@ async def main(mode: str) -> None:
                 )
             )
         finally:
-            await runtime.shutdown()
+            await worker.shutdown()
 
 
 async def tokenize(payload):

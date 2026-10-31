@@ -418,9 +418,18 @@ class TaskRolloutWorker:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
             # Harbor owns the agent deadline and must still run its verifier after
-            # an agent timeout. The outer attempt deadline covers both phases.
+            # an agent timeout. Recorder turn clocks otherwise span verification
+            # too. The outer attempt deadline covers all native trial phases.
             lowered = lowered.model_copy(
-                update={"limits": lowered.limits.model_copy(update={"total_turn_timeout": None})}
+                update={
+                    "limits": lowered.limits.model_copy(
+                        update={
+                            "model_turn_timeout": None,
+                            "tool_turn_timeout": None,
+                            "total_turn_timeout": None,
+                        }
+                    )
+                }
             )
         elif harbor is not None and self.installed_agents is not None:
             if not is_shell_harness(lowered.harness):
