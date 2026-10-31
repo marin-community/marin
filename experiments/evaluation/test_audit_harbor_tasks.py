@@ -10,16 +10,17 @@ import pytest
 from experiments.evaluation.audit_harbor_tasks import inventory
 
 
-def write_task(root: Path, name: str, compose: str | None = None) -> Path:
+def write_task(root: Path, name: str, compose: str | None = None, *, compose_name: str = "docker-compose.yaml") -> Path:
     task = root / name
     (task / "environment").mkdir(parents=True)
     (task / "task.toml").write_text('version = "1.0"\n')
     if compose is not None:
-        (task / "environment" / "docker-compose.yaml").write_text(compose)
+        (task / "environment" / compose_name).write_text(compose)
     return task
 
 
-def test_inventory_distinguishes_wrappers_from_peers_without_exposing_values(tmp_path):
+@pytest.mark.parametrize("compose_name", ["docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml"])
+def test_inventory_distinguishes_wrappers_from_peers_without_exposing_values(tmp_path, compose_name):
     write_task(tmp_path, "plain")
     write_task(tmp_path, "wrapper", "services:\n  main:\n    image: example/image\n")
     peer = write_task(
@@ -30,6 +31,7 @@ def test_inventory_distinguishes_wrappers_from_peers_without_exposing_values(tmp
         "    environment:\n      TOKEN: secret-task-value\n"
         "    volumes: ['/var/run/docker.sock:/var/run/docker.sock']\n"
         "    custom_option: secret-option-value\n",
+        compose_name=compose_name,
     )
     (peer / "solution.sh").write_text("docker run -e TOKEN=secret-command-value image\n")
     result = inventory(tmp_path, source="example/dataset", revision="snapshot")
@@ -45,7 +47,7 @@ def test_inventory_distinguishes_wrappers_from_peers_without_exposing_values(tmp
     assert peers.compose[0].review_fields == ("services.runtime.privileged", "services.runtime.volumes")
     assert peers.compose[0].other_fields == ("services.runtime.custom_option",)
     assert {reference.path for reference in peers.docker_references} == {
-        "environment/docker-compose.yaml",
+        f"environment/{compose_name}",
         "solution.sh",
     }
     encoded = json.dumps(asdict(result))
@@ -67,7 +69,6 @@ def test_topology_uses_active_overlay_and_harbors_main_service(tmp_path):
     nested = embedded / "environment" / "terminal"
     nested.mkdir()
     (nested / "docker-compose.yaml").write_text("services:\n  default: {}\n  mock_gist_server: {}\n")
-    (embedded / "environment" / "compose.yaml").write_text("services:\n  unused: {}\n")
 
     result = inventory(tmp_path, source="example/dataset", revision="snapshot")
 

@@ -9,8 +9,8 @@ Example:
 
 Compose files describe topology; Docker command references are review candidates,
 not proof that a task needs a Docker daemon. This inventory does not certify that
-an image or task can run in a particular sandbox. Harbor activates the task's
-environment/docker-compose.yaml as an overlay on its main service; embedded
+an image or task can run in a particular sandbox. Supported Compose files directly
+under environment/ describe topology alongside the task's main service; embedded
 development Compose files do not define the task topology.
 """
 
@@ -25,7 +25,9 @@ from pathlib import Path
 
 import yaml
 
-COMPOSE_PATH = Path("environment/docker-compose.yaml")
+COMPOSE_PATHS = frozenset(
+    Path("environment") / name for name in ("docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml")
+)
 SERVICE_KEYS = {"image", "build", "command", "entrypoint", "environment", "working_dir", "depends_on", "healthcheck"}
 REVIEW_KEYS = {
     "privileged",
@@ -144,7 +146,7 @@ def task_inventory(task_root: Path, dataset_root: Path) -> TaskInventory:
     for path in sorted(task_root.rglob("*")):
         if not path.is_file():
             continue
-        if path.relative_to(task_root) == COMPOSE_PATH:
+        if path.relative_to(task_root) in COMPOSE_PATHS:
             compose.append(compose_inventory(path, task_root))
         if path.suffix not in {".sh", ".py", ".md", ".toml", ".yaml", ".yml"} and path.name != "Dockerfile":
             continue
