@@ -66,10 +66,13 @@ def test_cohort_bindings_reach_the_generator(key, tool_parser):
     entry = cohort_model(key)
     config, _ = launch.recipe(entry, {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
     generator = config["generator"]
-    assert generator["engine_init_kwargs"] == {
+    expected_kwargs = {
         "enable_auto_tool_choice": True,
         "tool_call_parser": tool_parser,
     }
+    if entry.max_num_batched_tokens is not None:
+        expected_kwargs["max_num_batched_tokens"] = entry.max_num_batched_tokens
+    assert generator["engine_init_kwargs"] == expected_kwargs
     default_kwargs = generator["chat_template_kwargs"]
     template = entry.chat_template_kwargs or {}
     assert default_kwargs == template
