@@ -3,8 +3,9 @@
 
 """Persistent bubblewrap sandboxes over host programs or prepared OCI filesystems.
 
-Each machine's commands see the host's programs, read-only or copy-on-write, and private runtime
-configuration on top of a private root directory, which holds paths from ``/app`` and ``/tmp`` to ``HOME``.
+Host-image commands see the host's programs, read-only or copy-on-write. Prepared
+images use their OCI filesystem. Both have private runtime configuration and
+writable directories such as ``/app``, ``/tmp``, and ``HOME``.
 """
 
 import asyncio
@@ -65,6 +66,7 @@ LAUNCH_SOURCE = Path(launch.__file__).read_text()
 NPROC_HEADROOM = 256
 """Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
 FILE_SIZE_LIMIT = 1 << 30
+PROCESS_STOP_TIMEOUT = 1
 # Reserve program directories and private configuration paths from caller-supplied mounts.
 SYSTEM_DIRECTORIES = (
     "/bin",
@@ -434,6 +436,7 @@ class LocalMachine:
         self._network_namespaces: tuple[int, ...] = ()
         self._root_fd: int | None = None
         self._commands: set[asyncio.subprocess.Process] = set()
+        self._sessions: set[SubprocessSession] = set()
         self._watcher: asyncio.Task[None] | None = None
 
     def _check_open(self) -> None:
@@ -670,11 +673,20 @@ class LocalMachine:
                 except ProcessLookupError:
                     pass
                 try:
-                    await process.wait()
+                    async with asyncio.timeout(PROCESS_STOP_TIMEOUT):
+                        await process.wait()
+                        await session.drain_output()
+                except TimeoutError:
+                    # A command can detach from its launcher's process group
+                    # and retain the pipes. Reclaim its entire task namespace.
+                    await self.close()
                 finally:
                     self._commands.discard(process)
+                    self._sessions.discard(session)
 
-            return SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            self._sessions.add(session)
+            return session
 
         return await acquire_owned(asyncio.create_task(acquire()))
 
@@ -857,10 +869,17 @@ class LocalMachine:
                 signal.pidfd_send_signal(descriptor, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        if self._keeper is not None:
-            await self._keeper.wait()
-        if self._commands:
-            await asyncio.gather(*(process.wait() for process in tuple(self._commands)))
+
+        # Process.wait also waits for buffered pipe output. Read through the
+        # session lock so shutdown can run alongside a caller or session.close.
+        # Calling session.close here would recurse when its stop escalates here.
+        async with asyncio.TaskGroup() as pending:
+            for session in tuple(self._sessions):
+                pending.create_task(session.drain_output())
+            if self._keeper is not None:
+                pending.create_task(self._keeper.wait())
+            for process in tuple(self._commands):
+                pending.create_task(process.wait())
         if self._cgroup is not None:
             await self._cgroup.remove()
         if self._keeper_pidfd is not None:
