@@ -56,7 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
-from iris.cluster.runtime.task_spec import TASK_CONTAINERS_CAPABILITY
+from iris.cluster.runtime.task_spec import POD_NETWORK_CAPABILITY, TASK_CONTAINERS_CAPABILITY
 from iris.cluster.task_connection import TaskConnection
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -94,7 +94,7 @@ class BackendCapability(StrEnum):
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
     TASK_SERVICES = TASK_CONTAINERS_CAPABILITY
-    POD_NETWORK = "pod-network"
+    POD_NETWORK = POD_NETWORK_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)

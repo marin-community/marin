@@ -17,6 +17,7 @@ PRIMARY_CONTAINER = "task"
 # Keep existing Pod container identities stable across specification renames.
 COMPANION_CONTAINER_PREFIX = "service-"
 TASK_CONTAINERS_CAPABILITY = "task-containers"
+POD_NETWORK_CAPABILITY = "pod-network"
 _CONTAINER_NAME = re.compile(r"[a-z](?:[a-z0-9-]*[a-z0-9])?")
 _PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 
@@ -25,7 +26,7 @@ def required_task_capabilities(environment: job_pb2.EnvironmentConfig) -> frozen
     """Execution features a destination must retain when accepting this task."""
     capabilities = {TASK_CONTAINERS_CAPABILITY} if len(environment.containers) > 1 else set()
     if environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD or environment.HasField("driver_connection"):
-        capabilities.add("pod-network")
+        capabilities.add(POD_NETWORK_CAPABILITY)
     return frozenset(capabilities)
 
 
