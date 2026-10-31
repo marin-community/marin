@@ -18,7 +18,6 @@ from torch import distributed as dist
 from skyrl_train.checkpoint_schedule import (
     OPTIMIZER_STATE_MARKER,
     OptimizerStateMode,
-    master_only_optimizer_state,
 )
 from skyrl_train.distributed.strategy import DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
@@ -41,6 +40,8 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
+from skyrl_train.distributed.megatron.master_records import model_space_masters
+from skyrl_train.host_memory import log_host_memory, reset_peak
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
@@ -84,6 +85,14 @@ def _optimizer_checkpoint_metadata(sharding_type: str) -> dict:
     if sharding_type == "fully_reshardable":
         metadata["distrib_optim_fully_reshardable_mem_efficient"] = True
     return metadata
+
+
+def _init_lazy_optimizer_state(optimizer) -> None:
+    """Create any optimizer state Megatron allocates lazily; its (de)serializers expect it."""
+    optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
+    for child in optimizers:
+        if child.optimizer is not None and child.init_state_fn is not None:
+            child.init_state_fn(child.optimizer, child.config)
 
 
 def _saved_optimizer_sharding_type(common_state: dict) -> str:
@@ -330,13 +339,6 @@ class MegatronStrategy(DistributedStrategy):
             raise ValueError(
                 f"optimizer_state must be {OptimizerStateMode.FULL.value} or {OptimizerStateMode.MASTERS_ONLY.value}"
             )
-        if optimizer_state == OptimizerStateMode.MASTERS_ONLY and self.megatron_config.optimizer_checkpoint_sharding_type != "fully_reshardable":
-            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
-            raise ValueError(
-                "master-only optimizer checkpoints require "
-                "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type == 'fully_reshardable'; "
-                f"got {sharding_type!r}, whose optimizer records cannot be filtered down to masters only"
-            )
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -359,20 +361,22 @@ class MegatronStrategy(DistributedStrategy):
         if optimizer:
             # An empty training selection can reach checkpointing before the first
             # update. Megatron's serializer still requires the lazy optimizer state.
-            optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
-            for child in optimizers:
-                if child.optimizer is not None and child.init_state_fn is not None:
-                    child.init_state_fn(child.optimizer, child.config)
-            optimizer_sharded_state = optimizer.sharded_state_dict(
-                model_sharded_state_dict,
-                metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
-            )
-            if optimizer_state == OptimizerStateMode.MASTERS_ONLY:
-                # Keep the FP32 master records that weight analysis reads; drop the
-                # moment states a resume would need.
-                optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
-            sharded_state_dict["optimizer"] = optimizer_sharded_state
-            if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
+            _init_lazy_optimizer_state(optimizer)
+            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
+            if optimizer_state == OptimizerStateMode.FULL:
+                sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
+                    model_sharded_state_dict, metadata=_optimizer_checkpoint_metadata(sharding_type)
+                )
+            # The FP32 masters that weight analysis reads, by model name. fully_reshardable
+            # full saves already carry them; every other save gets them assembled one
+            # parameter at a time, with no optimizer-state gather (master_records).
+            if optimizer_state == OptimizerStateMode.MASTERS_ONLY or sharding_type != "fully_reshardable":
+                sharded_state_dict["fp32_masters"] = model_space_masters(optimizer, model_sharded_state_dict)
+            if (
+                "optimizer" in sharded_state_dict
+                and self.optimizer_config is not None
+                and str(self.optimizer_config.optimizer).lower() == "muonh"
+            ):
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
                 sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
                 sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
@@ -401,6 +405,9 @@ class MegatronStrategy(DistributedStrategy):
             save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
         )
 
+        rank = dist.get_rank()
+        log_host_memory("before_save_write", rank)
+        reset_peak()
         with io.local_work_dir(ckpt_dir) as work_dir:
             # TODO(tgriggs): Support configurable async saves.
             async_save_request = dist_checkpointing.save(
@@ -425,6 +432,7 @@ class MegatronStrategy(DistributedStrategy):
                 with io.open_file(marker_path, "w") as f:
                     f.write(json.dumps({"optimizer_state": optimizer_state.value}))
 
+        log_host_memory("save_peak", rank)
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
@@ -478,6 +486,9 @@ class MegatronStrategy(DistributedStrategy):
                 # gradients resident that second copy is what OOMs a policy that trains fine.
                 # The empty buffers come back after the optimizer state is restored below.
                 offload_megatron_grads_to_cpu(model)
+                # dp_reshardable reads each main parameter's moments to shape the load; a
+                # CPU-offloaded (hybrid) optimizer creates them lazily, so a fresh one has none.
+                _init_lazy_optimizer_state(optimizer)
                 sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
                     model_sharded_state_dict,
                     is_loading=True,
@@ -542,6 +553,7 @@ class MegatronStrategy(DistributedStrategy):
             states = extra_state.get("client_state", {}) or {}
             self.log("Loaded client state from checkpoint.")
 
+        log_host_memory("after_load", dist.get_rank())
         return ckpt_dir, states
 
     def save_fp32_master_hf_model(
@@ -641,7 +653,9 @@ def _parameters_replaced(owners: dict[str, nn.Parameter], values: dict[str, torc
         for name, parameter in owners.items():
             replacement = values[name]
             if replacement.shape != parameter.shape:
-                raise ValueError(f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}")
+                raise ValueError(
+                    f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}"
+                )
             parameter.data = replacement.to(parameter.device)
         yield
     finally:
