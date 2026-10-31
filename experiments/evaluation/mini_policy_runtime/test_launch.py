@@ -69,7 +69,6 @@ def test_cohort_bindings_reach_the_generator(key, tool_parser):
     assert generator["engine_init_kwargs"] == {
         "enable_auto_tool_choice": True,
         "tool_call_parser": tool_parser,
-        **({"enable_expert_parallel": True} if entry.expert_parallel else {}),
     }
     default_kwargs = generator["chat_template_kwargs"]
     template = entry.chat_template_kwargs or {}

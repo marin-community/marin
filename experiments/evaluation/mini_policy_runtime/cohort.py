@@ -19,7 +19,8 @@ Serving bindings follow each checkpoint's own training configuration:
   is natively 32,768).
 - Snowball 67B-A2B serves TP1 because the Marin vLLM fork's GrugMoE GPU path
   requires tensor parallelism 1; two TP1 engines cover the two allocated H100s,
-  with memory utilization raised for KV headroom.
+  with memory utilization raised for KV headroom. SkyRL manages the expert
+  parallel actor option itself, so no engine kwarg is added.
 - ``chat_template_file`` prepends a tools system section to a checkpoint whose
   training template drops the API ``tools`` array (Snowball, Nemotron). The
   vendored files are the checkpoints' exact training templates plus that
@@ -41,7 +42,6 @@ class CohortModel:
     tensor_parallel_size: int = 2
     num_inference_engines: int = 1
     gpu_memory_utilization: float = 0.85
-    expert_parallel: bool = False
     chat_template_file: str | None = None
     chat_template_kwargs: dict | None = None
 
@@ -109,11 +109,12 @@ def cohort_model(key: str) -> CohortModel:
 
 
 def engine_init_kwargs(model: CohortModel) -> dict:
-    """SkyRL generator engine arguments bound to the model's parser bindings."""
-    kwargs = {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
-    if model.expert_parallel:
-        kwargs["enable_expert_parallel"] = True
-    return kwargs
+    """SkyRL generator engine arguments bound to the model's parser bindings.
+
+    Expert parallel is not passed here: SkyRL forwards its own actor option
+    under the same name, so a duplicate engine kwarg fails actor creation.
+    """
+    return {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
 
 
 def chat_template_config(model: CohortModel) -> dict:
