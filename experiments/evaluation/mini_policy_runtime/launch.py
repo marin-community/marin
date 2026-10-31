@@ -209,8 +209,8 @@ def main(
             max_retries=0,
             target_cluster="cw-rno2a",
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=3,
-            job_timeout_seconds=7200,
+            coordinator_timeout_hours=25,
+            job_timeout_seconds=86400,
             required_env_vars=(manifest["credential_env"], "TOGETHER_API_KEY")
             + (("JUDGE_API_KEY",) if judge_base_url else ()),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,7 +31,14 @@ SOURCE_REQUIREMENTS = (
     "antlr4-python3-runtime==4.11.0",
     "lm-eval @ git+https://github.com/EleutherAI/lm-evaluation-harness@6d642546f4688648fced259eb3302efd36ece5af",
 )
-ASSET_PATH = "runtime-v3/wheels"
+ASSET_PATH = "runtime-v4/wheels"
+NLTK_DATA_REVISION = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
+NLTK_RESOURCES = (
+    "tokenizers/punkt",
+    "tokenizers/punkt_tab",
+    "corpora/stopwords",
+    "taggers/averaged_perceptron_tagger_eng",
+)
 
 
 def retarget_evalchemy(output: Path) -> None:
@@ -57,6 +65,15 @@ def retarget_evalchemy(output: Path) -> None:
         if original_text.count(old) != 1:
             raise ValueError("Unexpected evaluator dependency metadata")
         metadata.write_text(original_text.replace(old, "Requires-Dist: lm-eval[api,math]==0.4.12"))
+        # IFBench imports create this directory and load tokenizers from it. The
+        # installed wheel is read-only inside the verifier, so bundle the data.
+        nltk_data = package / "eval/chat_benchmarks/IFBench/.nltk_data"
+        for resource in NLTK_RESOURCES:
+            archive = root / (resource.split("/")[-1] + ".zip")
+            url = f"https://raw.githubusercontent.com/nltk/nltk_data/{NLTK_DATA_REVISION}/packages/{resource}.zip"
+            urllib.request.urlretrieve(url, archive)
+            with zipfile.ZipFile(archive) as data:
+                data.extractall(nltk_data / resource.split("/")[0])
         subprocess.run([sys.executable, "-m", "wheel", "pack", str(package), "-d", str(output)], check=True)
 
 

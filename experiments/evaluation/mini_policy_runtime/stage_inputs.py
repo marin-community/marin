@@ -19,7 +19,7 @@ from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINAT
 from experiments.evaluation.mini_policy_runtime.repair_release import repaired_table
 
 
-def main(excluded: list[str], wheels_revision: str, included: list[str]):
+def main(excluded: list[str], wheels_revision: str, included: list[str], output_prefix: str):
     logging.basicConfig(level=logging.INFO)
     unique = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
     table = repaired_table(pq.read_table(unique), wheels_revision)
@@ -35,15 +35,15 @@ def main(excluded: list[str], wheels_revision: str, included: list[str]):
             chosen.append(i)
     if included and set(included) != seen:
         raise ValueError("A requested smoke benchmark is absent from the release")
-    smoke_name = ("smoke-" + "-".join(sorted(included)) + "-runtime-v3" if included else "smoke-runtime-v3") + (
+    smoke_name = ("smoke-" + "-".join(sorted(included)) + "-runtime-v4" if included else "smoke-runtime-v4") + (
         "-without-" + "-".join(sorted(excluded)) if excluded else ""
     )
     expanded_path = hf_hub_download(DATASET, "data/validation-rollouts.parquet", repo_type="dataset", revision=REVISION)
     expanded = repaired_table(pq.read_table(expanded_path), wheels_revision)
     if table.num_rows != 840 or expanded.num_rows != 1626:
         raise ValueError("Published dataset cardinality changed")
-    for name, rows in ((smoke_name, table.take(pa.array(chosen))), ("full-runtime-v3", expanded)):
-        destination = StoragePath(DESTINATION) / name / "rollouts.parquet"
+    for name, rows in ((smoke_name, table.take(pa.array(chosen))), ("full-runtime-v4", expanded)):
+        destination = StoragePath(output_prefix) / name / "rollouts.parquet"
         fs, key = filesystem_for(str(destination))
         with fs.open(key, "wb") as output:
             pq.write_table(rows, output)
@@ -53,18 +53,18 @@ def main(excluded: list[str], wheels_revision: str, included: list[str]):
         "dataset": DATASET,
         "source_revision": REVISION,
         "wheels_revision": wheels_revision,
-        "runtime_repair": "v3",
+        "runtime_repair": "v4",
         "smoke_task_ids": [table.to_pylist()[i]["task_id"] for i in chosen],
         "smoke_benchmarks": sorted(seen),
-        "smoke_data_uri": str(StoragePath(DESTINATION) / smoke_name),
+        "smoke_data_uri": str(StoragePath(output_prefix) / smoke_name),
         "smoke_excluded_benchmarks": excluded,
         "smoke_included_benchmarks": included,
-        "full_data_uri": str(StoragePath(DESTINATION) / "full-runtime-v3"),
+        "full_data_uri": str(StoragePath(output_prefix) / "full-runtime-v4"),
         "model": MODEL,
         "model_revision": MODEL_REVISION,
         "model_uri": model_uri,
     }
-    publish(smoke_name + "-staged-inputs.json", report)
+    publish(smoke_name + "-staged-inputs.json", report, output_prefix)
     print(json.dumps(report), flush=True)
 
 
@@ -73,5 +73,6 @@ if __name__ == "__main__":
     parser.add_argument("--smoke-exclude", action="append", default=[])
     parser.add_argument("--smoke-include", action="append", default=[])
     parser.add_argument("--wheels-revision", required=True)
+    parser.add_argument("--output-prefix", default=DESTINATION)
     args = parser.parse_args()
-    main(args.smoke_exclude, args.wheels_revision, args.smoke_include)
+    main(args.smoke_exclude, args.wheels_revision, args.smoke_include, args.output_prefix)

@@ -20,6 +20,7 @@ from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.environment_inventory import restored_environments
 from experiments.evaluation.mini_policy_runtime.profile import (
     DATASET,
+    DESTINATION,
     MODEL,
     REVISION,
     counterpart_environment,
@@ -27,7 +28,9 @@ from experiments.evaluation.mini_policy_runtime.profile import (
 )
 
 
-async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str], report_name: str):
+async def main(
+    smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str], report_name: str, output_prefix: str
+):
     logging.basicConfig(level=logging.INFO)
     os.environ.update(counterpart_environment())
     os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
@@ -102,7 +105,11 @@ async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list
                     )
                     logging.error("Preflight failed: %s %s", row.benchmark, type(error).__name__)
                 finally:
-                    publish("native-environment-preflight-progress.json", {"ready": receipts, "failures": failures})
+                    publish(
+                        "native-environment-preflight-progress.json",
+                        {"ready": receipts, "failures": failures},
+                        output_prefix,
+                    )
 
         await asyncio.gather(*(probe(key) for key in keys))
         report = {
@@ -138,6 +145,7 @@ async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list
             report_name
             or ("diagnostic" if benchmarks else ("smoke" if smoke else "full")) + "-native-environments.json",
             report,
+            output_prefix,
         )
         if failures:
             raise RuntimeError(f"{len(failures)} environment preflights failed")
@@ -147,8 +155,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--report-name", default="")
+    parser.add_argument("--output-prefix", default=DESTINATION)
     parser.add_argument("--benchmark", action="append", default=[])
     parser.add_argument("--credential-env", required=True)
     parser.add_argument("--data-uri", required=True)
     args = parser.parse_args()
-    asyncio.run(main(args.smoke, args.credential_env, args.data_uri, args.benchmark, args.report_name))
+    asyncio.run(
+        main(args.smoke, args.credential_env, args.data_uri, args.benchmark, args.report_name, args.output_prefix)
+    )

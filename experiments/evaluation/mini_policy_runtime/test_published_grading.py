@@ -26,13 +26,18 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(900)
-async def test_published_math_package_grades_in_bubblewrap():
+@pytest.mark.parametrize("benchmark", ["math500", "ifbench"])
+async def test_published_package_grades_in_bubblewrap(benchmark):
     path = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
-    row = next(r for r in pq.read_table(path).to_pylist() if r["benchmark"] == "math500")
+    row = next(r for r in pq.read_table(path).to_pylist() if r["benchmark"] == benchmark)
     original = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
     payload = next(resource for resource in original.task.resources.verifier if resource.path == "config.json")
     config = json.loads(base64.b64decode(payload.source.content_base64))
-    answer = "\\boxed{" + config["spec"]["doc"]["answer"] + "}"
+    answer = (
+        "\\boxed{" + config["spec"]["doc"]["answer"] + "}"
+        if benchmark == "math500"
+        else "Please whisper today whisper now"
+    )
     factory = LocalMachineFactory(hash_seed="20261030")
     model = ReplayModel([{"role": "assistant", "content": answer}])
     runner = engine(model, {"local": factory}, harnesses={original.harness: ShellHarness(command_timeout=None)})
@@ -46,7 +51,16 @@ async def test_published_math_package_grades_in_bubblewrap():
         "reward": result.grade.reward,
         "status": str(result.grade.status),
         "grade_error": result.grade.error,
+        "diagnostics": result.grade.diagnostics,
         "control": "fixed reference response, not an evaluated model score",
     }
-    (Path(os.environ["IRIS_OUTPUT_DIR"]) / "local-grader-control.json").write_text(json.dumps(receipt, indent=2))
-    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0), result.grade.error
+    (Path(os.environ["IRIS_OUTPUT_DIR"]) / f"{benchmark}-grader-control.json").write_text(json.dumps(receipt, indent=2))
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0), receipt
+    if benchmark == "ifbench":
+        failing = engine(
+            ReplayModel([{"role": "assistant", "content": "The constraint was ignored."}]),
+            {"local": factory},
+            harnesses={original.harness: ShellHarness(command_timeout=None)},
+        )
+        incorrect = await failing.run_task(repaired)
+        assert (incorrect.grade.status, incorrect.grade.reward) == (Outcome.GRADED, 0.0), incorrect.grade
