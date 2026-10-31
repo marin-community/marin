@@ -997,8 +997,8 @@ class IrisClient:
         return self._submit(
             task=task,
             entrypoint=None,
-            resources=task.primary_service.resources,
-            environment=task.primary_service.environment or EnvironmentSpec(setup_scripts=[]),
+            resources=task.primary_container.resources,
+            environment=task.primary_container.environment or EnvironmentSpec(setup_scripts=[]),
             name=name,
             ports=ports,
             scheduling_timeout=scheduling_timeout,

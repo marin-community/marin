@@ -222,8 +222,8 @@ def with_slice_topology_env(
     result.env_vars.pop(IRIS_SLICE_COUNT, None)
     result.env_vars.pop(IRIS_TASKS_PER_SLICE, None)
     result.env_vars.update(slice_topology_env(resources, num_tasks))
-    if result.services:
-        primary = next(service for service in result.services if service.name == result.primary_service)
+    if result.containers:
+        primary = next(service for service in result.containers if service.name == result.primary_container)
         primary.env_vars.pop(IRIS_SLICE_COUNT, None)
         primary.env_vars.pop(IRIS_TASKS_PER_SLICE, None)
         primary.env_vars.update(slice_topology_env(resources, num_tasks))

@@ -16,7 +16,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint, get_device_variant
 from iris.cluster.egress import parse_egress_rules
-from iris.cluster.runtime.task_spec import normalize_task_request, primary_service
+from iris.cluster.runtime.task_spec import normalize_task_request, primary_container
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
 
@@ -109,7 +109,7 @@ def task_environment_to_json(environment: job_pb2.EnvironmentConfig) -> str:
     """Serialize the task environment without inline primary workdir files."""
     stored = job_pb2.EnvironmentConfig()
     stored.CopyFrom(environment)
-    primary = primary_service(stored)
+    primary = primary_container(stored)
     if primary.HasField("runtime_entrypoint"):
         primary.runtime_entrypoint.ClearField("workdir_files")
     return proto_to_json(stored)
@@ -197,8 +197,8 @@ def reconstruct_launch_job_request(
     for filename, data in workdir_files.items():
         req.entrypoint.workdir_files[filename] = data
     req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
-    if req.environment.services:
-        primary = primary_service(req.environment)
+    if req.environment.containers:
+        primary = primary_container(req.environment)
         if primary.HasField("runtime_entrypoint"):
             primary.runtime_entrypoint.workdir_files.update(workdir_files)
     req.resources.CopyFrom(

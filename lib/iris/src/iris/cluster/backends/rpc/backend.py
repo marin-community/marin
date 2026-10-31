@@ -331,10 +331,10 @@ class RpcTaskBackend:
             "driver_connection"
         ):
             return "Native Pod attachment and driver endpoints require Kubernetes"
-        if len(request.environment.services) > 1:
-            return "Multi-service tasks require the Kubernetes backend"
-        if request.environment.services and not request.environment.services[0].HasField("runtime_entrypoint"):
-            return "The worker backend requires an Iris command as its primary service startup"
+        if len(request.environment.containers) > 1:
+            return "Multi-container tasks require the Kubernetes backend"
+        if request.environment.containers and not request.environment.containers[0].HasField("runtime_entrypoint"):
+            return "The worker backend requires an Iris command as its primary container startup"
         return None
 
     def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
@@ -395,7 +395,7 @@ class RpcTaskBackend:
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         if request.container_name:
-            return worker_pb2.Worker.ExecInContainerResponse(error="Sandbox services require the Kubernetes backend")
+            return worker_pb2.Worker.ExecInContainerResponse(error="Sandbox containers require the Kubernetes backend")
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)

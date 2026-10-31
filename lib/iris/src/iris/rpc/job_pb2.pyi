@@ -636,7 +636,7 @@ class DriverConnectionSpec(_message.Message):
     def __init__(self, driver_task_id: _Optional[str] = ..., driver_attempt_uid: _Optional[str] = ..., port: _Optional[int] = ..., driver_pod_uid: _Optional[str] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "secrets", "setup_scripts", "services", "primary_service", "network_attachment", "driver_connection")
+    __slots__ = ("env_vars", "secrets", "setup_scripts", "containers", "primary_container", "network_attachment", "driver_connection")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -654,18 +654,18 @@ class EnvironmentConfig(_message.Message):
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
     SECRETS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
-    SERVICES_FIELD_NUMBER: _ClassVar[int]
-    PRIMARY_SERVICE_FIELD_NUMBER: _ClassVar[int]
+    CONTAINERS_FIELD_NUMBER: _ClassVar[int]
+    PRIMARY_CONTAINER_FIELD_NUMBER: _ClassVar[int]
     NETWORK_ATTACHMENT_FIELD_NUMBER: _ClassVar[int]
     DRIVER_CONNECTION_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
     secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    services: _containers.RepeatedCompositeFieldContainer[ServiceSpec]
-    primary_service: str
+    containers: _containers.RepeatedCompositeFieldContainer[ContainerSpec]
+    primary_container: str
     network_attachment: NetworkAttachment
     driver_connection: DriverConnectionSpec
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., services: _Optional[_Iterable[_Union[ServiceSpec, _Mapping]]] = ..., primary_service: _Optional[str] = ..., network_attachment: _Optional[_Union[NetworkAttachment, str]] = ..., driver_connection: _Optional[_Union[DriverConnectionSpec, _Mapping]] = ...) -> None: ...
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., containers: _Optional[_Iterable[_Union[ContainerSpec, _Mapping]]] = ..., primary_container: _Optional[str] = ..., network_attachment: _Optional[_Union[NetworkAttachment, str]] = ..., driver_connection: _Optional[_Union[DriverConnectionSpec, _Mapping]] = ...) -> None: ...
 
 class ImageCommand(_message.Message):
     __slots__ = ("entrypoint", "arguments")
@@ -675,7 +675,7 @@ class ImageCommand(_message.Message):
     arguments: CommandEntrypoint
     def __init__(self, entrypoint: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., arguments: _Optional[_Union[CommandEntrypoint, _Mapping]] = ...) -> None: ...
 
-class ServiceSpec(_message.Message):
+class ContainerSpec(_message.Message):
     __slots__ = ("name", "image", "workdir", "env_vars", "resources", "secrets", "setup_scripts", "runtime_entrypoint", "image_command")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")

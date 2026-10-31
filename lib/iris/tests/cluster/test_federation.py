@@ -167,11 +167,11 @@ def test_service_tasks_route_only_to_peers_that_retain_all_services(pinned):
         constraints=[],
         local_feasible=False,
         cluster_pin="cw" if pinned else "",
-        required_capabilities=frozenset({"task-services"}),
+        required_capabilities=frozenset({"task-containers"}),
     )
     assert router.classify(request).disposition == SubmitDisposition.REJECT
 
-    backend.capabilities.append("task-services")
+    backend.capabilities.append("task-containers")
     peer.probe()
     assert router.classify(request).disposition == SubmitDisposition.QUEUE
 

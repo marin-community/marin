@@ -248,12 +248,12 @@ def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log
 
 @pytest.mark.parametrize("pinned", [False, True])
 @pytest.mark.parametrize("supported", [False, True])
-def test_worker_hub_routes_complete_service_groups_only_to_capable_peers(tmp_path, log_client, pinned, supported):
+def test_worker_hub_routes_complete_container_groups_only_to_capable_peers(tmp_path, log_client, pinned, supported):
     class ServicePeer(_InProcessPeerConnection):
         def list_backends(self):
             return [
                 controller_pb2.Controller.BackendSummary(
-                    backend_id="default", capabilities=["task-services"] if supported else []
+                    backend_id="default", capabilities=["task-containers"] if supported else []
                 )
             ]
 
@@ -263,9 +263,9 @@ def test_worker_hub_routes_complete_service_groups_only_to_capable_peers(tmp_pat
         peer._controller.backend.descriptor = BackendDescriptor(backend_id="default", kind=BackendKind.KUBERNETES)
         manager = _attach_federation(parent, ServicePeer(peer))
         request = _cluster_pinned_request("native-group") if pinned else make_direct_job_request("native-group")
-        request.environment.primary_service = "agent"
+        request.environment.primary_container = "agent"
         for name in ("agent", "runtime"):
-            service = request.environment.services.add(
+            service = request.environment.containers.add(
                 name=name,
                 image="example.test/" + name,
                 workdir="/app",
@@ -289,8 +289,8 @@ def test_worker_hub_routes_complete_service_groups_only_to_capable_peers(tmp_pat
         with peer_state._db.read_snapshot() as snapshot:
             template = snapshot.caches[RunTemplatesProjection].get(snapshot, job_id)
         assert template is not None
-        assert template.environment.primary_service == "agent"
-        assert [service.name for service in template.environment.services] == ["agent", "runtime"]
+        assert template.environment.primary_container == "agent"
+        assert [service.name for service in template.environment.containers] == ["agent", "runtime"]
         assert template.resources.cpu_millicores == 2000
 
 

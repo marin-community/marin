@@ -35,11 +35,11 @@ COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
 }
 
 # A pod off the cluster network carries this label with its TaskNetwork value
-# ("none" or "internet"), or "loopback" for a private service group. Operator
+# ("none" or "internet"), or "loopback" for a private container group. Operator
 # controller startup installs the matching durable NetworkPolicies.
 EGRESS_LABEL = "iris.egress"
 EGRESS_NETWORK_POLICY_PREFIX = "iris-egress-"
-SERVICE_GROUP_NETWORK = "loopback"
+CONTAINER_GROUP_NETWORK = "loopback"
 
 # Secret volumes are readable by the pod's supplemental group.
 SECRET_GROUP = 2000

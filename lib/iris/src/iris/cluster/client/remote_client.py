@@ -24,7 +24,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.entrypoint import build_runtime_entrypoint
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.env import with_slice_topology_env
-from iris.cluster.runtime.task_spec import normalize_task_request, primary_service
+from iris.cluster.runtime.task_spec import normalize_task_request, primary_container
 from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.cluster.types import (
     EndpointAccess,
@@ -182,8 +182,8 @@ class RemoteClusterClient:
             environment = EnvironmentSpec().to_sandbox_proto() if sandboxed else EnvironmentSpec().to_proto()
         env_config = with_slice_topology_env(environment, resources, replicas)
 
-        if env_config.services:
-            primary = primary_service(env_config)
+        if env_config.containers:
+            primary = primary_container(env_config)
             runtime_ep = primary.runtime_entrypoint
         elif entrypoint is not None:
             runtime_ep = build_runtime_entrypoint(entrypoint, env_config)

@@ -47,7 +47,7 @@ from iris.cluster.federation.store import (
     FederationStore,
     HandoffSpec,
 )
-from iris.cluster.runtime.task_spec import normalize_task_request, primary_service
+from iris.cluster.runtime.task_spec import normalize_task_request, primary_container
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import controller_pb2
@@ -499,7 +499,7 @@ class FederationManager:
         content ids on the way in.
         """
         normalize_task_request(handoff)
-        entrypoint = primary_service(handoff.environment).runtime_entrypoint
+        entrypoint = primary_container(handoff.environment).runtime_entrypoint
         refs = dict(entrypoint.workdir_file_refs)
         if not handoff.bundle_id and not refs:
             return

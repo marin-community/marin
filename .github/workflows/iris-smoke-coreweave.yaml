@@ -101,7 +101,7 @@ jobs:
           from pathlib import Path
 
           from iris.cluster.config import load_config
-          from iris.cluster.platforms.k8s.network_policies import SERVICE_GROUP_NETWORK_POLICY_NAME
+          from iris.cluster.platforms.k8s.network_policies import CONTAINER_GROUP_NETWORK_POLICY_NAME
           from iris.cluster.platforms.k8s.rbac_manifests import (
               task_secret_role_manifest,
               task_secret_binding_manifest,
@@ -144,7 +144,7 @@ jobs:
                   "rules": [{
                       "apiGroups": ["networking.k8s.io"],
                       "resources": ["networkpolicies"],
-                      "resourceNames": [SERVICE_GROUP_NETWORK_POLICY_NAME],
+                      "resourceNames": [CONTAINER_GROUP_NETWORK_POLICY_NAME],
                       "verbs": ["get"],
                   }],
               },
@@ -185,7 +185,7 @@ jobs:
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
 
-      - name: Run Shellbox service-group integration from a driver Pod
+      - name: Run Shellbox container-group integration from a driver Pod
         env:
           SHELLBOX_IRIS_PYTHON_IMAGE: docker.io/library/python@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
           CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}

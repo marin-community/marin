@@ -751,8 +751,8 @@ def test_reconcile_rpc_keeps_inline_workdir_files_scoped_to_their_job(state):
 def test_reconcile_rpc_lowers_named_singleton_to_worker_runtime_fields(state):
     worker_id = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     request = make_job_request("native-singleton")
-    request.environment.primary_service = "agent"
-    primary = request.environment.services.add(
+    request.environment.primary_container = "agent"
+    primary = request.environment.containers.add(
         name="agent",
         image="example.test/agent:latest",
         workdir="/app",

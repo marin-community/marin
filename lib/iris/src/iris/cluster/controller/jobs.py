@@ -52,9 +52,9 @@ from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.runtime.task_spec import (
     normalize_task_request,
-    primary_service,
+    primary_container,
     required_task_capabilities,
-    validate_task_services,
+    validate_task_containers,
 )
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
@@ -671,7 +671,7 @@ def _validate_launch_profile(
         )
     _validate_egress(request)
     try:
-        validate_task_services(request.container_profile, request.egress_policy, request.environment)
+        validate_task_containers(request.container_profile, request.egress_policy, request.environment)
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
@@ -891,7 +891,7 @@ def _store_launch_payload(
         del normalized.entrypoint.workdir_files[name]
         normalized.entrypoint.workdir_file_refs[name] = blob_id
         logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
-    primary = primary_service(normalized.environment)
+    primary = primary_container(normalized.environment)
     if primary.HasField("runtime_entrypoint"):
         primary.runtime_entrypoint.CopyFrom(normalized.entrypoint)
     return normalized
@@ -1026,7 +1026,7 @@ def launch_job(
     if plan.disposition == SubmitDisposition.LOCAL:
         required = required_task_capabilities(request.environment)
         if not required.issubset(dependencies.runtime.backend.descriptor.capabilities):
-            raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-service tasks")
+            raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-container tasks")
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:

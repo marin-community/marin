@@ -843,7 +843,7 @@ class EnvironmentSpec:
 
 
 @dataclass(frozen=True)
-class ServiceSpec:
+class ContainerSpec:
     """One named container, using either an Iris command or its image startup."""
 
     name: str
@@ -856,12 +856,12 @@ class ServiceSpec:
     command: "Entrypoint | None" = None
     environment: EnvironmentSpec | None = None
 
-    def to_proto(self, environment: job_pb2.EnvironmentConfig | None = None) -> job_pb2.ServiceSpec:
+    def to_proto(self, environment: job_pb2.EnvironmentConfig | None = None) -> job_pb2.ContainerSpec:
         if self.command is not None and (self.entrypoint is not None or self.arguments is not None):
             raise ValueError("An Iris command cannot also override image ENTRYPOINT or CMD")
         if environment is None:
             environment = (self.environment or EnvironmentSpec(setup_scripts=[])).to_sandbox_proto()
-        spec = job_pb2.ServiceSpec(
+        spec = job_pb2.ContainerSpec(
             name=self.name,
             image=self.image,
             workdir=self.workdir,
@@ -906,29 +906,29 @@ class DriverConnectionSpec:
 class TaskSpec:
     """A task's complete named container set and primary lifecycle owner."""
 
-    services: Sequence[ServiceSpec]
+    containers: Sequence[ContainerSpec]
     primary: str = "task"
     network_attachment: NetworkAttachment = NetworkAttachment.DEFAULT
     driver_connection: DriverConnectionSpec | None = None
 
     def __post_init__(self) -> None:
-        names = [service.name for service in self.services]
+        names = [container.name for container in self.containers]
         if not names or len(set(names)) != len(names):
-            raise ValueError("A task requires a nonempty set of uniquely named services")
+            raise ValueError("A task requires a nonempty set of uniquely named containers")
         if self.primary not in names:
-            raise ValueError("The primary service must belong to the task")
+            raise ValueError("The primary container must belong to the task")
 
     @property
-    def primary_service(self) -> ServiceSpec:
-        return next(service for service in self.services if service.name == self.primary)
+    def primary_container(self) -> ContainerSpec:
+        return next(container for container in self.containers if container.name == self.primary)
 
     def to_proto(self, primary_environment: job_pb2.EnvironmentConfig) -> job_pb2.EnvironmentConfig:
         result = job_pb2.EnvironmentConfig(
-            services=[
-                service.to_proto(primary_environment if service.name == self.primary else None)
-                for service in self.services
+            containers=[
+                container.to_proto(primary_environment if container.name == self.primary else None)
+                for container in self.containers
             ],
-            primary_service=self.primary,
+            primary_container=self.primary,
             network_attachment=self.network_attachment.to_proto(),
         )
         if self.driver_connection is not None:

@@ -1159,6 +1159,9 @@ Deploy the matching controller and RBAC before launching new drivers. The
 controller needs permission to manage these per-driver NetworkPolicies, in
 addition to its existing Pod operations. Policies are owned by the exact driver
 Pod, so Kubernetes garbage collection removes them when that Pod is deleted.
+The controller upgrade migrates persisted task descriptions to `containers` and
+`primary_container` before reconstructing jobs. Protobuf field numbers and
+running Pod container names remain unchanged.
 Existing running tasks keep their original networking and cannot be retrofitted
 by reloading the controller. Start a new Pod-network driver to use this path.
 A replacement attempt does not inherit its predecessor's child connections.

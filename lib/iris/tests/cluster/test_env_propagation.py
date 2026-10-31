@@ -18,13 +18,13 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import (
+    ContainerSpec,
     DriverConnectionSpec,
     Entrypoint,
     EnvironmentSpec,
     JobName,
     NetworkAttachment,
     ResourceSpec,
-    ServiceSpec,
     TaskSpec,
 )
 from iris.rpc import job_pb2
@@ -43,17 +43,17 @@ class _RecordingClusterClient:
     captured_secrets: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
     captured_setup_scripts: list = field(default_factory=list)
-    captured_primary_service: str = ""
-    captured_services: list[job_pb2.ServiceSpec] = field(default_factory=list)
+    captured_primary_container: str = ""
+    captured_containers: list[job_pb2.ContainerSpec] = field(default_factory=list)
     captured_resources: job_pb2.ResourceSpecProto | None = None
     captured_environment: job_pb2.EnvironmentConfig | None = None
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, resources=None, **kwargs) -> JobName:
         if environment:
             self.captured_environment = environment
-            self.captured_services = list(environment.services)
-            self.captured_primary_service = environment.primary_service
-            primary = next(member for member in environment.services if member.name == environment.primary_service)
+            self.captured_containers = list(environment.containers)
+            self.captured_primary_container = environment.primary_container
+            primary = next(member for member in environment.containers if member.name == environment.primary_container)
             self.captured_env = dict(primary.env_vars)
             self.captured_secrets = dict(primary.secrets)
             self.captured_setup_scripts = list(primary.setup_scripts)
@@ -138,7 +138,7 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["MY_VAR"] == "child_override"
     assert stub.captured_env["CHILD_ONLY"] == "yes"
     assert stub.captured_env["PARENT_ONLY"] == "yes"
-    assert stub.captured_primary_service == "task"
+    assert stub.captured_primary_container == "task"
 
 
 def test_submitter_credentials_use_files_and_respect_isolation(capturing_client, monkeypatch):
@@ -341,14 +341,14 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
 
     assert stub.captured_env == {"TASK_VAR": "1"}
     assert stub.captured_setup_scripts == []
-    assert stub.captured_primary_service == "task"
+    assert stub.captured_primary_container == "task"
 
 
 def test_submit_task_preserves_named_services_and_aggregates_member_resources(capturing_client):
     client, stub = capturing_client
     task = TaskSpec(
-        services=[
-            ServiceSpec(
+        containers=[
+            ContainerSpec(
                 name="agent",
                 image="example.test/agent:latest",
                 workdir="/agent",
@@ -356,7 +356,7 @@ def test_submit_task_preserves_named_services_and_aggregates_member_resources(ca
                 command=Entrypoint.from_command("python", "agent.py"),
                 environment=EnvironmentSpec(env_vars={"AGENT_INPUT": "value"}, setup_scripts=[]),
             ),
-            ServiceSpec(
+            ContainerSpec(
                 name="runtime",
                 image="example.test/runtime:latest",
                 workdir="/runtime",
@@ -371,9 +371,9 @@ def test_submit_task_preserves_named_services_and_aggregates_member_resources(ca
 
     client.submit_task(task, "native-services")
 
-    assert stub.captured_primary_service == "agent"
-    agent, runtime = stub.captured_services
-    assert [member.name for member in stub.captured_services] == ["agent", "runtime"]
+    assert stub.captured_primary_container == "agent"
+    agent, runtime = stub.captured_containers
+    assert [member.name for member in stub.captured_containers] == ["agent", "runtime"]
     assert agent.env_vars["AGENT_INPUT"] == "value"
     assert list(agent.runtime_entrypoint.run_command.argv) == ["python", "agent.py"]
     assert runtime.WhichOneof("startup") == "image_command"
