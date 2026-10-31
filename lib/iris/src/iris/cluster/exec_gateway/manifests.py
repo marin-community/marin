@@ -50,6 +50,7 @@ def gateway_manifests(*, namespace: str, image: str, gateway_id: str, issuer: st
                             {
                                 "name": "gateway",
                                 "image": image,
+                                "env": [{"name": "HOME", "value": "/nonexistent"}],
                                 "command": [
                                     "iris",
                                     "exec-gateway",
