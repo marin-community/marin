@@ -7,7 +7,7 @@ NVIDIA_DEVICE_ALLOCATION_DIRECTORY = Path("/var/run/nvidia-container-devices")
 
 
 def pin_task_cuda_devices() -> str | None:
-    """Keep CUDA inside NVIDIA's allocation when privilege exposes extra device nodes."""
+    """Apply and return the GPU allocation mask, or None if no bounded allocation exists."""
     allocation = os.environ.get("NVIDIA_VISIBLE_DEVICES")
     # Some task images keep NVIDIA_VISIBLE_DEVICES=void even when the plugin
     # has mounted its authoritative allocation. Privilege still exposes all
