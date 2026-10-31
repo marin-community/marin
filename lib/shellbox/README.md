@@ -31,7 +31,7 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | Local gVisor | Docker image, registry image, Dockerfile | allow or deny | Docker daemon with `runsc` registered |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
 | Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: DNS only on Kubernetes, no network on Docker workers | Iris controller and workers with sandbox profile support |
-| Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Trusted commands only; `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
+| Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Isolated worker with `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
@@ -93,9 +93,8 @@ UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
 address. Concurrent groups may use the same ports. Every member must request
 `NetworkPolicy.DENY`; the group never falls back to host networking.
 
-Iris native container groups and direct process connections are deferred to a
-separate follow-up. The existing Iris adapter supports single-container machine
-commands and file transfer; it provides neither `create_task` nor process sessions.
+The Iris adapter supports single-container machine commands and file transfer;
+it provides neither `create_task` nor process sessions.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
@@ -138,6 +137,11 @@ There is no per-request exec or guest control endpoint.
 Local, Docker, gVisor and Daytona expose `ProcessMachine.open_process`.
 Its `ProcessSession` provides incremental binary `read`/`write`, bounded stderr,
 exit status and explicit close. `Machine.run` still executes complete commands.
+Pipe and SDK adapters share `StreamProcessSession` for read/write serialization,
+bounded stderr and owned teardown. The adapter supplies its reader, writer, wait
+and stop operations. Local and Docker use raw binary pipes; Daytona uses the
+shared `process_framing` codec in its host and guest bridge because its SDK
+transports text. HTTP request/response messages sit above this byte-stream API.
 QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
 
