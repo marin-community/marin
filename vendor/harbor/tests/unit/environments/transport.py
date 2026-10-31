@@ -6,10 +6,12 @@
 import asyncio
 import os
 import shutil
+import signal
 import socket
 from pathlib import Path
 
 from shellbox.machine import Command, ExitReason, MachineSpec, Result
+from shellbox.process_session import SubprocessSession, acquire_owned
 
 
 def available_port() -> int:
@@ -24,6 +26,7 @@ class ProcessMachine:
     def __init__(self, root: Path, spec: MachineSpec):
         self.root, self.spec = root, spec
         self.closed = False
+        self.sessions: set[SubprocessSession] = set()
         self.path(spec.workdir).mkdir(parents=True)
 
     def path(self, path: str) -> Path:
@@ -35,10 +38,33 @@ class ProcessMachine:
             "/workspace",
             "/tests",
             "/setup_files",
-            "/tmp/shellbox-http-",
         ):
             value = value.replace(prefix, str(self.path(prefix)))
         return value.replace("tau3-runtime", "127.0.0.1")
+
+    async def open_process(self, command: Command) -> SubprocessSession:
+        async def acquire() -> SubprocessSession:
+            process = await asyncio.create_subprocess_exec(
+                *(self.argument(value) for value in command.argv),
+                cwd=self.path(command.cwd or self.spec.workdir),
+                env={"PATH": os.environ["PATH"], **self.spec.env, **command.env},
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+
+            async def stop() -> None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            self.sessions.add(session)
+            return session
+
+        return await acquire_owned(asyncio.create_task(acquire()))
 
     async def run(self, command: Command) -> Result:
         process = await asyncio.create_subprocess_exec(
@@ -71,3 +97,4 @@ class ProcessMachine:
 
     async def close(self) -> None:
         self.closed = True
+        await asyncio.gather(*(session.close() for session in self.sessions))

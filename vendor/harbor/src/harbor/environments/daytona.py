@@ -37,6 +37,7 @@ from shellbox.backends.daytona.machine import (
 from shellbox.http_service import serve_http
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import MachineSpec, NetworkPolicy
+from shellbox.process_session import acquire_owned, await_cleanup, finish_owned, own_cleanup
 
 
 class DaytonaEnvironment(BaseEnvironment):
@@ -86,6 +87,7 @@ class DaytonaEnvironment(BaseEnvironment):
         self.verifier_model_endpoint = verifier_model_endpoint
         self.machine: DaytonaMachine | None = None
         self._relay = AsyncExitStack()
+        self._stopping: asyncio.Task[None] | None = None
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -156,13 +158,8 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Daytona model capability requires a host endpoint and model"
             )
-        creation = asyncio.create_task(self.factory.create(spec))
-        try:
-            self.machine = await asyncio.shield(creation)
-        except asyncio.CancelledError:
-            machine = await creation
-            await asyncio.shield(machine.close())
-            raise
+        self._stopping = None
+        self.machine = await acquire_owned(asyncio.create_task(self.factory.create(spec)))
         try:
             if self.model_endpoint is not None:
                 assert self.model_name is not None
@@ -181,11 +178,19 @@ class DaytonaEnvironment(BaseEnvironment):
                 if result.return_code:
                     raise RuntimeError("Failed to prepare Daytona artifact paths")
             await self._upload_environment_dir_after_start()
-        except BaseException:
-            await asyncio.shield(self.stop(True))
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(self.stop(True)))
+            except BaseException as cleanup_error:
+                error.add_note(f"Daytona sandbox cleanup failed ({type(cleanup_error).__name__})")
             raise
 
     async def stop(self, delete: bool) -> None:
+        if self._stopping is None:
+            self._stopping = own_cleanup(self._stop())
+        await await_cleanup(self._stopping)
+
+    async def _stop(self) -> None:
         try:
             await self._relay.aclose()
         finally:

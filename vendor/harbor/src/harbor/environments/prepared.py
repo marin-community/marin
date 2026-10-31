@@ -29,6 +29,7 @@ from harbor.utils.env import resolve_env_vars
 from shellbox.machine import Command, Machine, MachineSpec
 from shellbox.task import Task, TaskFactory
 from shellbox.http_service import serve_http
+from shellbox.process_session import acquire_owned, await_cleanup, finish_owned, own_cleanup
 
 
 class PreparedEnvironment(BaseEnvironment):
@@ -52,6 +53,7 @@ class PreparedEnvironment(BaseEnvironment):
         self.machine: Machine | None = None
         self.execution: Task | None = None
         self._relay = AsyncExitStack()
+        self._stopping: asyncio.Task[None] | None = None
         self._service_log_paths: tuple[tuple[str, str], ...] = ()
         self.model_endpoint = model_endpoint
         self.model_name = model_name
@@ -111,15 +113,8 @@ class PreparedEnvironment(BaseEnvironment):
             raise ValueError(
                 "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
             )
-        creation = asyncio.create_task(self.factory.create_task(task_spec))
-        try:
-            execution = await asyncio.shield(creation)
-        except asyncio.CancelledError:
-            # A backend may still acquire resources after cancellation. Own and
-            # reclaim the late task before leaving this operation.
-            execution = await creation
-            await asyncio.shield(execution.close())
-            raise
+        self._stopping = None
+        execution = await acquire_owned(asyncio.create_task(self.factory.create_task(task_spec)))
         self.execution = execution
         self.machine = execution.primary
         try:
@@ -145,11 +140,19 @@ class PreparedEnvironment(BaseEnvironment):
                 if result.return_code:
                     raise RuntimeError(f"Failed to prepare sandbox paths: {result.stderr or result.stdout}")
             await self._upload_environment_dir_after_start()
-        except BaseException:
-            await asyncio.shield(self.stop(True))
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(self.stop(True)))
+            except BaseException as cleanup_error:
+                error.add_note(f"Prepared sandbox cleanup failed ({type(cleanup_error).__name__})")
             raise
 
     async def stop(self, delete: bool) -> None:
+        if self._stopping is None:
+            self._stopping = own_cleanup(self._stop())
+        await await_cleanup(self._stopping)
+
+    async def _stop(self) -> None:
         try:
             await self._relay.aclose()
         finally:

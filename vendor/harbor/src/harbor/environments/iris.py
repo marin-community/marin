@@ -30,12 +30,17 @@ class IrisEnvironment(PreparedEnvironment):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.factory = IrisMachineFactory(
-            cluster=cluster,
-            controller_url=controller_url,
-            scheduling_timeout=scheduling_timeout,
-            job_ttl=job_ttl,
-        )
+        if cluster is None and controller_url is None:
+            self.factory = IrisMachineFactory.in_cluster(
+                scheduling_timeout=scheduling_timeout, job_ttl=job_ttl
+            )
+        else:
+            self.factory = IrisMachineFactory(
+                cluster=cluster,
+                controller_url=controller_url,
+                scheduling_timeout=scheduling_timeout,
+                job_ttl=job_ttl,
+            )
 
     @staticmethod
     def type() -> EnvironmentType:

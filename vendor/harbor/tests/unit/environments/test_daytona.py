@@ -6,6 +6,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -31,6 +32,50 @@ class ProcessFactory:
     async def create(self, spec):
         self.machine = ProcessMachine(self.root, spec)
         return self.machine
+
+
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_cancelled_start_reclaims_a_late_daytona_machine(tmp_path, cleanup_failure):
+    adapter = DaytonaEnvironment(
+        environment_dir=tmp_path,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="test/image"),
+        client_factory=lambda: pytest.fail("Unexpected provider access"),
+    )
+
+    async def run():
+        submitting, submitted = asyncio.Event(), asyncio.Event()
+        closing, closed = asyncio.Event(), asyncio.Event()
+        finish_cleanup = asyncio.Event()
+
+        async def close():
+            closing.set()
+            await finish_cleanup.wait()
+            closed.set()
+            if cleanup_failure:
+                raise RuntimeError("Backend cleanup failed")
+
+        async def create(spec):
+            submitting.set()
+            await submitted.wait()
+            return SimpleNamespace(close=close)
+
+        adapter.factory = SimpleNamespace(create=create)
+        start = asyncio.create_task(adapter.start(False))
+        await asyncio.wait_for(submitting.wait(), 5)
+        start.cancel("initial cancellation")
+        submitted.set()
+        await asyncio.wait_for(closing.wait(), 5)
+        start.cancel("repeated cancellation")
+        finish_cleanup.set()
+        with pytest.raises(asyncio.CancelledError) as error:
+            await asyncio.wait_for(start, 5)
+        assert error.value.args == ("initial cancellation",)
+        assert closed.is_set()
+
+    asyncio.run(run())
 
 
 def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(

@@ -286,6 +286,17 @@ Without a hosted model, the adapter rejects the task before allocating its servi
 Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
 `harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
 
+The relay starts one Python helper and exchanges bounded request/response frames
+over its persistent process pipes. Iris requires the separate exec gateway from
+#10640: the controller authorizes setup, then async Connect calls go directly to
+the configured gateway. Idle polls do not enter the controller's synchronous exec
+pool or start container processes. Deploy the gateway and its verification key
+before enabling the controller's `exec_gateway` configuration, and provide a route
+reachable by the trusted driver. A controller reload alone does not provide that
+route. See [gateway operations](../lib/iris/OPS.md#persistent-execution-gateway)
+for deployment, session expiry and observability. The same relay uses owned local
+process pipes or Daytona's SDK session; provider credentials remain on the host.
+
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
 `agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
 into the actor's agent-log directory through the control plane. This preserves tau3's runtime-state

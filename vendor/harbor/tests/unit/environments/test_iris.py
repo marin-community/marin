@@ -82,18 +82,25 @@ def test_cannot_override_isolation(tmp_path: Path, override: dict) -> None:
         environment(tmp_path, **override)
 
 
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 def test_cancelled_start_reclaims_job_that_finishes_submitting(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, cleanup_failure: bool
 ) -> None:
     adapter = environment(tmp_path)
 
     async def run() -> None:
         submitting = asyncio.Event()
         finish_submission = asyncio.Event()
+        closing = asyncio.Event()
+        finish_cleanup = asyncio.Event()
         reclaimed = asyncio.Event()
 
         async def close() -> None:
+            closing.set()
+            await finish_cleanup.wait()
             reclaimed.set()
+            if cleanup_failure:
+                raise RuntimeError("Backend cleanup failed")
 
         async def create(spec):
             submitting.set()
@@ -103,10 +110,14 @@ def test_cancelled_start_reclaims_job_that_finishes_submitting(
         monkeypatch.setattr(adapter.factory, "create_task", create)
         start = asyncio.create_task(adapter.start(force_build=False))
         await submitting.wait()
-        start.cancel()
+        start.cancel("initial cancellation")
         finish_submission.set()
-        with pytest.raises(asyncio.CancelledError):
-            await start
+        await asyncio.wait_for(closing.wait(), 5)
+        start.cancel("repeated cancellation")
+        finish_cleanup.set()
+        with pytest.raises(asyncio.CancelledError) as error:
+            await asyncio.wait_for(start, 5)
+        assert error.value.args == ("initial cancellation",)
         assert reclaimed.is_set()
 
     asyncio.run(run())
