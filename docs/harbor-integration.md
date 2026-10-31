@@ -127,7 +127,7 @@ The Daytona adapter accepts `network_policy` (`mode` and optional
 `value`), `ttl_minutes` and `create_timeout`. Model endpoint settings are supplied
 by the trusted launcher. Snapshot names, automatic snapshot toggles, provider target
 overrides and forced rebuilds are unsupported. Compose tasks must use prepared
-Iris or local service groups; Daytona rejects every Compose filename and extra overlay.
+Iris or local container groups; Daytona rejects every Compose filename and extra overlay.
 The host entry point resolves `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
 once and supplies the connection privately. The public API URL defaults to
 `https://app.daytona.io/api`; a live Daytona run requires an explicit target:
@@ -165,7 +165,7 @@ prompting to inherit a host variable. Use the Marin launcher for hosted judge au
 
 ## Offline execution through Shellbox and Iris
 
-For prepared tasks and private service groups, select Harbor's Iris adapter over Shellbox:
+For prepared tasks and private container groups, select Harbor's Iris adapter over Shellbox:
 
 ```yaml
 n_concurrent_trials: 4
@@ -215,8 +215,8 @@ Build images separately with the task's dependencies, verifier dependencies and 
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
 Iris tasks need Python 3.11 or newer in the main image for the process broker.
 Other tasks using the model relay need Python 3 in their main image.
-Services with timed readiness checks need Python 3 in their own images to supervise
-individual probes without stopping the service on the first timeout.
+Containers with timed readiness checks need Python 3 in their own images to supervise
+individual probes without stopping the container on the first timeout.
 For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
 preserve the runtime's per-task configuration and add Terminus's missing terminal dependencies:
 
@@ -265,7 +265,7 @@ selects this attachment for Iris-backed Harbor policies. An external controller
 URL or a controller port-forward alone does not provide access to private Pod addresses.
 
 The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
-`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Service groups deny
+`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Container groups deny
 external traffic including DNS; single-container Kubernetes jobs retain platform DNS. No controller token, storage credential,
 workspace bundle, shared host cache or service-account token is supplied to the task by this adapter.
 Task environment templates resolve only against explicit task capabilities. They never read the
@@ -275,17 +275,17 @@ Image contents and explicit task inputs must themselves be free of production cr
 The runtime has no independent Docker or other provider execution backend. The prepared Iris and local paths also reject installed agents,
 custom agent imports and custom host mounts. Its Compose importer supports `main` plus prepared
 sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
-on started or healthy services. MCP URLs must name an exposed endpoint inside the service group.
+on started or healthy services. MCP URLs must name an exposed endpoint inside the container group.
 Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
-between sidecars fail explicitly. The controller must advertise service-group support.
+between sidecars fail explicitly. The controller must advertise `task-containers` support.
 
-Services share only the group's loopback network. External egress remains denied. Tau3's user model
+Containers share only the group's loopback network. External egress remains denied. Tau3's user model
 and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
 non-streaming chat completions to the selected model, fixes its model name, and rejects redirects;
 the upstream endpoint capability and provider authentication stay in the host process.
 Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
-Without a hosted model, the adapter rejects the task before allocating its service group. A direct
+Without a hosted model, the adapter rejects the task before allocating its container group. A direct
 Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
 `harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
 

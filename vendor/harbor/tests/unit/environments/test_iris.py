@@ -189,7 +189,7 @@ class ControllerJob:
 
     def submit_task(self, **kwargs):
         self.submission = kwargs
-        command = list(kwargs["task"].primary_service.command.command)
+        command = list(kwargs["task"].primary_container.command.command)
         if self.guest_root is not None:
             command[3] = mapped_broker_source(command[3], self.guest_root)
             command[-1] = str(self.guest_root / command[-1].lstrip("/"))
@@ -325,7 +325,7 @@ def test_offline_lifecycle_commands_and_host_artifacts(
     asyncio.run(run())
     assert job.submission["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
     assert job.submission["egress_policy"] == job_pb2.EGRESS_POLICY_NONE
-    primary = job.submission["task"].primary_service.to_proto(
+    primary = job.submission["task"].primary_container.to_proto(
         job_pb2.EnvironmentConfig()
     )
     assert dict(primary.env_vars) == {"PUBLIC": "task-visible"}
