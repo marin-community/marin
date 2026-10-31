@@ -121,7 +121,7 @@ compile path and keeps the normal training path untouched.
 Use the returned metric dict to:
 
 - log `backward_flow/<scope>/{in,out}_{activation,gradient}_{norm,rms,mean_abs,max_abs,finite_fraction}`
-  plus `{in,out}_gradient_rms_scaled` when a gradient scale is configured
+  plus `{in,out}_gradient_{rms,max_abs}_scaled` when a gradient scale is configured
 - build a graph once from a traced grad JAXpr
 - call `infer_backward_flow_render_hints(...)` before rendering so residual-stream
   anchors become a readable display graph

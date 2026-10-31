@@ -22,7 +22,7 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 - **Tuned reference hyperparameters** at a fixed scale (from Vizier sweep or equivalent).
 - **Validated scaling rules** confirmed at ~1e19 FLOPs and across the full isoflop range.
 - A **scaling ladder** training optimal models at larger budgets.
-- **Canary promotion** in `experiments/ferries/canary_ferry.py`.
+- **Canary update**, if the new setup is intended for the hardware smoke canary.
 - A **running experiment record** in the coordinating issue, W&B report, or
   durable session channel.
 
@@ -30,11 +30,11 @@ architecture. Dataset changes can usually reuse an existing heuristic.
 
 ```
 experiments/grug/moe/heuristic.py              # MuonH MoE heuristic — use as template
-experiments/references/completed_adamh.py      # AdamH heuristic (no create_isoflop_sweep_steps)
+experiments/references/completed_adamh.py      # AdamH heuristic
 
 experiments/references/
     reference_hyperparameter_sweep.py  # Vizier hparam tuning at fixed scale
-    reference_scaling_suite.py         # full isoflop analysis + scaling ladder
+    reference_scaling_suite.py         # completed-run analysis + scaling ladder
 
 experiments/ferries/canary_ferry.py            # daily canary
 
@@ -57,8 +57,8 @@ First, make sure the idea looks promising at one reference scale. Good signs inc
 
 ### 2) Tune reference hyperparameters
 
-Pick one reference model and data budget, usually around 130M params and 2.5B tokens on the
-Nemotron mix. Then sweep the optimizer hyperparameter space with
+Pick one reference model and data budget. The reference sweep uses a ~130M parameter
+model and 1B tokens on the Nemotron mix. Sweep the optimizer hyperparameter space with
 `experiments/references/reference_hyperparameter_sweep.py`:
 
 ```sh
@@ -88,7 +88,7 @@ class MyHeuristic:
 
     # Reference point (from step 2)
     reference_batch_size: int = 64
-    reference_tokens: float = 2.5e9
+    reference_tokens: float = 1e9
     lr_base: float = 0.01
 
     @property
@@ -119,42 +119,27 @@ Before launching a sweep, print the candidate grids for a few budgets and check 
 
 ### 4) Run an IsoFLOP sweep
 
-Create a standalone script (modelled on `experiments/references/reference_scaling_suite.py`)
-that holds the isoflop runs as an `ArtifactStep` analysis plus optimal-training steps:
+Create a standalone script modelled on `experiments/references/reference_scaling_suite.py`.
+It reads completed IsoFLOP runs and returns an `IsoFlopAnalysisArtifact`; the
+optimal-training steps depend on that artifact. Replace the reference run paths,
+metric key, heuristic, data, and training resources for the new sweep. The
+reference suite does not submit candidate runs, so the new experiment must
+create and submit those training steps separately.
 
 ```python
-# List the GCS paths of completed isoflop runs:
 _ISOFLOP_RUNS: tuple[str, ...] = (
     "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d512-L6-B32-my-heuristic-v1",
     # ...
 )
-
-def run_isoflop_analysis(config: IsoFlopAnalysisConfig) -> None:
-    raw = read_eval_records(config.training_runs, ...)
-    records = transform_levanter_metrics(raw, config.metric_key, ...)
-    result = fit_scaling_laws(records)
-    save_isoflop_analysis_result(result, config.output_path)
-
-def build(*, version: str = "dev") -> list[ArtifactStep[Artifact]]:
-    analysis = ArtifactStep(
-        name=user_namespaced_name("my-scaling-suite-analysis", version),
-        ...
-        run=remote(run_isoflop_analysis, resources=ResourceConfig.with_cpu()),
-        build_config=lambda ctx: IsoFlopAnalysisConfig(
-            training_runs=_ISOFLOP_RUNS, output_path=ctx.output_path
-        ),
-    )
-    # ... optimal training steps ...
-    return [analysis, *optimal_runs]
-
-if __name__ == "__main__":
-    StepRunner().run([s.lower() for s in build()])
 ```
 
-Metrics are read from `tracker_metrics.jsonl` with WandB fallback via `read_eval_records`.
-Submit individual isoflop candidate runs as separate `ArtifactStep` objects (see
-`reference_scaling_suite.py` for how the existing AdamH isoflop paths are hard-coded and
-read retroactively).
+Pass these completed paths to `IsoFlopAnalysisConfig(training_runs=..., output_path=...)`
+in an analysis `ArtifactStep`, as `_analysis_step()` does in the reference suite.
+Its `run_isoflop_analysis()` reads `tracker_metrics.jsonl` with
+WandB fallback, converts the records, calls `fit_scaling_laws()`, and returns
+`IsoFlopAnalysisArtifact(scaling_fits=...)`. It writes `fit_curves.json` as a
+human-readable sidecar. Downstream steps use `ctx.resolved(analysis).scaling_fits`.
+The reference suite reads existing AdamH checkpoint paths retroactively.
 
 What to check after the sweep:
 - No loss spikes or divergence at any candidate size.
@@ -165,8 +150,9 @@ What to check after the sweep:
 
 Train compute-optimal models at larger budgets (modelled on `reference_scaling_suite.py`):
 
-1. Analysis step reads existing isoflop runs and writes `isoflop_analysis_result.json`.
-2. `predict_optimal_config()` for each target budget.
+1. The analysis step returns fitted values in `IsoFlopAnalysisArtifact`; it also writes
+   `fit_curves.json` for inspection.
+2. Pass those fitted values to `predict_optimal_config()` for each target budget.
 3. Use `candidate.optimizer_config` or recompute via `build_optimizer_config()` when
    batch size must be overridden for available hardware.
 4. Train with the appropriate TPU type, TP degree, and gradient accumulation.
@@ -176,10 +162,12 @@ uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
   -- python -m experiments.my_scaling_suite
 ```
 
-### 6) Promote to canary
+### 6) Check canary fit
 
-Update `experiments/ferries/canary_ferry.py` with the new best setup. Keep the canary
-model size and FLOP budget roughly fixed (~30M params, ~1B tokens) so it stays cheap.
+Update `experiments/ferries/canary_ferry.py` when the new setup should become the
+hardware smoke canary. Its current MoE model has 9.9M parameters. The TPU path
+defaults to 250M training tokens; the GPU path defaults to 50 steps. Check the
+canary's cost and regression gates before changing its model or token budget.
 
 ## Iteration
 
@@ -197,5 +185,5 @@ General rule: **find the smallest scale that reproduces a problem, fix it there,
 - No loss spikes or regressions at ~1e19; competitive with prior heuristic at all sizes.
 - Full isoflop sweep with fitted scaling laws and reviewed plots.
 - Scaling ladder trained at target budgets.
-- Canary promoted in `experiments/ferries/canary_ferry.py`.
+- Canary updated if the new setup is intended for the hardware smoke canary.
 - Report: scaling rules, sweep results, comparison vs baseline, known limitations.
