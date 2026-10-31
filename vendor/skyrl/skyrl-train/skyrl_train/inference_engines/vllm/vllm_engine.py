@@ -21,6 +21,7 @@ from vllm.distributed.weight_transfer.base import WeightTransferUpdateRequest
 from vllm.renderers.online_renderer import OnlineRenderer
 
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
+from marinskyrl.gpu_allocation import pin_task_cuda_devices
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV
 from skyrl_train.config.behavior_logprobs import (
     ROLLOUT_LOGPROB_VALIDATION_KEY,
@@ -149,13 +150,27 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
     """Substitute exact prompt token IDs while retaining vLLM's chat response parser."""
 
     async def render_chat_request(self, request):
-        rendered = await super().render_chat_request(request)
         exact_ids = _exact_chat_prompt_token_ids.get()
-        if exact_ids is None or not isinstance(rendered, tuple):
+        if exact_ids is None:
+            return await super().render_chat_request(request)
+        prompt = TokensPrompt(prompt_token_ids=list(exact_ids))
+        request.build_tok_params(self.model_config).apply_post_tokenization(self.renderer.tokenizer, prompt)
+        if prompt["prompt_token_ids"] != exact_ids:
+            raise ValueError("Exact sampled prompt tokens cannot be padded or truncated")
+        # Use the pinned renderer's decode-side token reuse path. Rendering the
+        # messages first can reject their reconstructed tokens before our exact
+        # sampled prefix is substituted, even though that prefix fits the budget.
+        previous_transfer = request.kv_transfer_params
+        request.kv_transfer_params = {**(previous_transfer or {}), "prompt_token_ids": list(exact_ids)}
+        try:
+            rendered = await super().render_chat_request(request)
+        finally:
+            request.kv_transfer_params = previous_transfer
+        if not isinstance(rendered, tuple):
             return rendered
         conversation, engine_inputs = rendered
         if len(engine_inputs) != 1:
-            raise ValueError("Exact OpenCode continuation requires one rendered prompt")
+            raise ValueError("Exact chat continuation requires one rendered prompt")
         return conversation, [TokensPrompt(prompt_token_ids=list(exact_ids))]
 
     async def create_chat_completion_with_exact_prompt(
@@ -275,6 +290,7 @@ def setup_envvars_for_vllm(kwargs, bundle_indices):
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         os.environ.pop("ROCR_VISIBLE_DEVICES", None)
         os.environ.pop("HIP_VISIBLE_DEVICES", None)
+        pin_task_cuda_devices()
     elif noset_visible_devices:
         # We need to set CUDA_VISIBLE_DEVICES to the ray assigned GPU
         # when the distributed_executor_backend is not rayargs and

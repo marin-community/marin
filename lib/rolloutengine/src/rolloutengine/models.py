@@ -108,6 +108,10 @@ Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 """The policy under rollout: it serves one model request and returns the exact turn."""
 
 
+class ContextWindowExceeded(RuntimeError):
+    """Reject one request while allowing the harness to compact and send another."""
+
+
 class GenerationLimitReached(Exception):
     """The rendered prompt leaves no permitted generation budget."""
 

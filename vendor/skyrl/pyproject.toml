@@ -295,9 +295,10 @@ ignore = [
 "skyrl-train/tests/cpu/test_ray_metrics.py" = ["E402"]
 
 [tool.pytest.ini_options]
-addopts = "-v -s -m 'not docker'"
+addopts = "-v -s -m 'not docker and not manual'"
 testpaths = ["skyrl-train/tests", "cloud/iris/tests"]
 markers = [
+    "manual: explicit runtime validation requiring the frozen GPU environment",
     "docker: local Docker execution; run explicitly in the container test lane",
     "nightly: extended CPU learning and checkpoint-resume coverage",
     "vllm",

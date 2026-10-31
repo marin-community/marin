@@ -14,10 +14,13 @@ from harbor.agents.factory import AgentFactory
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
-from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.config import EnvironmentConfig, MCPServerConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from marinskyrl.harbor_environments import (
+    DeferredVerifierEnvironment, EnvironmentResourceOverrides, original_trial_environment,
+)
 from marinskyrl.resource_locator import join_resource_path
 from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.models import ModelTurn, Prompt
@@ -58,6 +61,9 @@ class InstalledAgentSettings(BaseModel):
     service_startup_timeout: float
     service_shutdown_timeout: float
     environment_snapshots: dict[str, str] = Field(default_factory=dict)
+    environment_overrides: dict[str, EnvironmentResourceOverrides] = Field(default_factory=dict)
+    agent_mcp_servers: dict[str, list[MCPServerConfig]] = Field(default_factory=dict)
+    verifier_env: dict[str, DeferredVerifierEnvironment] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
 
 
@@ -175,19 +181,19 @@ class InstalledAgentRuntime:
                 else DockerfileSource(context, context / "Dockerfile")
             )
             key = image_source_key(source)
-            if key not in self.settings.environment_snapshots:
-                raise ValueError(f"Harbor environment has no approved snapshot: {key}")
-            environment = config.environment.model_copy(
-                update={
-                    "force_build": False,
-                    "kwargs": {
-                        **config.environment.kwargs,
-                        "snapshot_template_name": self.settings.environment_snapshots[key],
-                        "auto_snapshot": False,
-                        "assume_global_snapshot": True,
-                    },
-                }
+            environment = original_trial_environment(
+                config.environment, key, self.settings.environment_snapshots, self.settings.environment_overrides
             )
+            if key in self.settings.agent_mcp_servers:
+                config = config.model_copy(update={
+                    "agent": config.agent.model_copy(update={"mcp_servers": self.settings.agent_mcp_servers[key]})
+                })
+            if key in self.settings.verifier_env:
+                config = config.model_copy(update={
+                    "verifier": config.verifier.model_copy(update={
+                        "env": {**config.verifier.env, **self.settings.verifier_env[key].harbor_environment()}
+                    })
+                })
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(
