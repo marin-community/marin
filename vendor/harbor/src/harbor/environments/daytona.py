@@ -107,7 +107,7 @@ class DaytonaEnvironment(BaseEnvironment):
             (self.environment_dir / name).exists() for name in COMPOSE_FILENAMES
         ):
             raise ValueError(
-                "Shellbox Daytona supports single-container tasks; use Iris for Compose service groups"
+                "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
         if (
             not self.task_env_config.docker_image
