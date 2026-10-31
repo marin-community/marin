@@ -97,15 +97,13 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
     return {name: pipeline for name, pipeline in catalog.items() if not sources or name in sources}
 
 
-def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
+def _image_factory(backend: Backend | None) -> MachineFactory | None:
     if backend is None:
         return None
     if backend == Backend.GVISOR:
-        if controller_url is None:
-            if get_job_info() is None:
-                raise click.UsageError("--image-backend gvisor requires --controller-url outside an Iris job")
-            return IrisMachineFactory.in_cluster(job_ttl=IRIS_JOB_TTL)
-        return IrisMachineFactory(controller_url=controller_url, job_ttl=IRIS_JOB_TTL)
+        if get_job_info() is None:
+            raise click.UsageError("--image-backend gvisor requires an in-cluster Iris driver with Pod networking")
+        return IrisMachineFactory.in_cluster(job_ttl=IRIS_JOB_TTL)
     if backend != Backend.DAYTONA:
         raise ValueError(f"Unsupported image backend: {backend}")
     # Daytona is an optional Shellbox dependency; local and Iris campaigns do not import its SDK.
@@ -394,10 +392,6 @@ def _embedding_pass(
     help="Image controls: gvisor via Iris or daytona. Omit for local and simulator controls only.",
 )
 @click.option(
-    "--controller-url",
-    help="Controller for --image-backend gvisor; defaults to the current Iris job's controller.",
-)
-@click.option(
     "--simulator-catalog",
     help="Portable software catalog URL or path; use an immutable snapshot for cached campaign results.",
 )
@@ -492,7 +486,6 @@ def main(
     worker_image: str | None,
     container_profile: str | None,
     image_backend: str | None,
-    controller_url: str | None,
     simulator_catalog: str | None,
     seed: int,
     quality_sample_size: int,
@@ -688,7 +681,7 @@ def main(
             normalized_shards if normalized_shards is not None else (LOCAL_NORMALIZED_SHARDS if cache_dir else None)
         ),
         machines=CampaignMachines(
-            image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url),
+            image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None),
             simulator_catalog=simulator_catalog,
         ),
         seed=seed,

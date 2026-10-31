@@ -21,7 +21,7 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, NetworkAttachment, ResourceSpec
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
@@ -552,11 +552,16 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
+    uses_iris_sandboxes = any(
+        evaluation.identity.eval_ref.harbor is not None and evaluation.identity.eval_ref.harbor.env == "iris"
+        for evaluation in batch.evaluations
+    )
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
+        network_attachment=NetworkAttachment.POD if uses_iris_sandboxes else NetworkAttachment.DEFAULT,
         constraints=constraints,
         egress_allow=batch.egress_allow,
         max_retries_failure=0,

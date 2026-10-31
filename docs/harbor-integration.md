@@ -213,7 +213,8 @@ format and normalizes it before container construction.
 
 Build images separately with the task's dependencies, verifier dependencies and terminal utilities
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
-Tasks using the model relay also need Python 3 in the main image.
+Iris tasks need Python 3.11 or newer in the main image for the process broker.
+Other tasks using the model relay need Python 3 in their main image.
 Services with timed readiness checks need Python 3 in their own images to supervise
 individual probes without stopping the service on the first timeout.
 For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
@@ -252,14 +253,16 @@ retain the prepared snapshot and manifest as Marin artifacts. These preparation 
 trusted build infrastructure; they are never run by the evaluation sandbox.
 The image must run as root inside the sandbox because Harbor setup and verification request that
 user, and Iris exec cannot switch the image's user.
-Iris replaces the main image's entrypoint with its idle process. Sidecars retain their prepared
+Iris replaces the main image's entrypoint with its process helper. Sidecars retain their prepared
 image's ENTRYPOINT/CMD unless Compose explicitly overrides them.
 The adapter does not build images or install a nested container runtime.
 The shared launcher's host entry point resolves its enclosing Iris controller once and passes
 that binding explicitly into job configuration. Sandboxes use the enclosing job's scoped task
 token. An explicit controller must match this binding; a cluster selector is replaced by the
-enclosing controller. For a direct local Harbor invocation, pass an explicit environment
-`cluster` or `controller_url` instead.
+enclosing controller. Online Iris execution requires a trusted driver inside that
+Kubernetes cluster with `NetworkAttachment.POD`; the shared evaluation launcher
+selects this attachment for Iris-backed Harbor policies. An external controller
+URL or a controller port-forward alone does not provide access to private Pod addresses.
 
 The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
 `SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Service groups deny
@@ -286,16 +289,17 @@ Without a hosted model, the adapter rejects the task before allocating its servi
 Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
 `harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
 
-The relay starts one Python helper and exchanges bounded request/response frames
-over its persistent process pipes. Iris requires the separate exec gateway from
-#10640: the controller authorizes setup, then async Connect calls go directly to
-the configured gateway. Idle polls do not enter the controller's synchronous exec
-pool or start container processes. Deploy the gateway and its verification key
-before enabling the controller's `exec_gateway` configuration, and provide a route
-reachable by the trusted driver. A controller reload alone does not provide that
-route. See [gateway operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#persistent-execution-gateway)
-for deployment, session expiry and observability. The same relay uses owned local
-process pipes or Daytona's SDK session; provider credentials remain on the host.
+The relay starts one Python HTTP helper and exchanges bounded request/response
+frames over a persistent process session. On Iris, a process broker in the
+primary connects directly to its trusted driver over native Pod networking.
+The controller authorizes the exact driver and sandbox attempts and resolves the
+Pod address; ongoing primary commands, transfers and model messages do not pass
+through the controller or Kubernetes exec streams. Per-driver ingress policy
+admits only the owning driver, while sandbox egress remains denied. There is no
+shared execution gateway. Companion readiness and log handoff retain unary exec.
+See [direct connection operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#direct-sandbox-connections)
+for RBAC, networking and rollout requirements. The same HTTP relay uses owned
+local process pipes or Daytona's SDK session; provider credentials remain on the host.
 
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
 `agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
