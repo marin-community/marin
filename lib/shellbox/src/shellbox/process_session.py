@@ -6,11 +6,14 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-
-from shellbox.machine import ProcessSession
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 _CLEANUPS: set[asyncio.Task[None]] = set()
+
+
+class ClosableResource(Protocol):
+    async def close(self) -> None: ...
 
 
 async def finish_owned[T](task: asyncio.Task[T]) -> T:
@@ -54,8 +57,8 @@ async def await_cleanup(task: asyncio.Task[None]) -> None:
         raise
 
 
-async def acquire_process[T: ProcessSession](acquisition: asyncio.Task[T]) -> T:
-    """Own a process acquisition, reclaiming any late handle after interruption."""
+async def acquire_owned[T: ClosableResource](acquisition: asyncio.Task[T]) -> T:
+    """Own an acquisition, closing any late resource after interruption."""
     try:
         return await asyncio.shield(acquisition)
     except BaseException as error:
