@@ -53,7 +53,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
-from shellbox.process_session import SubprocessSession, acquire_owned
+from shellbox.process_session import SubprocessSession, acquire_owned, finish_owned, own_cleanup
 from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
@@ -1201,16 +1201,23 @@ class LocalMachineFactory:
             if result.exit_code != 0:
                 raise RuntimeError(f"Cannot create image workdir: {result.stderr.decode(errors='replace')}")
             return machine
-        except BaseException:
+        except BaseException as error:
             # A cancelled to_thread still writes its bundle. Reclaim it only
             # after the trusted unpacker has stopped.
+            async def cleanup() -> None:
+                try:
+                    await preparation
+                finally:
+                    if machine is not None:
+                        await machine._close_local()
+                    else:
+                        await asyncio.to_thread(_remove, parent)
+
             try:
-                await asyncio.shield(preparation)
-            finally:
-                if machine is not None:
-                    await machine._close_local()
-                else:
-                    await asyncio.to_thread(_remove, parent)
+                await finish_owned(own_cleanup(cleanup()))
+            except BaseException as cleanup_error:
+                if cleanup_error is not error:
+                    error.add_note(f"Local image cleanup failed ({type(cleanup_error).__name__})")
             raise
 
 
