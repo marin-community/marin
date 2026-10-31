@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Promote persisted single-container jobs into the canonical service list.
+"""Promote persisted single-container jobs into the canonical container list.
 
 Inline files remain in job_workdir_files. Existing flat columns are retained as
 the primary worker projection; resource columns continue to hold the task total.
@@ -18,7 +18,7 @@ def migrate(raw_conn) -> None:
     ).fetchall()
     for job_id, environment_json, entrypoint_json, image, cpu, memory, disk, device_json in rows:
         environment = json.loads(environment_json)
-        if environment.get("services"):
+        if environment.get("containers"):
             continue
         resources = {
             "cpu_millicores": int(cpu),
@@ -37,8 +37,8 @@ def migrate(raw_conn) -> None:
             "setup_scripts": list(environment.get("setup_scripts", [])),
             "runtime_entrypoint": json.loads(entrypoint_json),
         }
-        environment["services"] = [primary]
-        environment["primary_service"] = "task"
+        environment["containers"] = [primary]
+        environment["primary_container"] = "task"
         raw_conn.execute(
             "UPDATE job_config SET environment_json = ? WHERE job_id = ?",
             (json.dumps(environment), job_id),

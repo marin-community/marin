@@ -8,7 +8,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0054_task_services.py"
+from google.protobuf import json_format
+from iris.rpc import job_pb2
+
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0054_task_containers.py"
 
 
 def _load_migration():
@@ -69,23 +72,23 @@ def test_migration_0054_preserves_startup_resources_and_workdir_files_on_replay(
     migration.migrate(conn)
 
     assert conn.execute("SELECT * FROM job_config").fetchall() == first
-    stored = json.loads(first[0][1])
-    assert stored["primary_service"] == "task"
-    primary = stored["services"][0]
-    assert primary["name"] == "task"
-    assert primary["image"] == "example.test/agent:old"
-    assert primary["env_vars"] == {"TASK_INPUT": "primary-value"}
-    assert primary["secrets"] == {"SERVICE_KEY": "explicit-value"}
-    assert primary["setup_scripts"] == ["prepare-workspace"]
-    assert primary["runtime_entrypoint"] == entrypoint
-    assert primary["resources"] == {
-        "cpu_millicores": 4000,
-        "memory_bytes": 4 * 1024**3,
-        "disk_bytes": 4 * 1024**3,
-    }
+    stored = json_format.Parse(first[0][1], job_pb2.EnvironmentConfig())
+    assert stored.primary_container == "task"
+    primary = stored.containers[0]
+    assert primary.name == "task"
+    assert primary.image == "example.test/agent:old"
+    assert dict(primary.env_vars) == {"TASK_INPUT": "primary-value"}
+    assert dict(primary.secrets) == {"SERVICE_KEY": "explicit-value"}
+    assert list(primary.setup_scripts) == ["prepare-workspace"]
+    assert list(primary.runtime_entrypoint.run_command.argv) == ["python", "_callable_runner.py"]
+    assert list(primary.runtime_entrypoint.setup_commands) == ["prepare-workspace", "install-runtime"]
+    assert dict(primary.runtime_entrypoint.workdir_file_refs) == {"weights.bin": "gs://existing-bucket/weights.bin"}
+    assert primary.resources.cpu_millicores == 4000
+    assert primary.resources.memory_bytes == 4 * 1024**3
+    assert primary.resources.disk_bytes == 4 * 1024**3
     assert first[0][4:7] == (4000, 4 * 1024**3, 4 * 1024**3)
     assert conn.execute("SELECT * FROM job_workdir_files").fetchall() == [
         ("/alice/old-job", "_callable_runner.py", b"print('preserved')")
     ]
-    assert len(stored["services"]) == 1
+    assert len(stored.containers) == 1
     conn.close()
