@@ -31,9 +31,11 @@ cd mini840-repro
 git checkout --detach 863678366542eb6191de63225268e284a1ccbc46
 ```
 
-Run the remaining commands from that repository root. Existing Iris, CoreWeave storage, Hugging Face, Daytona eval and Together access is required. See [installation](../../../docs/tutorials/installation.md), [CoreWeave access](../../../docs/tutorials/cloud-gpu.md), and [Iris authentication](../../../lib/iris/OPS.md#authentication-headless--ci). The GCP identity must already have access to the two secrets below; these instructions do not grant it. Export `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` from the approved credential store; do not put them in files committed to Git. Public dataset downloads need no HF write token. With existing GCP access, the credential roles can be resolved without a local secrets file:
+Run the remaining commands from that repository root. Existing Iris, CoreWeave storage, Hugging Face, Daytona eval and Together access is required. See [installation](../../../docs/tutorials/installation.md), [CoreWeave access](../../../docs/tutorials/cloud-gpu.md), and [Iris authentication](../../../lib/iris/OPS.md#authentication-headless--ci). The GCP identity must already have access to the four secrets below; these instructions do not grant it. Before submitting any Iris job, export `CW_KEY_ID` and `CW_KEY_SECRET` for CoreWeave storage handoff, plus `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` for task execution, from the approved credential store; do not put them in files committed to Git. Public dataset downloads need no HF write token. With existing GCP access, the credential roles can be resolved without a local secrets file:
 
 ```bash
+export CW_KEY_ID=$(gcloud secrets versions access latest --project=hai-gcp-models --secret=cw-object-storage-key-id)
+export CW_KEY_SECRET=$(gcloud secrets versions access latest --project=hai-gcp-models --secret=cw-object-storage-key-secret)
 export DAYTONA_EVAL_API_KEY=$(gcloud secrets versions access latest --project=hai-gcp-models --secret=DAYTONA_EVAL_API_KEY)
 export TOGETHER_API_KEY=$(gcloud secrets versions access latest --project=hai-gcp-models --secret=TOGETHER_API_KEY)
 ```
