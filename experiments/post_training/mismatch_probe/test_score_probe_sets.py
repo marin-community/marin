@@ -9,6 +9,7 @@ from experiments.post_training.mismatch_probe.score_probe_sets import (
     exact_summary,
     flip_rows,
     forward_groups,
+    group_sequences,
     load_reference_shard,
     padded_rows,
     resolve_reference_roots,
@@ -46,6 +47,18 @@ def test_no_forward_holds_more_than_four_long_sequences():
         long = sum(lengths[index] > 65_536 for index in group[: unique_rows(group)])
         if long:
             assert len(group) == 8 and long <= 4  # one row per rank: the group is a single forward
+
+
+def test_long_row_limit_counts_physical_padding_and_keeps_every_real_sequence():
+    sequences = [ProbeSequence(str(row), [10] * 70_000, ["context"] * 70_000, [-1] * 70_000, "P_R") for row in range(9)]
+    groups = group_sequences(sequences, max_long=1)
+    observed = []
+    for _index, group, real in groups:
+        assert sum(len(sequence.token_ids) > 65_536 for sequence in group) == 1
+        observed.extend(sequence.sample_id for sequence in group[:real])
+        for sequence in group[:real]:
+            assert sequence is sequences[int(sequence.sample_id)]
+    assert sorted(observed) == [str(row) for row in range(9)]
 
 
 def test_a_reference_shard_round_trips_in_compact_form(tmp_path):

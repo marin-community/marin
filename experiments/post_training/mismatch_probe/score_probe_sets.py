@@ -13,7 +13,9 @@ rows and ``token_budget`` padded tokens per group, and every group a multiple of
 data-parallel size (the last row repeats to fill; its copies are dropped). A sequence
 longer than ``LONG_SEQUENCE_TOKENS`` goes in a group of exactly one row per rank, at most
 ``MAX_LONG_PER_FORWARD`` of them, so no forward scores more than four (C1: one node fits
-131k tokens with up to four long rows per forward). Every pass runs at micro-batch 1, the
+131k synthetic tokens with up to four long rows per forward; real routing can require a
+lower ``--max-long-per-forward``). Discarded long padding rows use a two-token prefix
+to avoid multiplying the expert load. Every pass runs at micro-batch 1, the
 layout the B-vs-B floor was measured at (C5).
 
 Passes, each writing under ``<out>/<set>/``:
@@ -41,6 +43,7 @@ import json
 import tempfile
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +70,7 @@ ROWS_PER_GROUP = 64
 TOKEN_BUDGET = 64 * 8_192
 LONG_SEQUENCE_TOKENS = 65_536
 MAX_LONG_PER_FORWARD = 4
+PADDING_SEQUENCE_TOKENS = 2
 PAD_TOKEN_ID = 0
 EXACT_RATE = 0.01
 MASTER_SEED = 20261023
@@ -199,10 +203,26 @@ def stage_set(uri: str, limit: int | None) -> list[ProbeSequence]:
     return load_probe_sequences(local.name)
 
 
-def group_sequences(sequences: list[ProbeSequence]) -> list[tuple[int, list[ProbeSequence], int]]:
-    """(group index, the group's padded rows, its count of real rows)."""
-    groups = forward_groups([len(sequence.token_ids) for sequence in sequences])
-    return [(index, [sequences[row] for row in group], unique_rows(group)) for index, group in enumerate(groups)]
+def group_sequences(
+    sequences: list[ProbeSequence], *, max_long: int = MAX_LONG_PER_FORWARD
+) -> list[tuple[int, list[ProbeSequence], int]]:
+    """Group rows without replicating a long sequence into discarded padding ranks."""
+    groups = forward_groups([len(sequence.token_ids) for sequence in sequences], max_long=max_long)
+    result = []
+    for index, group in enumerate(groups):
+        real = unique_rows(group)
+        rows = [sequences[row] for row in group]
+        if len(rows[-1].token_ids) > LONG_SEQUENCE_TOKENS:
+            for rank in range(real, len(rows)):
+                rows[rank] = replace(
+                    rows[rank],
+                    sample_id=f"{rows[rank].sample_id}:padding:{rank}",
+                    token_ids=rows[rank].token_ids[:PADDING_SEQUENCE_TOKENS],
+                    token_type_tags=rows[rank].token_type_tags[:PADDING_SEQUENCE_TOKENS],
+                    position_tags=rows[rank].position_tags[:PADDING_SEQUENCE_TOKENS],
+                )
+        result.append((index, rows, real))
+    return result
 
 
 def exists(path: str) -> bool:
@@ -265,17 +285,25 @@ def _gather_ids(sequences: list[ProbeSequence], reference: dict[str, np.ndarray]
     )
 
 
-def reference_pass(model_path: str, sets: dict[str, str], out: str, limit: int | None) -> None:
+def reference_pass(
+    model_path: str, sets: dict[str, str], out: str, limit: int | None, *, max_long: int = MAX_LONG_PER_FORWARD
+) -> None:
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
-            for index, group, _real in group_sequences(stage_set(uri, limit)):
+            for index, group, _real in group_sequences(stage_set(uri, limit), max_long=max_long):
                 path = shard_path(out, set_name, "reference", index, "npz")
                 if exists(path):
                     continue
                 save_reference_shard(path, group, _score(policy, _batch(group), top_k=TOP_K))
             write_json(
                 f"{out.rstrip('/')}/{set_name}/reference.json",
-                {"model": model_path, "sequences": uri, "limit": limit, "top_k": TOP_K},
+                {
+                    "model": model_path,
+                    "sequences": uri,
+                    "limit": limit,
+                    "top_k": TOP_K,
+                    "max_long_per_forward": max_long,
+                },
             )
 
 
@@ -319,13 +347,15 @@ def candidate_pass(
     reference_roots: dict[str, str],
     out: str,
     limit: int | None,
+    *,
+    max_long: int = MAX_LONG_PER_FORWARD,
 ) -> None:
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
             reference_out = reference_roots[set_name]
             with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
                 reference_meta = json.load(handle)
-            for index, group, real in group_sequences(stage_set(uri, limit)):
+            for index, group, real in group_sequences(stage_set(uri, limit), max_long=max_long):
                 path = shard_path(out, set_name, f"kl-{label}", index, "parquet")
                 if exists(path):
                     continue
@@ -344,13 +374,19 @@ def candidate_pass(
 
 
 def noise_pass(
-    model_path: str, sets: dict[str, str], reference_roots: dict[str, str], out: str, limit: int | None
+    model_path: str,
+    sets: dict[str, str],
+    reference_roots: dict[str, str],
+    out: str,
+    limit: int | None,
+    *,
+    max_long: int = MAX_LONG_PER_FORWARD,
 ) -> None:
     """The reference model gathered on its own support with each group's rows reversed (C5)."""
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
             reference_out = reference_roots[set_name]
-            for index, group, real in group_sequences(stage_set(uri, limit)):
+            for index, group, real in group_sequences(stage_set(uri, limit), max_long=max_long):
                 path = shard_path(out, set_name, "kl-noise", index, "parquet")
                 if exists(path):
                     continue
@@ -370,7 +406,14 @@ def noise_pass(
 
 
 def exact_pass(
-    reference_model: str, candidate_model: str, label: str, sets: dict[str, str], out: str, limit: int | None
+    reference_model: str,
+    candidate_model: str,
+    label: str,
+    sets: dict[str, str],
+    out: str,
+    limit: int | None,
+    *,
+    max_long: int = MAX_LONG_PER_FORWARD,
 ) -> None:
     """Full-vocabulary KL on the seeded 1% subsample (C4), against the binned rows at the same positions."""
     work = tempfile.mkdtemp()
@@ -378,7 +421,7 @@ def exact_pass(
     for role, model in (("reference", reference_model), ("candidate", candidate_model)):
         with _worker(model) as policy:
             for set_name, sequences in staged.items():
-                for index, group, _real in group_sequences(sequences):
+                for index, group, _real in group_sequences(sequences, max_long=max_long):
                     local = f"{work}/{set_name}-{role}-{index:04d}.npz"
                     if Path(local).exists():
                         continue
@@ -386,7 +429,7 @@ def exact_pass(
                     np.savez(local, rows=results["exact_logprobs"], positions=results["exact_positions"])
     for set_name, sequences in staged.items():
         exact_rows = []
-        for index, group, real in group_sequences(sequences):
+        for index, group, real in group_sequences(sequences, max_long=max_long):
             reference = np.load(f"{work}/{set_name}-reference-{index:04d}.npz")
             candidate = np.load(f"{work}/{set_name}-candidate-{index:04d}.npz")
             rows = exact_rows_from_passes(
@@ -492,6 +535,8 @@ def flips_pass(
     reference_roots: dict[str, str],
     out: str,
     limit: int | None,
+    *,
+    max_long: int = MAX_LONG_PER_FORWARD,
 ) -> None:
     """Greedy-token flips per scored position: the candidate's top-1 against the reference's."""
     with _worker(model_path) as policy:
@@ -499,7 +544,7 @@ def flips_pass(
             reference_out = reference_roots[set_name]
             with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
                 reference_meta = json.load(handle)
-            for index, group, real in group_sequences(stage_set(uri, limit)):
+            for index, group, real in group_sequences(stage_set(uri, limit), max_long=max_long):
                 path = shard_path(out, set_name, f"flip-{label}", index, "parquet")
                 if exists(path):
                     continue
@@ -617,6 +662,13 @@ def main() -> None:
         command = commands.add_parser(name)
         command.add_argument("--set", dest="sets", action="append", required=True, help="SET=continuation jsonl uri")
         command.add_argument("--out", required=True)
+        command.add_argument(
+            "--max-long-per-forward",
+            type=int,
+            choices=range(1, DP_SIZE + 1),
+            default=MAX_LONG_PER_FORWARD,
+            help="Maximum real sequences above 64k per forward; lower this for concentrated expert routing",
+        )
         command.add_argument("--limit", type=int, default=None, help="score only each set's first N sequences")
         if name in ("reference", "candidate", "noise", "flips"):
             command.add_argument("--model-path", required=True)
@@ -639,18 +691,30 @@ def main() -> None:
     args = parser.parse_args()
     sets = parse_sets(args.sets)
     if args.command == "reference":
-        reference_pass(args.model_path, sets, args.out, args.limit)
+        reference_pass(args.model_path, sets, args.out, args.limit, max_long=args.max_long_per_forward)
     elif args.command == "candidate":
         roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
-        candidate_pass(args.model_path, args.label, args.step, sets, roots, args.out, args.limit)
+        candidate_pass(
+            args.model_path, args.label, args.step, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward
+        )
     elif args.command == "noise":
         roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
-        noise_pass(args.model_path, sets, roots, args.out, args.limit)
+        noise_pass(args.model_path, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward)
     elif args.command == "flips":
         roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
-        flips_pass(args.model_path, args.label, args.step, sets, roots, args.out, args.limit)
+        flips_pass(
+            args.model_path, args.label, args.step, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward
+        )
     else:
-        exact_pass(args.reference_model, args.candidate_model, args.label, sets, args.out, args.limit)
+        exact_pass(
+            args.reference_model,
+            args.candidate_model,
+            args.label,
+            sets,
+            args.out,
+            args.limit,
+            max_long=args.max_long_per_forward,
+        )
 
 
 if __name__ == "__main__":
