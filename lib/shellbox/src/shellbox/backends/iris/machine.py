@@ -34,7 +34,7 @@ from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSE
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
 from shellbox.backends.iris import process_guest
-from shellbox.backends.iris.process import IrisProcessSession
+from shellbox.backends.iris.process import CONNECT_TIMEOUT, IrisProcessSession, ProcessConnectionUnavailable
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
@@ -61,6 +61,8 @@ TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
+STARTUP_TCP_TIMEOUT = 1
+STARTUP_RETRY_INTERVAL = 0.1
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 # How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
@@ -164,6 +166,9 @@ class IrisMachine:
 
     async def open_process(self, command: Command) -> IrisProcessSession:
         """Open primary-container pipes directly from the owning driver Pod."""
+        return await self._open_process(command, tcp_timeout=CONNECT_TIMEOUT)
+
+    async def _open_process(self, command: Command, *, tcp_timeout: float) -> IrisProcessSession:
         if self.container_name:
             raise UnsupportedMachineSpec("Persistent Iris process sessions support the primary container only")
         if not command.argv or command.stdin or command.timeout is not None:
@@ -189,6 +194,7 @@ class IrisMachine:
                 self._capability,
                 replace(command, cwd=command.cwd or self.spec.workdir, env=environment),
                 on_close=self.execution.sessions.discard,
+                tcp_timeout=tcp_timeout,
             )
             self.execution.sessions.add(session)
             if self.execution.closed:
@@ -200,8 +206,8 @@ class IrisMachine:
         # of replaying an Open whose command may already have started.
         try:
             return await acquire_owned(asyncio.create_task(acquire()))
-        except ConnectionRefusedError:
-            # Startup readiness may race the listener, before any Open was sent.
+        except ProcessConnectionUnavailable:
+            # Only a TCP failure proves that no authentication or Open was sent.
             raise
         except BaseException as error:
             try:
@@ -210,12 +216,15 @@ class IrisMachine:
                 error.add_note(f"Iris sandbox cleanup failed ({type(cleanup_error).__name__})")
             raise
 
-    async def _direct_command(self, command: Command) -> Result:
+    async def _direct_command(self, command: Command, *, tcp_timeout: float = CONNECT_TIMEOUT) -> Result:
         limit = command.output_limit_bytes
-        session = await self.open_process(replace(command, stdin=b"", timeout=None, output_limit_bytes=limit + 1))
+        session = await self._open_process(
+            replace(command, stdin=b"", timeout=None, output_limit_bytes=limit + 1), tcp_timeout=tcp_timeout
+        )
 
         async def input_bytes() -> None:
-            await session.write(command.stdin)
+            if command.stdin:
+                await session.write(command.stdin)
             await session.write_eof()
 
         sending = asyncio.create_task(input_bytes())
@@ -556,12 +565,21 @@ class IrisMachineFactory:
                         raise
                 else:
                     if status.state == TaskState.RUNNING:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
                         try:
-                            await machine._checked("true")
-                        except ConnectionRefusedError:
-                            # RUNNING can precede the broker binding its socket.
-                            await asyncio.sleep(0.1)
+                            async with asyncio.timeout(remaining):
+                                ready = await machine._direct_command(
+                                    Command(("sh", "-c", "true")), tcp_timeout=min(STARTUP_TCP_TIMEOUT, remaining)
+                                )
+                        except ProcessConnectionUnavailable:
+                            # RUNNING does not prove ingress is usable. Fresh
+                            # short dials avoid a stale SYN retransmission wait.
+                            await asyncio.sleep(min(STARTUP_RETRY_INTERVAL, max(0, deadline - time.monotonic())))
                             continue
+                        if ready.exit_code:
+                            raise RuntimeError(f"Iris sandbox readiness command failed ({ready.exit_code})")
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")

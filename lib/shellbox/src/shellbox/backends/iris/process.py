@@ -32,6 +32,10 @@ CONNECT_TIMEOUT = 30
 CLOSE_TIMEOUT = 10
 
 
+class ProcessConnectionUnavailable(ConnectionError):
+    """TCP failed before authentication or any process request was sent."""
+
+
 class IrisProcessSession:
     """One process with bounded stdout and independently drained stderr."""
 
@@ -68,10 +72,16 @@ class IrisProcessSession:
         command: Command,
         *,
         on_close: Callable[["IrisProcessSession"], None],
+        tcp_timeout: float = CONNECT_TIMEOUT,
     ) -> "IrisProcessSession":
-        async with asyncio.timeout(CONNECT_TIMEOUT):
-            reader, writer = await asyncio.open_connection(host, port, limit=CHUNK_BYTES)
-            try:
+        deadline = asyncio.get_running_loop().time() + CONNECT_TIMEOUT
+        try:
+            async with asyncio.timeout(min(tcp_timeout, CONNECT_TIMEOUT)):
+                reader, writer = await asyncio.open_connection(host, port, limit=CHUNK_BYTES)
+        except (TimeoutError, OSError) as error:
+            raise ProcessConnectionUnavailable("Iris process TCP connection is unavailable") from error
+        try:
+            async with asyncio.timeout_at(deadline):
                 await authenticate_client(reader, writer, capability)
                 await write_frame(
                     writer,
@@ -82,13 +92,13 @@ class IrisProcessSession:
                 if kind != READY or data:
                     raise RuntimeError("Iris process did not acknowledge startup")
                 return cls(reader, writer, stderr_limit=command.output_limit_bytes, on_close=on_close)
-            except BaseException as error:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except (ConnectionError, OSError) as cleanup_error:
-                    error.add_note(f"Iris socket cleanup failed ({type(cleanup_error).__name__})")
-                raise
+        except BaseException as error:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError) as cleanup_error:
+                error.add_note(f"Iris socket cleanup failed ({type(cleanup_error).__name__})")
+            raise
 
     @property
     def stderr(self) -> bytes:

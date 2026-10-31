@@ -245,6 +245,67 @@ def test_direct_primary_commands_and_large_files_bypass_controller_exec(tmp_path
     asyncio.run(check())
 
 
+def test_lost_ready_after_open_never_replays_and_reclaims_the_process(tmp_path, monkeypatch):
+    marker, lockfile = tmp_path / "executions", tmp_path / "running.lock"
+    program = (
+        "import fcntl,signal,sys; lock=open(sys.argv[2],'w'); fcntl.flock(lock,fcntl.LOCK_EX); "
+        "open(sys.argv[1],'a').write('once\\n'); print('started',flush=True); signal.pause()"
+    )
+
+    async def check():
+        connect = asyncio.open_connection
+        proxies = set()
+        async with direct_machine(tmp_path) as (machine, controller, connections):
+
+            async def lose_ready(reader, writer):
+                guest_reader, guest_writer = await connect("127.0.0.1", controller.port)
+                try:
+                    # Forward the real mutual handshake and Open. Drop the
+                    # acknowledgment only after the real child proves it ran.
+                    for source, target, count in (
+                        (guest_reader, writer, len(process_guest.MAGIC) + 32),
+                        (reader, guest_writer, 64),
+                        (guest_reader, writer, 32),
+                    ):
+                        target.write(await source.readexactly(count))
+                        await target.drain()
+                    kind, data = await process_guest.read_frame(reader)
+                    assert kind == process_guest.OPEN
+                    await process_guest.write_frame(guest_writer, kind, data)
+                    assert await process_guest.read_frame(guest_reader) == (process_guest.READY, b"")
+                    output = bytearray()
+                    while b"\n" not in output:
+                        kind, data = await process_guest.read_frame(guest_reader)
+                        assert kind == process_guest.STDOUT
+                        output.extend(data)
+                    assert output == b"started\n"
+                finally:
+                    writer.close()
+                    guest_writer.close()
+                    await asyncio.gather(writer.wait_closed(), guest_writer.wait_closed())
+
+            def accepted(reader, writer):
+                task = asyncio.create_task(lose_ready(reader, writer))
+                proxies.add(task)
+
+            proxy = await asyncio.start_server(accepted, "127.0.0.1", 0)
+
+            async def redirected_tcp(*args, **kwargs):
+                return await connect("127.0.0.1", proxy.sockets[0].getsockname()[1], **kwargs)
+
+            monkeypatch.setattr(asyncio, "open_connection", redirected_tcp)
+            async with proxy:
+                with pytest.raises(asyncio.IncompleteReadError):
+                    await machine.open_process(Command(("python3", "-u", "-c", program, str(marker), str(lockfile))))
+                await asyncio.wait_for(asyncio.gather(*proxies, *connections), 5)
+            assert machine.job.cancelled
+            assert marker.read_text() == "once\n"
+            with lockfile.open() as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    asyncio.run(check())
+
+
 def test_process_close_reaps_descendants_even_with_unread_output(tmp_path):
     lockfile = tmp_path / "descendant.lock"
     child_program = (
