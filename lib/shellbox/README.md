@@ -30,10 +30,25 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | --- | --- | --- | --- |
 | Local gVisor | Docker image, registry image, Dockerfile | allow or deny | Docker daemon with `runsc` registered |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
-| Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: no network. Neither reaches the cluster | Iris controller and workers with sandbox profile support; `ALLOW` needs a Kubernetes cluster |
+| Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: denied external traffic. Neither grants cluster access | In-cluster Pod-network driver, Kubernetes controller, CPU gVisor and enforced network policy |
 | Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Trusted commands only; `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
 
-The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker runtime on the host. The `daytona` extra pins the SDK used by the Harbor fork. Its OpenTelemetry dependencies include prereleases, so installing it needs `--prerelease allow`. The `iris` extra installs `marin-iris`; its current PyPI releases and related Marin dependencies also need `--prerelease allow`. A local checkout can supply Iris as a workspace dependency instead. Iris uses its `CONTAINER_PROFILE_SANDBOX` job profile, which runs the job under gVisor with no cluster environment, credentials, or workspace bundle, and the `ExecInContainer` RPC. It does not launch a nested `runsc` process or actor. `NetworkPolicy.ALLOW` submits the job with `EGRESS_POLICY_INTERNET`, which reaches public addresses but not private, carrier-grade NAT or link-local ones, so not the controller, other pods or the metadata server. On Docker worker clusters such as `marin` it needs the host egress filter that worker bootstrap installs. `NetworkPolicy.DENY` submits `EGRESS_POLICY_NONE`, which leaves only DNS on Kubernetes and no network on Docker workers. Iris file transfer requires the task image's `/bin/sh`, `base64`, `tar`, `head`, `tail`, and `wc` utilities. Daytona uses the sandbox filesystem API for file transfer and requires `/bin/sh`, `tar`, `head`, and `wc` for commands and directory transfer. Daytona sandboxes and Iris jobs have a default six-hour lifetime to limit leaks when the harness exits without closing them. The Iris controller scans for expired jobs about once a minute, so an Iris sandbox can outlive `job_ttl` by a minute or more. A command or transfer on an Iris sandbox that was killed, expired, or preempted raises `MachineTerminated`. When the controller's exec pool is full it refuses an exec with `RESOURCE_EXHAUSTED` before running it; the machine retries that refusal with backoff for up to Iris's 30-minute RPC retry budget. Other exec RPC errors are not retried, because the command may already have run.
+The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
+runtime on the host. The Daytona SDK and current Iris dependencies require
+`--prerelease allow`. A checkout can supply Iris as a workspace dependency.
+Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
+credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+addresses; `DENY` denies external traffic. Neither grants cluster access.
+Private service groups also deny DNS.
+
+Online Iris execution requires a trusted driver on the Kubernetes cluster's Pod
+network. Its primary image needs Python 3.11 or newer for the direct process helper;
+companion transfers still use `ExecInContainer` and need `/bin/sh`, `base64`,
+`tar`, `head`, `tail` and `wc`. Daytona uses its filesystem API and requires
+`/bin/sh`, `tar`, `head` and `wc` for commands and directory transfer.
+Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
+expired jobs about once a minute. An expired, killed or preempted machine raises
+`MachineTerminated`; uncertain command failures are not replayed.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
@@ -47,7 +62,11 @@ finally:
     await machine.close()
 ```
 
-Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job with internet access, or `NetworkPolicy.DENY` on any Iris cluster. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
+Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
+Docker daemon with `runsc` registered. Inside an Iris driver with Pod attachment,
+use `IrisMachineFactory.in_cluster()`. These backends provide commands, shared
+files and process sessions. Harbor's `BashAgent` requires the separate persistent
+`ShellSession` interface; host-side Terminus-2 uses machine commands.
 
 Model and judge credentials belong to the trusted host handler used by
 `serve_http`. Sandboxes receive neither secret references nor resolved provider
@@ -90,7 +109,9 @@ disabled. Literal task inputs and image contents must themselves be free of
 production credentials. Iris rejects explicit cloud-storage and controller
 credential variables, and service groups reject secret-enabled factories.
 The Kubernetes namespace must have an enforcing NetworkPolicy implementation
-and no additional allow policy selecting these pods. Kubernetes combines allow
+and no wider allow policy selecting these pods. Iris may admit the owning
+driver's connection to the primary helper; external egress remains denied.
+Kubernetes combines allow
 rules from all matching policies; the Iris-managed `none` and `internet`
 policies select different labels and do not apply to groups.
 
@@ -138,17 +159,22 @@ exit status and explicit close. `Machine.run` still executes complete commands.
 QEMU and ShellSim do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
 
-Iris requires an operator-deployed exec gateway and a controller configured with
-its reachable address and identity. The controller authorizes one live attempt
-and declared container, then returns a host-only grant. The async gateway owns
-one Kubernetes exec connection per helper, outside the controller's synchronous
-exec pool. Send and Receive are bounded unary Connect calls; an empty Receive
-waits asynchronously. A lost response fails the session rather than replaying
-an uncertain operation. The gateway gets only the controller's public verification
-key. Provider credentials remain in the trusted handler. See
-[gateway operations](../iris/OPS.md#persistent-execution-gateway) for deployment,
-reachability, lifetime and rollout requirements. Worker-daemon Iris backends do
-not yet provide persistent process sessions.
+Iris starts a small Python process helper in each primary container. The trusted
+driver connects directly over the Pod network, after the controller authorizes
+and resolves the exact driver and child attempts. A fresh per-machine capability
+authenticates the connection; it grants no authority outside that container.
+Primary commands, file transfers and process sessions use bounded binary frames
+on these direct connections. Companion readiness and artifact transfers retain
+unary exec; companions do not expose `open_process`. A lost connection fails the
+machine rather than replaying an uncertain command. There is no shared gateway.
+
+The driver must explicitly use `NetworkAttachment.POD`, separately from its
+container profile and egress policy. One ingress policy per driver attempt and
+port admits only that driver's Pod to its children; sandbox egress stays denied.
+External and host-network drivers cannot use this path. See
+[direct connection operations](../iris/OPS.md#direct-sandbox-connections) for
+RBAC and rollout requirements. Docker-worker Iris backends do not yet provide
+direct process sessions.
 
 For a coordinator already running in Iris, use
 `IrisMachineFactory.in_cluster()` to select its own controller and task identity.
@@ -326,24 +352,34 @@ With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable 
 
 ## Live Iris service-group check
 
-The CoreWeave smoke workflow runs `tests/test_iris_service_group_live.py` against
-the shared `cw-us-west-04a` controller in namespace `iris-ci`. It creates two
+The CoreWeave smoke workflow submits a trusted Pod-network driver against the
+shared `cw-us-west-04a` controller in namespace `iris-ci`. The driver runs
+`tests/test_iris_service_group_live.py` from the bundled checkout. It creates
 CPU-only groups to check private runtime connections, filesystem separation,
-credential absence, denied outbound connections, host HTTP capabilities and
-teardown. The groups use the workflow's digest-pinned Python image.
+credential absence, denied outbound connections, binary process pipes, host HTTP
+capabilities and teardown. A separate trusted Pod verifies denied cross-driver
+ingress with a reachable control. The guests use a digest-pinned Python image.
 
 This check is excluded from default unit runs. Against an already updated test
-controller, supply its URL, image and known network probe targets explicitly:
+controller, submit the driver with its URL, image and known network probe targets:
 
 ```sh
-SHELLBOX_IRIS_CONTROLLER_URL=http://127.0.0.1:10000 \
-SHELLBOX_IRIS_PYTHON_IMAGE='<registry-image>@sha256:<digest>' \
-SHELLBOX_IRIS_PRIVATE_ADDRESS='<controller-service-ip>:10000' \
-SHELLBOX_IRIS_PUBLIC_ADDRESS=1.1.1.1:443 \
-uv run --package marin-shellbox --extra iris --frozen --group test pytest \
-  -c lib/taskcompendium/pyproject.toml lib/shellbox/tests/test_iris_service_group_live.py \
-  -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 -v
+uv run --package marin-shellbox --extra iris --frozen --group test \
+  python scripts/ci/run_shellbox_iris.py submit \
+  --controller-url http://127.0.0.1:10000 \
+  --config lib/iris/config/cw-us-west-04a.yaml \
+  --job-name shellbox-live-proof \
+  --python-image '<registry-image>@sha256:<digest>' \
+  --private-address '<controller-service-ip>:10000' \
+  --public-address 1.1.1.1:443 \
+  --log-path artifacts/shellbox-iris.log
 ```
+
+The submitter uses normal bundle-storage credentials. The trusted driver receives
+its ordinary Iris environment; the sandbox groups receive none of that storage
+or controller authority. A source manifest verifies that the driver imports the
+submitted Iris and Shellbox code. The command preserves bounded logs and cancels
+the exact driver tree on exit.
 
 The controller must advertise `task-services` and have permission to
 read the named `iris-egress-loopback` NetworkPolicy. The CI workflow grants only

@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import pwd
+import signal
+import socket
 import subprocess
 import tarfile
 import threading
@@ -25,9 +27,10 @@ from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
+from shellbox.backends.iris import process_guest
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
@@ -37,7 +40,30 @@ from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSp
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
 
 
+@pytest.fixture(autouse=True)
+def in_cluster_driver(monkeypatch):
+    monkeypatch.setattr(
+        iris_backend,
+        "get_job_info",
+        lambda: JobInfo(
+            task_id=JobName.from_wire("/user/driver/0"),
+            attempt_uid="driver-attempt",
+            controller_address="http://controller",
+            task_token="task-scoped-token",
+        ),
+    )
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    monkeypatch.setattr(process_guest, "PORT", port)
+
+
 class LocalRpc:
+    def get_task_connection(self, request, timeout_ms):
+        return controller_pb2.Controller.GetTaskConnectionResponse(
+            pod_ip="127.0.0.1", port=process_guest.PORT, pod_uid="fixture-pod", attempt_uid="fixture-attempt"
+        )
+
     def exec_in_container(self, request, timeout_ms):
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
@@ -79,7 +105,10 @@ class LocalTask:
 
     def status(self):
         return SimpleNamespace(
-            state=self.state, error_message="" if self.state is TaskState.RUNNING else "container exited"
+            state=self.state,
+            error_message="" if self.state is TaskState.RUNNING else "container exited",
+            current_attempt_number=0,
+            attempts=(SimpleNamespace(attempt_number=0, attempt_uid="fixture-attempt"),),
         )
 
 
@@ -88,6 +117,7 @@ class LocalJob:
         self.cancelled = False
         self.killed = threading.Event()
         self._task = task
+        self.process: subprocess.Popen | None = None
 
     def tasks(self):
         return [] if self._task is None else [self._task]
@@ -98,6 +128,9 @@ class LocalJob:
     def cancel(self):
         self.cancelled = True
         self.killed.set()
+        if self.process is not None and self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGKILL)
+            self.process.wait(timeout=10)
 
 
 class LocalClient:
@@ -125,6 +158,13 @@ class TaskClient(LocalClient):
 
     def submit_task(self, **kwargs):
         self.submitted = kwargs
+        self.job.process = subprocess.Popen(
+            kwargs["task"].primary_service.command.command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
         return self.job
 
 
@@ -148,6 +188,7 @@ def local_machine(
         job,  # type: ignore[arg-type]
         task or LocalTask(TaskState.RUNNING),  # type: ignore[arg-type]
         spec,
+        container_name="runtime",
     )
     return machine, job
 
@@ -186,25 +227,41 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
 @pytest.mark.parametrize("task_interface", [False, True], ids=["machine", "task"])
 def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, task_interface):
     task_id = JobName.from_wire("/fixture/sandbox/0")
-    status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
+    status = task_status_from_proto(
+        job_pb2.TaskStatus(
+            task_id=task_id.to_wire(),
+            state=job_pb2.TASK_STATE_RUNNING,
+            attempts=[job_pb2.TaskAttempt(attempt_id=0, attempt_uid="fixture-attempt")],
+        )
+    )
     job = LocalJob()
     job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
-    client = LocalClient()
+    client = TaskClient(job)
+    submit_task = client.submit_task
     submitted_environments = []
 
     def submit(**kwargs):
         submitted_environments.append(kwargs["task"].primary_service.env_vars)
-        return job
+        return submit_task(**kwargs)
 
     client.submit_task = submit
     endpoint = LocalEndpoint()
     endpoint.url = "http://fixture"
     endpoint.credentials = None
-    monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
     monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
     monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
     secret = "private-fixture-credential"
     monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
+    monkeypatch.setattr(
+        iris_backend,
+        "get_job_info",
+        lambda: JobInfo(
+            task_id=JobName.from_wire("/user/driver/0"),
+            attempt_uid="driver-attempt",
+            controller_address="http://fixture",
+            task_token="task-scoped-token",
+        ),
+    )
     factory = IrisMachineFactory(controller_url="http://fixture")
     spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
 
@@ -405,7 +462,6 @@ def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path,
 )
 def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     client = RecordingClient()
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -425,7 +481,6 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
     task = LocalTask(TaskState.PENDING)
     current_status = task.status
     job = LocalJob(task)
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -478,7 +533,6 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
 def test_cancelled_factory_wait_reclaims_the_submitted_job(monkeypatch, tmp_path, grouped):
     task = LocalTask(TaskState.PENDING)
     job = LocalJob(task)
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -526,7 +580,6 @@ def test_cancelled_blocked_submission_keeps_ownership_until_job_can_be_reclaimed
             assert release.wait(10)
             return super().submit_task(**kwargs)
 
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: BlockingClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -565,6 +618,7 @@ def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypat
         task_id=JobName.from_wire("/user/driver/0"),
         controller_address="http://controller",
         task_token="task-scoped-token",
+        attempt_uid="driver-attempt",
     )
     client = RecordingClient()
     attached_headers: dict[str, str] = {}
@@ -574,7 +628,6 @@ def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypat
         return client
 
     monkeypatch.setattr(iris_backend, "get_job_info", lambda: info)
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: pytest.fail("Read host cluster credentials"))
     monkeypatch.setattr(iris_backend.IrisClient, "remote", remote)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory.in_cluster()
@@ -603,7 +656,6 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
     job = LocalJob(LocalTask(TaskState.RUNNING))
     client = TaskClient(job)
     rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
     image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
@@ -637,14 +689,13 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
         await group.close()
 
     asyncio.run(run())
-    assert rpc.targets == {"", "runtime"}
+    assert rpc.targets == {"runtime"}
     native_task = client.submitted["task"]
     assert native_task.primary == "task"
     assert [(service.name, service.resources.cpu, service.resources.memory) for service in native_task.services] == [
         ("task", 2, 256 * 1024 * 1024),
         ("runtime", 1, 128 * 1024 * 1024),
     ]
-    assert native_task.primary_service.command.command == ["sh", "-c", iris_backend.IDLE_ENTRYPOINT]
     runtime_service = native_task.services[1]
     assert runtime_service.command is None
     assert runtime_service.entrypoint is None
@@ -655,7 +706,6 @@ def test_readiness_timeout_retries_without_stopping_runtime_or_leaving_probe_chi
     job = LocalJob(LocalTask(TaskState.RUNNING))
     client = TaskClient(job)
     rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
     image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
@@ -719,7 +769,6 @@ else:
 
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.FAILED))
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -734,7 +783,6 @@ def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.RUNNING))
     client = TaskClient(job)
     rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
     image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)

@@ -31,16 +31,16 @@ import "vm.proto";
 // ============================================================================
 
 message Controller {
-  message OpenExecSessionRequest {
-    string task_id = 1;
-    string attempt_uid = 2;
-    string container_name = 3;
-    repeated string command = 4;
+  message GetTaskConnectionRequest {
+    string driver_task_id = 1;
+    string driver_attempt_uid = 2;
+    string task_id = 3;
+    string attempt_uid = 4;
   }
-  message OpenExecSessionResponse {
-    string gateway_address = 1;
-    string grant = 2;
-    iris.time.Timestamp expires_at = 3;
+  message GetTaskConnectionResponse {
+    string pod_ip = 1;
+    uint32 port = 2;
+    string pod_uid = 3;
     string attempt_uid = 4;
   }
 
@@ -948,8 +948,7 @@ service ControllerService {
   // Kubernetes cluster status
   rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
 
-  // Authorize an exact running container and return a scoped gateway grant.
-  rpc OpenExecSession(Controller.OpenExecSessionRequest) returns (Controller.OpenExecSessionResponse);
+  rpc GetTaskConnection(Controller.GetTaskConnectionRequest) returns (Controller.GetTaskConnectionResponse);
 
   // Generic query API
   rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);

@@ -37,6 +37,7 @@ from iris.cluster.controller.backend import (
     TaskBackend,
 )
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
+from iris.cluster.controller.connections import ConnectionDependencies, bind_driver_connection
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -488,6 +489,11 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
+    if request.environment.network_attachment not in (
+        job_pb2.NETWORK_ATTACHMENT_DEFAULT,
+        job_pb2.NETWORK_ATTACHMENT_POD,
+    ):
+        raise ConnectError(Code.INVALID_ARGUMENT, "Unknown native network attachment")
     for name in request.environment.secrets:
         try:
             validate_secret_name(name)
@@ -919,7 +925,11 @@ def _plan_launch(
     available = dependencies.runtime.backend.descriptor.capabilities
     if not required.issubset(available):
         error = f"Local backend lacks required task capabilities: {', '.join(sorted(required - available))}"
-    if launch.received_handoff:
+    if request.environment.HasField("driver_connection"):
+        if error is not None or cluster_pin is not None:
+            raise ConnectError(Code.INVALID_ARGUMENT, error or "Driver connections cannot route to another controller")
+        plan = SubmitPlan(SubmitDisposition.LOCAL)
+    elif launch.received_handoff:
         plan = SubmitPlan(SubmitDisposition.LOCAL)
     else:
         plan = dependencies.runtime.federation.classify_submit(
@@ -1011,6 +1021,7 @@ def launch_job(
     _validate_launch_capacity(dependencies, request, launch)
 
     request = _inject_resource_constraints(request)
+    bind_driver_connection(ConnectionDependencies(dependencies.db, dependencies.runtime.backend), request, launch.job_id)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
         required = required_task_capabilities(request.environment)

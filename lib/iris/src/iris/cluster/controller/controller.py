@@ -27,7 +27,7 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import ExecGatewayConfig, PeerConfig
+from iris.cluster.config import PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.audit_logging import log_event
@@ -353,8 +353,6 @@ class ControllerConfig:
     """This cluster's public origin (cluster config ``dashboard_url``); the local origin
     a minted capability URL uses when no public parent is configured."""
 
-    exec_gateway: ExecGatewayConfig | None = None
-
     federation_public_parent: str = ""
     """Public origin of the federation parent that fronts this cluster (cluster config
     ``federation_public_parent``). Set on a child whose own origin is not world-visible:
@@ -519,7 +517,6 @@ class Controller:
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
             budgets=self._budgets,
-            exec_gateway=config.exec_gateway,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
                 local_origin=config.dashboard_url,

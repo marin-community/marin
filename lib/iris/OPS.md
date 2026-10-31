@@ -1107,130 +1107,103 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
 
-## Persistent execution gateway
+## Direct sandbox connections
 
-Persistent execution runs in a separate trusted platform Deployment. The controller
-handles only `OpenExecSession`: it checks the job owner or received federation
-handoff, current attempt, declared container, and live Pod identity, then signs a
-host-only grant. The caller sends that grant directly to the gateway's Connect
-RPCs. Neither the grant nor the controller signing key enters a task container.
-The gateway mounts only the controller's public verification key. Its namespaced
-Role permits `get` on Pods and `get`/`create` on `pods/exec`.
+Shellbox's Kubernetes adapter runs its trusted driver inside Iris with explicit
+Pod networking. Each sandbox primary starts a Python process helper. Iris
+allocates the sandbox, authorizes its owning driver, and returns the current
+Pod address and identity through `GetTaskConnection`. Primary commands,
+transfers and persistent model-relay messages then travel directly between
+those Pods. They do not occupy the controller's exec pool or Kubernetes exec
+streams. Companion readiness and artifact transfers still use unary exec.
 
-Deploy the gateway before enabling its endpoint in cluster configuration. Use a
-controller image built from the same checkout; `lib/iris/Dockerfile`'s `controller`
-target includes Kubernetes and the asynchronous WebSocket transport. The existing
-CoreWeave smoke workflow, `.github/workflows/iris-smoke-coreweave.yaml`, builds
-`ghcr.io/marin-community/iris-controller` for `linux/amd64` and uses namespace
-`iris-ci` with `lib/iris/config/cw-us-west-04a.yaml`. Reuse that built image tag
-rather than an unrelated `latest` when adding a gateway to that workflow.
+The driver opts into Pod attachment independently of its container profile and
+egress policy:
 
-Export just the configured signing key's public PEM in the operator environment.
-This reads the private key through its existing secret reference and writes only
-the derived public key:
+```python
+from iris.cluster.types import NetworkAttachment
+
+job = client.submit(
+    entrypoint=driver_entrypoint,
+    resources=driver_resources,
+    network_attachment=NetworkAttachment.POD,
+)
+```
+
+Inside that job, use `IrisMachineFactory.in_cluster()`. Shellbox declares a
+`DriverConnectionSpec` on each child with the driver's task ID, attempt UID and
+helper port. The controller requires a live trusted driver in the same cluster
+and binds each child to that attempt. Host-network drivers and external callers
+cannot use direct sandbox connections. Run a driver in the execution cluster;
+a controller port-forward does not provide connectivity to Pod addresses.
+
+Shellbox supplies a fresh random connection capability to each helper. It grants
+execution only in that helper's container and carries no model, storage or
+Kubernetes authority. The driver retains provider authentication. Sandbox Pods
+keep gVisor, denied egress, no service-account token and no injected production
+credentials. The helper's primary image must contain Python 3.11 or newer. Companions retain
+their image ENTRYPOINT/CMD; they do not expose persistent process sessions.
+
+### Operator prerequisites and rollout
+
+The namespace needs an enforcing Kubernetes NetworkPolicy implementation, the
+configured CPU-only gVisor RuntimeClass, and Iris's base sandbox deny policies.
+For each driver attempt and declared port, the controller creates an ingress-only
+policy selecting that driver's children. It admits only the owning driver's Pod
+in the same namespace. Reply traffic follows the driver-initiated connection;
+sandbox-initiated cluster and internet connections remain denied. Additional
+namespace policies must not grant wider access to sandbox Pods: Kubernetes
+combines all matching allow rules.
+
+Deploy the matching controller and RBAC before launching new drivers. The
+controller needs permission to manage these per-driver NetworkPolicies, in
+addition to its existing Pod operations. Policies are owned by the exact driver
+Pod, so Kubernetes garbage collection removes them when that Pod is deleted.
+Existing running tasks keep their original networking and cannot be retrofitted
+by reloading the controller. Start a new Pod-network driver to use this path.
+A replacement attempt does not inherit its predecessor's child connections.
+
+The CoreWeave smoke workflow installs the controller's namespaced policy role.
+For another namespace, render the same manifests with its controller service
+account and apply them through the operator's Kubernetes context:
 
 ```bash
-mkdir -p /tmp/iris-exec-setup
-uv run --no-sync python - lib/iris/config/cw-us-west-04a.yaml \
-  > /tmp/iris-exec-setup/public.pem <<'PY'
+uv run --package marin-iris --extra controller python - <namespace> <controller-service-account> \
+  > /tmp/iris-driver-connections.yaml <<'PY'
 import sys
-from iris.cluster.config import load_config
-from rigging.secrets import resolve_secret_spec
-from rigging.token_authority import signing_key_from_private_pem
 
-config = load_config(sys.argv[1])
-assert config.auth and config.auth.signing_key
-key = signing_key_from_private_pem(resolve_secret_spec(config.auth.signing_key).value)
-print(key.public_pem, end="")
+import yaml
+from iris.cluster.platforms.k8s.rbac_manifests import (
+    driver_connection_binding_manifest,
+    driver_connection_role_manifest,
+)
+
+namespace, service_account = sys.argv[1:]
+print(yaml.safe_dump_all([
+    driver_connection_role_manifest(namespace),
+    driver_connection_binding_manifest(namespace, service_account),
+]))
 PY
+kubectl --kubeconfig <kubeconfig> --context <context> apply -f /tmp/iris-driver-connections.yaml
 ```
 
-Render the operator manifests, review them, then apply them through the normal
-cluster deployment procedure. The issuer must equal the cluster config's `name`.
-The gateway ID is an audience identifier shared with the controller's gateway
-configuration; choose a distinct ID for each gateway.
+Kubernetes needs no separate execution gateway Deployment, Service, signing key
+or port-forward. Its existing nodes already supply Pod networking and gVisor;
+this rollout changes controller code/RBAC and the submitted driver/Shellbox
+version. Docker-worker backends reject explicit Pod attachment and driver
+connections. Ordinary jobs using default attachment retain their existing
+behavior; extending direct connections to inaccessible Docker workers requires
+a separate worker transport.
+
+Inspect the owning driver, sandbox Pods and policies when diagnosing a failure:
 
 ```bash
-uv run --no-sync iris exec-gateway manifests \
-  --namespace iris-ci \
-  --image ghcr.io/marin-community/iris-controller:BUILT_TAG \
-  --gateway-id iris-ci-exec \
-  --issuer cw-us-west-04a \
-  --public-key /tmp/iris-exec-setup/public.pem \
-  > /tmp/iris-exec-setup/gateway.yaml
-kubectl --context marin_US-WEST-04A apply -f /tmp/iris-exec-setup/gateway.yaml
-kubectl --context marin_US-WEST-04A -n iris-ci rollout status deployment/iris-exec-gateway
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get pods -o wide
+kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get networkpolicies -o yaml
 ```
 
-The Service listens on port `10002`. For shared callers, configure a separate TLS
-endpoint that forwards `/iris.exec_gateway.ExecGatewayService/*` to that Service,
-including unary calls lasting at least 30 seconds. The gateway authenticates its
-own signed execution grants; the caller does not forward controller credentials.
-Every caller must be able to reach this endpoint. The gateway reaches the
-Kubernetes API server with its service account, then streams through the API
-server's `pods/exec` connection. It requires no network route into task Pods, and
-service-group Pods retain their loopback-only NetworkPolicy.
-
-Set the externally reachable origin in the cluster config and roll the controller
-through the existing controller rollout procedure:
-
-```yaml
-exec_gateway:
-  address: https://iris-exec.example.org
-  gateway_id: iris-ci-exec
-```
-
-A missing gateway configuration disables persistent execution and omits its
-backend capability. Configuration requires a persistent controller signing key.
-After a signing-key rotation, replace the gateway's pinned public-key ConfigMap
-and restart the gateway alongside the controller rollout. A restart closes its
-current sessions; callers must open new sessions.
-
-For a single-host CI or manual proof, port-forward the gateway Service and use
-`http://127.0.0.1:10002` as the configured gateway address for that environment:
-
-```bash
-kubectl --context marin_US-WEST-04A -n iris-ci \
-  port-forward service/iris-exec-gateway 10002:10002
-```
-
-From another terminal on that host, run against an existing running task whose
-selected container provides Python. This verifies 256 KiB of binary stdin and
-stdout across multiple chunks, stderr, EOF, and a nonzero process exit:
-
-```bash
-uv run --no-sync iris --config lib/iris/config/cw-us-west-04a.yaml \
-  exec-gateway probe --task-id /OWNER/JOB/0 --container-name task
-```
-
-`Open`, `Send`, `Receive`, and `CloseSession` are typed unary Connect RPCs.
-`Receive` waits asynchronously for up to 20 seconds. Each stdin chunk and output
-response is capped at 64 KiB; a session buffers at most 1 MiB of output and
-backpressures the Kubernetes stream until the caller drains it. A gateway admits
-256 sessions, with eight bounded metadata/authentication setup workers. Idle
-streams use asynchronous sockets rather than controller or gateway worker
-threads. An idle session closes after five minutes without a client operation;
-its signed grant expires after one hour even if the client remains active.
-Grants permit one launch and cannot be replayed to reopen a closed session.
-Sessions have no renewal or cross-process recovery: a longer-lived caller must
-handle expiry as a closed process and open a new authorized process if needed.
-
-Keep one replica per gateway identity: session state belongs to its process.
-Deploy additional gateway identities to partition capacity rather than sending
-one identity's requests to independent replicas. Closing a session half-closes
-stdin and disconnects exec. Programs using persistent sessions must clean up their
-children on stdin EOF; disconnecting Kubernetes exec alone does not guarantee
-that an arbitrary detached process dies.
-
-Inspect gateway lifecycle and pressure from its own logs:
-
-```bash
-kubectl --context marin_US-WEST-04A -n iris-ci logs deployment/iris-exec-gateway --since=10m
-```
-
-Open records report active/opening sessions and the target Pod/container. Capacity
-refusals report active sessions, setup operations, and retained spent grants. Close
-records report bytes transferred, remaining queued bytes, backpressure events, dropped bytes,
-receive count and cumulative receive wait milliseconds, exit status, and any
-transport, idle, or expiry error. Empty long polls produce no individual log
-records. Grants and their command arguments are excluded from these logs.
+Check that the driver has `hostNetwork: false`, that the child and policy name the
+same live driver attempt, and that the target Pod has the expected attempt UID.
+Do not solve a connection failure by enabling sandbox egress or host networking.
+The live Shellbox check runs its driver inside the CI cluster and exercises
+binary transfer, process teardown and denied access from another Pod.

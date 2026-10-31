@@ -883,12 +883,33 @@ class ServiceSpec:
         return spec
 
 
+class NetworkAttachment(IntEnum):
+    """Native network attachment, independent of a task's egress policy."""
+
+    DEFAULT = job_pb2.NETWORK_ATTACHMENT_DEFAULT
+    POD = job_pb2.NETWORK_ATTACHMENT_POD
+
+    def to_proto(self) -> job_pb2.NetworkAttachment:
+        return job_pb2.NETWORK_ATTACHMENT_POD if self is NetworkAttachment.POD else job_pb2.NETWORK_ATTACHMENT_DEFAULT
+
+
+@dataclass(frozen=True)
+class DriverConnectionSpec:
+    """One primary endpoint accessible only to this live driver attempt."""
+
+    driver_task_id: JobName
+    driver_attempt_uid: str
+    port: int
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     """A task's complete named container set and primary lifecycle owner."""
 
     services: Sequence[ServiceSpec]
     primary: str = "task"
+    network_attachment: NetworkAttachment = NetworkAttachment.DEFAULT
+    driver_connection: DriverConnectionSpec | None = None
 
     def __post_init__(self) -> None:
         names = [service.name for service in self.services]
@@ -902,13 +923,23 @@ class TaskSpec:
         return next(service for service in self.services if service.name == self.primary)
 
     def to_proto(self, primary_environment: job_pb2.EnvironmentConfig) -> job_pb2.EnvironmentConfig:
-        return job_pb2.EnvironmentConfig(
+        result = job_pb2.EnvironmentConfig(
             services=[
                 service.to_proto(primary_environment if service.name == self.primary else None)
                 for service in self.services
             ],
             primary_service=self.primary,
+            network_attachment=self.network_attachment.to_proto(),
         )
+        if self.driver_connection is not None:
+            result.driver_connection.CopyFrom(
+                job_pb2.DriverConnectionSpec(
+                    driver_task_id=self.driver_connection.driver_task_id.to_wire(),
+                    driver_attempt_uid=self.driver_connection.driver_attempt_uid,
+                    port=self.driver_connection.port,
+                )
+            )
+        return result
 
 
 class Namespace(str):

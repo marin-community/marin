@@ -139,3 +139,28 @@ def cluster_role_binding_manifest(role_name: str, namespace: str, service_accoun
         "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
         "roleRef": {"kind": "ClusterRole", "name": role_name, "apiGroup": "rbac.authorization.k8s.io"},
     }
+
+
+DRIVER_CONNECTION_ROLE_NAME = "iris-driver-connections"
+
+
+def driver_connection_role_manifest(namespace: str) -> dict:
+    """Delegate namespaced ingress policy writes to the trusted controller."""
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": DRIVER_CONNECTION_ROLE_NAME, "namespace": namespace},
+        "rules": [
+            {"apiGroups": ["networking.k8s.io"], "resources": ["networkpolicies"], "verbs": ["get", "create", "patch"]}
+        ],
+    }
+
+
+def driver_connection_binding_manifest(namespace: str, service_account: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {"name": DRIVER_CONNECTION_ROLE_NAME, "namespace": namespace},
+        "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
+        "roleRef": {"kind": "Role", "name": DRIVER_CONNECTION_ROLE_NAME, "apiGroup": "rbac.authorization.k8s.io"},
+    }

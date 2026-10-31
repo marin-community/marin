@@ -56,7 +56,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
-from iris.cluster.exec_gateway.auth import ExecPodTarget
+from iris.cluster.task_connection import TaskPod
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -327,6 +327,10 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.environment.network_attachment != job_pb2.NETWORK_ATTACHMENT_DEFAULT or request.environment.HasField(
+            "driver_connection"
+        ):
+            return "Native Pod attachment and driver endpoints require Kubernetes"
         if len(request.environment.services) > 1:
             return "Multi-service tasks require the Kubernetes backend"
         if request.environment.services and not request.environment.services[0].HasField("runtime_entrypoint"):
@@ -373,8 +377,16 @@ class RpcTaskBackend:
         stub = self.stub_factory.get_stub(target.address)
         return asyncio.run(stub.profile_task(request, timeout_ms=timeout_ms))
 
-    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
-        raise ProviderUnsupportedError("Persistent execution requires a Kubernetes backend")
+    def resolve_task_pod(self, target: TaskTarget) -> TaskPod:
+        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskPod:
+        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskPod:
+        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
 
     def exec_in_container(
         self,

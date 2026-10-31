@@ -65,3 +65,40 @@ def build_service_group_network_policy(namespace: str) -> dict:
             "egress": [],
         },
     }
+
+
+DRIVER_POD_UID_LABEL = "iris.pod_uid"
+DRIVER_OWNER_LABEL = "iris.driver_pod_uid"
+DRIVER_PORT_LABEL = "iris.driver_port"
+
+
+def driver_connection_policy(namespace: str, pod_name: str, pod_uid: str, attempt_uid: str, port: int) -> dict:
+    """Permit one declared endpoint from one immutable owning driver Pod."""
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {
+            "name": f"iris-driver-{pod_uid}-{port}",
+            "namespace": namespace,
+            "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod_uid}],
+        },
+        "spec": {
+            "podSelector": {"matchLabels": {DRIVER_OWNER_LABEL: pod_uid, DRIVER_PORT_LABEL: str(port)}},
+            "policyTypes": ["Ingress"],
+            "ingress": [
+                {
+                    "from": [
+                        {
+                            "podSelector": {
+                                "matchLabels": {
+                                    DRIVER_POD_UID_LABEL: pod_uid,
+                                    "iris.attempt_uid": attempt_uid,
+                                }
+                            }
+                        }
+                    ],
+                    "ports": [{"protocol": "TCP", "port": port}],
+                }
+            ],
+        },
+    }

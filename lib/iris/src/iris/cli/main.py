@@ -260,7 +260,6 @@ from iris.cli.attempt import attempt as attempt_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
 from iris.cli.endpoints import endpoints  # noqa: E402
-from iris.cli.exec_gateway import exec_gateway  # noqa: E402
 from iris.cli.job import job  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
@@ -272,7 +271,6 @@ iris.add_command(attempt_cmd)
 iris.add_command(cluster)
 iris.add_command(build)
 iris.add_command(endpoints)
-iris.add_command(exec_gateway)
 iris.add_command(job)
 iris.add_command(task)
 iris.add_command(query_cmd)

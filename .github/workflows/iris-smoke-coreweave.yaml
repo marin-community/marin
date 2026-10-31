@@ -8,6 +8,7 @@ on:
       - "lib/shellbox/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
       - "scripts/ci/iris_monitor.py"
+      - "scripts/ci/run_shellbox_iris.py"
   workflow_dispatch:
 
 permissions:
@@ -104,6 +105,8 @@ jobs:
           from iris.cluster.platforms.k8s.rbac_manifests import (
               task_secret_role_manifest,
               task_secret_binding_manifest,
+              driver_connection_role_manifest,
+              driver_connection_binding_manifest,
           )
           from iris.cluster.platforms.k8s.service import CloudK8sService
 
@@ -132,6 +135,8 @@ jobs:
               },
               task_secret_role_manifest(namespace),
               task_secret_binding_manifest(namespace, "iris-controller"),
+              driver_connection_role_manifest(namespace),
+              driver_connection_binding_manifest(namespace, "iris-controller"),
               {
                   "apiVersion": "rbac.authorization.k8s.io/v1",
                   "kind": "Role",
@@ -158,25 +163,6 @@ jobs:
               kubectl.apply_json(manifest)
           PY
 
-      # The external runner reaches the gateway through a separate port-forward.
-      # Keep this CI-only address out of the cluster's normal configuration.
-      - name: Prepare CI exec gateway configuration
-        run: |
-          uv run --package marin-iris --extra controller python - <<'PY'
-          import os
-          from pathlib import Path
-
-          import yaml
-          from iris.cluster.config import ExecGatewayConfig, config_to_dict, load_config
-
-          config = load_config("lib/iris/config/cw-us-west-04a.yaml")
-          config.exec_gateway = ExecGatewayConfig(address="http://127.0.0.1:10002", gateway_id="iris-ci")
-          path = Path(os.environ["RUNNER_TEMP"]) / "iris-exec-ci.yaml"
-          path.write_text(yaml.safe_dump(config_to_dict(config), sort_keys=False))
-          with Path(os.environ["GITHUB_ENV"]).open("a") as output:
-              output.write(f"IRIS_CI_CONFIG={path}\n")
-          PY
-
       # Rebuild images and roll the controller. Infrastructure and base RBAC
       # remain managed by Pulumi.
       #
@@ -189,7 +175,7 @@ jobs:
           CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: |
           cd lib/iris && uv run --group dev --extra controller iris -v \
-            --config="$IRIS_CI_CONFIG" \
+            --config=config/cw-us-west-04a.yaml \
             cluster start --fresh --image-platform linux/amd64
 
       - name: Connect to iris-ci controller
@@ -199,79 +185,38 @@ jobs:
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
 
-      - name: Deploy CI exec gateway
-        run: |
-          export IRIS_CI_CONTROLLER_IMAGE=$(kubectl --kubeconfig "$HOME/.kube/coreweave-iris" \
-            --context marin_US-WEST-04A -n "$IRIS_NAMESPACE" \
-            get deployment iris-controller -o jsonpath='{.spec.template.spec.containers[0].image}')
-          uv run --package marin-iris --extra controller python - <<'PY'
-          import os
-
-          from iris.cluster.config import load_config
-          from iris.cluster.exec_gateway.manifests import gateway_manifests
-          from iris.cluster.platforms.k8s.service import CloudK8sService
-          from rigging.secrets import resolve_secret_spec
-          from rigging.token_authority import signing_key_from_private_pem
-
-          config = load_config(os.environ["IRIS_CI_CONFIG"])
-          assert config.auth is not None and config.exec_gateway is not None
-          assert config.kubernetes_provider.namespace == os.environ["IRIS_NAMESPACE"] == "iris-ci"
-          # Resolve the existing signing key in the operator process. Only its
-          # public half enters the gateway's ConfigMap; never print the key.
-          public_key = signing_key_from_private_pem(resolve_secret_spec(config.auth.signing_key).value).public_pem
-          kubectl = CloudK8sService(
-              namespace="iris-ci", kubeconfig_path=os.path.expanduser("~/.kube/coreweave-iris"),
-              context=config.platform.coreweave.kube_context,
-          )
-          for manifest in gateway_manifests(
-              namespace="iris-ci", image=os.environ["IRIS_CI_CONTROLLER_IMAGE"],
-              gateway_id=config.exec_gateway.gateway_id, issuer=config.name, public_key=public_key,
-          ):
-              kubectl.apply_json(manifest)
-          PY
-          kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin_US-WEST-04A \
-            -n "$IRIS_NAMESPACE" rollout status deployment/iris-exec-gateway --timeout=180s
-          kubectl --kubeconfig "$HOME/.kube/coreweave-iris" --context marin_US-WEST-04A \
-            -n "$IRIS_NAMESPACE" port-forward service/iris-exec-gateway 10002:10002 \
-            > "$RUNNER_TEMP/iris-exec-gateway-port-forward.log" 2>&1 &
-          echo "EXEC_GATEWAY_PF_PID=$!" >> "$GITHUB_ENV"
-          uv run --no-sync python - <<'PY'
-          import socket
-          from rigging.timing import Duration, ExponentialBackoff
-
-          def ready():
-              try:
-                  with socket.create_connection(("127.0.0.1", 10002), timeout=1):
-                      return True
-              except OSError:
-                  return False
-
-          ExponentialBackoff(initial=0.1, maximum=1).wait_until_or_raise(
-              ready, timeout=Duration.from_seconds(30), error_message="CI exec gateway port-forward is unavailable"
-          )
-          PY
-
-      - name: Run Shellbox service-group integration
+      - name: Run Shellbox service-group integration from a driver Pod
         env:
           SHELLBOX_IRIS_PYTHON_IMAGE: docker.io/library/python@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
-          SHELLBOX_IRIS_PUBLIC_ADDRESS: "1.1.1.1:443"
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
         run: |
-          export SHELLBOX_IRIS_CONTROLLER_URL="$IRIS_CONTROLLER_URL"
           service_ip=$(kubectl --kubeconfig "$HOME/.kube/coreweave-iris" \
             --context marin_US-WEST-04A -n "$IRIS_NAMESPACE" \
             get service iris-ci-controller-svc -o jsonpath='{.spec.clusterIP}')
-          export SHELLBOX_IRIS_PRIVATE_ADDRESS="$service_ip:10000"
-          uv run --package marin-shellbox --extra iris --frozen --group test pytest \
-            -c lib/taskcompendium/pyproject.toml lib/shellbox/tests/test_iris_service_group_live.py \
-            -m 'integration and requires_cluster' -o 'addopts=' --timeout=900 \
-            -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/shellbox-iris.xml" -v
+          uv run --package marin-shellbox --extra iris --frozen --group test \
+            python scripts/ci/run_shellbox_iris.py submit \
+            --controller-url "$IRIS_CONTROLLER_URL" \
+            --config lib/iris/config/cw-us-west-04a.yaml \
+            --job-name "shellbox-driver-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --python-image "$SHELLBOX_IRIS_PYTHON_IMAGE" \
+            --public-address "1.1.1.1:443" --private-address "$service_ip:10000" \
+            --log-path "$RUNNER_TEMP/shellbox-iris.log"
 
-      - name: Upload Shellbox integration result
+      - name: Cancel Shellbox driver tree
+        if: always()
+        run: |
+          if [ -n "${SHELLBOX_IRIS_DRIVER_JOB:-}" ]; then
+            uv run --no-sync iris --controller-url "$IRIS_CONTROLLER_URL" \
+              job cancel "$SHELLBOX_IRIS_DRIVER_JOB"
+          fi
+
+      - name: Upload Shellbox integration logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: shellbox-iris-result
-          path: ${{ runner.temp }}/shellbox-iris.xml
+          path: ${{ runner.temp }}/shellbox-iris.log
           if-no-files-found: ignore
           retention-days: 14
 
@@ -324,9 +269,6 @@ jobs:
         run: |
           if [ -n "${PF_PID:-}" ]; then
             kill "$PF_PID" 2>/dev/null || true
-          fi
-          if [ -n "${EXEC_GATEWAY_PF_PID:-}" ]; then
-            kill "$EXEC_GATEWAY_PF_PID" 2>/dev/null || true
           fi
           pkill -f "kubectl.*$IRIS_NAMESPACE.*port-forward.*pod/iris-controller" 2>/dev/null || true
           pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE.*pod/iris-controller" 2>/dev/null || true

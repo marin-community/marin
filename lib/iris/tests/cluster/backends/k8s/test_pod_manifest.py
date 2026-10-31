@@ -1447,6 +1447,16 @@ def test_host_network_omitted_when_disabled():
     assert "dnsPolicy" not in manifest["spec"]
 
 
+def test_explicit_pod_attachment_overrides_cluster_host_network():
+    req = make_run_req("/my-job/task-0")
+    req.environment.network_attachment = job_pb2.NETWORK_ATTACHMENT_POD
+    manifest = _build_pod_manifest(req, pod_config(host_network=True, controller_address="http://controller:8080"))
+    assert not manifest["spec"].get("hostNetwork", False)
+    task_env = {entry["name"]: entry for entry in manifest["spec"]["containers"][0]["env"]}
+    assert task_env["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://controller:8080"
+    assert task_env["IRIS_POD_UID"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.uid"
+
+
 # ---------------------------------------------------------------------------
 # Iris env vars and task script
 # ---------------------------------------------------------------------------

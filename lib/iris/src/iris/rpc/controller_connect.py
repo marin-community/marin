@@ -85,7 +85,7 @@ class ControllerService(Protocol):
     async def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def open_exec_session(self, request: controller__pb2.Controller.OpenExecSessionRequest, ctx: RequestContext) -> controller__pb2.Controller.OpenExecSessionResponse:
+    async def get_task_connection(self, request: controller__pb2.Controller.GetTaskConnectionRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskConnectionResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
@@ -338,15 +338,15 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     ),
                     function=svc.get_kubernetes_cluster_status,
                 ),
-                "/iris.cluster.ControllerService/OpenExecSession": Endpoint.unary(
+                "/iris.cluster.ControllerService/GetTaskConnection": Endpoint.unary(
                     method=MethodInfo(
-                        name="OpenExecSession",
+                        name="GetTaskConnection",
                         service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.OpenExecSessionRequest,
-                        output=controller__pb2.Controller.OpenExecSessionResponse,
+                        input=controller__pb2.Controller.GetTaskConnectionRequest,
+                        output=controller__pb2.Controller.GetTaskConnectionResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.open_exec_session,
+                    function=svc.get_task_connection,
                 ),
                 "/iris.cluster.ControllerService/ExecuteRawQuery": Endpoint.unary(
                     method=MethodInfo(
@@ -881,20 +881,20 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def open_exec_session(
+    async def get_task_connection(
         self,
-        request: controller__pb2.Controller.OpenExecSessionRequest,
+        request: controller__pb2.Controller.GetTaskConnectionRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.OpenExecSessionResponse:
+    ) -> controller__pb2.Controller.GetTaskConnectionResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="OpenExecSession",
+                name="GetTaskConnection",
                 service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.OpenExecSessionRequest,
-                output=controller__pb2.Controller.OpenExecSessionResponse,
+                input=controller__pb2.Controller.GetTaskConnectionRequest,
+                output=controller__pb2.Controller.GetTaskConnectionResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1228,7 +1228,7 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def open_exec_session(self, request: controller__pb2.Controller.OpenExecSessionRequest, ctx: RequestContext) -> controller__pb2.Controller.OpenExecSessionResponse:
+    def get_task_connection(self, request: controller__pb2.Controller.GetTaskConnectionRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskConnectionResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1472,15 +1472,15 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.get_kubernetes_cluster_status,
                 ),
-                "/iris.cluster.ControllerService/OpenExecSession": EndpointSync.unary(
+                "/iris.cluster.ControllerService/GetTaskConnection": EndpointSync.unary(
                     method=MethodInfo(
-                        name="OpenExecSession",
+                        name="GetTaskConnection",
                         service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.OpenExecSessionRequest,
-                        output=controller__pb2.Controller.OpenExecSessionResponse,
+                        input=controller__pb2.Controller.GetTaskConnectionRequest,
+                        output=controller__pb2.Controller.GetTaskConnectionResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.open_exec_session,
+                    function=service.get_task_connection,
                 ),
                 "/iris.cluster.ControllerService/ExecuteRawQuery": EndpointSync.unary(
                     method=MethodInfo(
@@ -2015,20 +2015,20 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def open_exec_session(
+    def get_task_connection(
         self,
-        request: controller__pb2.Controller.OpenExecSessionRequest,
+        request: controller__pb2.Controller.GetTaskConnectionRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.OpenExecSessionResponse:
+    ) -> controller__pb2.Controller.GetTaskConnectionResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="OpenExecSession",
+                name="GetTaskConnection",
                 service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.OpenExecSessionRequest,
-                output=controller__pb2.Controller.OpenExecSessionResponse,
+                input=controller__pb2.Controller.GetTaskConnectionRequest,
+                output=controller__pb2.Controller.GetTaskConnectionResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
