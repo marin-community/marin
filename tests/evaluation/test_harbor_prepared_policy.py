@@ -11,6 +11,7 @@ import pytest
 
 from tests.evaluation.harbor_runtime import external_python as _external_python
 from tests.evaluation.harbor_runtime import preflight as _preflight
+from tests.evaluation.harbor_runtime import write_runtime_overlay
 
 
 @pytest.fixture
@@ -164,25 +165,20 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
     stable_policy["environment"]["kwargs"] = {"image_cache": str(tmp_path / "image-cache")}
     policy.write_text(json.dumps(stable_policy))
     overlay = tmp_path / "overlay.json"
-    overlay.write_text(
-        json.dumps(
-            {
-                "job_name": "test",
-                "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": str(tmp_path / "dataset"),
-                "endpoint_url": "https://model.test/v1",
-                "served_model": "test",
-                "task_limit": None,
-                "model_agent_kwargs": {},
-                "verifier_env": {
-                    "OPENAI_API_KEY": "hosted-judge-secret",
-                    "OPENAI_BASE_URL": "https://judge.test/v1",
-                    "MODEL_NAME": "judge",
-                },
-                "archive_root": str(tmp_path / "archive"),
-                "archive_dataset": "test",
-            }
-        )
+    write_runtime_overlay(
+        overlay,
+        tmp_path,
+        job_name="test",
+        dataset_path=str(tmp_path / "dataset"),
+        endpoint_url="https://model.test/v1",
+        served_model="test",
+        task_limit=None,
+        verifier_env={
+            "OPENAI_API_KEY": "hosted-judge-secret",
+            "OPENAI_BASE_URL": "https://judge.test/v1",
+            "MODEL_NAME": "judge",
+        },
+        archive_dataset="test",
     )
     completed = _external_python(
         "-c",
@@ -251,36 +247,28 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
         )
         verifier = {}
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "daytona"},
-                "agents": [agent],
-                "datasets": [{"path": "dataset"}],
-                "verifier": verifier,
-            }
-        )
-    )
+    document = {
+        "environment": {"type": "daytona"},
+        "agents": [agent],
+        "datasets": [{"path": "dataset"}],
+        "verifier": verifier,
+    }
+    if agent_name == "sotopia":
+        document["sotopia_cohort"] = {"version": "test-v1", "models": []}
+    policy_path.write_text(json.dumps(document))
     preflight_result = _preflight(tmp_path, [(policy_path, {})], check=False)
     assert preflight_result.returncode == 0, preflight_result.stderr
     preflight = json.loads(preflight_result.stdout)[0]
     assert preflight["verifier_env_keys"] == ["TOGETHER_API_KEY"]
     overlay_path = tmp_path / "overlay.json"
-    overlay_path.write_text(
-        json.dumps(
-            {
-                "job_name": "test",
-                "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": None,
-                "endpoint_url": "http://candidate.test/v1",
-                "served_model": "candidate",
-                "task_limit": None,
-                "model_agent_kwargs": {},
-                "verifier_env": {},
-                "archive_root": str(tmp_path / "archive"),
-                "archive_dataset": "test",
-            }
-        )
+    write_runtime_overlay(
+        overlay_path,
+        tmp_path,
+        job_name="test",
+        endpoint_url="http://candidate.test/v1",
+        served_model="candidate",
+        task_limit=None,
+        archive_dataset="test",
     )
     completed = _external_python(
         "-c",
