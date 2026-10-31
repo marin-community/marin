@@ -17,8 +17,8 @@ Ckpt 1 (`experiments/grug/fast_track/belay_ckpt1.py`), on the d512 rung.
 - **Experiment checkout:** your working directory. Its branch is this week's experiment branch. Commit flags and run
   specs here and push. Branch new experiment work only from `marin_belay_v1_clean_s7` lineage branches.
 - **Registry checkout:** a checkout of the registry branch, `experiments/belay/registry/X####-<slug>.yaml`, one file
-  per idea (see `experiments/belay/README.md` there). Run registry commands from that directory with the Python
-  named in your prompt.
+  per idea (see `experiments/belay/README.md` there). Run registry commands and git there exactly as your prompt
+  shows.
 - **Belay page API:** `uv run python -m experiments.belay.demo api ...` (state, report, post); see "Reporting".
 
 ## One iteration
@@ -35,7 +35,7 @@ Ckpt 1 (`experiments/grug/fast_track/belay_ckpt1.py`), on the d512 rung.
 3. **Plan approved ideas** (events `approved` and `work_pending`).
    - Check the idea against the house rules below. If it breaks one, set the idea `declined` with a one-paragraph
      note that names the rule, post it as activity, and stop on that idea.
-   - Allocate a registry id: `python -m experiments.belay.registry new --slug ... --name ... --category ...
+   - Allocate a registry id: `registry.py new --slug ... --name ... --category ...
      --summary ... --source <intake|maintainer> [--intake-url ... --intake-author ... --approved-by ...]`, commit
      and push the registry branch.
    - Implement the idea as a default-off flag (`--model-set` / `--opt-set` field) if the code does not exist yet.

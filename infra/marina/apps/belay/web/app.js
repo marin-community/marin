@@ -118,7 +118,11 @@ function runPill(run) {
 }
 
 function progress(run) {
-  if (!run.total_steps) return el('span', { class: 'hint' }, run.state === 'pending' ? 'not started' : 'compiling…')
+  if (!run.total_steps) {
+    if (run.state === 'pending') return el('span', { class: 'hint' }, 'not started')
+    if (TERMINAL.has(run.state)) return el('span', { class: 'num' }, run.step ? `${run.step.toLocaleString()} steps` : '—')
+    return el('span', { class: 'hint' }, run.step ? `step ${run.step.toLocaleString()}` : 'starting…')
+  }
   const step = Math.min(run.step ?? 0, run.total_steps)
   const bar = el('span')
   bar.style.width = `${(100 * step) / run.total_steps}%`
