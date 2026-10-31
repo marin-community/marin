@@ -122,6 +122,11 @@ def feedback_options(function):
             click.option("--failures-per-analysis", type=int, default=64, show_default=True),
             click.option("--max-new-ideas", type=int, default=8, show_default=True),
             click.option(
+                "--max-analyses",
+                type=int,
+                help="Analyses to run before the ideas end; 1 synthesizes once, from the first evaluation's failures.",
+            ),
+            click.option(
                 "--analysis-rules",
                 type=click.Choice(tuple(ANALYSIS_RULES)),
                 default="general",
@@ -216,6 +221,7 @@ class FeedbackOptions:
     max_pass_rate: float
     failures_per_analysis: int
     max_new_ideas: int
+    max_analyses: int | None
     analysis_rules: str
     synthesized_share: float
     synthesis_replaces: str | None
@@ -296,6 +302,7 @@ async def _feedback_boxes(
     analysis = AnalysisConfig(
         make_client=partial(GlmClient, source, GLM_PROVIDER),
         max_new_ideas=feedback.max_new_ideas,
+        max_analyses=feedback.max_analyses,
         capability_rules=ANALYSIS_RULES[feedback.analysis_rules][0],
         capability_kind=ANALYSIS_RULES[feedback.analysis_rules][1],
         shard_size=8,

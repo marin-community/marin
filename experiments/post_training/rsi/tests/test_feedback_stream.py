@@ -121,3 +121,37 @@ def test_ideas_are_ranked_by_the_failed_tasks_that_they_cite():
         "format",
         "none",
     ]
+
+
+def test_one_analysis_gives_a_one_shot_set_of_ideas(monkeypatch):
+    batches_seen = []
+
+    def plan(batch, *args, **kwargs):
+        batches_seen.append(batch)
+        return batch
+
+    def execute(batch, work_dir, workers):
+        return [IDEA.model_copy(update={"capability_id": f"idea-{batch[0]}", "capability": {"id": batch[0]}})]
+
+    monkeypatch.setattr(feedback.failed_run_analysis, "analyze_failed_runs", plan)
+    monkeypatch.setattr(feedback, "_execute", execute)
+    analysis = feedback.AnalysisConfig(
+        make_client=None,
+        max_new_ideas=8,
+        max_analyses=1,
+        capability_rules="",
+        capability_kind="",
+        shard_size=8,
+        extract_policy=None,
+        merge_policy=None,
+        work_dir="/tmp",
+        workers=1,
+    )
+
+    async def run() -> list[str]:
+        ideas = feedback.analyze_failed_runs(from_iterable([["first"], ["second"], ["third"]]), analysis)
+        return [idea.capability_id async for idea in ideas]
+
+    # The ideas end after the first analysis; later batches of failures are never analyzed.
+    assert asyncio.run(run()) == ["idea-first"]
+    assert batches_seen == [["first"]]

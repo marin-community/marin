@@ -72,6 +72,8 @@ async def failed_runs(groups: AsyncIterable[TaskRollouts], max_pass_rate: float)
 class AnalysisConfig:
     make_client: MakeClient
     max_new_ideas: int
+    max_analyses: int | None
+    """Analyses to run before the ideas end; 1 gives a one-shot set from the first evaluation's failures."""
     capability_rules: str
     """What the analysis counts as a capability (``ANALYSIS_RULES``)."""
     capability_kind: str
@@ -90,6 +92,8 @@ async def analyze_failed_runs(
     seen = set(known)
     analysis = 0
     async for batch in batches:
+        if config.max_analyses is not None and analysis >= config.max_analyses:
+            return
         analysis += 1
         plan = failed_run_analysis.analyze_failed_runs(
             batch,
