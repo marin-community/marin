@@ -3,6 +3,8 @@
 
 """Define Kubernetes namespace and RBAC manifests for Iris controllers."""
 
+from iris.cluster.platforms.k8s.network_policies import CONTAINER_GROUP_NETWORK_POLICY_NAME
+
 TASK_SECRET_ROLE_NAME = "iris-task-secret-delivery"
 
 
@@ -46,6 +48,14 @@ CLUSTER_ROLE_RULES = [
         "apiGroups": [""],
         "resources": ["configmaps"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
+    },
+    {
+        # Operators own isolation; dispatch may inspect only this named policy,
+        # without permission to create, relax, or delete NetworkPolicies.
+        "apiGroups": ["networking.k8s.io"],
+        "resources": ["networkpolicies"],
+        "resourceNames": [CONTAINER_GROUP_NETWORK_POLICY_NAME],
+        "verbs": ["get"],
     },
     {
         # Per-attempt Cilium egress policies. The controller writes them by
@@ -128,4 +138,29 @@ def cluster_role_binding_manifest(role_name: str, namespace: str, service_accoun
         "metadata": {"name": role_name},
         "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
         "roleRef": {"kind": "ClusterRole", "name": role_name, "apiGroup": "rbac.authorization.k8s.io"},
+    }
+
+
+DRIVER_CONNECTION_ROLE_NAME = "iris-driver-connections"
+
+
+def driver_connection_role_manifest(namespace: str) -> dict:
+    """Delegate namespaced ingress policy writes to the trusted controller."""
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": DRIVER_CONNECTION_ROLE_NAME, "namespace": namespace},
+        "rules": [
+            {"apiGroups": ["networking.k8s.io"], "resources": ["networkpolicies"], "verbs": ["get", "create", "patch"]}
+        ],
+    }
+
+
+def driver_connection_binding_manifest(namespace: str, service_account: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {"name": DRIVER_CONNECTION_ROLE_NAME, "namespace": namespace},
+        "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
+        "roleRef": {"kind": "Role", "name": DRIVER_CONNECTION_ROLE_NAME, "apiGroup": "rbac.authorization.k8s.io"},
     }

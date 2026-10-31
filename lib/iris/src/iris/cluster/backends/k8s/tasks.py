@@ -42,7 +42,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.config import DEFAULT_SANDBOX_RUNTIME_CLASS, EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -68,6 +68,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
+    CONTAINER_GROUP_NETWORK,
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
@@ -93,6 +94,13 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 )
 from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
+from iris.cluster.platforms.k8s.network_policies import (
+    CONTAINER_GROUP_NETWORK_POLICY_NAME,
+    DRIVER_OWNER_LABEL,
+    DRIVER_POD_UID_LABEL,
+    DRIVER_PORT_LABEL,
+    driver_connection_policy,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -121,7 +129,6 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     cache_host_dirname,
     normalize_workdir_relative_path,
-    render_setup_steps,
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
@@ -136,6 +143,12 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.task_spec import (
+    COMPANION_CONTAINER_PREFIX,
+    ContainerSpec,
+    task_spec_from_request,
+    validate_task_containers,
+)
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
@@ -147,6 +160,7 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
+from iris.cluster.task_connection import TaskConnection
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
@@ -169,6 +183,16 @@ def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
         f"Create an access key at {COREWEAVE_ACCESS_KEYS_URL}, "
         "then export CW_KEY_ID and CW_KEY_SECRET before submitting, or supply both in EnvironmentSpec.secrets."
     )
+
+
+@dataclass(frozen=True)
+class _TaskPod:
+    namespace: str
+    pod_name: str
+    pod_uid: str
+    pod_ip: str
+    attempt_uid: str
+    host_network: bool
 
 
 class PodManifestError(ValueError):
@@ -550,6 +574,7 @@ class PodConfig:
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
+    sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
@@ -569,18 +594,6 @@ class PodConfig:
     # Enables EGRESS_POLICY_ALLOWLIST: the cluster's allowlist and whether it is
     # the default. None rejects ALLOWLIST jobs.
     egress_allowlist: EgressAllowlistConfig | None = None
-
-
-def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Build a shell script that runs the setup steps then the run_command."""
-    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
-    lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
-    # Activate the venv the setup script populated. Conditional on it existing so
-    # a custom or no-setup script that brings its own environment runs as-is.
-    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.entrypoint.run_command.argv:
-        lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
-    return "\n".join(lines)
 
 
 def _build_init_container_spec(
@@ -866,10 +879,15 @@ def _topology_request_annotations(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    CLUSTER pods do. Legacy gVisor needs the CNI-created interface and routes
-    for cluster egress.
+    Single-container CLUSTER pods do. Container groups keep their own loopback,
+    and legacy gVisor needs the CNI-created interface and routes for egress.
     """
-    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+    if (
+        not config.host_network
+        or run_req.environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
+        or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
+        or len(run_req.environment.containers) > 1
+    ):
         return False
     return network is TaskNetwork.CLUSTER
 
@@ -884,6 +902,38 @@ def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) ->
     return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
 
 
+def _container_group_security_context() -> dict:
+    return {
+        "runAsUser": 0,
+        "capabilities": {"drop": ["ALL"]},
+        "allowPrivilegeEscalation": False,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+
+
+def _container_manifest(container: ContainerSpec, physical_name: str) -> dict:
+    resources = container.resources
+    requests = {"cpu": f"{resources.cpu_millicores}m", "memory": str(resources.memory_bytes)}
+    limits = {"memory": str(resources.memory_bytes)}
+    if resources.disk_bytes:
+        requests["ephemeral-storage"] = str(resources.disk_bytes)
+        limits["ephemeral-storage"] = str(resources.disk_bytes)
+    manifest: dict = {
+        "name": physical_name,
+        "image": container.image,
+        "imagePullPolicy": "IfNotPresent",
+        "workingDir": container.workdir,
+        "env": [{"name": name, "value": value} for name, value in container.env_vars.items()],
+        "resources": {"requests": requests, "limits": limits},
+        "terminationMessagePolicy": "FallbackToLogsOnError",
+    }
+    if container.entrypoint is not None:
+        manifest["command"] = list(container.entrypoint)
+    if container.arguments is not None:
+        manifest["args"] = list(container.arguments)
+    return manifest
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -894,13 +944,18 @@ def _build_pod_manifest(
     pod_name = _pod_name(task_id, attempt_id, run_req.attempt_uid)
 
     namespace = config.namespace
-    # Per-task image override (RunTaskRequest.task_image) wins; otherwise the
-    # cluster default. GPU tooling (nsys) is baked into the task image, so a GPU
-    # job needs no special image and iris does not inspect the resource request.
-    task_image = run_req.task_image or config.default_image
     cache_dir = config.cache_dir
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
+    try:
+        task_spec = task_spec_from_request(run_req, config.default_image)
+        validate_task_containers(run_req.container_profile, run_req.egress_policy, run_req.environment)
+    except ValueError as error:
+        raise PodManifestError(str(error)) from error
+    multiple = len(task_spec.containers) > 1
+    if multiple and _needs_infiniband(run_req.num_tasks, run_req.resources.device):
+        raise PodManifestError("Multi-container tasks do not support multi-host GPU InfiniBand networking")
+    private_group = multiple and isolation.network is TaskNetwork.NONE
     service_account = config.service_account if isolation.include_service_account else ""
     network = isolation.network
     if network is TaskNetwork.ALLOWLIST and config.egress_allowlist is None:
@@ -920,7 +975,7 @@ def _build_pod_manifest(
         environment=run_req.environment,
         constraints=run_req.constraints,
         ports=run_req.ports,
-        resources=run_req.resources if run_req.HasField("resources") else None,
+        resources=task_spec.primary_container.resources,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     job_secrets = task_secret_values(run_req.environment)
@@ -955,7 +1010,8 @@ def _build_pod_manifest(
     has_tpu = False
     memory_limit_bytes = 0
     if run_req.HasField("resources"):
-        res = run_req.resources
+        res = job_pb2.ResourceSpecProto()
+        res.CopyFrom(task_spec.primary_container.resources)
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
@@ -997,21 +1053,16 @@ def _build_pod_manifest(
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
     volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
-    container: dict = {
-        "name": "task",
-        "image": task_image,
-        "imagePullPolicy": "IfNotPresent",
-        "env": env_list,
-        "workingDir": WORKDIR_MOUNT.container_path,
-        "volumeMounts": vol_mounts,
-        "command": ["bash", "-lc", _build_task_script(run_req)],
-        # Without this, a non-zero exit leaves containerStatuses[].state.terminated
-        # with an empty message and a bare "Error" reason, burying the actual
-        # crash (JAX traceback, fatal-error banner, OOM abort, ...) in logs the
-        # operator has to pull separately. This has the kubelet populate the
-        # message with the container's own tail log output instead.
-        "terminationMessagePolicy": "FallbackToLogsOnError",
-    }
+    containers = [
+        _container_manifest(
+            member, "task" if member.name == task_spec.primary else f"{COMPANION_CONTAINER_PREFIX}{member.name}"
+        )
+        for member in task_spec.containers
+    ]
+    container = containers[0]
+    container["env"] = env_list
+    container["env"].append({"name": "IRIS_POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}})
+    container["volumeMounts"] = vol_mounts
     if job_secrets or _needs_task_policy(run_req, network):
         # The required volume also holds task startup until the pod's egress
         # policy exists: the provider writes the Secret after the policy.
@@ -1029,9 +1080,14 @@ def _build_pod_manifest(
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    if multiple and run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+        for member in containers:
+            member["securityContext"] = _container_group_security_context()
 
     if resources:
         container["resources"] = resources
+    else:
+        container.pop("resources")
 
     job_id = _job_id_from_task(task_id)
     labels = {
@@ -1044,11 +1100,17 @@ def _build_pod_manifest(
     }
     if run_req.attempt_uid:
         labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
+    if run_req.environment.HasField("driver_connection"):
+        connection = run_req.environment.driver_connection
+        if not connection.driver_instance_uid:
+            raise PodManifestError("Driver connection has no controller-bound Pod identity")
+        labels[DRIVER_OWNER_LABEL] = connection.driver_instance_uid
+        labels[DRIVER_PORT_LABEL] = str(connection.port)
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
     if network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = network.value
+        labels[EGRESS_LABEL] = CONTAINER_GROUP_NETWORK if private_group else network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1131,7 +1193,6 @@ def _build_pod_manifest(
             }
         )
 
-    containers = [container]
     if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         storage_file = None
@@ -1171,10 +1232,18 @@ def _build_pod_manifest(
     # gVisor isolates the whole pod via a node RuntimeClass; the container
     # securityContext stays at the DEFAULT posture (see _security_context).
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
-        spec["runtimeClassName"] = "gvisor"
+        spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
+    if multiple or task_spec.primary != "task":
+        aliases = list(dict.fromkeys(("task", *(member.name for member in task_spec.containers))))
+        spec["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": aliases}]
+    if multiple:
+        spec["shareProcessNamespace"] = False
+    if private_group:
+        spec["dnsPolicy"] = "None"
+        spec["dnsConfig"] = {"nameservers": ["127.0.0.1"]}
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -1325,7 +1394,9 @@ def _pod_failure_state(pod: dict) -> int:
         # Pod-level eviction: the pod status reason indicates infrastructure.
         reason = pod.get("status", {}).get("reason", "")
     else:
-        reason = status.get("state", {}).get("terminated", {}).get("reason", "")
+        reason = status.get("state", {}).get("terminated", {}).get("reason", "") or pod.get("status", {}).get(
+            "reason", ""
+        )
     if reason in _INFRASTRUCTURE_FAILURE_REASONS:
         return job_pb2.TASK_STATE_WORKER_FAILED
     return job_pb2.TASK_STATE_FAILED
@@ -1357,6 +1428,35 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         "pod_uid": metadata.get("uid") or None,
         "node_name": pod.get("spec", {}).get("nodeName") or None,
     }
+    task_terminated = _task_container_terminated(pod)
+    if not task_terminated:
+        exited = next(
+            (
+                status
+                for status in pod.get("status", {}).get("containerStatuses", [])
+                if status.get("name", "").startswith(COMPANION_CONTAINER_PREFIX)
+                and "terminated" in status.get("state", {})
+            ),
+            None,
+        )
+        if exited is not None:
+            terminated = exited["state"]["terminated"]
+            new_state = _pod_failure_state(pod)
+            terminal_reason = _extract_terminal_reason(pod)
+            service_error = (
+                f"Task container {exited['name']} exited before the primary completed "
+                f"(exit code {terminated.get('exitCode', 1)}): {terminated.get('reason', 'terminated')}"
+            )
+            return TaskUpdate(
+                attempt_uid=AttemptUid(entry.attempt_uid),
+                task_id=task_id,
+                attempt_id=attempt_id,
+                new_state=new_state,
+                exit_code=terminated.get("exitCode", 1),
+                error=(terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else service_error),
+                terminal_reason=terminal_reason,
+                **identity,
+            )
 
     if phase == "Pending":
         return TaskUpdate(
@@ -1369,14 +1469,20 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         )
 
     if phase == "Running":
-        return TaskUpdate(
-            attempt_uid=AttemptUid(entry.attempt_uid),
-            task_id=task_id,
-            attempt_id=attempt_id,
-            new_state=job_pb2.TASK_STATE_RUNNING,
-            status_message=TASK_OUTPUT_FINALIZING_STATUS if _task_container_terminated(pod) else "",
-            **identity,
+        uploader = _output_container_status(pod)
+        requires_output = uploader is not None or any(
+            container.get("name") == OUTPUT_CONTAINER_NAME for container in pod.get("spec", {}).get("containers", [])
         )
+        waiting_for_output = requires_output and (uploader is None or "terminated" not in uploader.get("state", {}))
+        if not task_terminated or waiting_for_output:
+            return TaskUpdate(
+                attempt_uid=AttemptUid(entry.attempt_uid),
+                task_id=task_id,
+                attempt_id=attempt_id,
+                new_state=job_pb2.TASK_STATE_RUNNING,
+                status_message=TASK_OUTPUT_FINALIZING_STATUS if task_terminated else "",
+                **identity,
+            )
 
     if phase == "Succeeded":
         return TaskUpdate(
@@ -1389,10 +1495,10 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             **identity,
         )
 
-    # _poll_pods holds unresolved phases through their grace period, so only a
-    # definitive Failed phase can reach the failure classifier.
+    # A terminated primary owns completion even while companion containers keep
+    # the Pod Running. The controller then reclaims the whole attempt's Pod.
+    # _poll_pods holds other unresolved phases through their grace period.
     exit_code = _extract_exit_code(pod)
-    task_terminated = _task_container_terminated(pod)
     new_state = (
         job_pb2.TASK_STATE_SUCCEEDED
         if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
@@ -2554,6 +2660,17 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if (
+            request.environment.HasField("driver_connection")
+            and request.environment.network_attachment != job_pb2.NETWORK_ATTACHMENT_POD
+        ):
+            return "Driver connections require POD network attachment"
+        if request.environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD and _needs_infiniband(
+            request.replicas, request.resources.device
+        ):
+            return "POD network attachment does not support multi-host GPU InfiniBand networking"
+        if len(request.environment.containers) > 1 and _needs_infiniband(request.replicas, request.resources.device):
+            return "Multi-container tasks do not support multi-host GPU InfiniBand networking"
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
@@ -2753,6 +2870,74 @@ class K8sTaskProvider:
 
         return resp
 
+    def _resolve_task_pod(self, target: TaskTarget) -> _TaskPod:
+        if not target.attempt_uid:
+            raise ProviderError("A direct connection requires an exact task attempt")
+        name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        pod = self.kubectl.get_json(K8sResource.PODS, name)
+        if pod is None:
+            raise ProviderError("Task Pod is unavailable")
+        metadata = pod.get("metadata", {})
+        status = pod.get("status", {})
+        primary = _task_container_status(pod)
+        if (
+            not metadata.get("uid")
+            or metadata.get("deletionTimestamp")
+            or metadata.get("labels", {}).get(_LABEL_ATTEMPT_UID) != target.attempt_uid
+            or status.get("phase") != "Running"
+            or not status.get("podIP")
+            or primary is None
+            or "running" not in primary.get("state", {})
+        ):
+            raise ProviderError("Task Pod is stale, terminating, or not running")
+        return _TaskPod(
+            self.pods.namespace,
+            name,
+            metadata["uid"],
+            status["podIP"],
+            target.attempt_uid,
+            bool(pod.get("spec", {}).get("hostNetwork")),
+        )
+
+    def resolve_driver_connection(self, driver: TaskTarget) -> TaskConnection:
+        source = self._resolve_task_pod(driver)
+        if source.host_network:
+            raise ProviderError("A direct connection driver requires POD network attachment")
+        return TaskConnection(address=source.pod_ip, instance_uid=source.pod_uid, attempt_uid=source.attempt_uid)
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskConnection:
+        source = self._resolve_task_pod(driver)
+        if source.host_network:
+            raise ProviderError("A direct connection driver requires POD network attachment")
+        try:
+            self.kubectl.patch_pod_labels(source.pod_name, source.pod_uid, {DRIVER_POD_UID_LABEL: source.pod_uid})
+            self.kubectl.apply_json(
+                driver_connection_policy(source.namespace, source.pod_name, source.pod_uid, source.attempt_uid, port)
+            )
+        except KubectlError as error:
+            raise ProviderError(str(error)) from error
+        if self._resolve_task_pod(driver).pod_uid != source.pod_uid:
+            raise ProviderError("Owning driver Pod changed")
+        return TaskConnection(address=source.pod_ip, instance_uid=source.pod_uid, attempt_uid=source.attempt_uid)
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskConnection:
+        source = self._resolve_task_pod(driver)
+        endpoint = self._resolve_task_pod(target)
+        if source.pod_uid != spec.driver_instance_uid or source.host_network or endpoint.host_network:
+            raise ProviderError("Driver or endpoint Pod identity/network attachment changed")
+        pod = self.kubectl.get_json(K8sResource.PODS, endpoint.pod_name)
+        labels = pod["metadata"].get("labels", {}) if pod is not None else {}
+        if labels.get(DRIVER_OWNER_LABEL) != source.pod_uid or labels.get(DRIVER_PORT_LABEL) != str(spec.port):
+            raise ProviderError("Endpoint Pod does not declare this owning driver and port")
+        # Refuse address reuse across provider reads.
+        if self._resolve_task_pod(driver).pod_uid != source.pod_uid:
+            raise ProviderError("Owning driver Pod changed")
+        if self._resolve_task_pod(target).pod_uid != endpoint.pod_uid:
+            raise ProviderError("Endpoint Pod changed")
+        return TaskConnection(address=endpoint.pod_ip, instance_uid=endpoint.pod_uid, attempt_uid=endpoint.attempt_uid)
+
     def exec_in_container(
         self,
         target: TaskTarget,
@@ -2764,7 +2949,8 @@ class K8sTaskProvider:
         pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
-            result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
+            container = f"{COMPANION_CONTAINER_PREFIX}{request.container_name}" if request.container_name else "task"
+            result = self.kubectl.exec(pod_name, command, container=container, timeout=effective_timeout)
             return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
                 stdout=result.stdout,
@@ -2810,6 +2996,26 @@ class K8sTaskProvider:
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
         manifest = _build_pod_manifest(run_req, self.pods)
+        if (
+            len(run_req.environment.containers) > 1
+            and task_isolation(run_req.container_profile, run_req.egress_policy).network is TaskNetwork.NONE
+        ):
+            # Kubernetes permits network access when no policy selects a pod.
+            # Only the operator may install or change the durable deny-all policy.
+            policy = self.kubectl.get_json(K8sResource.NETWORK_POLICIES, CONTAINER_GROUP_NETWORK_POLICY_NAME)
+            spec = policy.get("spec", {}) if policy is not None else {}
+            if (
+                policy is None
+                or policy.get("metadata", {}).get("deletionTimestamp")
+                or spec.get("podSelector") != {"matchLabels": {EGRESS_LABEL: CONTAINER_GROUP_NETWORK}}
+                or set(spec.get("policyTypes", [])) != {"Ingress", "Egress"}
+                or spec.get("ingress")
+                or spec.get("egress")
+            ):
+                raise KubectlError(
+                    f"Container groups require the operator-installed {CONTAINER_GROUP_NETWORK_POLICY_NAME} "
+                    "NetworkPolicy to select only container groups and deny all ingress and egress"
+                )
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
@@ -2852,9 +3058,9 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        network = TaskNetwork(manifest["metadata"]["labels"].get(EGRESS_LABEL, TaskNetwork.CLUSTER.value))
+        network = task_isolation(run_req.container_profile, run_req.egress_policy).network
         task_policy = None
-        if _needs_task_policy(run_req, network):
+        if self.pods.egress_allowlist is not None and _needs_task_policy(run_req, network):
             # A stale policy can outlive its pod briefly; selecting on the attempt
             # UID keeps it from granting its rules to a resubmitted job's pod.
             assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
@@ -3164,6 +3370,10 @@ class K8sTaskProvider:
         # A running pod reports every container, so no status means no uploader (a sandbox pod).
         uploader = _output_container_status(pod)
         if uploader is None:
+            return None
+        if "terminated" in uploader.get("state", {}):
+            self._output_finalization_started.pop(entry, None)
+            self._released_output_attempts.discard(entry)
             return None
 
         started = self._output_finalization_started.setdefault(entry, time.monotonic())

@@ -95,6 +95,7 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.task_connection import TaskConnection
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     TERMINAL_TASK_STATES,
@@ -200,6 +201,17 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
+
+    def resolve_driver_connection(self, driver: TaskTarget) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
 
     def exec_in_container(
         self,
