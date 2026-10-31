@@ -1,0 +1,6 @@
+experiment: X0221
+launcher: ckpt1
+protocol: equal_steps
+runs:
+  seed0:   {size: d512, seed: 0, variant: "AdEMAMix off", flags: [--opt-set, adam_ademamix_alpha=0]}
+  control: {size: d512, seed: 0, variant: "Belay Ckpt 1 control", control: true}
