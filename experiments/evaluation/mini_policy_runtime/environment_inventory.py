@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve the published Mini840 Harbor image keys against existing Daytona snapshots."""
+"""Restore published Harbor environment sources and their frozen policy bindings."""
 
 import asyncio
 import hashlib
@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import yaml
-from daytona import AsyncDaytona
 from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
@@ -53,6 +52,7 @@ class EnvironmentRecord:
     memory_mb: int | None
     storage_mb: int | None
     storage_override_mb: int | None
+    agent_mcp_servers: list[dict]
 
 
 def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
@@ -96,6 +96,9 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
                 storage_override_mb=yaml.safe_load(policies[row["task_id"]]["original_config"])
                 .get("environment", {})
                 .get("override_storage_mb"),
+                agent_mcp_servers=yaml.safe_load(policies[row["task_id"]]["original_config"])
+                .get("user_agent", {})
+                .get("mcp_servers", []),
             )
         )
     return inventory
@@ -104,39 +107,14 @@ def restored_environments(temporary: Path) -> list[EnvironmentRecord]:
 async def main():
     with tempfile.TemporaryDirectory() as temporary:
         inventory = [asdict(row) for row in restored_environments(Path(temporary))]
-    snapshots = []
-    async with AsyncDaytona() as client:
-        page = 1
-        while True:
-            result = await client.snapshot.list(page=page, limit=100)
-            for item in result.items:
-                snapshots.append({"name": item.name, "state": str(item.state), "image_name": item.image_name})
-            if page >= result.total_pages:
-                break
-            page += 1
-    active = {row["name"]: row for row in snapshots if row["state"].lower() in {"active", "snapshotstate.active"}}
-    mapping = {}
-    for task in inventory:
-        prefix = "harbor__" + task["environment_hash"] + "__"
-        candidates = sorted(name for name in active if name.startswith(prefix) and name.endswith("snapshot"))
-        task["snapshot_candidates"] = candidates
-        if candidates:
-            mapping[task["image_source_key"]] = candidates[0]
-    missing = [row for row in inventory if row["image_source_key"] not in mapping]
     report = {
         "dataset": DATASET,
         "revision": REVISION,
         "tasks": inventory,
-        "snapshots": snapshots,
-        "approved_environment_snapshots": mapping,
-        "missing": missing,
         "summary": {
             "agentic_tasks": len(inventory),
             "benchmarks": dict(Counter(r["benchmark"] for r in inventory)),
             "unique_source_keys": len({r["image_source_key"] for r in inventory}),
-            "mapped_source_keys": len(mapping),
-            "missing_tasks": len(missing),
-            "listed_snapshots": len(snapshots),
         },
     }
     publish("environment-inventory.json", report)

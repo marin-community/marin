@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Missing environment approvals must fail before any GPU submission."""
+"""Incomplete environment preflights must fail before any GPU submission."""
 
 import json
 
@@ -11,17 +11,17 @@ from click.testing import CliRunner
 from experiments.evaluation.mini_policy_runtime import launch
 
 
-@pytest.mark.parametrize("defect", ["missing_snapshot", "wrong_dataset_scope"])
+@pytest.mark.parametrize("defect", ["missing_environment", "wrong_dataset_scope"])
 def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect):
     manifest = {
         "required_source_keys": ["dockerfile:one", "dockerfile:two"],
         "expected_source_keys": 2,
-        "environment_snapshots": {"dockerfile:one": "snapshot-one", "dockerfile:two": "snapshot-two"},
+        "validated_source_keys": ["dockerfile:one", "dockerfile:two"],
         "failures": [],
         "data_uri": "s3://example/full",
     }
-    if defect == "missing_snapshot":
-        del manifest["environment_snapshots"]["dockerfile:two"]
+    if defect == "missing_environment":
+        manifest["validated_source_keys"].remove("dockerfile:two")
     else:
         manifest["data_uri"] = "s3://example/smoke"
     path = tmp_path / "environments.json"

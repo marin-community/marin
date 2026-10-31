@@ -5,10 +5,10 @@ This directory repairs the missing eval-only launcher and environment manifest r
 TaskRolloutSpecs, uses Pi 0.87.0 for Harbor tasks, and runs SkyRL's `generate` entrypoint without training.
 
 **Full end-to-end validation is pending.** The released 840 unique tasks expand to 1,626 rollouts.
-Their 287 agentic tasks require 197 environment source keys. The available eval account reached its
-45-snapshot quota. CPU preparation is now testing the RL account's capacity for the complete map.
-A diagnostic smoke that omits BixBench must not be reported as full Mini840 validation. No complete
-approved environment map is published yet.
+Their 287 agentic tasks use 197 distinct environment sources. The Daytona eval account can build and
+run these sources directly; named snapshots are optional. The earlier mandatory snapshot-map gate
+was a runtime defect. CPU preflight checks native environment startup and Pi installation before
+allocating model GPUs. A partial preflight is not full Mini840 validation.
 
 BixBench's embedded task manifest requests 20 GB, but its original policy config explicitly overrides
 that request to 10 GB. Preparation reads this override from the frozen policy index and records it
@@ -30,46 +30,23 @@ this full execution path.
   The launcher co-hosts it on eight H100s unless an existing endpoint is supplied. Credentials are
   resolved at submission and are never written into launch YAML.
 
-The published package graders and repetitions remain unchanged. A smoke selects the first unchanged
+The grader code and repetitions remain unchanged. Runtime packaging repairs remove unsupported local
+resource allocations, publish wheels for source-only dependencies, and bind OlympiadBench judge
+credentials into the verifier sandbox. Repaired data receives a new immutable revision. A smoke selects the first unchanged
 unique task from each benchmark; it does not replace the complete validation data.
 
 ## CPU preparation on RNO2A
 
-Existing Iris, CoreWeave, HF, Daytona and Together credentials are required. `DAYTONA_RL_API_KEY`
-identifies the account that must own the prepared snapshots. Choose another explicit credential
-role if that account lacks the required capacity. Preparation may build images; evaluation cannot.
+Existing Iris, CoreWeave, HF, Daytona and Together credentials are required. Use the explicit
+`DAYTONA_EVAL_API_KEY` role for native Harbor environments. No snapshot quota is needed.
 
-```bash
-uv run iris --cluster=marin job run --no-wait --enable-extra-resources \
-  --target-cluster cw-rno2a --priority batch --cpu 4 --memory 16GB --disk 128GB \
-  --timeout 3600 --job-name mini840-stage-inputs \
-  -- uv run --with-editable ./vendor/harbor --with daytona==0.200.2 --prerelease allow \
-  python -m experiments.evaluation.mini_policy_runtime.stage_inputs
-```
+The repair sequence is: build the pinned grading dependency wheels with `repair_release
+--build-wheels`, stage the repaired inputs using `stage_inputs --wheels-revision REVISION`, then run
+`environment_preflight --credential-env DAYTONA_EVAL_API_KEY --data-uri DATA_URI`. All three commands
+run on RNO2A CPU jobs. Add `--smoke` to preflight for the 21-benchmark smoke dataset. The full preflight
+checks all 197 environment sources; benchmark-specific diagnostic preflights cannot launch an eval.
 
-The staging report supplies the complete model mirror and data URIs under
-`s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031/`. Preparation restores the
-original published environment files and computes keys on Linux using the same code as the runtime.
-It records snapshot IDs, source keys, package hashes, credential role, dataset revision, and failures.
-It stops launching further builds when the snapshot quota is reached. Existing shared snapshots are
-not deleted.
-
-Prepare the complete cohort before allocation:
-
-```bash
-uv run iris --cluster=marin job run --no-wait --enable-extra-resources \
-  --target-cluster cw-rno2a --priority batch --cpu 4 --memory 16GB --disk 32GB \
-  --timeout 7200 --job-name mini840-prepare-environments \
-  -e DAYTONA_RL_API_KEY "$DAYTONA_RL_API_KEY" \
-  -- uv run --with-editable ./vendor/harbor --with daytona==0.200.2 --prerelease allow \
-  python -m experiments.evaluation.mini_policy_runtime.prepare_environments \
-  --credential-env DAYTONA_RL_API_KEY \
-  --data-uri s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031/full
-```
-
-Use `--smoke` with the staged `/smoke` data URI for one task per benchmark. Diagnostic benchmark
-subsets must be explicit and use a different data URI. A snapshot map for a smoke cannot launch the
-full dataset. The launcher's missing-key and dataset-scope checks run before GPU artifact creation.
+Commands and immutable repaired dataset revisions will be recorded here after the live checks pass.
 
 ## Plan and launch
 
@@ -81,12 +58,12 @@ An incomplete manifest fails before GPU artifact construction.
 uv run python -m experiments.evaluation.mini_policy_runtime.launch \
   --version 2026.10.31 \
   --model-uri "$MODEL_URI" \
-  --data-uri s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031/full \
+  --data-uri s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031/full-runtime-v3 \
   --environment-manifest "$APPROVED_MANIFEST_URI"
 ```
 
-Inspect the plan, then add `--run` to the same command. The coordinator and model jobs run on RNO2A
-at batch priority. The GPU task uses the privileged container profile for local bubblewrap graders.
+Inspect the plan, then add `--run` to the same command. The coordinator and model jobs run on RNO2A; `--priority production` is available
+for relaunches after pre-emption. The GPU task uses the privileged container profile for local bubblewrap graders.
 The complete cohort retains all 1,626 released rollout rows. The immutable resolved SkyRL launch
 configuration, trajectories and Harbor trial evidence identify the actual run.
 

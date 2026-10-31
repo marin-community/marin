@@ -39,10 +39,16 @@ def run_judged(config: JudgedEvaluation) -> SkyRLRun:
         launch["runtime"]["task_env"]["JUDGE_BASE_URL"] = base_url
         # Resolve credentials only in the submitting process; never serialize a key into YAML.
         previous = os.environ.get("JUDGE_API_KEY")
+        previous_counterpart = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
         os.environ["JUDGE_API_KEY"] = judge.model.endpoint.api_key or "EMPTY"
         try:
             return run_skyrl(replace(config.skyrl, launch_config_yaml=yaml.safe_dump(launch)))
         finally:
+            if previous_counterpart is None:
+                del os.environ["OPENAI_API_KEY"]
+            else:
+                os.environ["OPENAI_API_KEY"] = previous_counterpart
             if previous is None:
                 del os.environ["JUDGE_API_KEY"]
             else:

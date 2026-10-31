@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate released Mini840 rollouts without training or implicit environment builds."""
+"""Evaluate released Mini840 rollouts through native Harbor environments without training."""
 
 import json
 from dataclasses import replace
@@ -30,11 +30,17 @@ from marin.rl.skyrl import (
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged
-from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION
+from experiments.evaluation.mini_policy_runtime.profile import (
+    MODEL,
+    MODEL_REVISION,
+    SEED,
+    counterpart_environment,
+    pi_agent_config,
+)
 
 
 def recipe(
-    snapshots: dict[str, str], environment_overrides: dict, judge_base_url: str, credential_env: str
+    environment_overrides: dict, agent_mcp_servers: dict, verifier_env: dict, judge_base_url: str, credential_env: str
 ) -> tuple[dict, SkyRLRolePlan]:
     plan = SkyRLRolePlan(
         colocate_all=True,
@@ -77,7 +83,7 @@ def recipe(
             "eval_interval": 1,
             "eval_batch_size": 32,
             "resume_mode": "none",
-            "seed": 20261030,
+            "seed": SEED,
             "algorithm": {"use_kl_loss": False},
             "policy": {"megatron_config": geometry},
             "ref": {"megatron_config": geometry},
@@ -109,45 +115,43 @@ def recipe(
                 "max_retries": 0,
             },
             "installed_agent": {
-                "agent": {
-                    "name": "pi",
-                    "override_setup_timeout_sec": 360,
-                    "kwargs": {"version": "0.87.0", "thinking": "high"},
-                },
+                "agent": pi_agent_config(),
                 "setup_timeout": 360,
                 "run_timeout": 1800,
                 "cleanup_timeout": 60,
                 "service_startup_timeout": 60,
                 "service_shutdown_timeout": 60,
-                "environment_snapshots": snapshots,
+                "environment_snapshots": {},
                 "environment_overrides": environment_overrides,
+                "agent_mcp_servers": agent_mcp_servers,
+                "verifier_env": verifier_env,
                 "trial_reward_key": "reward",
             },
         },
         "trajectory_runner": {"max_concurrent_tasks": 8},
         "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
-        "extra_env": {"JUDGE_BASE_URL": judge_base_url},
+        "extra_env": {**counterpart_environment(), "JUDGE_BASE_URL": judge_base_url},
     }
     _materialize_role_plan_config(config, plan)
     return config, plan
 
 
-def approved_snapshots(manifest: dict, data_uri: str) -> dict[str, str]:
-    """Reject a partial or mismatched map before constructing a GPU artifact."""
+def validate_environment_preflight(manifest: dict, data_uri: str) -> None:
+    """Reject incomplete or mismatched environment checks before constructing a GPU artifact."""
+    if manifest.get("scope") == "diagnostic":
+        raise click.ClickException("A diagnostic preflight does not cover an evaluation dataset.")
     required = set(manifest["required_source_keys"])
-    snapshots = manifest["environment_snapshots"]
-    missing = required - snapshots.keys()
+    missing = required - set(manifest["validated_source_keys"])
     if manifest["failures"] or missing or len(required) != manifest["expected_source_keys"]:
         raise click.ClickException(f"Environment manifest is incomplete ({len(missing)} missing keys).")
     if data_uri != manifest["data_uri"]:
         raise click.ClickException("Environment manifest belongs to a different dataset scope.")
-    return {key: snapshots[key] for key in sorted(required)}
 
 
 @click.command(help=__doc__)
 @click.option("--model-uri", required=True, help="Complete, revision-pinned RNO2A weight mirror.")
 @click.option("--data-uri", required=True, help="Preflight-validated rollouts.parquet on RNO2A storage.")
-@click.option("--environment-manifest", required=True, help="Immutable approved JSON manifest URI.")
+@click.option("--environment-manifest", required=True, help="Immutable CPU environment-preflight manifest URI.")
 @click.option("--priority", type=click.Choice(["batch", "production"]), default="batch")
 @click.option("--judge-base-url", help="Existing MiniMax endpoint; otherwise co-host the pinned 131k judge.")
 @rl_build_options
@@ -158,10 +162,11 @@ def main(
     fs, path = filesystem_for(environment_manifest)
     with fs.open(path, "r") as file:
         manifest = json.load(file)
-    snapshots = approved_snapshots(manifest, data_uri)
+    validate_environment_preflight(manifest, data_uri)
     config, plan = recipe(
-        snapshots,
         manifest["environment_overrides"],
+        manifest["agent_mcp_servers"],
+        manifest["verifier_env"],
         judge_base_url or "runtime://minimax-judge",
         manifest["credential_env"],
     )
@@ -179,7 +184,7 @@ def main(
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
             topology=SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=plan),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
-            seed=20261030,
+            seed=SEED,
         ),
         IrisSkyRLExecution(
             cluster="cw-rno2a",
