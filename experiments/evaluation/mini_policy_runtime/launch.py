@@ -108,7 +108,7 @@ def recipe(
         "generator": {
             "backend": "vllm",
             "model_dtype": "bfloat16",
-            "max_num_seqs": 8,
+            "max_num_seqs": model.max_num_seqs,
             "engine_init_kwargs": engine_init_kwargs(model),
             "run_engines_locally": True,
             "enable_http_endpoint": False,

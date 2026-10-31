@@ -19,8 +19,10 @@ Serving bindings follow each checkpoint's own training configuration:
   is natively 32,768).
 - Snowball 67B-A2B serves TP1 because the Marin vLLM fork's GrugMoE GPU path
   requires tensor parallelism 1; two TP1 engines cover the two allocated H100s,
-  with memory utilization raised for KV headroom. SkyRL manages the expert
-  parallel actor option itself, so no engine kwarg is added.
+  with raised memory utilization and a reduced prefill-token and sequence
+  budget so the 67 GB of weights still leave KV and activation headroom on one
+  H100 (the campaign's Grug serving configs bound the same way). SkyRL manages
+  the expert parallel actor option itself, so no engine kwarg is added.
 - ``chat_template_file`` prepends a tools system section to a checkpoint whose
   training template drops the API ``tools`` array (Snowball, Nemotron). The
   vendored files are the checkpoints' exact training templates plus that
@@ -42,6 +44,8 @@ class CohortModel:
     tensor_parallel_size: int = 2
     num_inference_engines: int = 1
     gpu_memory_utilization: float = 0.85
+    max_num_seqs: int = 8
+    max_num_batched_tokens: int | None = None
     chat_template_file: str | None = None
     chat_template_kwargs: dict | None = None
 
@@ -85,6 +89,8 @@ COHORT_MODELS: dict[str, CohortModel] = {
         tensor_parallel_size=1,
         num_inference_engines=2,
         gpu_memory_utilization=0.95,
+        max_num_seqs=4,
+        max_num_batched_tokens=4096,
         chat_template_file="snowball-67b-a2b.jinja",
     ),
 }
@@ -113,7 +119,10 @@ def engine_init_kwargs(model: CohortModel) -> dict:
     Expert parallel is not passed here: SkyRL forwards its own actor option
     under the same name, so a duplicate engine kwarg fails actor creation.
     """
-    return {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
+    kwargs = {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
+    if model.max_num_batched_tokens is not None:
+        kwargs["max_num_batched_tokens"] = model.max_num_batched_tokens
+    return kwargs
 
 
 def chat_template_config(model: CohortModel) -> dict:

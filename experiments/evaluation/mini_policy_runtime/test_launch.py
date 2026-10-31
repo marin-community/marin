@@ -95,6 +95,8 @@ def test_snowball_serves_tp1_engines_on_the_two_gpu_bundle():
     assert plan.num_inference_engines == 2
     assert plan.inference_engine_tensor_parallel_size == 1
     assert config["generator"]["gpu_memory_utilization"] == 0.95
+    assert config["generator"]["max_num_seqs"] == 4
+    assert config["generator"]["engine_init_kwargs"]["max_num_batched_tokens"] == 4096
     assert config["trainer"]["policy"]["megatron_config"]["tensor_model_parallel_size"] == 1
 
 
