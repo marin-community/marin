@@ -56,8 +56,6 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
-from iris.cluster.runtime.task_spec import TASK_CONTAINERS_CAPABILITY
-from iris.cluster.task_connection import TaskPod
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -93,8 +91,6 @@ class BackendCapability(StrEnum):
     WORKER_FLEET = "worker-fleet"
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
-    TASK_SERVICES = TASK_CONTAINERS_CAPABILITY
-    POD_NETWORK = "pod-network"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +111,7 @@ class BackendDescriptor:
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
-                {BackendCapability.DIRECT_DISPATCH, BackendCapability.TASK_SERVICES, BackendCapability.POD_NETWORK}
+                {BackendCapability.DIRECT_DISPATCH}
                 if self.kind is BackendKind.KUBERNETES
                 else {BackendCapability.WORKER_FLEET}
             )
@@ -139,10 +135,6 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
         capabilities.append("workers")
     if BackendCapability.AUTOSCALER in descriptor.capabilities:
         capabilities.append("autoscaler")
-    if BackendCapability.TASK_SERVICES in descriptor.capabilities:
-        capabilities.append(TASK_CONTAINERS_CAPABILITY)
-    if BackendCapability.POD_NETWORK in descriptor.capabilities:
-        capabilities.append(BackendCapability.POD_NETWORK)
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
         capabilities=capabilities,
@@ -562,20 +554,6 @@ class TaskBackend(Protocol):
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         """Profile a task attempt. Raises ProviderUnsupportedError if N/A."""
-        ...
-
-    def resolve_task_pod(self, target: TaskTarget) -> TaskPod:
-        """Resolve the actual running native Pod for one exact attempt."""
-        ...
-
-    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskPod:
-        """Install ingress isolation before any child endpoint can be dispatched."""
-        ...
-
-    def resolve_task_connection(
-        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
-    ) -> TaskPod:
-        """Return the actual target Pod identity after fencing its owning driver."""
         ...
 
     def exec_in_container(

@@ -99,7 +99,6 @@ class BackendAvailability:
     amounts: dict[str, int]  # free amount per resource token ("h100" -> 8)
     advertised_shape: dict[str, list[str]]  # advertised_attributes, for shape match
     held_by_band: dict[int, dict[str, int]] = field(default_factory=dict)  # band -> token -> held amount
-    capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -130,7 +129,6 @@ class QueuedCandidate:
     submitted_at_ms: int
     shape_constraints: list[Constraint]
     availability_gate: list[Constraint]
-    required_capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -388,12 +386,7 @@ def _place_on_peer(
     what it advertises. A candidate is NOT force-routed past a shape-matching metric
     backend that is merely full — that waits for the next heartbeat.
     """
-    shape_matching = [
-        backend
-        for backend in peer.backends
-        if candidate.required_capabilities.issubset(backend.capabilities)
-        and _shape_ok(backend, candidate.shape_constraints)
-    ]
+    shape_matching = [b for b in peer.backends if _shape_ok(b, candidate.shape_constraints)]
     best: _Placement | None = None
     for backend in shape_matching:
         capacity = working.get((peer.peer_id, backend.backend_id))
@@ -413,11 +406,7 @@ def _place_on_peer(
             best = option
     if best is not None:
         return best
-    if (
-        not candidate.required_capabilities
-        and not shape_matching
-        and (not candidate.shape_constraints or candidate.pinned_peer_id == peer.peer_id)
-    ):
+    if not shape_matching and (not candidate.shape_constraints or candidate.pinned_peer_id == peer.peer_id):
         return _shape_only_placement("")
     return None
 

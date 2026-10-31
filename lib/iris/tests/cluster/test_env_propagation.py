@@ -17,14 +17,7 @@ import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.types import (
-    ContainerSpec,
-    Entrypoint,
-    EnvironmentSpec,
-    JobName,
-    ResourceSpec,
-    TaskSpec,
-)
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
 from rigging.secrets import SecretBehavior
 
@@ -41,17 +34,12 @@ class _RecordingClusterClient:
     captured_secrets: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
     captured_setup_scripts: list = field(default_factory=list)
-    captured_containers: list[job_pb2.ContainerSpec] = field(default_factory=list)
-    captured_resources: job_pb2.ResourceSpecProto | None = None
 
-    def submit_job(self, *, job_id=None, environment=None, constraints=None, resources=None, **kwargs) -> JobName:
+    def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
-            self.captured_containers = list(environment.containers)
-            primary = next(member for member in environment.containers if member.name == environment.primary_container)
-            self.captured_env = dict(primary.env_vars)
-            self.captured_secrets = dict(primary.secrets)
-            self.captured_setup_scripts = list(primary.setup_scripts)
-        self.captured_resources = resources
+            self.captured_env = dict(environment.env_vars)
+            self.captured_secrets = dict(environment.secrets)
+            self.captured_setup_scripts = list(environment.setup_scripts)
         if constraints:
             self.captured_constraints = list(constraints)
         return job_id or JobName.root("test", "dummy")
@@ -334,46 +322,6 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
 
     assert stub.captured_env == {"TASK_VAR": "1"}
     assert stub.captured_setup_scripts == []
-
-
-def test_named_primary_inherits_parent_env_without_leaking_to_peers(capturing_client, parent_context):
-    client, stub = capturing_client
-    task = TaskSpec(
-        containers=[
-            ContainerSpec(
-                name="agent",
-                image="example.test/agent:latest",
-                resources=ResourceSpec(cpu=2, memory="2g", disk="2g"),
-                command=Entrypoint.from_command("python", "agent.py"),
-                environment=EnvironmentSpec(env_vars={"AGENT_INPUT": "value"}, setup_scripts=[]),
-            ),
-            ContainerSpec(
-                name="runtime",
-                image="example.test/runtime:latest",
-                resources=ResourceSpec(cpu=1, memory="1g", disk="1g"),
-                env_vars={"RUNTIME_INPUT": "value"},
-            ),
-        ],
-        primary="agent",
-    )
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({"PARENT_ONLY": "inherited", "AGENT_INPUT": "parent-value"}),
-        ),
-    ):
-        client.submit_task(task, "native-services")
-
-    agent, runtime = stub.captured_containers
-    assert agent.env_vars["PARENT_ONLY"] == "inherited"
-    assert agent.env_vars["AGENT_INPUT"] == "value"
-    assert dict(runtime.env_vars) == {"RUNTIME_INPUT": "value"}
-    assert stub.captured_resources is not None
-    assert stub.captured_resources.cpu_millicores == 3000
-    assert stub.captured_resources.memory_bytes == 3 * 1024**3
-    assert stub.captured_resources.disk_bytes == 3 * 1024**3
 
 
 def test_task_client_presents_the_task_token_from_its_env(monkeypatch):

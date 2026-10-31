@@ -1106,37 +1106,3 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 # View failed run
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
-
-## Direct sandbox connections
-
-Run Shellbox's Iris adapter inside a trusted Iris job with
-`network_attachment=NetworkAttachment.POD`, then use
-`IrisMachineFactory.in_cluster()`. The driver must run on the execution cluster;
-external callers, host-network drivers and a controller port-forward cannot
-reach this path. See [task containers and networking](docs/container-profiles.md#task-containers)
-for the API and isolation rules.
-
-Before enabling it in a namespace:
-
-- Deploy matching controller and Shellbox/client code. Existing jobs keep their
-  networking; start a new Pod-network driver after the rollout.
-- Install the configured CPU-only gVisor RuntimeClass and enforcing sandbox
-  NetworkPolicies. No other policy may grant wider access to sandbox Pods.
-- Apply the controller's driver-connection RBAC from
-  `iris.cluster.platforms.k8s.rbac_manifests`. The CoreWeave smoke workflow
-  installs it for `iris-ci`; other namespaces need an operator rollout.
-
-Kubernetes needs no separate gateway or Iris worker rollout. The controller
-creates ingress policies for each owning driver attempt; deleting that driver
-Pod reclaims its policies. Provider credentials remain in the driver.
-Docker-worker backends do not support this connection path.
-
-To diagnose a connection failure, inspect the driver, child and ingress policy:
-
-```bash
-kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get pods -o wide
-kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get networkpolicies -o yaml
-```
-
-Check Pod attachment and the owning driver/attempt labels. Do not enable sandbox
-egress or host networking to bypass a connection failure.

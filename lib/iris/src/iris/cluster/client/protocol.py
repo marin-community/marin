@@ -23,7 +23,7 @@ class ClusterClient(Protocol):
     def submit_job(
         self,
         job_id: JobName,
-        entrypoint: Entrypoint | None,
+        entrypoint: Entrypoint,
         resources: job_pb2.ResourceSpecProto,
         environment: job_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,

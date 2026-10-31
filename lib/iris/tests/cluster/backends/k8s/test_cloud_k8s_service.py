@@ -164,37 +164,6 @@ def test_secret_apply_failure_does_not_expose_api_echoed_values():
     assert "submitted-sensitive-value" not in "".join(traceback.format_exception(captured.value))
 
 
-def test_runtime_class_apply_uses_cluster_scope_and_preserves_handler_constraints():
-    discovered = []
-    applied = []
-
-    def resource_api(**kwargs):
-        discovered.append(kwargs)
-        return object()
-
-    svc = CloudK8sService(namespace="iris-ci")
-    svc.__dict__["_dyn"] = SimpleNamespace(
-        resources=SimpleNamespace(get=resource_api),
-        server_side_apply=lambda **kwargs: applied.append(kwargs),
-    )
-    svc.apply_json(
-        {
-            "apiVersion": "node.k8s.io/v1",
-            "kind": "RuntimeClass",
-            "metadata": {"name": "iris-ci-gvisor-cpu"},
-            "handler": "cpu-runtime",
-            "scheduling": {"nodeSelector": {"runtime.example/cpu": "true"}},
-        }
-    )
-
-    assert discovered == [{"api_version": "node.k8s.io/v1", "kind": "RuntimeClass"}]
-    [request] = applied
-    assert "namespace" not in request
-    assert request["name"] == "iris-ci-gvisor-cpu"
-    assert request["body"]["handler"] == "cpu-runtime"
-    assert request["body"]["scheduling"] == {"nodeSelector": {"runtime.example/cpu": "true"}}
-
-
 def test_list_json_walks_all_pages():
     """A list must be chunked: an unpaginated response body has no read bound (#7881)."""
     svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])

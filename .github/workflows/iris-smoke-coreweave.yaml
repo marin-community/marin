@@ -5,10 +5,8 @@ on:
     types: [opened, synchronize]
     paths:
       - "lib/iris/**"
-      - "lib/shellbox/**"
       - ".github/workflows/iris-smoke-coreweave.yaml"
       - "scripts/ci/iris_monitor.py"
-      - "scripts/ci/run_shellbox_iris.py"
   workflow_dispatch:
 
 permissions:
@@ -92,28 +90,24 @@ jobs:
           export KUBECONFIG=~/.kube/coreweave-iris
           kubectl delete pods -n "$IRIS_NAMESPACE" -l "$IRIS_MANAGED_LABEL=true" --grace-period=0 --ignore-not-found || true
 
-      # CI owns its CPU-only RuntimeClass and rolls controller images without
-      # applying Pulumi. Provision it and the scoped read grants before deployment.
-      - name: Prepare CI controller prerequisites
+      # CI rolls controller images without applying Pulumi. Reconcile the shared
+      # secret-delivery manifests in iris-ci before the controller's RBAC preflight.
+      - name: Prepare CI secret delivery permissions
         run: |
           cd lib/iris && uv run --group dev --extra controller python - <<'PY'
           import os
           from pathlib import Path
 
           from iris.cluster.config import load_config
-          from iris.cluster.platforms.k8s.network_policies import CONTAINER_GROUP_NETWORK_POLICY_NAME
           from iris.cluster.platforms.k8s.rbac_manifests import (
               task_secret_role_manifest,
               task_secret_binding_manifest,
-              driver_connection_role_manifest,
-              driver_connection_binding_manifest,
           )
           from iris.cluster.platforms.k8s.service import CloudK8sService
 
           config = load_config("config/cw-us-west-04a.yaml")
           namespace = os.environ["IRIS_NAMESPACE"]
           assert namespace == config.kubernetes_provider.namespace == "iris-ci"
-          assert config.kubernetes_provider.sandbox_runtime_class == "iris-ci-gvisor-cpu"
           assert config.platform.coreweave is not None
           kubectl = CloudK8sService(
               namespace=namespace,
@@ -121,44 +115,8 @@ jobs:
               context=config.platform.coreweave.kube_context,
           )
           for manifest in (
-              {
-                  "apiVersion": "node.k8s.io/v1",
-                  "kind": "RuntimeClass",
-                  "metadata": {
-                      "name": config.kubernetes_provider.sandbox_runtime_class,
-                      "labels": {"app.kubernetes.io/managed-by": "iris-coreweave-ci"},
-                  },
-                  "handler": "cw-gvisor-cpu",
-                  "scheduling": {
-                      "nodeSelector": {"node.coreweave.cloud/container-runtime.cw-gvisor-cpu": "true"},
-                  },
-              },
               task_secret_role_manifest(namespace),
               task_secret_binding_manifest(namespace, "iris-controller"),
-              driver_connection_role_manifest(namespace),
-              driver_connection_binding_manifest(namespace, "iris-controller"),
-              {
-                  "apiVersion": "rbac.authorization.k8s.io/v1",
-                  "kind": "Role",
-                  "metadata": {"name": "iris-service-group-policy-reader", "namespace": namespace},
-                  "rules": [{
-                      "apiGroups": ["networking.k8s.io"],
-                      "resources": ["networkpolicies"],
-                      "resourceNames": [CONTAINER_GROUP_NETWORK_POLICY_NAME],
-                      "verbs": ["get"],
-                  }],
-              },
-              {
-                  "apiVersion": "rbac.authorization.k8s.io/v1",
-                  "kind": "RoleBinding",
-                  "metadata": {"name": "iris-service-group-policy-reader", "namespace": namespace},
-                  "subjects": [{"kind": "ServiceAccount", "name": "iris-controller", "namespace": namespace}],
-                  "roleRef": {
-                      "apiGroup": "rbac.authorization.k8s.io",
-                      "kind": "Role",
-                      "name": "iris-service-group-policy-reader",
-                  },
-              },
           ):
               kubectl.apply_json(manifest)
           PY
@@ -184,41 +142,6 @@ jobs:
             --namespace "$IRIS_NAMESPACE" \
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
-
-      - name: Run Shellbox container-group integration from a driver Pod
-        env:
-          SHELLBOX_IRIS_PYTHON_IMAGE: docker.io/library/python@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
-          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
-          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
-        run: |
-          service_ip=$(kubectl --kubeconfig "$HOME/.kube/coreweave-iris" \
-            --context marin_US-WEST-04A -n "$IRIS_NAMESPACE" \
-            get service iris-ci-controller-svc -o jsonpath='{.spec.clusterIP}')
-          uv run --package marin-shellbox --extra iris --frozen --group test \
-            python scripts/ci/run_shellbox_iris.py submit \
-            --controller-url "$IRIS_CONTROLLER_URL" \
-            --config lib/iris/config/cw-us-west-04a.yaml \
-            --job-name "shellbox-driver-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --python-image "$SHELLBOX_IRIS_PYTHON_IMAGE" \
-            --public-address "1.1.1.1:443" --private-address "$service_ip:10000" \
-            --log-path "$RUNNER_TEMP/shellbox-iris.log"
-
-      - name: Cancel Shellbox driver tree
-        if: always()
-        run: |
-          if [ -n "${SHELLBOX_IRIS_DRIVER_JOB:-}" ]; then
-            uv run --no-sync iris --controller-url "$IRIS_CONTROLLER_URL" \
-              job cancel "$SHELLBOX_IRIS_DRIVER_JOB"
-          fi
-
-      - name: Upload Shellbox integration logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shellbox-iris-result
-          path: ${{ runner.temp }}/shellbox-iris.log
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Run Marin integration pipeline
         env:

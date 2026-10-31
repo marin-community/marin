@@ -7,10 +7,7 @@ import asyncio
 import json
 import os
 import pwd
-import signal
-import socket
 import subprocess
-import tarfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -24,47 +21,20 @@ pytest.importorskip("iris")
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
-from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import job_pb2
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
-from shellbox.backends.iris import process_guest
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
-from shellbox.backends.iris.process import ProcessConnectionUnavailable
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
-from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
 
 
-@pytest.fixture(autouse=True)
-def in_cluster_driver(monkeypatch):
-    monkeypatch.setattr(
-        iris_backend,
-        "get_job_info",
-        lambda: JobInfo(
-            task_id=JobName.from_wire("/user/driver/0"),
-            attempt_uid="driver-attempt",
-            controller_address="http://controller",
-            task_token="task-scoped-token",
-        ),
-    )
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    monkeypatch.setattr(process_guest, "PORT", port)
-
-
 class LocalRpc:
-    def get_task_connection(self, request, timeout_ms):
-        return controller_pb2.Controller.GetTaskConnectionResponse(
-            pod_ip="127.0.0.1", port=process_guest.PORT, pod_uid="fixture-pod", attempt_uid="fixture-attempt"
-        )
-
     def exec_in_container(self, request, timeout_ms):
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
@@ -106,10 +76,7 @@ class LocalTask:
 
     def status(self):
         return SimpleNamespace(
-            state=self.state,
-            error_message="" if self.state is TaskState.RUNNING else "container exited",
-            current_attempt_number=0,
-            attempts=(SimpleNamespace(attempt_number=0, attempt_uid="fixture-attempt"),),
+            state=self.state, error_message="" if self.state is TaskState.RUNNING else "container exited"
         )
 
 
@@ -118,7 +85,6 @@ class LocalJob:
         self.cancelled = False
         self.killed = threading.Event()
         self._task = task
-        self.process: subprocess.Popen | None = None
 
     def tasks(self):
         return [] if self._task is None else [self._task]
@@ -129,9 +95,6 @@ class LocalJob:
     def cancel(self):
         self.cancelled = True
         self.killed.set()
-        if self.process is not None and self.process.poll() is None:
-            os.killpg(self.process.pid, signal.SIGKILL)
-            self.process.wait(timeout=10)
 
 
 class LocalClient:
@@ -140,14 +103,14 @@ class LocalClient:
 
 
 class SubmissionRecorded(Exception):
-    """Stop creation at the native Iris submission boundary."""
+    """Raised by ``RecordingClient.submit`` so ``create`` stops before polling the task."""
 
 
 class RecordingClient(LocalClient):
     def __init__(self):
         self.submitted: dict = {}
 
-    def submit_task(self, **kwargs):
+    def submit(self, **kwargs):
         self.submitted = kwargs
         raise SubmissionRecorded
 
@@ -155,17 +118,8 @@ class RecordingClient(LocalClient):
 class TaskClient(LocalClient):
     def __init__(self, job: LocalJob):
         self.job = job
-        self.submitted: dict = {}
 
-    def submit_task(self, **kwargs):
-        self.submitted = kwargs
-        self.job.process = subprocess.Popen(
-            kwargs["task"].primary_container.command.command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
+    def submit(self, **kwargs):
         return self.job
 
 
@@ -189,7 +143,6 @@ def local_machine(
         job,  # type: ignore[arg-type]
         task or LocalTask(TaskState.RUNNING),  # type: ignore[arg-type]
         spec,
-        container_name="runtime",
     )
     return machine, job
 
@@ -225,53 +178,36 @@ def test_iris_binary_command_and_file_round_trip(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("task_interface", [False, True], ids=["machine", "task"])
-def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, task_interface):
+@pytest.mark.parametrize("private_credentials", [False, True])
+def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatch, caplog, private_credentials):
     task_id = JobName.from_wire("/fixture/sandbox/0")
-    status = task_status_from_proto(
-        job_pb2.TaskStatus(
-            task_id=task_id.to_wire(),
-            state=job_pb2.TASK_STATE_RUNNING,
-            attempts=[job_pb2.TaskAttempt(attempt_id=0, attempt_uid="fixture-attempt")],
-        )
-    )
+    status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
     job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
-    client = TaskClient(job)
-    submit_task = client.submit_task
+    client = LocalClient()
     submitted_environments = []
 
     def submit(**kwargs):
-        submitted_environments.append(kwargs["task"].primary_container.env_vars)
-        return submit_task(**kwargs)
+        submitted_environments.append(kwargs["environment"].env_vars)
+        return job
 
-    client.submit_task = submit
+    client.submit = submit
     endpoint = LocalEndpoint()
     endpoint.url = "http://fixture"
     endpoint.credentials = None
+    monkeypatch.setattr("shellbox.backends.iris.machine.connect_controller", lambda **kwargs: endpoint)
     monkeypatch.setattr("shellbox.backends.iris.machine.IrisClient.remote", lambda *args, **kwargs: client)
     monkeypatch.setattr("shellbox.backends.iris.machine.ControllerServiceClientSync", lambda **kwargs: LocalRpc())
     secret = "private-fixture-credential"
     monkeypatch.setenv("SHELLBOX_TEST_PRIVATE_KEY", secret)
-    monkeypatch.setattr(
-        iris_backend,
-        "get_job_info",
-        lambda: JobInfo(
-            task_id=JobName.from_wire("/user/driver/0"),
-            attempt_uid="driver-attempt",
-            controller_address="http://fixture",
-            task_token="task-scoped-token",
-        ),
+    factory = IrisMachineFactory(
+        controller_url="http://fixture",
+        secret_env={"JUDGE_KEY": ("env:SHELLBOX_TEST_PRIVATE_KEY",)} if private_credentials else None,
     )
-    factory = IrisMachineFactory(controller_url="http://fixture")
     spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path), network=NetworkPolicy.ALLOW)
 
     async def scenario():
-        machine = (
-            (await factory.create_task(TaskSpec((ContainerSpec("agent", spec),), primary="agent"))).primary
-            if task_interface
-            else await factory.create(spec)
-        )
+        machine = await factory.create(spec)
         try:
             assert secret not in json.dumps(asdict(machine.spec), default=str)
             result = await machine.run(Command(("sh", "-c", "printf ready")))
@@ -281,101 +217,9 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
 
     asyncio.run(scenario())
     assert job.cancelled
-    assert submitted_environments == [{}]
+    assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
-
-
-@pytest.mark.parametrize("failure", [TimeoutError("dropped SYN"), OSError("route not yet ready")])
-def test_factory_retries_tcp_startup_then_runs_side_effect_once(tmp_path, monkeypatch, failure):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    connect = asyncio.open_connection
-    failures = [failure]
-
-    async def delayed_tcp(*args, **kwargs):
-        if failures:
-            raise failures.pop()
-        return await connect(*args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "open_connection", delayed_tcp)
-    marker = tmp_path / "executions"
-
-    async def check():
-        machine = await IrisMachineFactory(controller_url="http://controller").create(
-            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
-        )
-        try:
-            result = await machine.run(Command(("sh", "-c", 'printf once >> "$1"', "fixture", str(marker))))
-            assert result.exit_code == 0 and marker.read_text() == "once"
-            assert not job.cancelled
-
-            # A later user command must surface even a safe TCP failure, rather
-            # than silently replaying it when connectivity returns.
-            failures.append(TimeoutError("later connection lost"))
-            with pytest.raises(ProcessConnectionUnavailable):
-                await machine.run(Command(("sh", "-c", 'printf twice >> "$1"', "fixture", str(marker))))
-            assert marker.read_text() == "once"
-        finally:
-            await machine.close()
-        assert job.cancelled
-
-    asyncio.run(check())
-
-
-def test_factory_tcp_startup_deadline_reclaims_allocation(tmp_path, monkeypatch):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-
-    async def unavailable_tcp(*args, **kwargs):
-        await asyncio.Event().wait()
-        raise AssertionError("Unavailable TCP dial cannot finish")
-
-    monkeypatch.setattr(asyncio, "open_connection", unavailable_tcp)
-
-    async def check():
-        factory = IrisMachineFactory(controller_url="http://controller", scheduling_timeout=1)
-        with pytest.raises(TimeoutError):
-            await asyncio.wait_for(factory.create(MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))), 5)
-        assert job.cancelled
-        assert job.process is not None and job.process.returncode is not None
-
-    asyncio.run(check())
-
-
-def test_directory_upload_does_not_restore_host_ownership(tmp_path, monkeypatch):
-    original_metadata = tarfile.TarFile.gettarinfo
-
-    def foreign_owner(archive, *args, **kwargs):
-        metadata = original_metadata(archive, *args, **kwargs)
-        metadata.uid = os.getuid() + 1
-        metadata.gid = os.getgid() + 1
-        metadata.uname = metadata.gname = ""
-        return metadata
-
-    # Force the ownership-restoration behavior GNU tar uses for root, while
-    # exercising real extraction as an unprivileged test user.
-    monkeypatch.setenv("TAR_OPTIONS", "--same-owner")
-    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", foreign_owner)
-    source = tmp_path / "input"
-    source.mkdir()
-    (source / "solution.sh").write_text("#!/bin/sh\nexit 0\n")
-    (source / "solution.sh").chmod(0o755)
-    target = tmp_path / "remote"
-
-    async def run():
-        machine, _ = local_machine(tmp_path)
-        try:
-            await machine.upload(source, str(target))
-            assert (target / "solution.sh").read_bytes() == (source / "solution.sh").read_bytes()
-            assert (target / "solution.sh").stat().st_uid == os.getuid()
-            assert (target / "solution.sh").stat().st_mode & 0o777 == 0o755
-        finally:
-            await machine.close()
-
-    asyncio.run(run())
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
@@ -522,6 +366,7 @@ def test_close_raises_when_an_admitted_exec_outlives_the_sandbox(tmp_path: Path,
 )
 def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
     client = RecordingClient()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -534,47 +379,30 @@ def test_network_policy_selects_the_egress_policy(monkeypatch, network, egress):
 
 
 @pytest.mark.parametrize("task_missing", [False, True])
-@pytest.mark.parametrize("grouped", [False, True])
-def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
-    monkeypatch, tmp_path, task_missing, grouped
-):
+def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(monkeypatch, tmp_path, task_missing):
     task = LocalTask(TaskState.PENDING)
     current_status = task.status
+
+    def status():
+        nonlocal task_missing
+        if task_missing:
+            task_missing = False
+            raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
+        return current_status()
+
+    task.status = status
     job = LocalJob(task)
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
     workdir = tmp_path / "workspace"
-    spec = MachineSpec(source=RegistryImage("example.test/prepared@sha256:" + "a" * 64), workdir=str(workdir))
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(workdir))
     existing, _ = local_machine(tmp_path)
 
     async def scenario():
-        loop = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-        pending = asyncio.Event()
-
-        def status():
-            nonlocal task_missing
-            loop.call_soon_threadsafe(pending.set)
-            if task_missing:
-                task_missing = False
-                raise ConnectError(Code.NOT_FOUND, "Task is not registered yet")
-            return current_status()
-
-        task.status = status
-        creation = asyncio.create_task(
-            factory.create_task(
-                TaskSpec(
-                    containers=(
-                        ContainerSpec("task", spec),
-                        ContainerSpec("runtime", spec),
-                    )
-                )
-            )
-            if grouped
-            else factory.create(spec)
-        )
-        await asyncio.wait_for(pending.wait(), timeout=5)
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        creation = asyncio.create_task(factory.create(spec))
         command = asyncio.create_task(existing.run(Command(("printf", "ready"))))
         done, _ = await asyncio.wait((command,), timeout=5)
         task.state = TaskState.RUNNING
@@ -589,246 +417,9 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("grouped", [False, True])
-def test_cancelled_factory_wait_reclaims_the_submitted_job(monkeypatch, tmp_path, grouped):
-    task = LocalTask(TaskState.PENDING)
-    job = LocalJob(task)
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
-    factory = IrisMachineFactory(controller_url="http://controller")
-    spec = MachineSpec(source=RegistryImage("example.test/prepared@sha256:" + "a" * 64), workdir=str(tmp_path))
-
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        pending = asyncio.Event()
-        current_status = task.status
-
-        def status():
-            loop.call_soon_threadsafe(pending.set)
-            return current_status()
-
-        task.status = status
-        creation = asyncio.create_task(
-            factory.create_task(
-                TaskSpec(
-                    containers=(
-                        ContainerSpec("task", spec),
-                        ContainerSpec("runtime", spec),
-                    )
-                )
-            )
-            if grouped
-            else factory.create(spec)
-        )
-        await asyncio.wait_for(pending.wait(), timeout=5)
-        creation.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await creation
-        assert job.cancelled
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("grouped", [False, True])
-def test_cancelled_blocked_submission_keeps_ownership_until_job_can_be_reclaimed(monkeypatch, tmp_path, grouped):
-    admitted, release = threading.Event(), threading.Event()
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-
-    class BlockingClient(TaskClient):
-        def submit_task(self, **kwargs):
-            admitted.set()
-            assert release.wait(10)
-            return super().submit_task(**kwargs)
-
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: BlockingClient(job))
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: GroupRpc())
-    factory = IrisMachineFactory(controller_url="http://controller")
-    machine_spec = MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path))
-
-    async def check():
-        operation = asyncio.create_task(
-            factory.create_task(
-                TaskSpec(containers=(ContainerSpec("task", machine_spec), ContainerSpec("runtime", machine_spec)))
-            )
-            if grouped
-            else factory.create(machine_spec)
-        )
-        try:
-            assert await asyncio.to_thread(admitted.wait, 5)
-            operation.cancel("original cancellation")
-            # Enter submission ownership recovery before delivering cancellation again.
-            await asyncio.sleep(0)
-            operation.cancel("second cancellation")
-            await asyncio.sleep(0)
-            assert not operation.done()
-            release.set()
-            with pytest.raises(asyncio.CancelledError) as caught:
-                await asyncio.wait_for(operation, 5)
-            assert caught.value.args == ("original cancellation",)
-            assert job.cancelled
-        finally:
-            release.set()
-            await asyncio.gather(operation, return_exceptions=True)
-
-    asyncio.run(check())
-
-
-def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypatch):
-    info = JobInfo(
-        task_id=JobName.from_wire("/user/driver/0"),
-        controller_address="http://controller",
-        task_token="task-scoped-token",
-        attempt_uid="driver-attempt",
-    )
-    client = RecordingClient()
-    attached_headers: dict[str, str] = {}
-
-    def remote(*args, credentials, **kwargs):
-        attached_headers.update(credentials.headers())
-        return client
-
-    monkeypatch.setattr(iris_backend, "get_job_info", lambda: info)
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", remote)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
-    factory = IrisMachineFactory.in_cluster()
-
-    with pytest.raises(SubmissionRecorded):
-        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
-
-    assert attached_headers == {"authorization": "Bearer task-scoped-token"}
-    assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
-
-
-class GroupRpc(LocalRpc):
-    def __init__(self):
-        self.targets: set[str] = set()
-
-    def list_backends(self, request):
-        # A hub can forward this group to a capable peer without a local pool.
-        return SimpleNamespace(backends=[])
-
-    def exec_in_container(self, request, timeout_ms):
-        self.targets.add(request.container_name)
-        return super().exec_in_container(request, timeout_ms)
-
-
-def test_private_group_routes_service_exec_reserves_resources_and_closes_together(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-    client = TaskClient(job)
-    rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
-    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    probe = Command(
-        ("sh", "-c", "n=$(cat attempts 2>/dev/null || echo 0); n=$((n+1)); echo $n > attempts; test $n -ge 2")
-    )
-    spec = TaskSpec(
-        containers=(
-            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"), cpus=2, memory_mb=256)),
-            ContainerSpec(
-                name="runtime",
-                machine=MachineSpec(image, workdir=str(runtime), cpus=1, memory_mb=128),
-                endpoints=(ServiceEndpoint("http", 8000),),
-                readiness=ReadinessProbe(probe, timeout=5, interval=0.001, attempts=3),
-            ),
-        )
-    )
-
-    async def run():
-        group = await IrisMachineFactory(controller_url="http://controller").create_task(spec)
-        assert group.endpoint("runtime", "http") == "runtime:8000"
-        await group.wait_ready()
-        assert (runtime / "attempts").read_text().strip() == "2"
-        assert (await group.containers["runtime"].run(Command(("printf", "runtime")))).stdout == b"runtime"
-        await group.containers["runtime"].close()
-        assert job.cancelled
-        with pytest.raises(RuntimeError, match="closed"):
-            await group.primary.run(Command(("true",)))
-        await group.close()
-
-    asyncio.run(run())
-    assert rpc.targets == {"runtime"}
-    native_task = client.submitted["task"]
-    assert native_task.primary == "task"
-    assert [(service.name, service.resources.cpu, service.resources.memory) for service in native_task.containers] == [
-        ("task", 2, 256 * 1024 * 1024),
-        ("runtime", 1, 128 * 1024 * 1024),
-    ]
-    runtime_service = native_task.containers[1]
-    assert runtime_service.command is None
-    assert runtime_service.entrypoint is None
-    assert runtime_service.arguments is None
-
-
-def test_readiness_timeout_retries_without_stopping_runtime_or_leaving_probe_children(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-    client = TaskClient(job)
-    rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
-    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    probe_program = """\
-import fcntl
-import os
-from pathlib import Path
-import subprocess
-import sys
-
-assert os.getcwd() == os.environ['EXPECTED_CWD']
-assert sys.stdin.buffer.read() == b'probe input'
-counter = Path('attempts')
-attempt = int(counter.read_text()) + 1 if counter.exists() else 1
-counter.write_text(str(attempt))
-if attempt == 1:
-    subprocess.run([sys.executable, '-c',
-        "import fcntl,time; lock=open('probe.lock','w'); "
-        "fcntl.flock(lock,fcntl.LOCK_EX); time.sleep(3)"], check=True)
-else:
-    assert Path('probe.lock').exists()
-    with open('probe.lock') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        Path('healthy').write_text(str(attempt))
-"""
-    probe = Command(
-        ("python3", "-c", probe_program),
-        cwd=str(runtime),
-        env={"EXPECTED_CWD": str(runtime)},
-        stdin=b"probe input",
-        timeout=1,
-        output_limit_bytes=8,
-        user=str(os.getuid()),
-    )
-    spec = TaskSpec(
-        containers=(
-            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"))),
-            ContainerSpec(
-                name="runtime",
-                machine=MachineSpec(image, workdir=str(tmp_path)),
-                readiness=ReadinessProbe(probe, timeout=8, interval=0.001, attempts=2),
-            ),
-        )
-    )
-
-    async def run():
-        group = await IrisMachineFactory(controller_url="http://controller").create_task(spec)
-        try:
-            await group.wait_ready()
-            assert (runtime / "healthy").read_text() == "2"
-            assert not job.cancelled
-            assert (await group.containers["runtime"].run(Command(("printf", "running")))).stdout == b"running"
-        finally:
-            await group.close()
-        assert job.cancelled
-
-    asyncio.run(run())
-
-
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.FAILED))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: TaskClient(job))
     monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
     factory = IrisMachineFactory(controller_url="http://controller")
@@ -837,41 +428,6 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="container exited"):
         asyncio.run(factory.create(spec))
     assert job.cancelled
-
-
-def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path):
-    job = LocalJob(LocalTask(TaskState.RUNNING))
-    client = TaskClient(job)
-    rpc = GroupRpc()
-    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
-    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    spec = TaskSpec(
-        containers=(
-            ContainerSpec("task", MachineSpec(image, workdir=str(tmp_path / "task"))),
-            ContainerSpec(
-                name="runtime",
-                machine=MachineSpec(image, workdir=str(runtime)),
-                readiness=ReadinessProbe(
-                    Command(("sh", "-c", "echo unhealthy >&2; exit 1")), timeout=5, interval=0.001, attempts=2
-                ),
-            ),
-        )
-    )
-
-    async def run():
-        factory = IrisMachineFactory(controller_url="http://controller")
-        group = await factory.create_task(spec)
-        with pytest.raises(RuntimeError):
-            await group.wait_ready()
-        assert job.cancelled
-        with pytest.raises(RuntimeError):
-            await group.containers["runtime"].run(Command(("true",)))
-        await asyncio.gather(group.close(), group.close())
-
-    asyncio.run(run())
 
 
 def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:

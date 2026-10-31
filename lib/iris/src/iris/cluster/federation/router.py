@@ -46,7 +46,6 @@ class RoutingRequest:
     # An explicit ``cluster=<peer>`` pin, or "" for none. The caller validates the
     # peer exists.
     cluster_pin: str = ""
-    required_capabilities: frozenset[str] = frozenset()
 
 
 class SubmitDisposition(StrEnum):
@@ -79,9 +78,7 @@ def backend_satisfies(advertised: Mapping[str, list[str]], constraint: Constrain
     return any(evaluate_constraint(AttributeValue(v), constraint) for v in values)
 
 
-def _peer_can_host(
-    peer: FederationPeer, constraints: Sequence[Constraint], required_capabilities: frozenset[str]
-) -> bool:
+def _peer_can_host(peer: FederationPeer, constraints: Sequence[Constraint]) -> bool:
     """Whether ``peer`` currently advertises a backend that can host the job.
 
     A best-effort match against the last capability heartbeat: an unreachable
@@ -93,11 +90,9 @@ def _peer_can_host(
     if not heartbeat.reachable:
         return False
     routing = routing_constraints(strip_cluster_constraints(constraints))
-    if not routing and not required_capabilities:
+    if not routing:
         return True
     for backend in heartbeat.backends:
-        if not required_capabilities.issubset(backend.capabilities):
-            continue
         advertised = {key: list(values.values) for key, values in backend.advertised_attributes.items()}
         if all(backend_satisfies(advertised, c) for c in routing):
             return True
@@ -118,20 +113,11 @@ class PeerRouter:
         from the handoff at delivery.
         """
         if request.cluster_pin:
-            peer = self._peers[request.cluster_pin]
-            if (
-                request.required_capabilities
-                and peer.heartbeat().reachable
-                and not _peer_can_host(peer, (), request.required_capabilities)
-            ):
-                return SubmitPlan(SubmitDisposition.REJECT)
             # Validated to exist by the caller; queue pinned to it even if locally
             # feasible (an explicit pin means "federate this there").
             return SubmitPlan(SubmitDisposition.QUEUE, pinned_peer_id=request.cluster_pin)
         if request.local_feasible:
             return SubmitPlan(SubmitDisposition.LOCAL)
-        if any(
-            _peer_can_host(peer, request.constraints, request.required_capabilities) for peer in self._peers.values()
-        ):
+        if any(_peer_can_host(peer, request.constraints) for peer in self._peers.values()):
             return SubmitPlan(SubmitDisposition.QUEUE)
         return SubmitPlan(SubmitDisposition.REJECT)

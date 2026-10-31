@@ -36,7 +36,6 @@ from iris.cluster.federation.store import (
     HandoffSpec,
     HandoffState,
 )
-from iris.cluster.runtime.task_spec import required_task_capabilities
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc.proto_display import priority_band_rank
 from iris.time_proto import duration_from_proto, timestamp_from_proto
@@ -84,7 +83,6 @@ def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = No
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),
-                required_capabilities=required_task_capabilities(request.environment),
             )
         )
     candidates.sort(key=lambda c: (priority_band_rank(c.priority_band), c.submitted_at_ms))

@@ -11,6 +11,7 @@ Worker pods and node scaling are handled by K8sTaskProvider.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -46,6 +47,8 @@ from iris.cluster.platforms.k8s.constants import (
     CONTROLLER_SECRETS_DIR,
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
+    EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_TOLERATION,
     SECRET_FILE_MODE,
     SECRET_GROUP,
@@ -58,7 +61,6 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
 )
-from iris.cluster.platforms.k8s.network_policies import build_container_group_network_policy, build_egress_network_policy
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import TASK_SECRET_ROLE_NAME, cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -71,7 +73,7 @@ from iris.cluster.platforms.k8s.types import (
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
-from iris.cluster.runtime.sandbox import TaskNetwork
+from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS, TaskNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +457,57 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
         "spec": {
             "accessModes": ["ReadWriteOnce"],
             "resources": {"requests": {"storage": _CONTROLLER_STATE_PVC_SIZE}},
+        },
+    }
+
+
+# Namespace label the API server sets on every namespace (Kubernetes >= 1.21).
+_NAMESPACE_NAME_LABEL = "kubernetes.io/metadata.name"
+_DNS_NAMESPACE = "kube-system"
+_DNS_PORT = 53
+
+
+def _namespace_pods(namespace: str) -> dict:
+    return {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
+
+
+def _internet_except(service_cidr: str) -> list[str]:
+    blocked = [ipaddress.ip_network(cidr) for cidr in EGRESS_BLOCKED_CIDRS]
+    if service_cidr:
+        services = ipaddress.ip_network(service_cidr)
+        if not any(services.subnet_of(network) for network in blocked if network.version == services.version):
+            blocked.append(services)
+    return [str(network) for network in blocked]
+
+
+def build_egress_network_policy(namespace: str, network: TaskNetwork, service_cidr: str = "") -> dict:
+    """Build the NetworkPolicy for pods whose egress label is ``network``.
+
+    Both policies deny all ingress and allow egress to DNS in kube-system.
+    INTERNET adds every IPv4 address outside ``EGRESS_BLOCKED_CIDRS`` and
+    ``service_cidr``. Neither mode reaches the controller, finelog, worker RPC
+    ports, other pods, or the metadata server. ``kubectl exec`` goes through
+    the kubelet and is unaffected.
+    """
+    if network is TaskNetwork.CLUSTER:
+        raise ValueError("cluster-network pods carry no egress NetworkPolicy")
+    egress: list[dict] = [
+        {
+            "to": [_namespace_pods(_DNS_NAMESPACE)],
+            "ports": [{"protocol": "UDP", "port": _DNS_PORT}, {"protocol": "TCP", "port": _DNS_PORT}],
+        }
+    ]
+    if network is TaskNetwork.INTERNET:
+        egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": f"{EGRESS_NETWORK_POLICY_PREFIX}{network.value}", "namespace": namespace},
+        "spec": {
+            "podSelector": {"matchLabels": {EGRESS_LABEL: network.value}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": egress,
         },
     }
 
@@ -1007,8 +1060,7 @@ class K8sControllerProvider:
     def ensure_egress_network_policies(self, config: IrisClusterConfig) -> None:
         """Create the policies for pods off the cluster network, one per egress policy.
 
-        INTERNET and NONE get NetworkPolicies; container groups get a deny-all policy.
-        ALLOWLIST gets the namespace-wide
+        INTERNET and NONE get NetworkPolicies. ALLOWLIST gets the namespace-wide
         CiliumNetworkPolicy when ``kubernetes_provider.cilium`` is set.
         Never deleted on stop: they select only labeled pods, and removing one
         while such a pod runs would reconnect it to the controller or, for
@@ -1017,7 +1069,6 @@ class K8sControllerProvider:
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
-        self._kubectl.apply_json(build_container_group_network_policy(self._namespace))
         cilium = config.kubernetes_provider.cilium
         if cilium is not None:
             self._kubectl.apply_json(

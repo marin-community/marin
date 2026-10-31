@@ -37,7 +37,6 @@ from iris.cluster.controller.backend import (
     TaskBackend,
 )
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
-from iris.cluster.controller.connections import ConnectionDependencies, bind_driver_connection
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -50,12 +49,6 @@ from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, Su
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.sandbox import resolve_egress_policy
-from iris.cluster.runtime.task_spec import (
-    normalize_task_request,
-    primary_container,
-    required_task_capabilities,
-    validate_task_containers,
-)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -489,11 +482,6 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
-    if request.environment.network_attachment not in (
-        job_pb2.NETWORK_ATTACHMENT_DEFAULT,
-        job_pb2.NETWORK_ATTACHMENT_POD,
-    ):
-        raise ConnectError(Code.INVALID_ARGUMENT, "Unknown native network attachment")
     for name in request.environment.secrets:
         try:
             validate_secret_name(name)
@@ -670,10 +658,6 @@ def _validate_launch_profile(
             "submit without a workspace.",
         )
     _validate_egress(request)
-    try:
-        validate_task_containers(request.container_profile, request.egress_policy, request.environment)
-    except ValueError as error:
-        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
         logger.warning(
             "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",
@@ -891,9 +875,6 @@ def _store_launch_payload(
         del normalized.entrypoint.workdir_files[name]
         normalized.entrypoint.workdir_file_refs[name] = blob_id
         logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
-    primary = primary_container(normalized.environment)
-    if primary.HasField("runtime_entrypoint"):
-        primary.runtime_entrypoint.CopyFrom(normalized.entrypoint)
     return normalized
 
 
@@ -921,15 +902,7 @@ def _plan_launch(
             resources=request.resources,
         )
     )
-    required = required_task_capabilities(request.environment)
-    available = dependencies.runtime.backend.descriptor.capabilities
-    if not required.issubset(available):
-        error = f"Local backend lacks required task capabilities: {', '.join(sorted(required - available))}"
-    if request.environment.HasField("driver_connection"):
-        if error is not None or cluster_pin is not None:
-            raise ConnectError(Code.INVALID_ARGUMENT, error or "Driver connections cannot route to another controller")
-        plan = SubmitPlan(SubmitDisposition.LOCAL)
-    elif launch.received_handoff:
+    if launch.received_handoff:
         plan = SubmitPlan(SubmitDisposition.LOCAL)
     else:
         plan = dependencies.runtime.federation.classify_submit(
@@ -937,7 +910,6 @@ def _plan_launch(
                 constraints=constraints,
                 local_feasible=error is None,
                 cluster_pin=cluster_pin or "",
-                required_capabilities=required,
             )
         )
 
@@ -1007,13 +979,6 @@ def launch_job(
     The job is expanded into tasks based on the replicas field
     (defaulting to 1). Each task has ID "/job/.../index".
     """
-    normalized = controller_pb2.Controller.LaunchJobRequest()
-    normalized.CopyFrom(request)
-    request = normalized
-    try:
-        normalize_task_request(request)
-    except ValueError as error:
-        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     requested_job_id = _validate_launch_request(request)
     launch = _launch_identity(dependencies, request, ctx, requested_job_id)
     band = _resolve_launch_priority(dependencies, request, launch)
@@ -1021,12 +986,8 @@ def launch_job(
     _validate_launch_capacity(dependencies, request, launch)
 
     request = _inject_resource_constraints(request)
-    bind_driver_connection(ConnectionDependencies(dependencies.db, dependencies.runtime.backend), request, launch.job_id)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
-        required = required_task_capabilities(request.environment)
-        if not required.issubset(dependencies.runtime.backend.descriptor.capabilities):
-            raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-container tasks")
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:

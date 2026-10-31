@@ -95,7 +95,6 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.task_connection import TaskPod
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     TERMINAL_TASK_STATES,
@@ -201,17 +200,6 @@ class FakeProvider:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("fake")
-
-    def resolve_task_pod(self, target: TaskTarget) -> TaskPod:
-        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
-
-    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskPod:
-        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
-
-    def resolve_task_connection(
-        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
-    ) -> TaskPod:
-        raise ProviderUnsupportedError("Direct task connections require Kubernetes")
 
     def exec_in_container(
         self,
