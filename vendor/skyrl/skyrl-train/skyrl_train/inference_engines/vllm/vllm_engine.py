@@ -150,13 +150,27 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
     """Substitute exact prompt token IDs while retaining vLLM's chat response parser."""
 
     async def render_chat_request(self, request):
-        rendered = await super().render_chat_request(request)
         exact_ids = _exact_chat_prompt_token_ids.get()
-        if exact_ids is None or not isinstance(rendered, tuple):
+        if exact_ids is None:
+            return await super().render_chat_request(request)
+        prompt = TokensPrompt(prompt_token_ids=list(exact_ids))
+        request.build_tok_params(self.model_config).apply_post_tokenization(self.renderer.tokenizer, prompt)
+        if prompt["prompt_token_ids"] != exact_ids:
+            raise ValueError("Exact sampled prompt tokens cannot be padded or truncated")
+        # Use the pinned renderer's decode-side token reuse path. Rendering the
+        # messages first can reject their reconstructed tokens before our exact
+        # sampled prefix is substituted, even though that prefix fits the budget.
+        previous_transfer = request.kv_transfer_params
+        request.kv_transfer_params = {**(previous_transfer or {}), "prompt_token_ids": list(exact_ids)}
+        try:
+            rendered = await super().render_chat_request(request)
+        finally:
+            request.kv_transfer_params = previous_transfer
+        if not isinstance(rendered, tuple):
             return rendered
         conversation, engine_inputs = rendered
         if len(engine_inputs) != 1:
-            raise ValueError("Exact OpenCode continuation requires one rendered prompt")
+            raise ValueError("Exact chat continuation requires one rendered prompt")
         return conversation, [TokensPrompt(prompt_token_ids=list(exact_ids))]
 
     async def create_chat_completion_with_exact_prompt(
