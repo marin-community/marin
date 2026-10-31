@@ -27,7 +27,7 @@ from experiments.evaluation.mini_policy_runtime.profile import (
 )
 
 
-async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str]):
+async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str], report_name: str):
     logging.basicConfig(level=logging.INFO)
     os.environ.update(counterpart_environment())
     os.environ["OPENAI_API_KEY"] = os.environ["TOGETHER_API_KEY"]
@@ -134,7 +134,11 @@ async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list
             "receipts": receipts,
             "failures": failures,
         }
-        publish(("diagnostic" if benchmarks else ("smoke" if smoke else "full")) + "-native-environments.json", report)
+        publish(
+            report_name
+            or ("diagnostic" if benchmarks else ("smoke" if smoke else "full")) + "-native-environments.json",
+            report,
+        )
         if failures:
             raise RuntimeError(f"{len(failures)} environment preflights failed")
 
@@ -142,8 +146,9 @@ async def main(smoke: bool, credential_env: str, data_uri: str, benchmarks: list
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--report-name", default="")
     parser.add_argument("--benchmark", action="append", default=[])
     parser.add_argument("--credential-env", required=True)
     parser.add_argument("--data-uri", required=True)
     args = parser.parse_args()
-    asyncio.run(main(args.smoke, args.credential_env, args.data_uri, args.benchmark))
+    asyncio.run(main(args.smoke, args.credential_env, args.data_uri, args.benchmark, args.report_name))

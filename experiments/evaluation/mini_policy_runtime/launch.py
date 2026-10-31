@@ -95,6 +95,7 @@ def recipe(
             "backend": "vllm",
             "model_dtype": "bfloat16",
             "max_num_seqs": 8,
+            "engine_init_kwargs": {"enable_auto_tool_choice": True, "tool_call_parser": "qwen3_coder"},
             "run_engines_locally": True,
             "enable_http_endpoint": False,
             "gpu_memory_utilization": 0.85,

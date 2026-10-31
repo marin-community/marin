@@ -19,17 +19,25 @@ from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINAT
 from experiments.evaluation.mini_policy_runtime.repair_release import repaired_table
 
 
-def main(excluded: list[str], wheels_revision: str):
+def main(excluded: list[str], wheels_revision: str, included: list[str]):
     logging.basicConfig(level=logging.INFO)
     unique = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
     table = repaired_table(pq.read_table(unique), wheels_revision)
     seen = set()
     chosen = []
     for i, row in enumerate(table.to_pylist()):
-        if row["benchmark"] not in seen and row["benchmark"] not in excluded:
+        if (
+            row["benchmark"] not in seen
+            and row["benchmark"] not in excluded
+            and (not included or row["benchmark"] in included)
+        ):
             seen.add(row["benchmark"])
             chosen.append(i)
-    smoke_name = "smoke-runtime-v3" + ("-without-" + "-".join(sorted(excluded)) if excluded else "")
+    if included and set(included) != seen:
+        raise ValueError("A requested smoke benchmark is absent from the release")
+    smoke_name = ("smoke-" + "-".join(sorted(included)) + "-runtime-v3" if included else "smoke-runtime-v3") + (
+        "-without-" + "-".join(sorted(excluded)) if excluded else ""
+    )
     expanded_path = hf_hub_download(DATASET, "data/validation-rollouts.parquet", repo_type="dataset", revision=REVISION)
     expanded = repaired_table(pq.read_table(expanded_path), wheels_revision)
     if table.num_rows != 840 or expanded.num_rows != 1626:
@@ -50,6 +58,7 @@ def main(excluded: list[str], wheels_revision: str):
         "smoke_benchmarks": sorted(seen),
         "smoke_data_uri": str(StoragePath(DESTINATION) / smoke_name),
         "smoke_excluded_benchmarks": excluded,
+        "smoke_included_benchmarks": included,
         "full_data_uri": str(StoragePath(DESTINATION) / "full-runtime-v3"),
         "model": MODEL,
         "model_revision": MODEL_REVISION,
@@ -62,6 +71,7 @@ def main(excluded: list[str], wheels_revision: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke-exclude", action="append", default=[])
+    parser.add_argument("--smoke-include", action="append", default=[])
     parser.add_argument("--wheels-revision", required=True)
     args = parser.parse_args()
-    main(args.smoke_exclude, args.wheels_revision)
+    main(args.smoke_exclude, args.wheels_revision, args.smoke_include)
