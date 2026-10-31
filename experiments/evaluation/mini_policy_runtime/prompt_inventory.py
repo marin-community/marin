@@ -17,9 +17,8 @@ from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.cohort import cohort_model
 from experiments.evaluation.mini_policy_runtime.profile import (
     DATASET,
-    MAX_INPUT_TOKENS,
+    MAX_OUTPUT_TOKENS,
     REVISION,
-    TOTAL_CONTEXT_LENGTH,
 )
 
 
@@ -50,8 +49,8 @@ def main(model_key: str):
             b: {
                 "count": len(v),
                 "max_prompt_tokens": max(v),
-                "over_49152": sum(n > MAX_INPUT_TOKENS for n in v),
-                "over_65536": sum(n > TOTAL_CONTEXT_LENGTH for n in v),
+                "over_input_budget": sum(n > model.context_length - MAX_OUTPUT_TOKENS for n in v),
+                "over_context": sum(n > model.context_length for n in v),
             }
             for b, v in counts.items()
         },

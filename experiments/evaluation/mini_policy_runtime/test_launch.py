@@ -58,24 +58,57 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
         ("qwen36-35b-a3b", "qwen3_coder"),
         ("qwen35-35b-a3b", "qwen3_coder"),
         ("qwen3-30b-a3b", "hermes"),
-        ("nemotron3-nano-30b-a3b", "qwen3_coder"),
+        ("nemotron3-nano-30b-a3b", "hermes"),
         ("snowball-67b-a2b", "hermes"),
     ],
 )
 def test_cohort_bindings_reach_the_generator(key, tool_parser):
-    config, _ = launch.recipe(cohort_model(key), {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
+    entry = cohort_model(key)
+    config, _ = launch.recipe(entry, {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
     generator = config["generator"]
     assert generator["engine_init_kwargs"] == {
         "enable_auto_tool_choice": True,
         "tool_call_parser": tool_parser,
+        **({"enable_expert_parallel": True} if entry.expert_parallel else {}),
     }
     default_kwargs = generator["chat_template_kwargs"]
-    template = cohort_model(key).chat_template_kwargs or {}
+    template = entry.chat_template_kwargs or {}
     assert default_kwargs == template
     # The frozen execution profile is model-independent.
     assert generator["sampling_params"] == {"temperature": 0.6, "top_p": 0.95, "logprobs": 0}
     assert config["context_budget"] == {
-        "request_window_tokens": 65536,
+        "request_window_tokens": entry.context_length,
         "max_new_tokens_per_turn": 16384,
         "max_turns": 1024,
     }
+
+
+def test_qwen3_serves_at_its_native_context():
+    entry = cohort_model("qwen3-30b-a3b")
+    assert entry.context_length == 32768
+    agent = launch.pi_agent_config(entry.context_length)
+    assert agent["kwargs"]["model_info"] == {"max_input_tokens": 32768, "max_output_tokens": 16384}
+
+
+def test_snowball_serves_tp1_engines_on_the_two_gpu_bundle():
+    entry = cohort_model("snowball-67b-a2b")
+    config, plan = launch.recipe(entry, {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
+    assert plan.num_inference_engines == 2
+    assert plan.inference_engine_tensor_parallel_size == 1
+    assert config["generator"]["gpu_memory_utilization"] == 0.95
+    assert config["trainer"]["policy"]["megatron_config"]["tensor_model_parallel_size"] == 1
+
+
+def test_tools_blind_checkpoints_get_the_vendored_training_template():
+    for key, filename in [
+        ("snowball-67b-a2b", "snowball-67b-a2b.jinja"),
+        ("nemotron3-nano-30b-a3b", "nemotron3-nano-30b-a3b.jinja"),
+    ]:
+        entry = cohort_model(key)
+        config = launch.chat_template_config(entry)
+        assert config == {
+            "source": "file",
+            "name_or_path": f"/app/experiments/evaluation/mini_policy_runtime/chat-templates/{filename}",
+        }, config
+    # The Qwen families render tools with their own tokenizer template.
+    assert launch.chat_template_config(cohort_model("qwen35-35b-a3b")) == {"source": "name", "name_or_path": None}

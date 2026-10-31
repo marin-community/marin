@@ -22,7 +22,7 @@ POLICY_INDEX = "open-athena/Marin-Mini-Eval-Policy-Index"
 POLICY_INDEX_REVISION = "d5d2f92ce4866c431063bd123ea31a3865530809"
 
 
-def pi_agent_config() -> dict:
+def pi_agent_config(context_length: int = TOTAL_CONTEXT_LENGTH) -> dict:
     return {
         "name": "pi",
         "override_setup_timeout_sec": SETUP_TIMEOUT,
@@ -31,7 +31,7 @@ def pi_agent_config() -> dict:
             "mcp_adapter_version": "7.0.0",
             "thinking": "high",
             "thinking_format": "chat-template",
-            "model_info": {"max_input_tokens": TOTAL_CONTEXT_LENGTH, "max_output_tokens": MAX_OUTPUT_TOKENS},
+            "model_info": {"max_input_tokens": context_length, "max_output_tokens": MAX_OUTPUT_TOKENS},
         },
     }
 

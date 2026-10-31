@@ -29,7 +29,12 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.evaluation.mini_policy_runtime.cohort import CohortModel, cohort_model, engine_init_kwargs
+from experiments.evaluation.mini_policy_runtime.cohort import (
+    CohortModel,
+    chat_template_config,
+    cohort_model,
+    engine_init_kwargs,
+)
 from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged, run_with_existing_judge
 from experiments.evaluation.mini_policy_runtime.profile import (
     AGENT_TIMEOUT,
@@ -57,8 +62,8 @@ def recipe(
         colocate_all=True,
         policy_num_nodes=1,
         policy_num_gpus_per_node=2,
-        num_inference_engines=1,
-        inference_engine_tensor_parallel_size=2,
+        num_inference_engines=model.num_inference_engines,
+        inference_engine_tensor_parallel_size=model.tensor_parallel_size,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
         inference_engine_expert_parallel_size=1,
@@ -68,7 +73,7 @@ def recipe(
         n_samples_per_prompt=1,
     )
     geometry = {
-        "tensor_model_parallel_size": 2,
+        "tensor_model_parallel_size": model.tensor_parallel_size,
         "pipeline_model_parallel_size": 1,
         "context_parallel_size": 1,
         "expert_model_parallel_size": 1,
@@ -78,7 +83,7 @@ def recipe(
         "entrypoint": "generate",
         "config_groups": {"terminal_bench_config": "terminal_bench"},
         "context_budget": {
-            "request_window_tokens": TOTAL_CONTEXT_LENGTH,
+            "request_window_tokens": model.context_length,
             "max_new_tokens_per_turn": MAX_OUTPUT_TOKENS,
             "max_turns": 1024,
         },
@@ -107,9 +112,9 @@ def recipe(
             "engine_init_kwargs": engine_init_kwargs(model),
             "run_engines_locally": True,
             "enable_http_endpoint": False,
-            "gpu_memory_utilization": 0.85,
+            "gpu_memory_utilization": model.gpu_memory_utilization,
             "enforce_eager": False,
-            "chat_template": {"source": "name", "name_or_path": None},
+            "chat_template": chat_template_config(model),
             "chat_template_kwargs": dict(model.chat_template_kwargs or {}),
             "sampling_params": {"temperature": 0.6, "top_p": 0.95, "logprobs": 0},
             "eval_sampling_params": {"temperature": 0.6, "top_p": 0.95},
@@ -128,7 +133,7 @@ def recipe(
                 "max_retries": 0,
             },
             "installed_agent": {
-                "agent": pi_agent_config(),
+                "agent": pi_agent_config(model.context_length),
                 "setup_timeout": SETUP_TIMEOUT,
                 "run_timeout": AGENT_TIMEOUT,
                 "cleanup_timeout": CLEANUP_TIMEOUT,

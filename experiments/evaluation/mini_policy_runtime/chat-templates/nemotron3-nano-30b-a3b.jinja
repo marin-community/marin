@@ -1,0 +1,60 @@
+{#- Model-specific Mini840 serving template: this checkpoint's exact training template with a tools system section prepended. Role markers, think markers and tool-call markers are the checkpoint's own; only the tool schema context is new. -#}
+{%- if '<s>' -%}{{ '<s>' }}{%- endif -%}{{- '<|im_start|>system
+' -}}
+{%- if tools is defined and tools -%}
+{{- '### Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools> </tools> tags:
+
+<tools>
+' -}}
+{%- for tool in tools -%}
+{{ tool if tool is string else tool | tojson }}
+{%- endfor -%}
+{{- '</tools>
+
+For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+' -}}
+{%- endif -%}
+{{- '<|im_end|>
+' -}}
+{%- for message in messages -%}
+{%- if message.role == 'assistant' -%}
+{{- '<|im_start|>assistant
+' -}}
+{%- generation -%}
+{%- if message.reasoning_content -%}
+{{- '<think>' ~ message.reasoning_content ~ '</think>' -}}
+{%- endif -%}
+{{- message.content if message.content else '' -}}
+{%- for call in message.tool_calls or [] -%}
+{%- set function = call.function if call.function is defined else call -%}
+{{- '<tool_call>\n{"name": ' -}}
+{{- function.name | tojson -}}
+{{- ', "arguments": ' -}}
+{{- function.arguments if function.arguments is string else function.arguments | tojson -}}
+{{- '}\n</tool_call>' -}}
+{%- endfor -%}
+{{- '<|im_end|>' -}}
+{%- endgeneration -%}
+{%- elif message.role == 'tool' -%}
+{{- '<|im_start|>tool
+<tool_response>\n' -}}
+{{- message.content if message.content else '' -}}
+{{- '\n</tool_response><|im_end|>' -}}
+{%- else -%}
+{{- '<|im_start|>' ~ message.role ~ '\n' -}}
+{{- message.content if message.content else '' -}}
+{{- '<|im_end|>' -}}
+{%- endif -%}
+{{- '\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{- '<|im_start|>assistant
+' -}}
+{%- endif -%}
