@@ -553,12 +553,6 @@ class InMemoryK8sService:
         """Insert a pod in an arbitrary namespace (outside the service's own)."""
         self._namespaced_pods[(namespace, name)] = manifest
 
-    def patch_pod_labels(self, name: str, pod_uid: str, labels: dict[str, str]) -> None:
-        pod = self._resources.get((K8sResource.PODS.plural, name))
-        if pod is None or pod["metadata"].get("uid") != pod_uid:
-            raise KubectlError("Pod UID precondition failed")
-        pod["metadata"].setdefault("labels", {}).update(labels)
-
     def patch_node(self, name: str, patch: dict) -> None:
         self._check_failure("patch_node")
         node = self._resources[(K8sResource.NODES.plural, name)]

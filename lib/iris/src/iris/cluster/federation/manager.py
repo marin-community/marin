@@ -47,7 +47,6 @@ from iris.cluster.federation.store import (
     FederationStore,
     HandoffSpec,
 )
-from iris.cluster.runtime.task_spec import normalize_task_request, primary_container
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import controller_pb2
@@ -103,7 +102,6 @@ def _backend_availability(peer_id: str, backend: controller_pb2.Controller.Backe
             else {}
         ),
         advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
-        capabilities=frozenset(backend.capabilities),
     )
 
 
@@ -498,21 +496,16 @@ class FederationManager:
         handoff carries the bytes; the peer re-externalizes them under the same
         content ids on the way in.
         """
-        normalize_task_request(handoff)
-        entrypoint = primary_container(handoff.environment).runtime_entrypoint
-        refs = dict(entrypoint.workdir_file_refs)
+        refs = dict(handoff.entrypoint.workdir_file_refs)
         if not handoff.bundle_id and not refs:
             return
         assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
         if handoff.bundle_id:
             handoff.bundle_blob = self._bundles.get(handoff.bundle_id)
             handoff.ClearField("bundle_id")
-        if not refs:
-            return
         for name, blob_id in refs.items():
-            entrypoint.workdir_files[name] = self._bundles.get(blob_id)
-        entrypoint.ClearField("workdir_file_refs")
-        handoff.entrypoint.CopyFrom(entrypoint)
+            handoff.entrypoint.workdir_files[name] = self._bundles.get(blob_id)
+        handoff.entrypoint.ClearField("workdir_file_refs")
 
     def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
         heartbeat = peer.heartbeat()

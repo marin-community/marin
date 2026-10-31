@@ -24,7 +24,6 @@ from iris.cluster.controller.auth import (
     authorize_owner_if_configured,
 )
 from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
-from iris.cluster.controller.codec import proto_from_json
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.worker_health import WorkerLiveness
@@ -253,23 +252,10 @@ def exec_in_container(
     if proxied is not None:
         return proxied
 
-    container_name = request.container_name
-    if container_name:
-        assert task_id.parent is not None
-        with dependencies.db.read_snapshot() as snapshot:
-            job = reads.get_job_detail(snapshot, task_id.parent)
-        assert job is not None
-        environment = proto_from_json(job.environment_json, job_pb2.EnvironmentConfig)
-        if container_name in ("task", environment.primary_container or "task"):
-            container_name = ""
-        elif container_name not in {service.name for service in environment.containers}:
-            raise ConnectError(Code.INVALID_ARGUMENT, "Exec target is not a declared task container")
-
     worker_request = worker_pb2.Worker.ExecInContainerRequest(
         task_id=request.task_id,
         command=request.command,
         timeout_seconds=request.timeout_seconds,
-        container_name=container_name,
     )
     target = _resolve_task_target(dependencies, task, task.current_attempt_id, wire_name=request.task_id)
     timeout = request.timeout_seconds or (60 if target.worker_id is None else 0)

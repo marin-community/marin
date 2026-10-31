@@ -61,28 +61,6 @@ class Controller(_message.Message):
         ENDPOINT_ACCESS_LINK: _ClassVar[Controller.EndpointAccess]
     ENDPOINT_ACCESS_PRIVATE: Controller.EndpointAccess
     ENDPOINT_ACCESS_LINK: Controller.EndpointAccess
-    class GetTaskConnectionRequest(_message.Message):
-        __slots__ = ("driver_task_id", "driver_attempt_uid", "task_id", "attempt_uid")
-        DRIVER_TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        DRIVER_ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
-        driver_task_id: str
-        driver_attempt_uid: str
-        task_id: str
-        attempt_uid: str
-        def __init__(self, driver_task_id: _Optional[str] = ..., driver_attempt_uid: _Optional[str] = ..., task_id: _Optional[str] = ..., attempt_uid: _Optional[str] = ...) -> None: ...
-    class GetTaskConnectionResponse(_message.Message):
-        __slots__ = ("pod_ip", "port", "pod_uid", "attempt_uid")
-        POD_IP_FIELD_NUMBER: _ClassVar[int]
-        PORT_FIELD_NUMBER: _ClassVar[int]
-        POD_UID_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
-        pod_ip: str
-        port: int
-        pod_uid: str
-        attempt_uid: str
-        def __init__(self, pod_ip: _Optional[str] = ..., port: _Optional[int] = ..., pod_uid: _Optional[str] = ..., attempt_uid: _Optional[str] = ...) -> None: ...
     class LaunchJobRequest(_message.Message):
         __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "egress_policy", "egress_allow", "federation")
         NAME_FIELD_NUMBER: _ClassVar[int]
@@ -282,16 +260,14 @@ class Controller(_message.Message):
         results: _containers.RepeatedCompositeFieldContainer[Controller.KickResult]
         def __init__(self, results: _Optional[_Iterable[_Union[Controller.KickResult, _Mapping]]] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
-        __slots__ = ("task_id", "command", "timeout_seconds", "container_name")
+        __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         COMMAND_FIELD_NUMBER: _ClassVar[int]
         TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
-        CONTAINER_NAME_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         command: _containers.RepeatedScalarFieldContainer[str]
         timeout_seconds: int
-        container_name: str
-        def __init__(self, task_id: _Optional[str] = ..., command: _Optional[_Iterable[str]] = ..., timeout_seconds: _Optional[int] = ..., container_name: _Optional[str] = ...) -> None: ...
+        def __init__(self, task_id: _Optional[str] = ..., command: _Optional[_Iterable[str]] = ..., timeout_seconds: _Optional[int] = ...) -> None: ...
     class ExecInContainerResponse(_message.Message):
         __slots__ = ("exit_code", "stdout", "stderr", "error")
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]

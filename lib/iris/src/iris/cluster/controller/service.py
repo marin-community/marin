@@ -13,7 +13,6 @@ from iris.cluster.controller import (
     attempts,
     backend_status,
     checkpoint,
-    connections,
     diagnostics,
     federation_service,
     jobs,
@@ -265,13 +264,6 @@ class ControllerServiceImpl:
         ctx: RequestContext,
     ) -> job_pb2.GetCurrentUserResponse:
         return accounts.get_current_user(request, ctx)
-
-    def get_task_connection(
-        self, request: controller_pb2.Controller.GetTaskConnectionRequest, ctx: RequestContext
-    ) -> controller_pb2.Controller.GetTaskConnectionResponse:
-        return connections.get_task_connection(
-            connections.ConnectionDependencies(self._db, self._controller.backend), request, ctx
-        )
 
     def exec_in_container(
         self,

@@ -748,45 +748,6 @@ def test_reconcile_rpc_keeps_inline_workdir_files_scoped_to_their_job(state):
     }
 
 
-def test_reconcile_rpc_lowers_named_singleton_to_worker_runtime_fields(state):
-    worker_id = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
-    request = make_job_request("native-singleton")
-    request.environment.primary_container = "agent"
-    primary = request.environment.containers.add(
-        name="agent",
-        image="example.test/agent:latest",
-        workdir="/app",
-        env_vars={"TASK_INPUT": "explicit-value"},
-        secrets={"SERVICE_KEY": "private-value"},
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-    )
-    primary.runtime_entrypoint.run_command.argv.extend(["python", "agent.py"])
-    primary.runtime_entrypoint.workdir_files["agent.py"] = b"print('native')"
-    request.ClearField("entrypoint")
-    request.ClearField("resources")
-    request.ClearField("task_image")
-    request.environment.ClearField("env_vars")
-    request.environment.ClearField("secrets")
-    request.environment.ClearField("setup_scripts")
-    [task] = submit_job(state, "native-singleton", request)
-    assign_task(state, task, worker_id)
-    provider, stub = _provider_with_stub()
-
-    provider.reconcile(_worker_reconcile_request(state))
-
-    [wire_request] = stub.reconcile_calls
-    [desired] = wire_request.desired
-    dispatched = desired.run.request
-    assert dispatched.task_id == task.task_id.to_wire()
-    assert dispatched.task_image == "example.test/agent:latest"
-    assert list(dispatched.entrypoint.run_command.argv) == ["python", "agent.py"]
-    assert dict(dispatched.entrypoint.workdir_files) == {"agent.py": b"print('native')"}
-    assert dict(dispatched.environment.env_vars) == {"TASK_INPUT": "explicit-value"}
-    assert dict(dispatched.environment.secrets) == {"SERVICE_KEY": "private-value"}
-    assert dispatched.resources.cpu_millicores == 1000
-    assert dispatched.resources.memory_bytes == 1024**3
-
-
 def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(state):
     register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))

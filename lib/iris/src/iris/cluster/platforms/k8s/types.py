@@ -87,9 +87,6 @@ class K8sResource(Enum):
     SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")
     PERSISTENT_VOLUME_CLAIMS = ("", "v1", True, "persistentvolumeclaims", "PersistentVolumeClaim")
 
-    # Node v1
-    RUNTIME_CLASSES = ("node.k8s.io", "v1", False, "runtimeclasses", "RuntimeClass")
-
     # Apps v1
     DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
     DAEMONSETS = ("apps", "v1", True, "daemonsets", "DaemonSet")

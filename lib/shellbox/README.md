@@ -30,7 +30,7 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 | --- | --- | --- | --- |
 | Local gVisor | Docker image, registry image, Dockerfile | allow or deny | Docker daemon with `runsc` registered |
 | Daytona | Registry image reference or Docker build context | allow or deny | Daytona credentials and service access |
-| Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: denied external traffic. Neither grants cluster access | In-cluster Pod-network driver, Kubernetes controller, CPU gVisor and enforced network policy |
+| Iris | Registry image reference | `ALLOW`: public internet only; `DENY`: DNS only on Kubernetes, no network on Docker workers | Iris controller and workers with sandbox profile support |
 | Local | Host programs, Python packages, prepared OCI image or registry reference | allow or deny | Trusted commands only; `bwrap` able to create namespaces; OCI images also need `umoci`, registry preparation needs Skopeo |
 
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
@@ -39,13 +39,11 @@ runtime on the host. The Daytona SDK and current Iris dependencies require
 Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
 credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
-Private container groups also deny DNS.
 
-Online Iris execution requires a trusted driver on the Kubernetes cluster's Pod
-network. Its primary image needs Python 3.11 or newer for the direct process helper;
-companion transfers still use `ExecInContainer` and need `/bin/sh`, `base64`,
-`tar`, `head`, `tail` and `wc`. Daytona uses its filesystem API and requires
-`/bin/sh`, `tar`, `head` and `wc` for commands and directory transfer.
+Iris commands and file transfer use the existing `ExecInContainer` RPC and require
+`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
+for commands and directory transfer.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
@@ -63,22 +61,23 @@ finally:
 ```
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
-Docker daemon with `runsc` registered. Inside an Iris driver with Pod attachment,
-use `IrisMachineFactory.in_cluster()`. These backends provide commands, shared
-files and process sessions. Harbor's `BashAgent` requires the separate persistent
-`ShellSession` interface; host-side Terminus-2 uses machine commands.
+Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
+for the existing Iris command and file-transfer backend. Harbor's `BashAgent`
+requires the separate persistent `ShellSession` interface; host-side Terminus-2
+uses machine commands.
 
 Model and judge credentials belong to the trusted host handler used by
-`serve_http`. Sandboxes receive neither secret references nor resolved provider
-credentials. Keep keys out of `MachineSpec.env`, task data and command arguments.
+`serve_http`. Keep keys out of `MachineSpec.env`, task data and command arguments.
+The existing Iris adapter supports `secret_env` for trusted private graders;
+secret-enabled factories must never run actor jobs.
 
 ## Tasks and containers
 
 `shellbox.task.TaskSpec` describes one or more named `ContainerSpec` members and
 names the primary container. Every member has a `MachineSpec`, optional named
 endpoints and readiness probe. A single-container task uses this same model:
-`factory.create(machine_spec)` normalizes to a one-container `TaskSpec` and calls
-`create_task`. The returned `Task` exposes all members through `containers` and
+`LocalMachineFactory.create(machine_spec)` normalizes to a one-container
+`TaskSpec` and calls `create_task`. The returned `Task` exposes all members through `containers` and
 its default execution handle through `primary`.
 
 The primary stays alive for machine commands. Supporting containers use their
@@ -87,33 +86,16 @@ must already contain their dependencies. Startup overrides on the primary are
 currently unsupported by these Shellbox backends. All members use the same
 network policy; backend admission applies the sandbox restrictions separately.
 
-The Iris factory lowers every member, including the primary, to Iris's native
-`TaskSpec.containers` and submits it with `IrisClient.submit_task`. Iris's ordinary
-single-command API normalizes to the same container model; its container profile
-and egress policy determine isolation separately.
+`LocalMachineFactory.create_task` starts each member in bubblewrap. Members
+share a private loopback network and keep separate filesystems, PID, IPC and
+UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
+`group.endpoint("runtime", "http")` returns the declared private `runtime:8000`
+address. Concurrent groups may use the same ports. Every member must request
+`NetworkPolicy.DENY`; the group never falls back to host networking.
 
-Multi-container Shellbox tasks create one CPU-only
-Kubernetes pod under gVisor, with separate container filesystems and a private
-shared loopback network. Container names and `task` resolve to `127.0.0.1` within
-that pod. `group.endpoint("runtime", "http")` returns the declared private
-`runtime:8000` address; it is not a host-accessible endpoint. Every container
-must request `NetworkPolicy.DENY` and digest-pinned registry images.
-The group reserves the sum of all member CPU, memory and disk requests.
-
-A dedicated deny-all NetworkPolicy is installed before the pod starts. Unlike
-ordinary Iris `DENY`, groups have no platform DNS exception. They receive no
-host network, host cache, workspace bundle, mounted secrets, controller token,
-service-account token, log shipper or object-store uploader. Each container runs
-as root inside gVisor with all capabilities dropped and privilege escalation
-disabled. Literal task inputs and image contents must themselves be free of
-production credentials. Iris rejects explicit cloud-storage and controller
-credential variables, and container groups reject secret-enabled factories.
-The Kubernetes namespace must have an enforcing NetworkPolicy implementation
-and no wider allow policy selecting these pods. Iris may admit the owning
-driver's connection to the primary helper; external egress remains denied.
-Kubernetes combines allow
-rules from all matching policies; the Iris-managed `none` and `internet`
-policies select different labels and do not apply to groups.
+Iris native container groups and direct process connections are deferred to a
+separate follow-up. The existing Iris adapter supports single-container machine
+commands and file transfer; it provides neither `create_task` nor process sessions.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
@@ -153,36 +135,11 @@ requests, with no caller headers forwarded to the host handler. Request IDs allo
 concurrent calls; responses remain whole messages, without SSE or token streaming.
 There is no per-request exec or guest control endpoint.
 
-Local, Docker, gVisor, Daytona and Iris expose `ProcessMachine.open_process`.
+Local, Docker, gVisor and Daytona expose `ProcessMachine.open_process`.
 Its `ProcessSession` provides incremental binary `read`/`write`, bounded stderr,
 exit status and explicit close. `Machine.run` still executes complete commands.
-QEMU and ShellSim do not expose process sessions; online relays require a supported
+QEMU, ShellSim and Iris do not expose process sessions; online relays require a supported
 backend and fail explicitly otherwise.
-
-Iris starts a small Python process helper in each primary container. The trusted
-driver connects directly over the Pod network, after the controller authorizes
-and resolves the exact driver and child attempts. A fresh per-machine capability
-authenticates the connection; it grants no authority outside that container.
-Primary commands, file transfers and process sessions use bounded binary frames
-on these direct connections. Companion readiness and artifact transfers retain
-unary exec; companions do not expose `open_process`. A lost connection fails the
-machine rather than replaying an uncertain command. There is no shared gateway.
-During creation, TCP failures before command submission are retried within the
-scheduling deadline: a running Pod can precede network-policy enforcement.
-Authentication or command-start failures are not retried.
-
-The driver must explicitly use `NetworkAttachment.POD`, separately from its
-container profile and egress policy. One ingress policy per driver attempt and
-port admits only that driver's Pod to its children; sandbox egress stays denied.
-External and host-network drivers cannot use this path. See
-[direct connection operations](../iris/OPS.md#direct-sandbox-connections) for
-RBAC and rollout requirements. Docker-worker Iris backends do not yet provide
-direct process sessions.
-
-For a coordinator already running in Iris, use
-`IrisMachineFactory.in_cluster()` to select its own controller and task identity.
-An explicitly configured different controller is rejected instead of falling
-back to host credentials.
 
 The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
 Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
@@ -231,14 +188,8 @@ or cancelled startup close the whole group. Closing any member, a member exiting
 or the job lifetime ending also tears down the group; containers are not reused
 between trials. Download outputs through machine handles before closing them.
 
-Iris container groups require a Kubernetes controller advertising
-`task-containers`; older controllers and Docker-worker backends reject it.
-`LocalMachineFactory.create_task` implements the same contract with bubblewrap:
-members share a private loopback network and keep separate filesystems, PID, IPC
-and UTS namespaces. Concurrent groups may use the same ports. Group names resolve
-only inside their own network. Neither implementation falls back to host
-networking. An ordinary command timeout or caller cancellation closes the whole
-local machine or group; successful commands preserve background processes.
+An ordinary command timeout or caller cancellation closes the whole local
+machine or group; successful commands preserve background processes.
 
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
@@ -352,44 +303,6 @@ The `firmware` directory must contain `bios-microvm.bin` from SeaBIOS. The `libr
 Re-stage bundles built with an earlier prototype when updating this package; the guest and host serial protocols must match.
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
-
-## Live Iris container-group check
-
-The CoreWeave smoke workflow submits a trusted Pod-network driver against the
-shared `cw-us-west-04a` controller in namespace `iris-ci`. The driver runs
-`tests/test_iris_service_group_live.py` from the bundled checkout. It creates
-CPU-only groups to check private runtime connections, filesystem separation,
-credential absence, denied outbound connections, binary process pipes, host HTTP
-capabilities and teardown. A separate trusted Pod verifies denied cross-driver
-ingress with a reachable control. The guests use a digest-pinned Python image.
-
-This check is excluded from default unit runs. Against an already updated test
-controller, submit the driver with its URL, image and known network probe targets:
-
-```sh
-uv run --package marin-shellbox --extra iris --frozen --group test \
-  python scripts/ci/run_shellbox_iris.py submit \
-  --controller-url http://127.0.0.1:10000 \
-  --config lib/iris/config/cw-us-west-04a.yaml \
-  --job-name shellbox-live-proof \
-  --python-image '<registry-image>@sha256:<digest>' \
-  --private-address '<controller-service-ip>:10000' \
-  --public-address 1.1.1.1:443 \
-  --log-path artifacts/shellbox-iris.log
-```
-
-The submitter uses normal bundle-storage credentials. The trusted driver receives
-its ordinary Iris environment; the sandbox groups receive none of that storage
-or controller authority. A source manifest verifies that the driver imports the
-submitted Iris and Shellbox code. The command preserves bounded logs and cancels
-the exact driver tree on exit.
-
-The controller must advertise `task-containers` and have permission to
-read the named `iris-egress-loopback` NetworkPolicy. The CI workflow grants only
-that policy read within `iris-ci`; the operator installs the policy. Running the
-workflow also rebuilds the controller, deletes managed CI task pods and starts
-with fresh controller state. It shares a concurrency lock with the CoreWeave
-canary; use that workflow for CI deployment rather than an unsynchronized restart.
 
 ## Local backend
 

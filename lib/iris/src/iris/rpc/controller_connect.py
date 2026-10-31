@@ -85,9 +85,6 @@ class ControllerService(Protocol):
     async def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_task_connection(self, request: controller__pb2.Controller.GetTaskConnectionRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskConnectionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -337,16 +334,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_kubernetes_cluster_status,
-                ),
-                "/iris.cluster.ControllerService/GetTaskConnection": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetTaskConnection",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTaskConnectionRequest,
-                        output=controller__pb2.Controller.GetTaskConnectionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_task_connection,
                 ),
                 "/iris.cluster.ControllerService/ExecuteRawQuery": Endpoint.unary(
                     method=MethodInfo(
@@ -881,26 +868,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_task_connection(
-        self,
-        request: controller__pb2.Controller.GetTaskConnectionRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTaskConnectionResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTaskConnection",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTaskConnectionRequest,
-                output=controller__pb2.Controller.GetTaskConnectionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def execute_raw_query(
         self,
         request: query__pb2.RawQueryRequest,
@@ -1228,8 +1195,6 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_task_connection(self, request: controller__pb2.Controller.GetTaskConnectionRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskConnectionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def set_user_budget(self, request: controller__pb2.Controller.SetUserBudgetRequest, ctx: RequestContext) -> controller__pb2.Controller.SetUserBudgetResponse:
@@ -1471,16 +1436,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_kubernetes_cluster_status,
-                ),
-                "/iris.cluster.ControllerService/GetTaskConnection": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetTaskConnection",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetTaskConnectionRequest,
-                        output=controller__pb2.Controller.GetTaskConnectionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_task_connection,
                 ),
                 "/iris.cluster.ControllerService/ExecuteRawQuery": EndpointSync.unary(
                     method=MethodInfo(
@@ -2009,26 +1964,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.GetKubernetesClusterStatusRequest,
                 output=controller__pb2.Controller.GetKubernetesClusterStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_task_connection(
-        self,
-        request: controller__pb2.Controller.GetTaskConnectionRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetTaskConnectionResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetTaskConnection",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetTaskConnectionRequest,
-                output=controller__pb2.Controller.GetTaskConnectionResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

@@ -15,7 +15,6 @@ from iris.cluster.controller.codec import (
     constraints_to_json,
     entrypoint_to_json,
     proto_to_json,
-    task_environment_to_json,
 )
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -32,7 +31,6 @@ from iris.cluster.controller.schema import (
     jobs_table,
 )
 from iris.cluster.egress import format_egress_rule
-from iris.cluster.runtime.task_spec import normalize_task_request
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -179,7 +177,6 @@ def insert_job_and_config(
     stored verbatim. A child ignores it and inherits its root's stored value, so a
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
-    normalize_task_request(request)
     assert (
         priority_band != job_pb2.PRIORITY_BAND_INHERIT
     ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
@@ -246,7 +243,7 @@ def insert_job_and_config(
     )
     max_failures = int(request.max_task_failures)
     entrypoint_json = entrypoint_to_json(request.entrypoint)
-    environment_json = task_environment_to_json(request.environment)
+    environment_json = proto_to_json(request.environment)
     ports_json = list(request.ports)
     timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 

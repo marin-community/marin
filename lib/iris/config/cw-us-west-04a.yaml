@@ -82,7 +82,6 @@ storage:
 kubernetes_provider:
   namespace: iris-ci
   host_network: true
-  sandbox_runtime_class: iris-ci-gvisor-cpu
   cache_dir: /mnt/local/iris-cache
   cache_max_age:
     seconds: 604800

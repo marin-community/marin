@@ -31,19 +31,6 @@ import "vm.proto";
 // ============================================================================
 
 message Controller {
-  message GetTaskConnectionRequest {
-    string driver_task_id = 1;
-    string driver_attempt_uid = 2;
-    string task_id = 3;
-    string attempt_uid = 4;
-  }
-  message GetTaskConnectionResponse {
-    string pod_ip = 1;
-    uint32 port = 2;
-    string pod_uid = 3;
-    string attempt_uid = 4;
-  }
-
   // --- Job Lifecycle ---
   message LaunchJobRequest {
     string name = 1;
@@ -325,7 +312,6 @@ message Controller {
     string task_id = 1;             // Task whose container to exec into
     repeated string command = 2;     // Command to execute (e.g. ["bash", "-c", "ls"])
     int32 timeout_seconds = 3;      // Command timeout in seconds (0 = default 60s)
-    string container_name = 4;      // Empty selects the primary; otherwise a declared service name.
   }
 
   message ExecInContainerResponse {
@@ -947,8 +933,6 @@ service ControllerService {
 
   // Kubernetes cluster status
   rpc GetKubernetesClusterStatus(Controller.GetKubernetesClusterStatusRequest) returns (Controller.GetKubernetesClusterStatusResponse);
-
-  rpc GetTaskConnection(Controller.GetTaskConnectionRequest) returns (Controller.GetTaskConnectionResponse);
 
   // Generic query API
   rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);

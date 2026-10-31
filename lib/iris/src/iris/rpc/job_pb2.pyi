@@ -45,11 +45,6 @@ class PeerStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PEER_STATUS_SYNCED: _ClassVar[PeerStatus]
     PEER_STATUS_REJECTED: _ClassVar[PeerStatus]
 
-class NetworkAttachment(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    NETWORK_ATTACHMENT_DEFAULT: _ClassVar[NetworkAttachment]
-    NETWORK_ATTACHMENT_POD: _ClassVar[NetworkAttachment]
-
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     CONSTRAINT_OP_EQ: _ClassVar[ConstraintOp]
@@ -132,8 +127,6 @@ PEER_STATUS_PENDING_SCHEDULING: PeerStatus
 PEER_STATUS_ASSIGNED: PeerStatus
 PEER_STATUS_SYNCED: PeerStatus
 PEER_STATUS_REJECTED: PeerStatus
-NETWORK_ATTACHMENT_DEFAULT: NetworkAttachment
-NETWORK_ATTACHMENT_POD: NetworkAttachment
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -623,20 +616,8 @@ class ResourceSpecProto(_message.Message):
     device: DeviceConfig
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
-class DriverConnectionSpec(_message.Message):
-    __slots__ = ("driver_task_id", "driver_attempt_uid", "port", "driver_pod_uid")
-    DRIVER_TASK_ID_FIELD_NUMBER: _ClassVar[int]
-    DRIVER_ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
-    PORT_FIELD_NUMBER: _ClassVar[int]
-    DRIVER_POD_UID_FIELD_NUMBER: _ClassVar[int]
-    driver_task_id: str
-    driver_attempt_uid: str
-    port: int
-    driver_pod_uid: str
-    def __init__(self, driver_task_id: _Optional[str] = ..., driver_attempt_uid: _Optional[str] = ..., port: _Optional[int] = ..., driver_pod_uid: _Optional[str] = ...) -> None: ...
-
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "secrets", "setup_scripts", "containers", "primary_container", "network_attachment", "driver_connection")
+    __slots__ = ("env_vars", "secrets", "setup_scripts")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -654,62 +635,10 @@ class EnvironmentConfig(_message.Message):
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
     SECRETS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
-    CONTAINERS_FIELD_NUMBER: _ClassVar[int]
-    PRIMARY_CONTAINER_FIELD_NUMBER: _ClassVar[int]
-    NETWORK_ATTACHMENT_FIELD_NUMBER: _ClassVar[int]
-    DRIVER_CONNECTION_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
     secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    containers: _containers.RepeatedCompositeFieldContainer[ContainerSpec]
-    primary_container: str
-    network_attachment: NetworkAttachment
-    driver_connection: DriverConnectionSpec
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., containers: _Optional[_Iterable[_Union[ContainerSpec, _Mapping]]] = ..., primary_container: _Optional[str] = ..., network_attachment: _Optional[_Union[NetworkAttachment, str]] = ..., driver_connection: _Optional[_Union[DriverConnectionSpec, _Mapping]] = ...) -> None: ...
-
-class ImageCommand(_message.Message):
-    __slots__ = ("entrypoint", "arguments")
-    ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
-    ARGUMENTS_FIELD_NUMBER: _ClassVar[int]
-    entrypoint: CommandEntrypoint
-    arguments: CommandEntrypoint
-    def __init__(self, entrypoint: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., arguments: _Optional[_Union[CommandEntrypoint, _Mapping]] = ...) -> None: ...
-
-class ContainerSpec(_message.Message):
-    __slots__ = ("name", "image", "workdir", "env_vars", "resources", "secrets", "setup_scripts", "runtime_entrypoint", "image_command")
-    class EnvVarsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    class SecretsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_FIELD_NUMBER: _ClassVar[int]
-    WORKDIR_FIELD_NUMBER: _ClassVar[int]
-    ENV_VARS_FIELD_NUMBER: _ClassVar[int]
-    RESOURCES_FIELD_NUMBER: _ClassVar[int]
-    SECRETS_FIELD_NUMBER: _ClassVar[int]
-    SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
-    RUNTIME_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_COMMAND_FIELD_NUMBER: _ClassVar[int]
-    name: str
-    image: str
-    workdir: str
-    env_vars: _containers.ScalarMap[str, str]
-    resources: ResourceSpecProto
-    secrets: _containers.ScalarMap[str, str]
-    setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    runtime_entrypoint: RuntimeEntrypoint
-    image_command: ImageCommand
-    def __init__(self, name: _Optional[str] = ..., image: _Optional[str] = ..., workdir: _Optional[str] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., runtime_entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., image_command: _Optional[_Union[ImageCommand, _Mapping]] = ...) -> None: ...
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)

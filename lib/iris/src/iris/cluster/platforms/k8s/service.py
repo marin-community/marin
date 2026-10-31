@@ -107,8 +107,6 @@ class K8sService(Protocol):
 
     def apply_json(self, manifest: dict) -> None: ...
 
-    def patch_pod_labels(self, name: str, pod_uid: str, labels: dict[str, str]) -> None: ...
-
     def patch_node(self, name: str, patch: dict) -> None: ...
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
@@ -485,25 +483,6 @@ class CloudK8sService:
                 name = item.get("metadata", {}).get("name")
                 if name:
                     self.delete(resource, name, wait=wait)
-
-    def patch_pod_labels(self, name: str, pod_uid: str, labels: dict[str, str]) -> None:
-        """Stamp identity labels only if the named Pod still has its expected UID."""
-        patch = [{"op": "test", "path": "/metadata/uid", "value": pod_uid}]
-        patch.extend(
-            {"op": "add", "path": "/metadata/labels/" + key.replace("~", "~0").replace("/", "~1"), "value": value}
-            for key, value in labels.items()
-        )
-        with _k8s_call(f"patch Pod/{name} labels"):
-            try:
-                self._resource_api(K8sResource.PODS).patch(
-                    name=name,
-                    namespace=self.namespace,
-                    body=patch,
-                    content_type="application/json-patch+json",
-                    **self._request_timeout_kwargs(),
-                )
-            except ApiException as error:
-                raise KubectlError(f"patch Pod/{name} failed ({error.status}): {error.reason}") from error
 
     def patch_node(self, name: str, patch: dict) -> None:
         """Merge-patch a node, retaining resourceVersion preconditions when supplied."""
