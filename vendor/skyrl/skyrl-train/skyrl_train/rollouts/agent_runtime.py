@@ -18,7 +18,9 @@ from harbor.models.task.config import EnvironmentConfig, MCPServerConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from marinskyrl.harbor_environments import EnvironmentResourceOverrides, original_trial_environment
+from marinskyrl.harbor_environments import (
+    DeferredVerifierEnvironment, EnvironmentResourceOverrides, original_trial_environment,
+)
 from marinskyrl.resource_locator import join_resource_path
 from pydantic import BaseModel, ConfigDict, Field
 from rolloutengine.models import ModelTurn, Prompt
@@ -61,7 +63,7 @@ class InstalledAgentSettings(BaseModel):
     environment_snapshots: dict[str, str] = Field(default_factory=dict)
     environment_overrides: dict[str, EnvironmentResourceOverrides] = Field(default_factory=dict)
     agent_mcp_servers: dict[str, list[MCPServerConfig]] = Field(default_factory=dict)
-    verifier_env: dict[str, dict[str, str]] = Field(default_factory=dict)
+    verifier_env: dict[str, DeferredVerifierEnvironment] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
 
 
@@ -189,7 +191,7 @@ class InstalledAgentRuntime:
             if key in self.settings.verifier_env:
                 config = config.model_copy(update={
                     "verifier": config.verifier.model_copy(update={
-                        "env": {**config.verifier.env, **self.settings.verifier_env[key]}
+                        "env": {**config.verifier.env, **self.settings.verifier_env[key].harbor_environment()}
                     })
                 })
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout

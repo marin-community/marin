@@ -94,7 +94,7 @@ def recipe(
         "generator": {
             "backend": "vllm",
             "model_dtype": "bfloat16",
-            "engine_init_kwargs": {"max_num_seqs": 8},
+            "max_num_seqs": 8,
             "run_engines_locally": True,
             "enable_http_endpoint": False,
             "gpu_memory_utilization": 0.85,
@@ -126,7 +126,17 @@ def recipe(
                 "environment_snapshots": {},
                 "environment_overrides": environment_overrides,
                 "agent_mcp_servers": agent_mcp_servers,
-                "verifier_env": verifier_env,
+                "verifier_env": {
+                    source: {
+                        "values": {name: value for name, value in environment.items() if not value.startswith("${")},
+                        "variables": {
+                            name: value[2:-1]
+                            for name, value in environment.items()
+                            if value.startswith("${") and value.endswith("}")
+                        },
+                    }
+                    for source, environment in verifier_env.items()
+                },
                 "trial_reward_key": "reward",
             },
         },

@@ -15,6 +15,17 @@ class EnvironmentResourceOverrides(BaseModel):
     override_gpus: int | None = None
 
 
+class DeferredVerifierEnvironment(BaseModel):
+    """Carry host-variable names through Hydra without resolving credentials into config."""
+
+    model_config = ConfigDict(extra="forbid")
+    values: dict[str, str]
+    variables: dict[str, str]
+
+    def harbor_environment(self) -> dict[str, str]:
+        return {**self.values, **{name: "${" + variable + "}" for name, variable in self.variables.items()}}
+
+
 def original_trial_environment(
     environment: EnvironmentConfig,
     source_key: str,
