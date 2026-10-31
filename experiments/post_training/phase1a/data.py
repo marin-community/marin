@@ -6,9 +6,10 @@
 Both arms read their file with ``data.shuffle=false``. Step ``s`` of M4 rolls out
 the step's prompts task by task (8 per 32 sequences, 4 samples each), and step
 ``s`` of M1 trains on the same prompts' 4 expert completions in the same order. A
-prompt is eligible only when its M1 file holds at least 4 graded-correct expert
-completions, and the same eligible pool feeds both arms, so the filter cannot
-separate them. Each prompt is used once; a shortfall raises.
+prompt is eligible only when its M1 file holds at least 4 retained completions.
+X and R retain graded-correct expert samples; procedure nulls retain ended B
+samples without correctness grading. Both arms share the eligible pool. Each
+prompt is used once; a shortfall raises.
 """
 
 from __future__ import annotations
