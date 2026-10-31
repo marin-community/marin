@@ -245,7 +245,12 @@ def _resolve_definitions(
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
-    validated_configs = iter(preflight_harbor_configs(requests))
+    validated_configs = iter(
+        preflight_harbor_configs(
+            requests,
+            judge_model=canonical_served_name(judge_model.name) if judge_model is not None else None,
+        )
+    )
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:

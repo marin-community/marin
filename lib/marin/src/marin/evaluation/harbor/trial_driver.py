@@ -660,7 +660,7 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
-def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
+def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object], judge_model: str | None) -> dict[str, object]:
     document = _document(path)
     config = JobConfig.model_validate(document, extra="forbid")
     if config.tasks:
@@ -692,7 +692,12 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                 served_model=_STABLE_MODEL,
                 task_limit=None,
                 model_agent_kwargs=dict(model_agent_kwargs),
-                verifier_env={},
+                # Validate hosted judge capabilities before serving allocates an endpoint.
+                verifier_env=(
+                    {"OPENAI_API_KEY": "EMPTY", "OPENAI_BASE_URL": _STABLE_ENDPOINT, "MODEL_NAME": judge_model}
+                    if judge_model is not None
+                    else {}
+                ),
                 archive_root=jobs_dir,
                 archive_dataset=dataset_metadata.selector,
             ),
@@ -761,11 +766,14 @@ def _preflight(request_path: Path) -> None:
             raise ValueError("Harbor preflight request entries must be objects")
         path = request.get("path")
         model_agent_kwargs = request.get("model_agent_kwargs", {})
+        judge_model = request["judge_model"]
         if not isinstance(path, str):
             raise ValueError("Harbor preflight request path must be a string")
         if not isinstance(model_agent_kwargs, Mapping):
             raise ValueError("Harbor preflight model agent kwargs must be a mapping")
-        results.append(_preflight_one(Path(path), model_agent_kwargs))
+        if judge_model is not None and not isinstance(judge_model, str):
+            raise ValueError("Harbor preflight judge model must be a string or null")
+        results.append(_preflight_one(Path(path), model_agent_kwargs, judge_model))
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 

@@ -56,11 +56,12 @@ def preflight(
     hash_seed: str = "0",
     check: bool = True,
     extra_python_path: Path | None = None,
+    judge_model: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     request_path = tmp_path / f"requests-{hash_seed}.json"
     request_path.write_text(
         json.dumps(
-            [{"path": str(path), "model_agent_kwargs": kwargs} for path, kwargs in requests],
+            [{"path": str(path), "model_agent_kwargs": kwargs, "judge_model": judge_model} for path, kwargs in requests],
             separators=(",", ":"),
         )
     )

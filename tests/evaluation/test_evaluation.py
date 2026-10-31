@@ -120,7 +120,7 @@ def _install_fake_harbor_preflight(
 ) -> list[Mapping[str, object]]:
     received: list[Mapping[str, object]] = []
 
-    def preflight(requests):
+    def preflight(requests, *, judge_model):
         configs = []
         for path, model_agent_kwargs in requests:
             received.append(model_agent_kwargs)
@@ -2521,7 +2521,7 @@ def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, m
     iris_opened = False
     error = "Harbor config must declare exactly one agent"
 
-    def reject_preflight(_requests):
+    def reject_preflight(_requests, *, judge_model):
         raise ValueError(error)
 
     def open_iris_client(**_kwargs):

@@ -339,6 +339,8 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
 
 def preflight_harbor_configs(
     requests: Sequence[tuple[Path, Mapping[str, object]]],
+    *,
+    judge_model: str | None,
 ) -> tuple[ValidatedHarborConfig, ...]:
     """Validate Harbor policies and their placeholder effective jobs before launch."""
     if not requests:
@@ -348,6 +350,7 @@ def preflight_harbor_configs(
         {
             "path": str(path.resolve()),
             "model_agent_kwargs": dict(model_agent_kwargs),
+            "judge_model": judge_model,
         }
         for path, model_agent_kwargs in requests
     ]

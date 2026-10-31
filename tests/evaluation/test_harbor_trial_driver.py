@@ -489,7 +489,7 @@ datasets:
         (task_dir / "tests").mkdir()
         (task_dir / "tests/test.sh").write_text("exit 0\n")
 
-        (config,) = preflight_harbor_configs([(policy_path, {})])
+        (config,) = preflight_harbor_configs([(policy_path, {})], judge_model=None)
         assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
@@ -703,7 +703,7 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
         "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384},
     }
     requests = tmp_path / "requests.json"
-    requests.write_text(json.dumps([{"path": str(source), "model_agent_kwargs": model_kwargs}]))
+    requests.write_text(json.dumps([{"path": str(source), "model_agent_kwargs": model_kwargs, "judge_model": None}]))
     policy = tmp_path / "policy.json"
     overlay = tmp_path / "overlay.json"
     overlay.write_text(
