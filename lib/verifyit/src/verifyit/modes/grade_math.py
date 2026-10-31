@@ -20,6 +20,8 @@ Expected text that math-verify cannot parse raises ``InvalidTask``.
 import math
 import re
 import threading
+from collections.abc import Callable
+from dataclasses import replace
 from enum import StrEnum
 from fractions import Fraction
 from pathlib import Path
@@ -52,14 +54,30 @@ def _timeout() -> int:
     return TIMEOUT if threading.current_thread() is threading.main_thread() else 0
 
 
+_DANGLING_OPERATOR = re.compile(r"(?:[<>=+\-*/^]|\\(?:leq?|geq?|lt|gt|neq?|cdot|times))\s*$")
+
+
+def _parse_with_unit_recovery(text: str) -> list:
+    """Retry without unit stripping when normalization deletes a trailing variable."""
+    from math_verify import parse  # noqa: PLC0415
+    from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
+
+    latex = LatexExtractionConfig()
+    expression = ExprExtractionConfig()
+    parsed = parse(text, extraction_config=[latex, expression], parsing_timeout=_timeout(), raise_on_error=True)
+    if not any(isinstance(item, str) and _DANGLING_OPERATOR.search(item) for item in parsed):
+        return parsed
+    # For example, unit stripping changes p < s to p < by treating s as seconds.
+    unitless = [
+        replace(latex, normalization_config=replace(latex.normalization_config, units=False)),
+        expression,
+    ]
+    return parse(text, extraction_config=unitless, parsing_timeout=_timeout(), raise_on_error=True)
+
+
 def _parse(text: str) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
-    from math_verify import parse  # noqa: PLC0415
-
-    timeout = _timeout()
-    return parse(f"${strip_math_delimiters(text)}$", parsing_timeout=timeout, raise_on_error=True) or parse(
-        text, parsing_timeout=timeout, raise_on_error=True
-    )
+    return _parse_with_unit_recovery(f"${strip_math_delimiters(text)}$") or _parse_with_unit_recovery(text)
 
 
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
@@ -170,6 +188,21 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
             raise ValueError("math member cannot be normalized exactly")
         tokens.append(srepr(canonical).encode("utf-8").hex())
     return tuple(tokens)
+
+
+def _candidate_parse(parse: Callable[[], list]) -> list:
+    """A candidate's parse, empty when SymPy cannot even build its literal.
+
+    A candidate such as a 70,000-digit integer makes ``sympify`` raise (Python's
+    integer string limit) instead of returning an expression; that candidate is
+    unparsable, which grades zero, not a grader failure.
+    """
+    from sympy import SympifyError  # noqa: PLC0415
+
+    try:
+        return parse()
+    except (SympifyError, SyntaxError):
+        return []
 
 
 def _parsed_members(text: str) -> list[list]:
@@ -286,7 +319,9 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         expected = parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
-        parsed = parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        parsed = _candidate_parse(
+            lambda: parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
         match = bool(verify(gold=expected, target=parsed, timeout_seconds=_timeout(), raise_on_error=True))
@@ -298,7 +333,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    parsed = _parsed_members(candidate) if is_list else [_parse(candidate)]
+    parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 

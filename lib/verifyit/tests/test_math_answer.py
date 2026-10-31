@@ -324,3 +324,28 @@ def test_boxed_preserves_physics_reference_raw_fallback():
     missing = grade_math.grade_math_candidate(spec, "")
     assert missing.status == Status.SCORED
     assert missing.reward == 0
+
+
+@pytest.mark.parametrize(
+    ("expected", "candidate", "reward"),
+    [
+        ("p < s", "p<s", 1),
+        ("p<s", "p < s", 1),
+        ("p < s", "p<1", 0),
+        ("x - s", "x-s", 1),
+        ("x-s", "x - s", 1),
+        ("x - s", "x", 0),
+        (r"5 \text{ m}", "5", 1),
+    ],
+)
+def test_spaced_trailing_variables_survive_unit_normalization(expected, candidate, reward):
+    assert grade_math.grade_math_candidate(MathSpec(expected), candidate).reward == reward
+
+
+@pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
+def test_a_candidate_sympy_cannot_build_scores_zero(profile):
+    # The generated integer exceeds Python's string-to-integer limit inside SymPy.
+    huge = "8" * 70_000
+    result = grade_math.grade_math_text_candidate(MathSpec("12", profile=profile), rf"\boxed{{{huge}}}")
+    assert result.status == Status.SCORED
+    assert result.reward == 0
