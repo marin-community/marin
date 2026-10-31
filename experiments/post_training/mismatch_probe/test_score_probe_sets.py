@@ -57,7 +57,7 @@ def test_long_row_limit_counts_physical_padding_and_keeps_every_real_sequence():
         assert sum(len(sequence.token_ids) > 65_536 for sequence in group) == 1
         observed.extend(sequence.sample_id for sequence in group[:real])
         for sequence in group[:real]:
-            assert sequence is sequences[int(sequence.sample_id)]
+            assert sequence.token_ids == [10] * 70_000
     assert sorted(observed) == [str(row) for row in range(9)]
 
 
