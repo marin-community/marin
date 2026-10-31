@@ -332,6 +332,21 @@ class GrugGPTModel(GPTModel):
                 config=config, hidden_size=config.hidden_size, eps=config.layernorm_epsilon
             )
 
+    def forward(self, *args, **kwargs):
+        # GPTModel constructs TransformerBlock directly, so its spec cannot
+        # select a different decoder class. Scope host storage at the model.
+        # The final stage keeps its uncheckpointed norm and head on device.
+        offload = (
+            self.config.grug_checkpoint_cpu_offload
+            and not self.post_process
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        if offload:
+            with torch.autograd.graph.save_on_cpu(pin_memory=True):
+                return super().forward(*args, **kwargs)
+        return super().forward(*args, **kwargs)
+
     def _preprocess(
         self,
         input_ids,
