@@ -130,6 +130,31 @@ async def docker(
     return DockerCommandResult(process.returncode, stdout, stderr)
 
 
+def _exec_arguments(name: str, workdir: str, command: Command) -> list[str]:
+    args = ["exec", "-i"]
+    if directory := command.cwd or workdir:
+        args.extend(("-w", directory))
+    if command.user is not None:
+        args.extend(("--user", command.user))
+    for key, value in command.env.items():
+        args.extend(("-e", f"{key}={value}"))
+    args.extend(
+        (
+            name,
+            "/bin/sh",
+            "-c",
+            START_COMMAND,
+            "shellbox-start",
+            "/bin/sh",
+            "-c",
+            RUN_COMMAND,
+            "shellbox-command",
+            *command.argv,
+        )
+    )
+    return args
+
+
 class DockerMachine:
     """One Docker container with a writable filesystem."""
 
@@ -146,27 +171,7 @@ class DockerMachine:
             raise ValueError("Process sessions require argv and own stdin and their lifetime")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        args = ["docker", "exec", "-i"]
-        if workdir := command.cwd or self.spec.workdir:
-            args.extend(("-w", workdir))
-        if command.user is not None:
-            args.extend(("--user", command.user))
-        for key, value in command.env.items():
-            args.extend(("-e", f"{key}={value}"))
-        args.extend(
-            (
-                self.name,
-                "/bin/sh",
-                "-c",
-                START_COMMAND,
-                "shellbox-start",
-                "/bin/sh",
-                "-c",
-                RUN_COMMAND,
-                "shellbox-command",
-                *command.argv,
-            )
-        )
+        args = ["docker", *_exec_arguments(self.name, self.spec.workdir, command)]
 
         async def acquire() -> SubprocessSession:
             process = await asyncio.create_subprocess_exec(
@@ -215,29 +220,8 @@ class DockerMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        args = ["exec", "-i"]
-        workdir = command.cwd or self.spec.workdir
-        if workdir:
-            args.extend(("-w", workdir))
-        if command.user is not None:
-            args.extend(("--user", command.user))
-        for key, value in command.env.items():
-            args.extend(("-e", f"{key}={value}"))
+        args = _exec_arguments(self.name, self.spec.workdir, command)
         process_group: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-        args.extend(
-            (
-                self.name,
-                "/bin/sh",
-                "-c",
-                START_COMMAND,
-                "shellbox-start",
-                "/bin/sh",
-                "-c",
-                RUN_COMMAND,
-                "shellbox-command",
-                *command.argv,
-            )
-        )
         try:
             completed = await docker(
                 *args,

@@ -385,6 +385,74 @@ def test_background_processes_survive_successful_commands(factory):
     on_machine(factory, SPEC, scenario)
 
 
+@pytest.mark.parametrize("members", [1, 2], ids=["machine", "task"])
+@pytest.mark.parametrize("retained_stream", ["stdout", "stderr"])
+def test_process_session_close_reclaims_detached_command_and_its_task(factory, members, retained_stream):
+    async def scenario():
+        spec = TaskSpec(
+            tuple(
+                ContainerSpec(
+                    f"member-{index}",
+                    replace(SPEC, network=NetworkPolicy.DENY),
+                    entrypoint=("sleep", "3600") if index else None,
+                )
+                for index in range(members)
+            ),
+            primary="member-0",
+        )
+        task = await factory.create_task(spec)
+        machine = cast(LocalMachine, task.primary)
+        roots = [cast(LocalMachine, member).root for member in task.containers.values()]
+        session = None
+        try:
+            redirect = "2>/dev/null" if retained_stream == "stdout" else ">/dev/null"
+            session = await machine.open_process(
+                Command(("setsid", "sh", "-c", f"echo ready; exec sleep 3600 {redirect}"))
+            )
+            assert await asyncio.wait_for(session.read(6), 5) == b"ready\n"
+            await asyncio.wait_for(session.close(), 5)
+            assert session.process.returncode is not None
+            assert not any(root.exists() for root in roots)
+            for member in task.containers.values():
+                with pytest.raises(MachineTerminated):
+                    await member.run(Command(("true",)))
+        finally:
+            await task.close()
+            if session is not None:
+                await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_machine_close_drains_unconsumed_process_session_output(factory):
+    async def scenario(machine):
+        session = await machine.open_process(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "mkfifo /app/output-ready; echo ready; head -c 131073 /dev/zero; "
+                    "echo buffered >/app/output-ready; head -c 1048576 /dev/zero; sleep 3600",
+                )
+            )
+        )
+        try:
+            assert await asyncio.wait_for(session.read(6), 5) == b"ready\n"
+            # The FIFO confirms stdout exceeds asyncio's pipe-reader limit
+            # before teardown; the remaining output stays unread by the caller.
+            buffered = await machine.run(Command(("cat", "/app/output-ready"), timeout=5))
+            assert (buffered.exit_code, buffered.stdout) == (0, b"buffered\n")
+            await asyncio.wait_for(machine.close(), 5)
+            assert session.process.returncode is not None
+            assert await session.read() == b""
+            assert not machine.root.exists()
+        finally:
+            await machine.close()
+            await session.close()
+
+    on_machine(factory, SPEC, scenario)
+
+
 def test_losing_the_host_launcher_reclaims_its_still_running_guest(factory):
     async def scenario(machine):
         # The guest keeper still holds stderr open after this host-side fault.

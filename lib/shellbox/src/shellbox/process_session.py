@@ -221,15 +221,17 @@ class SubprocessSession(StreamProcessSession):
         self.process.stdin.write(data)
         await self.process.stdin.drain()
 
+    async def drain_output(self) -> None:
+        """Discard stdout and wait for independently drained stderr to reach EOF."""
+        while await self.read():
+            pass
+        assert self._stderr_reader is not None
+        await asyncio.shield(self._stderr_reader)
+
     async def _stop_subprocess(self) -> None:
         assert self.process.stdin is not None and self.process.stdout is not None
         self.process.stdin.close()
-
-        async def drain() -> None:
-            while await self.read():
-                pass
-
-        reader = asyncio.create_task(drain())
+        reader = asyncio.create_task(self.drain_output())
         try:
             try:
                 await self._stop_process()
