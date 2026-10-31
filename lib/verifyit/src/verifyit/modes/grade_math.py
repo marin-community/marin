@@ -62,14 +62,15 @@ def _parse_with_unit_recovery(text: str) -> list:
     from math_verify import parse  # noqa: PLC0415
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig  # noqa: PLC0415
 
-    configs = [LatexExtractionConfig(), ExprExtractionConfig()]
-    parsed = parse(text, extraction_config=configs, parsing_timeout=_timeout(), raise_on_error=True)
+    latex = LatexExtractionConfig()
+    expression = ExprExtractionConfig()
+    parsed = parse(text, extraction_config=[latex, expression], parsing_timeout=_timeout(), raise_on_error=True)
     if not any(isinstance(item, str) and _DANGLING_OPERATOR.search(item) for item in parsed):
         return parsed
     # For example, unit stripping changes p < s to p < by treating s as seconds.
     unitless = [
-        replace(configs[0], normalization_config=replace(configs[0].normalization_config, units=False)),
-        configs[1],
+        replace(latex, normalization_config=replace(latex.normalization_config, units=False)),
+        expression,
     ]
     return parse(text, extraction_config=unitless, parsing_timeout=_timeout(), raise_on_error=True)
 
