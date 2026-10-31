@@ -25,7 +25,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the Iris, local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
@@ -67,17 +67,15 @@ for the existing Iris command and file-transfer backend. Harbor's `BashAgent`
 requires the separate persistent `ShellSession` interface; host-side Terminus-2
 uses machine commands.
 
-Harbor selects Shellbox adapters with `environment.type`: `iris` (the default),
+Harbor selects Shellbox adapters with `environment.type`: `local` (the default),
 `daytona`, `qemu` or `shellsim`. It has no independent provider execution backend
 or custom environment import path. Its host-side Terminus-2 and oracle agents
-can use Iris with prebuilt digest-pinned offline tasks and private container groups.
-The Iris adapter delegates commands, transfers and cleanup to `IrisMachineFactory`.
+can use local bubblewrap with prebuilt digest-pinned offline tasks and private container groups.
+The local adapter delegates commands, transfers and cleanup to `LocalMachineFactory`.
 It reads prepared image references, translates a validated Compose subset into
 container groups, and rejects guest image builds, ambient environment interpolation
-and isolation overrides. See [offline Harbor execution](../../docs/harbor-integration.md#offline-execution-through-shellbox-and-iris)
-for policy and image requirements. Inside an Iris job, the factory submits to that
-job's own controller with its scoped task token. External callers first submit
-a trusted driver inside the execution cluster.
+and isolation overrides. See [offline Harbor execution](../../docs/harbor-integration.md#offline-execution-through-shellbox)
+for policy and image requirements.
 
 Model and judge credentials belong to the trusted host handler used by
 `serve_http`. Keep keys out of `MachineSpec.env`, task data and command arguments.
