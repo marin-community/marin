@@ -162,6 +162,8 @@ class IrisProcessSession:
                 self._input_written.clear()
                 await write_frame(self._writer, STDIN, data[offset : offset + CHUNK_BYTES])
                 await self._input_written.wait()
+                if self._closing is not None:
+                    raise MachineTerminated("Iris process session is closed")
                 if not self._acknowledged:
                     self._completed()
                     raise MachineTerminated("Iris process exited before accepting stdin")
@@ -199,6 +201,8 @@ class IrisProcessSession:
                             break
                         if kind == ERROR:
                             raise RuntimeError("Iris process cleanup failed")
+        except TimeoutError:
+            raise
         except (ConnectionError, OSError, asyncio.IncompleteReadError):
             # A disconnected broker reclaims the process, or its Pod has exited.
             pass

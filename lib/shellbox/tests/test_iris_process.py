@@ -306,7 +306,8 @@ def test_lost_ready_after_open_never_replays_and_reclaims_the_process(tmp_path, 
     asyncio.run(check())
 
 
-def test_process_close_reaps_descendants_even_with_unread_output(tmp_path):
+@pytest.mark.parametrize("blocked_pipe", ["stdout", "stdin"])
+def test_process_close_reaps_descendants_with_blocked_pipes(tmp_path, blocked_pipe):
     lockfile = tmp_path / "descendant.lock"
     child_program = (
         "import fcntl,sys; lock=open(sys.argv[1],'w'); fcntl.flock(lock,fcntl.LOCK_EX); "
@@ -318,7 +319,7 @@ def test_process_close_reaps_descendants_even_with_unread_output(tmp_path):
         "stdin=subprocess.PIPE,stdout=subprocess.PIPE)\n"
         "assert child.stdout.readline()==b'ready\\n'\n"
         "print('ready',flush=True)\n"
-        "while True: os.write(1,b'x'*65536)\n"
+        + ("while True: os.write(1,b'x'*65536)\n" if blocked_pipe == "stdout" else "__import__('signal').pause()\n")
     )
 
     async def check():
@@ -328,7 +329,17 @@ def test_process_close_reaps_descendants_even_with_unread_output(tmp_path):
             while b"\n" not in readiness:
                 readiness.extend(await session.read())
             assert readiness.startswith(b"ready\n")
+            writing = None
+            if blocked_pipe == "stdin":
+                writing = asyncio.create_task(session.write(b"x" * (4 * process_guest.CHUNK_BYTES)))
+                # The command never reads stdin, so its pipe and the broker's
+                # bounded buffer fill before the write can complete.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(writing), 0.1)
             await asyncio.wait_for(session.close(), 5)
+            if writing is not None:
+                with pytest.raises(MachineTerminated):
+                    await writing
             with lockfile.open() as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with pytest.raises(MachineTerminated):
