@@ -180,8 +180,8 @@ def test_drain_propagates_task_image(state):
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch.tasks_to_run[0].task_image == "custom/swetrace:dev"
-    assert batch.tasks_to_run[0].environment.primary_service == "task"
-    [primary] = batch.tasks_to_run[0].environment.services
+    assert batch.tasks_to_run[0].environment.primary_container == "task"
+    [primary] = batch.tasks_to_run[0].environment.containers
     assert primary.image == "custom/swetrace:dev"
     assert list(primary.runtime_entrypoint.run_command.argv) == ["python", "-c", "pass"]
 
@@ -458,7 +458,7 @@ def test_drain_includes_workdir_files(state):
     run_req = batch.tasks_to_run[0]
     assert "_callable_runner.py" in run_req.entrypoint.workdir_files
     assert run_req.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
-    [primary] = run_req.environment.services
+    [primary] = run_req.environment.containers
     assert primary.runtime_entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
 
 
@@ -630,14 +630,14 @@ def test_apply_worker_failed_from_assigned(state):
 
 
 @pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
-def test_native_service_group_submission_reaches_backend_dispatch_with_member_resources(make_controller, profile):
+def test_native_container_group_submission_reaches_backend_dispatch_with_member_resources(make_controller, profile):
     provider = FakeDirectProvider()
     controller = make_controller(provider=provider)
     request = make_direct_job_request("service-group", task_image="example.test/task@sha256:" + "a" * 64)
     request.container_profile = profile
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
-    request.environment.primary_service = "agent"
-    primary = request.environment.services.add(
+    request.environment.primary_container = "agent"
+    primary = request.environment.containers.add(
         name="agent",
         image=request.task_image,
         workdir="/app",
@@ -645,7 +645,7 @@ def test_native_service_group_submission_reaches_backend_dispatch_with_member_re
         resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=2 * 1024**3, disk_bytes=2 * 1024**3),
     )
     primary.runtime_entrypoint.CopyFrom(request.entrypoint)
-    runtime = job_pb2.ServiceSpec(
+    runtime = job_pb2.ContainerSpec(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/service",
@@ -656,7 +656,7 @@ def test_native_service_group_submission_reaches_backend_dispatch_with_member_re
     runtime.image_command.arguments.argv.extend(["--port", "8000"])
     if profile == job_pb2.CONTAINER_PROFILE_DEFAULT:
         runtime.env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/runtime/key.json"
-    request.environment.services.add().CopyFrom(runtime)
+    request.environment.containers.add().CopyFrom(runtime)
     request.ClearField("entrypoint")
     request.ClearField("resources")
     request.task_image = ""
@@ -673,8 +673,8 @@ def test_native_service_group_submission_reaches_backend_dispatch_with_member_re
     assert dispatched.resources.cpu_millicores == 3000
     assert dispatched.resources.memory_bytes == 3 * 1024**3
     assert dispatched.resources.disk_bytes == 3 * 1024**3
-    assert dispatched.environment.primary_service == "agent"
-    assert list(dispatched.environment.services) == [primary, runtime]
+    assert dispatched.environment.primary_container == "agent"
+    assert list(dispatched.environment.containers) == [primary, runtime]
 
 
 def test_k8s_pending_task_not_timed_out_before_admission(make_controller):

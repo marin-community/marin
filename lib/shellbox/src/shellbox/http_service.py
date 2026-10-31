@@ -162,7 +162,7 @@ async def serve_http(
     Python 3 in the guest exchanges bounded, buffered frames over persistent
     process pipes. The handler authorizes paths and operations before using host
     authority. Caller headers and streaming are unsupported. Close this context
-    before closing the machine or its service group.
+    before closing the machine or its container group.
     """
     if not 1 <= port <= 65535:
         raise ValueError("HTTP service port is out of range")

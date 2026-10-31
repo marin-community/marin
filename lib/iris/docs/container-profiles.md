@@ -103,7 +103,7 @@ workers — as a docker runtime named `runsc` in `/etc/docker/daemon.json` on
 docker-worker clusters (worker bootstrap does this), or as a CPU-only Kubernetes
 RuntimeClass. Set `kubernetes_provider.sandbox_runtime_class` to that class's
 name; it defaults to `gvisor`. The operator setting applies to singleton and
-service-group pods under both gVisor profiles. Jobs cannot select another
+container-group pods under both gVisor profiles. Jobs cannot select another
 class, and a missing class fails Pod creation.
 
 CoreWeave CI uses `iris-ci-gvisor-cpu`, which the smoke workflow provisions
@@ -135,7 +135,7 @@ variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
 identity variables reach the task. Its explicit `secrets` map is mounted as
 read-only files; parent secrets are not inherited. Explicit cloud-storage and
 controller credential names are rejected in both environment variables and
-secret bundles, including for single-service tasks.
+secret bundles, including for single-container tasks.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
@@ -145,18 +145,19 @@ run verbatim and default to none.
 ### Task containers
 
 `IrisClient.submit_task(TaskSpec(...))` submits a complete list of named
-`ServiceSpec` containers, including the primary. Each service declares its own
-image, working directory, environment and resources. The scheduler reserves the
-sum of those resources. A service can run an Iris `Entrypoint`, preserving setup
+`ContainerSpec` members through `TaskSpec.containers`, including the primary.
+Each container declares its own image, working directory, environment and
+resources. The scheduler reserves the sum of those resources. A container can
+run an Iris `Entrypoint`, preserving setup
 and workspace handling, or use its image ENTRYPOINT and CMD with optional
 overrides. The primary owns the task's completion and output handling.
 
 The existing `submit(entrypoint=..., resources=..., environment=...)` API
-normalizes to a one-service task through the same path. Kubernetes renders these
-services in one Pod for both ordinary and sandbox jobs; container profile and
+normalizes to a one-container task through the same path. Kubernetes renders these
+containers in one Pod for both ordinary and sandbox jobs; container profile and
 egress policy determine their isolation separately. Docker workers lower
-one-service Iris-command tasks to their existing execution path and reject
-multi-service tasks and image-command startup.
+one-container Iris-command tasks to their existing execution path and reject
+multi-container tasks and image-command startup.
 
 `TaskSpec.network_attachment` selects the network attachment separately from
 egress policy. `NetworkAttachment.DEFAULT` retains the cluster's existing host
@@ -167,33 +168,34 @@ and one ingress port. Iris binds this to the actual driver Pod UID; it does not
 grant sandbox egress or pass driver credentials to the child. Docker workers
 reject explicit Pod attachment and driver connections.
 
-`TaskSpec.primary` names the primary service; omitting it uses `task`. Exec
+`TaskSpec.primary` names the primary container; omitting it uses `task`.
+`TaskSpec.primary_container` returns that container's `ContainerSpec`. Exec
 accepts that logical name, while the physical primary Kubernetes container
 remains `task`. Companions accept literal environment variables but cannot run
 Iris setup scripts or receive secret bundles. Ordinary primary containers retain
 their existing environment, setup and secret behavior.
 
-`EnvironmentConfig.services` stores every member and `primary_service` selects
+`EnvironmentConfig.containers` stores every member and `primary_container` selects
 the primary. A controller migration upgrades stored flat jobs and the former
 peer list, retaining uploaded workdir files. Deploy matching client and
 controller versions together; the removed peer fields are not a supported
 mixed-version submission format.
 
-### Private service groups
+### Private container groups
 
-Shellbox uses the native service model on one `SANDBOX` job with
-`EGRESS_POLICY_NONE`. The Kubernetes backend advertises `task-services`;
+Shellbox uses the native container model on one `SANDBOX` job with
+`EGRESS_POLICY_NONE`. The Kubernetes backend advertises `task-containers`;
 controllers and clients without that capability reject group creation.
 Docker-worker backends do not implement groups.
 
-Each service receives its digest-pinned image, absolute working directory,
+Each container receives its digest-pinned image, absolute working directory,
 literal environment, CPU/memory/disk reservation and optional command overrides.
 The job reservation includes every member. Image ENTRYPOINT and CMD are preserved
 when their overrides are absent. Arbitrary pod fields, mounts, accelerators,
-setup scripts and secrets are rejected. Task and service environments reject
+setup scripts and secrets are rejected. Task and container environments reject
 cloud-storage and controller credential variables.
 
-The task and services have separate filesystems and PID namespaces but share
+The containers have separate filesystems and PID namespaces but share
 pod loopback. `/etc/hosts` maps the declared container names and `task` to
 `127.0.0.1`; there is no external DNS. The pod runs under gVisor, without service
 account tokens or credential-bearing infrastructure sidecars, with root users,
@@ -212,12 +214,12 @@ these Pods; Kubernetes policy permissions are additive.
 Shellbox starts the primary's process helper with the group and connects directly
 from its trusted Pod-network driver. It installs the host capability relay over
 that process connection, then runs bounded readiness probes. Companion readiness
-and artifact transfers still use unary exec. Timed probes require Python 3 in each service
+and artifact transfers still use unary exec. Timed probes require Python 3 in each container
 image; a guest supervisor kills a timed-out probe's process group and retries
-without stopping the service. Exhausting the readiness budget closes the group.
+without stopping the container. Exhausting the readiness budget closes the group.
 Closing any machine cancels the shared job; a container exiting fails the group
 so reconciliation reclaims all members.
-Service exec names are checked against the job definition before dispatch, so
+Container exec names are checked against the job definition before dispatch, so
 the API cannot address an infrastructure container. Model calls can use
 Shellbox's host HTTP capability relay, keeping upstream credentials and model
 access in the trusted harness rather than enabling pod egress.

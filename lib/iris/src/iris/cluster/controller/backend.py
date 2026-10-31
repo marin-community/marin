@@ -56,7 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
-from iris.cluster.runtime.task_spec import TASK_SERVICES_CAPABILITY
+from iris.cluster.runtime.task_spec import TASK_CONTAINERS_CAPABILITY
 from iris.cluster.task_connection import TaskPod
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -93,7 +93,7 @@ class BackendCapability(StrEnum):
     WORKER_FLEET = "worker-fleet"
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
-    TASK_SERVICES = TASK_SERVICES_CAPABILITY
+    TASK_SERVICES = TASK_CONTAINERS_CAPABILITY
     POD_NETWORK = "pod-network"
 
 
@@ -140,7 +140,7 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
     if BackendCapability.AUTOSCALER in descriptor.capabilities:
         capabilities.append("autoscaler")
     if BackendCapability.TASK_SERVICES in descriptor.capabilities:
-        capabilities.append(TASK_SERVICES_CAPABILITY)
+        capabilities.append(TASK_CONTAINERS_CAPABILITY)
     if BackendCapability.POD_NETWORK in descriptor.capabilities:
         capabilities.append(BackendCapability.POD_NETWORK)
     return DashboardBackendDescriptor(

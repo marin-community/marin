@@ -499,10 +499,10 @@ message EnvironmentConfig {
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.
   repeated string setup_scripts = 6;
-  // Canonical task description, including the primary service. Flat environment
+  // Canonical task description, including the primary container. Flat environment
   // fields above are the derived primary projection used by worker runtimes.
-  repeated ServiceSpec services = 10;
-  string primary_service = 11;
+  repeated ContainerSpec containers = 10;
+  string primary_container = 11;
   NetworkAttachment network_attachment = 12;
   DriverConnectionSpec driver_connection = 13;
 
@@ -515,7 +515,7 @@ message ImageCommand {
   CommandEntrypoint arguments = 2;
 }
 
-message ServiceSpec {
+message ContainerSpec {
   string name = 1;
   string image = 2;
   string workdir = 3;

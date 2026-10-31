@@ -24,7 +24,7 @@ from iris.cli.connect import ControllerEndpoint
 from iris.client import IrisClient, Job, Task
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.runtime.sandbox import validate_sandbox_environment
-from iris.cluster.types import DriverConnectionSpec, Entrypoint, NetworkAttachment, ResourceSpec, ServiceSpec
+from iris.cluster.types import ContainerSpec, DriverConnectionSpec, Entrypoint, NetworkAttachment, ResourceSpec
 from iris.cluster.types import TaskSpec as IrisTaskSpec
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
@@ -612,14 +612,14 @@ class IrisMachineFactory:
             raise UnsupportedMachineSpec("The Iris primary container is kept alive for machine commands")
         if companions and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Iris multi-container tasks require denied external networking")
-        services = tuple(
-            ServiceSpec(
-                name=service.name,
-                image=self._check_spec(service.machine).reference,
+        containers = tuple(
+            ContainerSpec(
+                name=container.name,
+                image=self._check_spec(container.machine).reference,
                 # OCI runtimes chdir before starting Python, so bootstrap from
                 # an existing directory and let the broker create the workdir.
-                workdir="/" if service.name == spec.primary else service.machine.workdir,
-                env_vars=service.machine.env,
+                workdir="/" if container.name == spec.primary else container.machine.workdir,
+                env_vars=container.machine.env,
                 command=(
                     Entrypoint.from_command(
                         "python3",
@@ -628,25 +628,25 @@ class IrisMachineFactory:
                         Path(process_guest.__file__).read_text(),
                         capability.hex(),
                         str(process_guest.PORT),
-                        service.machine.workdir,
+                        container.machine.workdir,
                     )
-                    if service.name == spec.primary
+                    if container.name == spec.primary
                     else None
                 ),
-                entrypoint=service.entrypoint,
-                arguments=service.arguments,
+                entrypoint=container.entrypoint,
+                arguments=container.arguments,
                 resources=ResourceSpec(
-                    cpu=service.machine.cpus or 1,
-                    memory=(service.machine.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
-                    disk=(service.machine.storage_mb or self.disk_mb) * 1024 * 1024,
+                    cpu=container.machine.cpus or 1,
+                    memory=(container.machine.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+                    disk=(container.machine.storage_mb or self.disk_mb) * 1024 * 1024,
                 ),
             )
-            for service in spec.containers
+            for container in spec.containers
         )
         task = await self._create(
             primary.machine,
             IrisTaskSpec(
-                services=services,
+                containers=containers,
                 primary=spec.primary,
                 network_attachment=NetworkAttachment.POD,
                 driver_connection=DriverConnectionSpec(info.task_id, info.attempt_uid, process_guest.PORT),
@@ -654,17 +654,17 @@ class IrisMachineFactory:
             capability,
         )
         members = {
-            service.name: IrisMachine(
+            container.name: IrisMachine(
                 task.endpoint,
                 task.client,
                 task.rpc,
                 task.job,
                 task.task,
-                service.machine,
-                container_name=service.name,
+                container.machine,
+                container_name=container.name,
                 execution=task.execution,
             )
-            for service in companions
+            for container in companions
         }
         members[primary.name] = task
         return ContainerTask(members, spec, task.close)

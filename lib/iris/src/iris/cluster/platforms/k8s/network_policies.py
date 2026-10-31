@@ -6,13 +6,13 @@
 import ipaddress
 
 from iris.cluster.platforms.k8s.constants import (
+    CONTAINER_GROUP_NETWORK,
     EGRESS_LABEL,
     EGRESS_NETWORK_POLICY_PREFIX,
-    SERVICE_GROUP_NETWORK,
 )
 from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS, TaskNetwork
 
-SERVICE_GROUP_NETWORK_POLICY_NAME = f"{EGRESS_NETWORK_POLICY_PREFIX}{SERVICE_GROUP_NETWORK}"
+CONTAINER_GROUP_NETWORK_POLICY_NAME = f"{EGRESS_NETWORK_POLICY_PREFIX}{CONTAINER_GROUP_NETWORK}"
 _NAMESPACE_NAME_LABEL = "kubernetes.io/metadata.name"
 _DNS_NAMESPACE = "kube-system"
 _DNS_PORT = 53
@@ -52,14 +52,14 @@ def build_egress_network_policy(namespace: str, network: TaskNetwork, service_ci
     }
 
 
-def build_service_group_network_policy(namespace: str) -> dict:
-    """Deny all ingress and egress for service groups sharing pod loopback."""
+def build_container_group_network_policy(namespace: str) -> dict:
+    """Deny all ingress and egress for container groups sharing pod loopback."""
     return {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
-        "metadata": {"name": SERVICE_GROUP_NETWORK_POLICY_NAME, "namespace": namespace},
+        "metadata": {"name": CONTAINER_GROUP_NETWORK_POLICY_NAME, "namespace": namespace},
         "spec": {
-            "podSelector": {"matchLabels": {EGRESS_LABEL: SERVICE_GROUP_NETWORK}},
+            "podSelector": {"matchLabels": {EGRESS_LABEL: CONTAINER_GROUP_NETWORK}},
             "policyTypes": ["Ingress", "Egress"],
             "ingress": [],
             "egress": [],

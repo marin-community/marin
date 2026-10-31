@@ -38,7 +38,7 @@ from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
-from iris.cluster.platforms.k8s.network_policies import build_service_group_network_policy
+from iris.cluster.platforms.k8s.network_policies import build_container_group_network_policy
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
@@ -73,20 +73,20 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
 
 
 @pytest.fixture
-def service_group_request():
+def container_group_request():
     request = make_run_req("/alice/group/0", cpu_mc=2000)
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.task_image = "example.test/task@sha256:" + "a" * 64
-    request.environment.primary_service = "task"
-    primary = request.environment.services.add(
+    request.environment.primary_container = "task"
+    primary = request.environment.containers.add(
         name="task",
         image=request.task_image,
         workdir="/app",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
     )
     primary.runtime_entrypoint.CopyFrom(request.entrypoint)
-    request.environment.services.add(
+    request.environment.containers.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
@@ -100,10 +100,10 @@ def service_group_request():
 
 
 @pytest.mark.parametrize("omitted_empty_rules", [False, True])
-def test_service_groups_dispatch_with_read_only_access_to_installed_isolation(
-    provider, k8s, monkeypatch, service_group_request, omitted_empty_rules
+def test_container_groups_dispatch_with_read_only_access_to_installed_isolation(
+    provider, k8s, monkeypatch, container_group_request, omitted_empty_rules
 ):
-    policy = build_service_group_network_policy("iris")
+    policy = build_container_group_network_policy("iris")
     if omitted_empty_rules:
         policy["spec"].pop("ingress")
         policy["spec"].pop("egress")
@@ -116,15 +116,17 @@ def test_service_groups_dispatch_with_read_only_access_to_installed_isolation(
         apply(manifest)
 
     monkeypatch.setattr(k8s, "apply_json", apply_without_policy_write)
-    updates = provider.sync(make_batch(tasks_to_run=[service_group_request]))
+    updates = provider.sync(make_batch(tasks_to_run=[container_group_request]))
     assert updates == []
     assert len(k8s.list_json(K8sResource.PODS)) == 1
     assert k8s.list_json(K8sResource.NETWORK_POLICIES) == [policy]
 
 
 @pytest.mark.parametrize("failure", ["missing", "egress", "ingress", "selector", "directions", "deleting"])
-def test_service_groups_without_enforcing_isolation_never_create_a_pod(provider, k8s, service_group_request, failure):
-    policy = build_service_group_network_policy("iris")
+def test_container_groups_without_enforcing_isolation_never_create_a_pod(
+    provider, k8s, container_group_request, failure
+):
+    policy = build_container_group_network_policy("iris")
     if failure in {"egress", "ingress"}:
         policy["spec"][failure] = [{}]
     elif failure == "selector":
@@ -135,7 +137,7 @@ def test_service_groups_without_enforcing_isolation_never_create_a_pod(provider,
         policy["metadata"]["deletionTimestamp"] = "2026-10-24T00:00:00Z"
     if failure != "missing":
         k8s.apply_json(policy)
-    updates = provider.sync(make_batch(tasks_to_run=[service_group_request]))
+    updates = provider.sync(make_batch(tasks_to_run=[container_group_request]))
     assert len(updates) == 1
     assert updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
     assert k8s.list_json(K8sResource.PODS) == []
@@ -254,10 +256,10 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
         ("service-runtime", 7, job_pb2.TASK_STATE_FAILED),
     ],
 )
-def test_default_service_group_member_exit_completes_task_and_reclaims_peers(
-    provider, k8s, service_group_request, exited_container, exit_code, expected_state
+def test_default_container_group_member_exit_completes_task_and_reclaims_peers(
+    provider, k8s, container_group_request, exited_container, exit_code, expected_state
 ):
-    request = service_group_request
+    request = container_group_request
     request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
     request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
     entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)
@@ -286,9 +288,9 @@ def test_default_service_group_member_exit_completes_task_and_reclaims_peers(
 
 @pytest.mark.parametrize("condition_type", ["DisruptionTarget", "TerminationTarget"])
 def test_service_exiting_before_the_primary_preserves_disruption_classification(
-    provider, k8s, service_group_request, condition_type
+    provider, k8s, container_group_request, condition_type
 ):
-    request = service_group_request
+    request = container_group_request
     request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
     request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
     entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)
@@ -314,14 +316,14 @@ def test_service_exiting_before_the_primary_preserves_disruption_classification(
     assert k8s.get_json(K8sResource.PODS, pod_name) is None
 
 
-def test_default_service_groups_keep_private_loopback_when_the_cluster_uses_host_network(k8s, service_group_request):
+def test_default_container_groups_keep_private_loopback_when_the_cluster_uses_host_network(k8s, container_group_request):
     provider = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(host_network=True), cluster_scan_interval=0.0
     )
     requests = []
     for name in ("first", "second"):
         request = job_pb2.RunTaskRequest()
-        request.CopyFrom(service_group_request)
+        request.CopyFrom(container_group_request)
         request.task_id = f"/alice/{name}/0"
         request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
         request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
@@ -339,14 +341,14 @@ def test_default_service_groups_keep_private_loopback_when_the_cluster_uses_host
         provider.close()
 
 
-def test_multi_host_gpu_service_group_is_rejected_before_pod_creation(provider, k8s, service_group_request):
-    request = service_group_request
+def test_multi_host_gpu_container_group_is_rejected_before_pod_creation(provider, k8s, container_group_request):
+    request = container_group_request
     request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
     request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
     request.num_tasks = 2
-    request.environment.services[0].resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=1))
+    request.environment.containers[0].resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=1))
     launch = controller_pb2.Controller.LaunchJobRequest(replicas=2, environment=request.environment)
-    launch.resources.device.gpu.CopyFrom(request.environment.services[0].resources.device.gpu)
+    launch.resources.device.gpu.CopyFrom(request.environment.containers[0].resources.device.gpu)
 
     assert "InfiniBand" in provider.validate_job(launch)
     [failure] = provider.sync(make_batch(tasks_to_run=[request]))
@@ -358,8 +360,8 @@ def test_multi_host_gpu_service_group_is_rejected_before_pod_creation(provider, 
 @pytest.mark.parametrize(
     "exit_code, expected_state", [(0, job_pb2.TASK_STATE_SUCCEEDED), (7, job_pb2.TASK_STATE_FAILED)]
 )
-def test_default_service_group_waits_for_output_upload_then_keeps_primary_outcome(
-    k8s, service_group_request, monkeypatch, exit_code, expected_state
+def test_default_container_group_waits_for_output_upload_then_keeps_primary_outcome(
+    k8s, container_group_request, monkeypatch, exit_code, expected_state
 ):
     current_time = 0.0
     monkeypatch.setattr("iris.cluster.backends.k8s.tasks.time.monotonic", lambda: current_time)
@@ -369,7 +371,7 @@ def test_default_service_group_waits_for_output_upload_then_keeps_primary_outcom
         pods=pod_config(task_outputs=TaskOutputPolicy(finalization_timeout=Duration.from_seconds(1))),
         cluster_scan_interval=0.0,
     )
-    request = service_group_request
+    request = container_group_request
     request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
     request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
     entry = RunningTaskEntry(task_id=JobName.from_wire(request.task_id), attempt_id=request.attempt_id)

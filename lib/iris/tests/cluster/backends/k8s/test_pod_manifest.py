@@ -27,7 +27,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.network_policies import build_service_group_network_policy
+from iris.cluster.platforms.k8s.network_policies import build_container_group_network_policy
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
@@ -79,8 +79,8 @@ def _dispatch(
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
-    if len(request.environment.services) > 1 and request.egress_policy == job_pb2.EGRESS_POLICY_NONE:
-        k8s.apply_json(build_service_group_network_policy(config.namespace))
+    if len(request.environment.containers) > 1 and request.egress_policy == job_pb2.EGRESS_POLICY_NONE:
+        k8s.apply_json(build_container_group_network_policy(config.namespace))
     provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))
@@ -1228,21 +1228,21 @@ def test_allowlist_job_rules_reach_only_their_own_attempt():
 
 
 @pytest.mark.parametrize("override_command", [False, True])
-def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(override_command):
+def test_private_container_group_separates_filesystems_and_has_no_off_pod_network(override_command):
     request = make_run_req("/alice/group/0", cpu_mc=3000)
     request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
     request.egress_policy = job_pb2.EGRESS_POLICY_NONE
     request.task_image = "example.test/task@sha256:" + "a" * 64
     request.resources.disk_bytes = 2 * 1024**3
-    request.environment.primary_service = "agent"
-    primary = request.environment.services.add(
+    request.environment.primary_container = "agent"
+    primary = request.environment.containers.add(
         name="agent",
         image=request.task_image,
         workdir="/app",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=3 * 1024**3, disk_bytes=1024**3),
     )
     primary.runtime_entrypoint.CopyFrom(request.entrypoint)
-    service = request.environment.services.add(
+    service = request.environment.containers.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
@@ -1319,8 +1319,8 @@ def test_default_profile_supports_named_image_services_on_the_cluster_network():
     request = make_run_req("/alice/default-group/0")
     request.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
     request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
-    request.environment.primary_service = "agent"
-    agent = request.environment.services.add(
+    request.environment.primary_container = "agent"
+    agent = request.environment.containers.add(
         name="agent",
         image="example.test/agent:latest",
         workdir="/agent",
@@ -1328,7 +1328,7 @@ def test_default_profile_supports_named_image_services_on_the_cluster_network():
         resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=2 * 1024**3),
     )
     agent.image_command.SetInParent()
-    runtime = request.environment.services.add(
+    runtime = request.environment.containers.add(
         name="runtime",
         image="example.test/runtime:latest",
         workdir="/runtime",

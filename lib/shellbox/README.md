@@ -39,7 +39,7 @@ runtime on the host. The Daytona SDK and current Iris dependencies require
 Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
 credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
-Private service groups also deny DNS.
+Private container groups also deny DNS.
 
 Online Iris execution requires a trusted driver on the Kubernetes cluster's Pod
 network. Its primary image needs Python 3.11 or newer for the direct process helper;
@@ -88,16 +88,16 @@ currently unsupported by these Shellbox backends. All members use the same
 network policy; backend admission applies the sandbox restrictions separately.
 
 The Iris factory lowers every member, including the primary, to Iris's native
-`TaskSpec.services` and submits it with `IrisClient.submit_task`. Iris's ordinary
-single-command API normalizes to the same service model; its container profile
+`TaskSpec.containers` and submits it with `IrisClient.submit_task`. Iris's ordinary
+single-command API normalizes to the same container model; its container profile
 and egress policy determine isolation separately.
 
 Multi-container Shellbox tasks create one CPU-only
 Kubernetes pod under gVisor, with separate container filesystems and a private
-shared loopback network. Service names and `task` resolve to `127.0.0.1` within
+shared loopback network. Container names and `task` resolve to `127.0.0.1` within
 that pod. `group.endpoint("runtime", "http")` returns the declared private
-`runtime:8000` address; it is not a host-accessible endpoint. The task and every
-service must request `NetworkPolicy.DENY` and digest-pinned registry images.
+`runtime:8000` address; it is not a host-accessible endpoint. Every container
+must request `NetworkPolicy.DENY` and digest-pinned registry images.
 The group reserves the sum of all member CPU, memory and disk requests.
 
 A dedicated deny-all NetworkPolicy is installed before the pod starts. Unlike
@@ -107,7 +107,7 @@ service-account token, log shipper or object-store uploader. Each container runs
 as root inside gVisor with all capabilities dropped and privilege escalation
 disabled. Literal task inputs and image contents must themselves be free of
 production credentials. Iris rejects explicit cloud-storage and controller
-credential variables, and service groups reject secret-enabled factories.
+credential variables, and container groups reject secret-enabled factories.
 The Kubernetes namespace must have an enforcing NetworkPolicy implementation
 and no wider allow policy selecting these pods. Iris may admit the owning
 driver's connection to the primary helper; external egress remains denied.
@@ -116,7 +116,7 @@ rules from all matching policies; the Iris-managed `none` and `internet`
 policies select different labels and do not apply to groups.
 
 Creation starts the containers and returns handles without waiting for health.
-Start host capabilities before readiness when a service needs them:
+Start host capabilities before readiness when a container needs them:
 
 ```python
 from shellbox.http_service import serve_http
@@ -222,17 +222,17 @@ can share one listener; separate network namespaces need their own listeners.
 This relay does not add Docker task-group execution or change plain Docker's
 host-kernel isolation boundary.
 
-`group.wait_ready()` runs each service's own readiness command with its declared
+`group.wait_ready()` runs each container's own readiness command with its declared
 timeout, interval, start period and optional attempt limit. Timed readiness
-requires Python 3 in each service image: a guest supervisor kills the probe's
+requires Python 3 in each container image: a guest supervisor kills the probe's
 process group when its attempt times out, allowing the next attempt without
 stopping the runtime service. Exhausted attempts, the overall readiness timeout
 or cancelled startup close the whole group. Closing any member, a member exiting,
 or the job lifetime ending also tears down the group; containers are not reused
 between trials. Download outputs through machine handles before closing them.
 
-Iris service groups require a Kubernetes controller advertising
-`task-services`; older controllers and Docker-worker backends reject it.
+Iris container groups require a Kubernetes controller advertising
+`task-containers`; older controllers and Docker-worker backends reject it.
 `LocalMachineFactory.create_task` implements the same contract with bubblewrap:
 members share a private loopback network and keep separate filesystems, PID, IPC
 and UTS namespaces. Concurrent groups may use the same ports. Group names resolve
@@ -353,7 +353,7 @@ Re-stage bundles built with an earlier prototype when updating this package; the
 
 With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable at `bin/qemu-system-x86_64` and its libraries at `bin/lib`. Pass those paths as `--qemu` and `--libraries` when staging. The current quicksand-qemu wheel does not supply `bios-microvm.bin`; pass a firmware directory that does. Its QEMU modules are loaded from the staged `lib/qemu` directory.
 
-## Live Iris service-group check
+## Live Iris container-group check
 
 The CoreWeave smoke workflow submits a trusted Pod-network driver against the
 shared `cw-us-west-04a` controller in namespace `iris-ci`. The driver runs
@@ -384,7 +384,7 @@ or controller authority. A source manifest verifies that the driver imports the
 submitted Iris and Shellbox code. The command preserves bounded logs and cancels
 the exact driver tree on exit.
 
-The controller must advertise `task-services` and have permission to
+The controller must advertise `task-containers` and have permission to
 read the named `iris-egress-loopback` NetworkPolicy. The CI workflow grants only
 that policy read within `iris-ci`; the operator installs the policy. Running the
 workflow also rebuilds the controller, deletes managed CI task pods and starts
@@ -449,7 +449,7 @@ for every machine, applying layers and whiteouts. No host program directories
 are mounted into this root. OCI `ENV` becomes the machine environment; use
 `MachineSpec(image, workdir="")` to select the image's working directory instead
 of the API default `/workspace`. Only root image users are currently supported.
-A service starts its image's `ENTRYPOINT` and `CMD` unless its
+A container starts its image's `ENTRYPOINT` and `CMD` unless its
 `ContainerSpec` overrides them. Image defaults cannot grant host environment
 variables. Images need `/bin/sh`, `sleep` and `tar` for exec and transfers; timed readiness
 and `serve_http` additionally require Python 3. `LocalMachineFactory(umoci=...)`

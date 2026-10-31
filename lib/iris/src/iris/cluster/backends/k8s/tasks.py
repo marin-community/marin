@@ -68,6 +68,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
+    CONTAINER_GROUP_NETWORK,
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
@@ -76,7 +77,6 @@ from iris.cluster.platforms.k8s.constants import (
     RDMA_RESOURCE,
     SECRET_FILE_MODE,
     SECRET_GROUP,
-    SERVICE_GROUP_NETWORK,
     STORAGE_SECRETS_DIR,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -95,10 +95,10 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.network_policies import (
+    CONTAINER_GROUP_NETWORK_POLICY_NAME,
     DRIVER_OWNER_LABEL,
     DRIVER_POD_UID_LABEL,
     DRIVER_PORT_LABEL,
-    SERVICE_GROUP_NETWORK_POLICY_NAME,
     driver_connection_policy,
 )
 from iris.cluster.platforms.k8s.service import K8sService
@@ -143,7 +143,12 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
-from iris.cluster.runtime.task_spec import SERVICE_PREFIX, ContainerSpec, task_spec_from_request, validate_task_services
+from iris.cluster.runtime.task_spec import (
+    COMPANION_CONTAINER_PREFIX,
+    ContainerSpec,
+    task_spec_from_request,
+    validate_task_containers,
+)
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
@@ -864,14 +869,14 @@ def _topology_request_annotations(
 def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
     """Whether the task pod joins its node's network, when the cluster enables host networking.
 
-    Single-container CLUSTER pods do. Service groups keep their own loopback,
+    Single-container CLUSTER pods do. Container groups keep their own loopback,
     and legacy gVisor needs the CNI-created interface and routes for egress.
     """
     if (
         not config.host_network
         or run_req.environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
         or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
-        or len(run_req.environment.services) > 1
+        or len(run_req.environment.containers) > 1
     ):
         return False
     return network is TaskNetwork.CLUSTER
@@ -887,7 +892,7 @@ def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) ->
     return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
 
 
-def _service_group_security_context() -> dict:
+def _container_group_security_context() -> dict:
     return {
         "runAsUser": 0,
         "capabilities": {"drop": ["ALL"]},
@@ -934,12 +939,12 @@ def _build_pod_manifest(
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     try:
         task_spec = task_spec_from_request(run_req, config.default_image)
-        validate_task_services(run_req.container_profile, run_req.egress_policy, run_req.environment)
+        validate_task_containers(run_req.container_profile, run_req.egress_policy, run_req.environment)
     except ValueError as error:
         raise PodManifestError(str(error)) from error
     multiple = len(task_spec.containers) > 1
     if multiple and _needs_infiniband(run_req.num_tasks, run_req.resources.device):
-        raise PodManifestError("Multi-service tasks do not support multi-host GPU InfiniBand networking")
+        raise PodManifestError("Multi-container tasks do not support multi-host GPU InfiniBand networking")
     private_group = multiple and isolation.network is TaskNetwork.NONE
     service_account = config.service_account if isolation.include_service_account else ""
     network = isolation.network
@@ -1039,7 +1044,9 @@ def _build_pod_manifest(
     volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     containers = [
-        _container_manifest(member, "task" if member.name == task_spec.primary else f"{SERVICE_PREFIX}{member.name}")
+        _container_manifest(
+            member, "task" if member.name == task_spec.primary else f"{COMPANION_CONTAINER_PREFIX}{member.name}"
+        )
         for member in task_spec.containers
     ]
     container = containers[0]
@@ -1065,7 +1072,7 @@ def _build_pod_manifest(
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
     if multiple and run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
         for member in containers:
-            member["securityContext"] = _service_group_security_context()
+            member["securityContext"] = _container_group_security_context()
 
     if resources:
         container["resources"] = resources
@@ -1093,7 +1100,7 @@ def _build_pod_manifest(
     if managed_label:
         labels[managed_label] = "true"
     if network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = SERVICE_GROUP_NETWORK if private_group else network.value
+        labels[EGRESS_LABEL] = CONTAINER_GROUP_NETWORK if private_group else network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1417,7 +1424,8 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             (
                 status
                 for status in pod.get("status", {}).get("containerStatuses", [])
-                if status.get("name", "").startswith(SERVICE_PREFIX) and "terminated" in status.get("state", {})
+                if status.get("name", "").startswith(COMPANION_CONTAINER_PREFIX)
+                and "terminated" in status.get("state", {})
             ),
             None,
         )
@@ -1426,7 +1434,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             new_state = _pod_failure_state(pod)
             terminal_reason = _extract_terminal_reason(pod)
             service_error = (
-                f"Task service {exited['name']} exited before the primary completed "
+                f"Task container {exited['name']} exited before the primary completed "
                 f"(exit code {terminated.get('exitCode', 1)}): {terminated.get('reason', 'terminated')}"
             )
             return TaskUpdate(
@@ -2646,8 +2654,8 @@ class K8sTaskProvider:
             request.replicas, request.resources.device
         ):
             return "POD network attachment does not support multi-host GPU InfiniBand networking"
-        if len(request.environment.services) > 1 and _needs_infiniband(request.replicas, request.resources.device):
-            return "Multi-service tasks do not support multi-host GPU InfiniBand networking"
+        if len(request.environment.containers) > 1 and _needs_infiniband(request.replicas, request.resources.device):
+            return "Multi-container tasks do not support multi-host GPU InfiniBand networking"
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
@@ -2920,7 +2928,7 @@ class K8sTaskProvider:
         pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
-            container = f"{SERVICE_PREFIX}{request.container_name}" if request.container_name else "task"
+            container = f"{COMPANION_CONTAINER_PREFIX}{request.container_name}" if request.container_name else "task"
             result = self.kubectl.exec(pod_name, command, container=container, timeout=effective_timeout)
             return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
@@ -2968,24 +2976,24 @@ class K8sTaskProvider:
         """Create or update the Pod for a task attempt."""
         manifest = _build_pod_manifest(run_req, self.pods)
         if (
-            len(run_req.environment.services) > 1
+            len(run_req.environment.containers) > 1
             and task_isolation(run_req.container_profile, run_req.egress_policy).network is TaskNetwork.NONE
         ):
             # Kubernetes permits network access when no policy selects a pod.
             # Only the operator may install or change the durable deny-all policy.
-            policy = self.kubectl.get_json(K8sResource.NETWORK_POLICIES, SERVICE_GROUP_NETWORK_POLICY_NAME)
+            policy = self.kubectl.get_json(K8sResource.NETWORK_POLICIES, CONTAINER_GROUP_NETWORK_POLICY_NAME)
             spec = policy.get("spec", {}) if policy is not None else {}
             if (
                 policy is None
                 or policy.get("metadata", {}).get("deletionTimestamp")
-                or spec.get("podSelector") != {"matchLabels": {EGRESS_LABEL: SERVICE_GROUP_NETWORK}}
+                or spec.get("podSelector") != {"matchLabels": {EGRESS_LABEL: CONTAINER_GROUP_NETWORK}}
                 or set(spec.get("policyTypes", [])) != {"Ingress", "Egress"}
                 or spec.get("ingress")
                 or spec.get("egress")
             ):
                 raise KubectlError(
-                    f"Service groups require the operator-installed {SERVICE_GROUP_NETWORK_POLICY_NAME} "
-                    "NetworkPolicy to select only service groups and deny all ingress and egress"
+                    f"Container groups require the operator-installed {CONTAINER_GROUP_NETWORK_POLICY_NAME} "
+                    "NetworkPolicy to select only container groups and deny all ingress and egress"
                 )
 
         task_id_name = JobName.from_wire(run_req.task_id)

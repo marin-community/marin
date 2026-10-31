@@ -3,7 +3,7 @@
 
 """Define Kubernetes namespace and RBAC manifests for Iris controllers."""
 
-from iris.cluster.platforms.k8s.network_policies import SERVICE_GROUP_NETWORK_POLICY_NAME
+from iris.cluster.platforms.k8s.network_policies import CONTAINER_GROUP_NETWORK_POLICY_NAME
 
 TASK_SECRET_ROLE_NAME = "iris-task-secret-delivery"
 
@@ -54,7 +54,7 @@ CLUSTER_ROLE_RULES = [
         # without permission to create, relax, or delete NetworkPolicies.
         "apiGroups": ["networking.k8s.io"],
         "resources": ["networkpolicies"],
-        "resourceNames": [SERVICE_GROUP_NETWORK_POLICY_NAME],
+        "resourceNames": [CONTAINER_GROUP_NETWORK_POLICY_NAME],
         "verbs": ["get"],
     },
     {

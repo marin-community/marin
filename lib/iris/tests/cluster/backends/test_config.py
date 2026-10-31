@@ -1966,8 +1966,8 @@ def test_k8s_dispatch_uses_configured_image_and_isolated_runtime_class(monkeypat
     try:
         request = make_run_req("/alice/runtime/0")
         request.container_profile = profile
-        request.environment.primary_service = "agent--main"
-        primary = request.environment.services.add(
+        request.environment.primary_container = "agent--main"
+        primary = request.environment.containers.add(
             name="agent--main",
             workdir="/app",
             resources=request.resources,

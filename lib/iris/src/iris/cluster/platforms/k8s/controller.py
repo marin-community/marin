@@ -58,7 +58,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
 )
-from iris.cluster.platforms.k8s.network_policies import build_egress_network_policy, build_service_group_network_policy
+from iris.cluster.platforms.k8s.network_policies import build_container_group_network_policy, build_egress_network_policy
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import TASK_SECRET_ROLE_NAME, cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -1007,7 +1007,7 @@ class K8sControllerProvider:
     def ensure_egress_network_policies(self, config: IrisClusterConfig) -> None:
         """Create the policies for pods off the cluster network, one per egress policy.
 
-        INTERNET and NONE get NetworkPolicies; service groups get a deny-all policy.
+        INTERNET and NONE get NetworkPolicies; container groups get a deny-all policy.
         ALLOWLIST gets the namespace-wide
         CiliumNetworkPolicy when ``kubernetes_provider.cilium`` is set.
         Never deleted on stop: they select only labeled pods, and removing one
@@ -1017,7 +1017,7 @@ class K8sControllerProvider:
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
-        self._kubectl.apply_json(build_service_group_network_policy(self._namespace))
+        self._kubectl.apply_json(build_container_group_network_policy(self._namespace))
         cilium = config.kubernetes_provider.cilium
         if cilium is not None:
             self._kubectl.apply_json(

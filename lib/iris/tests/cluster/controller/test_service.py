@@ -658,7 +658,7 @@ def test_redact_request_env_vars_does_not_mutate_original():
             env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}, secrets={"arbitrary": "private"}
         ),
     )
-    original.environment.services.add(
+    original.environment.containers.add(
         name="agent",
         env_vars={"HF_TOKEN": "nested-secret", "SAFE": "nested-visible"},
         secrets={"arbitrary": "nested-private"},
@@ -670,8 +670,8 @@ def test_redact_request_env_vars_does_not_mutate_original():
     assert redacted.environment.env_vars["SAFE"] == "ok"
     assert original.environment.secrets["arbitrary"] == "private"
     assert redacted.environment.secrets["arbitrary"] == REDACTED_VALUE
-    [original_service] = original.environment.services
-    [redacted_service] = redacted.environment.services
+    [original_service] = original.environment.containers
+    [redacted_service] = redacted.environment.containers
     assert original_service.env_vars["HF_TOKEN"] == "nested-secret"
     assert original_service.secrets["arbitrary"] == "nested-private"
     assert redacted_service.env_vars["HF_TOKEN"] == REDACTED_VALUE
@@ -749,7 +749,7 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["DB_PASSWORD"] == REDACTED_VALUE
     assert env["SAFE_VAR"] == "visible"
     assert env["NUM_WORKERS"] == "4"
-    [primary] = response.request.environment.services
+    [primary] = response.request.environment.containers
     assert primary.env_vars["HF_TOKEN"] == REDACTED_VALUE
     assert primary.env_vars["SAFE_VAR"] == "visible"
     assert primary.secrets["arbitrary"] == REDACTED_VALUE

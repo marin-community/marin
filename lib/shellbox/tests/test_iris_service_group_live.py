@@ -248,7 +248,7 @@ async def _foreign_driver_blocked(observer: IrisClient, machine: IrisMachine, im
             )
 
 
-def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(
+def test_iris_container_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(
     monkeypatch, record_property, tmp_path: Path
 ):
     info = get_job_info()

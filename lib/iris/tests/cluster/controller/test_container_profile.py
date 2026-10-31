@@ -189,24 +189,24 @@ def test_singleton_keeps_permitted_explicit_credentials_and_setup(service, profi
     ).request
 
     assert response.job_id == request.name
-    [primary] = stored.environment.services
+    [primary] = stored.environment.containers
     assert credential_name in primary.env_vars
     assert "JUDGE_KEY" in primary.secrets
     assert list(primary.setup_scripts) == ["prepare-judge"]
 
 
-def _service_group_request():
+def _container_group_request():
     request = _launch("/alice/group", SANDBOX, job_pb2.EGRESS_POLICY_NONE)
     request.task_image = "example.test/task@sha256:" + "a" * 64
-    request.environment.primary_service = "agent"
-    primary = request.environment.services.add(
+    request.environment.primary_container = "agent"
+    primary = request.environment.containers.add(
         name="agent",
         image=request.task_image,
         workdir="/app",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
     )
     primary.runtime_entrypoint.CopyFrom(request.entrypoint)
-    request.environment.services.add(
+    request.environment.containers.add(
         name="runtime",
         image="example.test/runtime@sha256:" + "b" * 64,
         workdir="/app",
@@ -219,9 +219,9 @@ def _service_group_request():
 
 
 @pytest.mark.parametrize("profile", [DEFAULT, SANDBOX])
-def test_service_group_persists_all_members_and_total_resources_on_admission(service, profile):
+def test_container_group_persists_all_members_and_total_resources_on_admission(service, profile):
     service._controller.backend.descriptor = k8s_backend_descriptor()
-    request = _service_group_request()
+    request = _container_group_request()
     request.container_profile = profile
     response = _as("user", "alice", service.launch_job, request, None)
     stored = _as(
@@ -233,13 +233,13 @@ def test_service_group_persists_all_members_and_total_resources_on_admission(ser
     ).request
     assert stored.resources.cpu_millicores == 2000
     assert stored.resources.memory_bytes == 2 * 1024**3
-    assert [member.name for member in stored.environment.services] == ["agent", "runtime"]
-    assert stored.environment.primary_service == "agent"
-    assert [member.resources.cpu_millicores for member in stored.environment.services] == [1000, 1000]
+    assert [member.name for member in stored.environment.containers] == ["agent", "runtime"]
+    assert stored.environment.primary_container == "agent"
+    assert [member.resources.cpu_millicores for member in stored.environment.containers] == [1000, 1000]
 
 
 def test_worker_backend_rejects_multi_service_submission_before_persisting(service):
-    request = _service_group_request()
+    request = _container_group_request()
     request.container_profile = DEFAULT
 
     with pytest.raises(ConnectError) as error:
@@ -258,7 +258,7 @@ def test_worker_backend_rejects_multi_service_submission_before_persisting(servi
 
 def test_service_exec_cannot_select_infrastructure_containers(service):
     service._controller.backend.descriptor = k8s_backend_descriptor()
-    task = _service_group_request()
+    task = _container_group_request()
     _as("user", "alice", service.launch_job, task, None)
     backend = service._controller.backend
     backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(stdout="runtime")
@@ -283,15 +283,15 @@ def test_service_exec_cannot_select_infrastructure_containers(service):
 
 
 @pytest.mark.parametrize("location", ["task", "service", "secret", "egress"])
-def test_sandbox_service_groups_reject_credentials_and_external_egress_at_admission(service, location):
+def test_sandbox_container_groups_reject_credentials_and_external_egress_at_admission(service, location):
     service._controller.backend.descriptor = k8s_backend_descriptor()
-    request = _service_group_request()
+    request = _container_group_request()
     if location == "task":
-        request.environment.services[0].env_vars["AWS_SECRET_ACCESS_KEY"] = "private"
+        request.environment.containers[0].env_vars["AWS_SECRET_ACCESS_KEY"] = "private"
     elif location == "service":
-        request.environment.services[1].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
+        request.environment.containers[1].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
     elif location == "secret":
-        request.environment.services[0].secrets["CW_KEY_SECRET"] = "private"
+        request.environment.containers[0].secrets["CW_KEY_SECRET"] = "private"
     else:
         request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
     with pytest.raises(ConnectError) as error:

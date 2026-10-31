@@ -160,7 +160,7 @@ class TaskClient(LocalClient):
     def submit_task(self, **kwargs):
         self.submitted = kwargs
         self.job.process = subprocess.Popen(
-            kwargs["task"].primary_service.command.command,
+            kwargs["task"].primary_container.command.command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -242,7 +242,7 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     submitted_environments = []
 
     def submit(**kwargs):
-        submitted_environments.append(kwargs["task"].primary_service.env_vars)
+        submitted_environments.append(kwargs["task"].primary_container.env_vars)
         return submit_task(**kwargs)
 
     client.submit_task = submit
@@ -752,11 +752,11 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
     assert rpc.targets == {"runtime"}
     native_task = client.submitted["task"]
     assert native_task.primary == "task"
-    assert [(service.name, service.resources.cpu, service.resources.memory) for service in native_task.services] == [
+    assert [(service.name, service.resources.cpu, service.resources.memory) for service in native_task.containers] == [
         ("task", 2, 256 * 1024 * 1024),
         ("runtime", 1, 128 * 1024 * 1024),
     ]
-    runtime_service = native_task.services[1]
+    runtime_service = native_task.containers[1]
     assert runtime_service.command is None
     assert runtime_service.entrypoint is None
     assert runtime_service.arguments is None

@@ -1958,12 +1958,12 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
     assert vm["runningTaskCount"] == 1
 
 
-def test_list_backends_advertises_task_services_to_clients(state, scheduler, tmp_path, log_client):
+def test_list_backends_advertises_task_containers_to_clients(state, scheduler, tmp_path, log_client):
     client, _, provider, _ = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
     try:
         [summary] = rpc_post(client, "ListBackends")["backends"]
         assert "cluster" in summary["capabilities"]
-        assert "task-services" in summary["capabilities"]
+        assert "task-containers" in summary["capabilities"]
     finally:
         provider.close()
 
