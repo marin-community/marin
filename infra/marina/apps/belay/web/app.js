@@ -44,6 +44,65 @@ function setChildren(id, ...children) {
   document.getElementById(id).replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false))
 }
 
+// ---------- a Markdown subset (paragraphs, lists, tables, `code`, **bold**, links), built as DOM nodes ----------
+
+function inline(text) {
+  const nodes = []
+  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g
+  let last = 0
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > last) nodes.push(text.slice(last, match.index))
+    const token = match[0]
+    if (match[1]) nodes.push(el('code', {}, token.slice(1, -1)))
+    else if (match[2]) nodes.push(el('strong', {}, ...inline(token.slice(2, -2))))
+    else nodes.push(link(match[4], token.slice(1, token.indexOf(']'))))
+    last = match.index + token.length
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+function markdown(source) {
+  const lines = source.replace(/\r/g, '').split('\n')
+  const blocks = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    if (!line.trim()) {
+      i += 1
+    } else if (line.trim().startsWith('|')) {
+      const rows = []
+      while (i < lines.length && lines[i].trim().startsWith('|')) rows.push(lines[i++].trim())
+      const cells = (row) => row.replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+      const body = rows.filter((r, n) => !(n === 1 && /^\|[\s|:-]+\|?$/.test(r)))
+      const [head, ...rest] = body.map(cells)
+      blocks.push(
+        el('div', { class: 'scroll' }, el('table', {},
+          el('thead', {}, el('tr', {}, head.map((c) => el('th', {}, ...inline(c))))),
+          el('tbody', {}, rest.map((r) => el('tr', {}, r.map((c) => el('td', {}, ...inline(c)))))),
+        )),
+      )
+    } else if (/^\s*([-*]|\d+\.)\s/.test(line)) {
+      const ordered = /^\s*\d+\./.test(line)
+      const items = []
+      while (i < lines.length && /^\s*([-*]|\d+\.)\s/.test(lines[i])) {
+        let item = lines[i++].replace(/^\s*([-*]|\d+\.)\s/, '')
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s/.test(lines[i])) item += ' ' + lines[i++].trim()
+        items.push(el('li', {}, ...inline(item)))
+      }
+      blocks.push(el(ordered ? 'ol' : 'ul', {}, items))
+    } else if (/^#{1,4}\s/.test(line)) {
+      blocks.push(el('h4', {}, ...inline(line.replace(/^#+\s/, ''))))
+      i += 1
+    } else {
+      const para = []
+      while (i < lines.length && lines[i].trim() && !/^\s*([-*]|\d+\.)\s|^\s*\||^#{1,4}\s/.test(lines[i])) para.push(lines[i++].trim())
+      blocks.push(el('p', {}, ...inline(para.join(' '))))
+    }
+  }
+  return el('div', { class: 'md' }, blocks)
+}
+
 // ---------- formatting ----------
 
 function relative(iso) {
@@ -307,7 +366,7 @@ function renderIdea(idea) {
       'done',
       'Plan',
       plan.protocol,
-      el('p', { class: 'body' }, plan.summary),
+      markdown(plan.summary ?? ''),
       el(
         'dl',
         { class: 'facts' },
@@ -320,7 +379,7 @@ function renderIdea(idea) {
       ),
     )
   } else if (idea.state === 'declined') {
-    planStep = step('failed', 'Plan', 'declined by the agent', el('p', { class: 'body' }, idea.note ?? ''))
+    planStep = step('failed', 'Plan', 'declined by the agent', markdown(idea.note ?? ''))
   } else {
     planStep = step(
       'current',
@@ -360,7 +419,7 @@ function renderIdea(idea) {
         ),
       ),
       el('div', { class: 'verdict', dataset: { kind: result.kind ?? 'neutral' } }, result.verdict),
-      result.summary ? el('p', { class: 'body' }, result.summary) : null,
+      result.summary ? markdown(result.summary) : null,
     )
   } else {
     resultStep = step(live.length ? 'todo' : runs.length ? 'current' : 'todo', 'Result', runs.length && !live.length ? 'the next session records it' : 'after the runs finish')
@@ -460,7 +519,7 @@ function renderSessions() {
           link(`${API}/sessions/${encodeURIComponent(s.id)}/transcript`, s.transcript_bytes ? 'transcript' : 'transcript (pending)'),
         ),
         s.events.length ? el('ul', {}, s.events.map((e) => el('li', {}, e.summary))) : null,
-        s.summary ? el('p', { class: 'summary' }, s.summary) : null,
+        s.summary ? el('div', { class: 'summary' }, markdown(s.summary)) : null,
       )
     }),
   )
@@ -477,9 +536,9 @@ function renderActivity() {
       el(
         'li',
         { dataset: { kind: a.kind } },
-        el('div', { class: 'feed-title' }, a.registry_id ? [el('code', {}, a.registry_id), ' '] : null, a.title),
+        el('div', { class: 'feed-title' }, a.registry_id && !a.title.startsWith(a.registry_id) ? [el('code', {}, a.registry_id), ' '] : null, a.title),
         el('div', {}, when(a.at), a.github_url ? [' · ', link(a.github_url, 'on GitHub')] : null),
-        a.body ? el('pre', { class: 'feed-body' }, a.body) : null,
+        a.body ? el('div', { class: 'feed-body' }, markdown(a.body)) : null,
       ),
     ),
   )
