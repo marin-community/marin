@@ -15,11 +15,12 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.mini_policy_runtime.artifacts import publish
-from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, MODEL, MODEL_REVISION, REVISION
+from experiments.evaluation.mini_policy_runtime.cohort import CohortModel, cohort_model
+from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, REVISION
 from experiments.evaluation.mini_policy_runtime.repair_release import repaired_table
 
 
-def main(excluded: list[str], wheels_revision: str, included: list[str], output_prefix: str):
+def main(excluded: list[str], wheels_revision: str, included: list[str], output_prefix: str, model: CohortModel):
     logging.basicConfig(level=logging.INFO)
     unique = hf_hub_download(DATASET, "data/validation.parquet", repo_type="dataset", revision=REVISION)
     table = repaired_table(pq.read_table(unique), wheels_revision)
@@ -48,7 +49,7 @@ def main(excluded: list[str], wheels_revision: str, included: list[str], output_
         with fs.open(key, "wb") as output:
             pq.write_table(rows, output)
     logging.info("Dataset staged; resolving pinned model mirror")
-    model_uri = resolve_model_path(MODEL, cache_ttl_days=30, revision=MODEL_REVISION)
+    model_uri = resolve_model_path(model.repo, cache_ttl_days=30, revision=model.revision)
     report = {
         "dataset": DATASET,
         "source_revision": REVISION,
@@ -60,11 +61,12 @@ def main(excluded: list[str], wheels_revision: str, included: list[str], output_
         "smoke_excluded_benchmarks": excluded,
         "smoke_included_benchmarks": included,
         "full_data_uri": str(StoragePath(output_prefix) / "full-runtime-v4"),
-        "model": MODEL,
-        "model_revision": MODEL_REVISION,
+        "model": model.repo,
+        "model_revision": model.revision,
+        "cohort_key": model.key,
         "model_uri": model_uri,
     }
-    publish(smoke_name + "-staged-inputs.json", report, output_prefix)
+    publish(f"smoke-runtime-v4-{model.key}-staged-inputs.json", report, output_prefix)
     print(json.dumps(report), flush=True)
 
 
@@ -74,5 +76,6 @@ if __name__ == "__main__":
     parser.add_argument("--smoke-include", action="append", default=[])
     parser.add_argument("--wheels-revision", required=True)
     parser.add_argument("--output-prefix", default=DESTINATION)
+    parser.add_argument("--model", required=True)
     args = parser.parse_args()
-    main(args.smoke_exclude, args.wheels_revision, args.smoke_include, args.output_prefix)
+    main(args.smoke_exclude, args.wheels_revision, args.smoke_include, args.output_prefix, cohort_model(args.model))

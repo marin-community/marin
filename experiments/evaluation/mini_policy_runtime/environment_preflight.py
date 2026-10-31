@@ -17,11 +17,11 @@ from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfi
 from harbor.trial.trial import Trial
 
 from experiments.evaluation.mini_policy_runtime.artifacts import publish
+from experiments.evaluation.mini_policy_runtime.cohort import cohort_model
 from experiments.evaluation.mini_policy_runtime.environment_inventory import restored_environments
 from experiments.evaluation.mini_policy_runtime.profile import (
     DATASET,
     DESTINATION,
-    MODEL,
     REVISION,
     counterpart_environment,
     pi_agent_config,
@@ -29,7 +29,13 @@ from experiments.evaluation.mini_policy_runtime.profile import (
 
 
 async def main(
-    smoke: bool, credential_env: str, data_uri: str, benchmarks: list[str], report_name: str, output_prefix: str
+    smoke: bool,
+    credential_env: str,
+    data_uri: str,
+    benchmarks: list[str],
+    report_name: str,
+    output_prefix: str,
+    model: str,
 ):
     logging.basicConfig(level=logging.INFO)
     os.environ.update(counterpart_environment())
@@ -37,6 +43,7 @@ async def main(
     receipts = []
     failures = []
     semaphore = asyncio.Semaphore(4)
+    served_model = cohort_model(model).repo
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         rows = restored_environments(root / "tasks")
@@ -66,7 +73,7 @@ async def main(
                             agent=AgentConfig.model_validate(
                                 {
                                     **pi_agent_config(),
-                                    "model_name": "hosted_vllm/" + MODEL,
+                                    "model_name": "hosted_vllm/" + served_model,
                                     "mcp_servers": row.agent_mcp_servers,
                                     "kwargs": {
                                         **pi_agent_config()["kwargs"],
@@ -159,7 +166,16 @@ if __name__ == "__main__":
     parser.add_argument("--benchmark", action="append", default=[])
     parser.add_argument("--credential-env", required=True)
     parser.add_argument("--data-uri", required=True)
+    parser.add_argument("--model", required=True)
     args = parser.parse_args()
     asyncio.run(
-        main(args.smoke, args.credential_env, args.data_uri, args.benchmark, args.report_name, args.output_prefix)
+        main(
+            args.smoke,
+            args.credential_env,
+            args.data_uri,
+            args.benchmark,
+            args.report_name,
+            args.output_prefix,
+            args.model,
+        )
     )

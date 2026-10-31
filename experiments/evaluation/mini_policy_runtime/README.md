@@ -12,6 +12,7 @@ The Daytona eval account can build the embedded environment recipes directly. Na
 - Frozen initial Micro210 export: `open-athena/Marin-Micro-Eval-210@4564ed081c316bc3231ae5c3a53a46b39248c819`, 210 unique tasks and 450 expanded rollouts. Micro is the first 210 Mini tasks.
 - Grading wheels: `open-athena/Marin-Mini-Eval-Policy-Index@d5dd315d58f0f47514dd0a2208e90e2a48541328`, directory `runtime-v4/wheels`.
 - Candidate: `Qwen/Qwen3.6-35B-A3B@995ad96eacd98c81ed38be0c5b274b04031597b0`, compiled vLLM, TP2, two H100s, automatic tool calling with `qwen3_coder`.
+- Cohort: the launch `--model` key binds repo, revision, TP2 topology, tool parser, and default chat-template kwargs in `cohort.py`. Chat-aligned bases: `qwen35-35b-a3b` and `nemotron3-nano-30b-a3b` use `qwen3_coder`; `qwen3-30b-a3b` and `snowball-67b-a2b` use `hermes`; no family uses a serving-side reasoning parser, matching the frozen policy model configs.
 - Context: 65,536 total tokens; maximum 16,384 output tokens per turn; thinking enabled. Pi reserves the output budget for compaction and retains 24,576 tokens. There is no cumulative episode-token cap.
 - Trial limits: agent 1,800 seconds in both training and eval; verifier 300; setup 360; cleanup 60; whole attempt 2,460. Harbor owns the agent and verifier deadlines separately so an agent timeout still reaches verification. The outer job allows 24 hours for the whole cohort.
 - Judge: the pinned [MiniMax-M3-MXFP8 configuration](../campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-131k.yaml), 131,072 total context tokens, TP8 on eight H100s. The launcher co-hosts it for BixBench and OlympiadBench fallback.
@@ -42,15 +43,16 @@ export DAYTONA_EVAL_API_KEY=$(gcloud secrets versions access latest --project=ha
 export TOGETHER_API_KEY=$(gcloud secrets versions access latest --project=hai-gcp-models --secret=TOGETHER_API_KEY)
 ```
 
-Choose a fresh artifact version and an output prefix that this run owns:
+Choose a fresh artifact version, an output prefix that this run owns, and the cohort model key:
 
 ```bash
 export MINI_VERSION=$(date -u +%Y.%m.%d.%H%M%S)
 export MINI_PREFIX="s3://marin-rno2a/marin/experiments/mini840-reproduction/$MINI_VERSION"
 export MINI_WHEELS=d5dd315d58f0f47514dd0a2208e90e2a48541328
+export MINI_COHORT_MODEL=qwen36-35b-a3b
 ```
 
-Stage the unchanged first task from each of the 21 benchmarks and the full expanded cohort. This CPU job also resolves a complete revision-pinned candidate weight mirror:
+Stage the unchanged first task from each of the 21 benchmarks and the full expanded cohort. This CPU job also resolves a complete revision-pinned candidate weight mirror. `--model` binds a cohort entry from `mini_policy_runtime/cohort.py`: `qwen36-35b-a3b` is the validated runtime candidate, and the chat-aligned bases are `qwen35-35b-a3b`, `qwen3-30b-a3b`, `nemotron3-nano-30b-a3b`, and `snowball-67b-a2b`.
 
 ```bash
 uv run --frozen iris --cluster marin job run --target-cluster cw-rno2a \
@@ -58,13 +60,14 @@ uv run --frozen iris --cluster marin job run --target-cluster cw-rno2a \
   --cpu 4 --memory 16GB --disk 32GB --enable-extra-resources \
   --timeout 1800 --priority batch -- \
   uv run --frozen python -m experiments.evaluation.mini_policy_runtime.stage_inputs \
-    --wheels-revision "$MINI_WHEELS" --output-prefix "$MINI_PREFIX"
+    --wheels-revision "$MINI_WHEELS" --output-prefix "$MINI_PREFIX" \
+    --model "$MINI_COHORT_MODEL"
 ```
 
 The command waits for completion. Download its staging report and read the model URI:
 
 ```bash
-uv run --frozen fsutil cp "$MINI_PREFIX/smoke-runtime-v4-staged-inputs.json" ./mini840-inputs.json
+uv run --frozen fsutil cp "$MINI_PREFIX/smoke-runtime-v4-$MINI_COHORT_MODEL-staged-inputs.json" ./mini840-inputs.json
 export MINI_MODEL_URI=$(uv run --frozen python -c 'import json; print(json.load(open("mini840-inputs.json"))["model_uri"])')
 ```
 
@@ -80,7 +83,8 @@ uv run --frozen iris --cluster marin job run --target-cluster cw-rno2a \
   uv run --frozen --with-editable ./vendor/harbor --with daytona==0.200.2 --prerelease allow \
     python -m experiments.evaluation.mini_policy_runtime.environment_preflight \
     --smoke --credential-env DAYTONA_EVAL_API_KEY \
-    --data-uri "$MINI_PREFIX/smoke-runtime-v4" --output-prefix "$MINI_PREFIX"
+    --data-uri "$MINI_PREFIX/smoke-runtime-v4" --output-prefix "$MINI_PREFIX" \
+    --model "$MINI_COHORT_MODEL"
 ```
 
 This starts environments from the published recipes and may build their images. It does not require 197 named snapshots. A failed preflight prevents GPU launch.
@@ -92,7 +96,7 @@ Inspect the launch plan first:
 ```bash
 uv run --frozen --with-editable ./vendor/harbor --with daytona==0.200.2 --prerelease allow \
   python -m experiments.evaluation.mini_policy_runtime.launch \
-  --version "$MINI_VERSION" --model-uri "$MINI_MODEL_URI" \
+  --version "$MINI_VERSION" --model "$MINI_COHORT_MODEL" --model-uri "$MINI_MODEL_URI" \
   --data-uri "$MINI_PREFIX/smoke-runtime-v4" \
   --environment-manifest "$MINI_PREFIX/smoke-native-environments.json" \
   --priority production

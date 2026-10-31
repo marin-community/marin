@@ -27,30 +27,35 @@ from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.evaluation.mini_policy_runtime.artifacts import publish
+from experiments.evaluation.mini_policy_runtime.cohort import cohort_model
 from experiments.evaluation.mini_policy_runtime.launch import recipe
-from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION, SEED
+from experiments.evaluation.mini_policy_runtime.profile import SEED
 
 VALIDATION_VERSION = "config-check-dev"
 
 
-def main(manifest_uri: str):
+def main(manifest_uri: str, model_key: str):
     fs, key = filesystem_for(manifest_uri)
     with fs.open(key) as reader:
         manifest = json.load(reader)
+    model = cohort_model(model_key)
     config, plan = recipe(
+        model,
         manifest["environment_overrides"],
         manifest["agent_mcp_servers"],
         manifest["verifier_env"],
         "http://judge.example.invalid/v1",
         manifest["credential_env"],
     )
-    model_directory = str(Path(hf_hub_download(MODEL, "config.json", revision=MODEL_REVISION)).parent)
-    model = ArtifactStep.adopt("mini840-validation-model", VALIDATION_VERSION, MODEL)
+    model_directory = str(Path(hf_hub_download(model.repo, "config.json", revision=model.revision)).parent)
+    model_artifact = ArtifactStep.adopt(f"mini840-{model.key}-validation-model", VALIDATION_VERSION, model.repo)
     spec = SkyRLSpec(
-        name="mini840-config-validation",
+        name=f"mini840-config-validation-{model.key}",
         version=VALIDATION_VERSION,
         config_yaml=yaml.safe_dump(config),
-        model=ArtifactHfModel(model, relative_path="", tokenizer_uri=MODEL, tokenizer_revision=MODEL_REVISION),
+        model=ArtifactHfModel(
+            model_artifact, relative_path="", tokenizer_uri=model.repo, tokenizer_revision=model.revision
+        ),
         train_data=(),
         validation_data=(),
         topology=SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=plan),
@@ -78,7 +83,7 @@ def main(manifest_uri: str):
                 export_hf=False,
                 run_id="mini840-cpu-validation",
                 attempt_id="cpu-validation",
-                model=ResolvedModelLocator(MODEL, MODEL_REVISION, model_directory, MODEL, MODEL_REVISION),
+                model=ResolvedModelLocator(model.repo, model.revision, model_directory, model.repo, model.revision),
                 train_data=(),
                 validation_data=(
                     ResolvedDirectoryDataSource(manifest["data_uri"], "mini840-input", "/tmp/data", "rollouts.parquet"),
@@ -97,4 +102,6 @@ def main(manifest_uri: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment-manifest", required=True)
-    main(parser.parse_args().environment_manifest)
+    parser.add_argument("--model", required=True)
+    args = parser.parse_args()
+    main(args.environment_manifest, args.model)

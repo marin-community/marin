@@ -29,14 +29,13 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.evaluation.mini_policy_runtime.cohort import CohortModel, cohort_model, engine_init_kwargs
 from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged, run_with_existing_judge
 from experiments.evaluation.mini_policy_runtime.profile import (
     AGENT_TIMEOUT,
     ATTEMPT_TIMEOUT,
     CLEANUP_TIMEOUT,
     MAX_OUTPUT_TOKENS,
-    MODEL,
-    MODEL_REVISION,
     SEED,
     SETUP_TIMEOUT,
     TOTAL_CONTEXT_LENGTH,
@@ -47,7 +46,12 @@ from experiments.evaluation.mini_policy_runtime.profile import (
 
 
 def recipe(
-    environment_overrides: dict, agent_mcp_servers: dict, verifier_env: dict, judge_base_url: str, credential_env: str
+    model: CohortModel,
+    environment_overrides: dict,
+    agent_mcp_servers: dict,
+    verifier_env: dict,
+    judge_base_url: str,
+    credential_env: str,
 ) -> tuple[dict, SkyRLRolePlan]:
     plan = SkyRLRolePlan(
         colocate_all=True,
@@ -100,13 +104,13 @@ def recipe(
             "backend": "vllm",
             "model_dtype": "bfloat16",
             "max_num_seqs": 8,
-            "engine_init_kwargs": {"enable_auto_tool_choice": True, "tool_call_parser": "qwen3_coder"},
+            "engine_init_kwargs": engine_init_kwargs(model),
             "run_engines_locally": True,
             "enable_http_endpoint": False,
             "gpu_memory_utilization": 0.85,
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": None},
-            "chat_template_kwargs": {"enable_thinking": True},
+            "chat_template_kwargs": dict(model.chat_template_kwargs or {}),
             "sampling_params": {"temperature": 0.6, "top_p": 0.95, "logprobs": 0},
             "eval_sampling_params": {"temperature": 0.6, "top_p": 0.95},
             "eval_n_samples_per_prompt": 1,
@@ -168,6 +172,7 @@ def validate_environment_preflight(manifest: dict, data_uri: str) -> None:
 
 
 @click.command(help=__doc__)
+@click.option("--model", required=True, help="Cohort model key bound in mini_policy_runtime.cohort.")
 @click.option("--model-uri", required=True, help="Complete, revision-pinned RNO2A weight mirror.")
 @click.option("--data-uri", required=True, help="Preflight-validated rollouts.parquet on RNO2A storage.")
 @click.option("--environment-manifest", required=True, help="Immutable CPU environment-preflight manifest URI.")
@@ -175,14 +180,21 @@ def validate_environment_preflight(manifest: dict, data_uri: str) -> None:
 @click.option("--judge-base-url", help="Existing MiniMax endpoint; otherwise co-host the pinned 131k judge.")
 @rl_build_options
 def main(
-    model_uri: str, data_uri: str, environment_manifest: str, judge_base_url: str | None, priority: str
+    model: str,
+    model_uri: str,
+    data_uri: str,
+    environment_manifest: str,
+    judge_base_url: str | None,
+    priority: str,
 ) -> ArtifactStep:
+    entry = cohort_model(model)
     # StoragePath.open does not route named CoreWeave buckets to their credentials.
     fs, path = filesystem_for(environment_manifest)
     with fs.open(path, "r") as file:
         manifest = json.load(file)
     validate_environment_preflight(manifest, data_uri)
     config, plan = recipe(
+        entry,
         manifest["environment_overrides"],
         manifest["agent_mcp_servers"],
         manifest["verifier_env"],
@@ -190,15 +202,18 @@ def main(
         manifest["credential_env"],
     )
     data = ArtifactStep.adopt("documents/mini840-" + fingerprint_hash(data_uri), "2026.10.31", data_uri)
-    model = ArtifactStep.adopt(
-        "checkpoints/mini840-qwen36", "2026.10.31", model_uri, config={"revision": MODEL_REVISION}
+    model_artifact = ArtifactStep.adopt(
+        f"checkpoints/mini840-{entry.key}", "2026.10.31", model_uri, config={"revision": entry.revision}
     )
+    spec_name = f"checkpoints/mini840-e2e-{entry.key}"
     step = skyrl_step(
         SkyRLSpec(
-            name="checkpoints/mini840-e2e",
-            version=resolve_version("checkpoints/mini840-e2e", None),
+            name=spec_name,
+            version=resolve_version(spec_name, None),
             config_yaml=yaml.safe_dump(config),
-            model=ArtifactHfModel(model, relative_path="", tokenizer_uri=MODEL, tokenizer_revision=MODEL_REVISION),
+            model=ArtifactHfModel(
+                model_artifact, relative_path="", tokenizer_uri=entry.repo, tokenizer_revision=entry.revision
+            ),
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
             topology=SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=plan),

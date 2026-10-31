@@ -9,10 +9,10 @@ import json
 from rigging.filesystem.buckets import filesystem_for
 from transformers import AutoTokenizer
 
-from experiments.evaluation.mini_policy_runtime.profile import MODEL, MODEL_REVISION
+from experiments.evaluation.mini_policy_runtime.cohort import cohort_model
 
 
-def main(evidence_uri: str) -> None:
+def main(model_key: str, evidence_uri: str) -> None:
     fs, path = filesystem_for(evidence_uri)
     request = json.loads(fs.cat_file(path))
     # vLLM's OpenAI chat parser decodes tool arguments before rendering Jinja.
@@ -21,7 +21,8 @@ def main(evidence_uri: str) -> None:
             arguments = call["function"]["arguments"]
             if isinstance(arguments, str):
                 call["function"]["arguments"] = json.loads(arguments)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION)
+    model = cohort_model(model_key)
+    tokenizer = AutoTokenizer.from_pretrained(model.repo, revision=model.revision)
     options = request["options"]
     tokens = tokenizer.apply_chat_template(
         request["messages"],
@@ -45,4 +46,6 @@ def main(evidence_uri: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence-uri", required=True)
-    main(parser.parse_args().evidence_uri)
+    parser.add_argument("--model", required=True)
+    args = parser.parse_args()
+    main(args.model, args.evidence_uri)

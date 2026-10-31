@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Incomplete environment preflights must fail before any GPU submission."""
+"""Cohort bindings and environment validation gates on Mini840 GPU submission."""
 
 import json
 
@@ -9,6 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from experiments.evaluation.mini_policy_runtime import launch
+from experiments.evaluation.mini_policy_runtime.cohort import cohort_model, engine_init_kwargs
 
 
 @pytest.mark.parametrize("defect", ["missing_environment", "wrong_dataset_scope"])
@@ -37,6 +38,8 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
             "--version",
             "2026.10.31",
             "--run",
+            "--model",
+            "qwen36-35b-a3b",
             "--model-uri",
             "s3://example/model",
             "--data-uri",
@@ -47,3 +50,43 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
     )
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
+
+
+def test_unknown_cohort_keys_fail_before_any_staging():
+    with pytest.raises(ValueError, match="snowball-67b-a2b"):
+        cohort_model("phantom-model")
+
+
+@pytest.mark.parametrize(
+    "key,tool_parser",
+    [
+        ("qwen36-35b-a3b", "qwen3_coder"),
+        ("qwen35-35b-a3b", "qwen3_coder"),
+        ("qwen3-30b-a3b", "hermes"),
+        ("nemotron3-nano-30b-a3b", "qwen3_coder"),
+        ("snowball-67b-a2b", "hermes"),
+    ],
+)
+def test_cohort_bindings_reach_the_generator(key, tool_parser):
+    config, _ = launch.recipe(cohort_model(key), {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
+    generator = config["generator"]
+    assert generator["engine_init_kwargs"] == {
+        "enable_auto_tool_choice": True,
+        "tool_call_parser": tool_parser,
+    }
+    default_kwargs = generator["chat_template_kwargs"]
+    template = cohort_model(key).chat_template_kwargs or {}
+    assert default_kwargs == template
+    # The frozen execution profile is model-independent.
+    assert generator["sampling_params"] == {"temperature": 0.6, "top_p": 0.95, "logprobs": 0}
+    assert config["context_budget"] == {
+        "request_window_tokens": 65536,
+        "max_new_tokens_per_turn": 16384,
+        "max_turns": 1024,
+    }
+
+
+def test_snowball_serves_llama_style_chat_template_without_thinking_kwarg():
+    entry = cohort_model("snowball-67b-a2b")
+    assert entry.chat_template_kwargs is None
+    assert engine_init_kwargs(entry) == {"enable_auto_tool_choice": True, "tool_call_parser": "hermes"}
