@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marin Belay</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="parts.css" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="marina-bar">
+      <div class="marina-title-row">
+        <a class="marina-brand" href="/">Marina</a>
+        <span class="marina-divider">/</span>
+        <span class="marina-app-title">Marin Belay</span>
+        <span class="marina-actions"><span class="chip" id="who"></span></span>
+      </div>
+      <nav class="marina-app-nav" aria-label="Sections">
+        <a href="#overview">Overview</a>
+        <a href="#suggestions">Suggestions</a>
+        <a href="#ideas">Ideas</a>
+        <a href="#runs">Runs</a>
+        <a href="#sessions">Sessions</a>
+        <a href="#activity">Activity</a>
+      </nav>
+    </header>
+
+    <main class="page">
+      <section id="overview" aria-labelledby="overview-h">
+        <div class="intro">
+          <h1 id="overview-h">Marin Belay</h1>
+          <p class="note">
+            An agent tests research ideas for
+            <a href="https://github.com/marin-community/marin/issues/9451">Marin Belay</a> on 8×H100 nodes.
+            Maintainers approve ideas here. Each approval starts a short agent session that plans the experiment,
+            commits it and launches its runs. When the runs finish, a new session records the result in the
+            registry. Nothing runs without an approval.
+          </p>
+        </div>
+
+        <div class="next" id="next" data-tone="idle">
+          <span class="next-dot" aria-hidden="true"></span>
+          <div>
+            <div class="next-label">What happens next</div>
+            <div class="next-text" id="next-text">Loading…</div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label class="switch">
+            <input type="checkbox" id="dispatch" role="switch" />
+            <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+            <span>
+              <strong>Dispatch</strong> <span id="dispatch-word" class="chip">off</span><br />
+              <span class="hint">When on, queued events start an agent session (one at a time).</span>
+            </span>
+          </label>
+          <div class="control-facts">
+            <div><span class="hint">Watcher</span> <span id="watcher"></span></div>
+            <div><span class="hint">GitHub posting</span> <span id="github" class="chip"></span></div>
+            <div><span class="hint">Queued events</span> <span id="queued"></span></div>
+          </div>
+        </div>
+
+        <ol class="pipeline" id="pipeline" aria-label="Pipeline"></ol>
+      </section>
+
+      <section id="suggestions" aria-labelledby="suggestions-h">
+        <div class="section-head">
+          <h2 id="suggestions-h">Suggestions waiting for a maintainer</h2>
+          <details class="propose">
+            <summary class="button">Propose an idea</summary>
+            <form id="propose-form">
+              <label>Title <input name="title" required maxlength="140" placeholder="e.g. Drop AdEMAMix at Ckpt 1" /></label>
+              <label>What to try and why
+                <textarea name="body" required rows="5" placeholder="The change, the rationale, and what would count as a win."></textarea>
+              </label>
+              <button class="primary" type="submit">Add as a pending suggestion</button>
+            </form>
+          </details>
+        </div>
+        <p class="note">
+          New comments on the intake issue
+          <a href="https://github.com/marin-community/marin/issues/9514">#9514</a> appear here within two minutes.
+          <strong>Approve</strong> queues the idea for the next agent session; <strong>Dismiss</strong> hides it.
+        </p>
+        <div id="pending" class="cards"></div>
+      </section>
+
+      <section id="ideas" aria-labelledby="ideas-h">
+        <h2 id="ideas-h">Ideas in progress and recorded</h2>
+        <p class="note">Each approved idea follows five steps: approval, plan, runs, result, registry entry.</p>
+        <div id="idea-list" class="ideas"></div>
+      </section>
+
+      <section id="runs" aria-labelledby="runs-h">
+        <h2 id="runs-h">Runs and resources</h2>
+        <div class="meters">
+          <div class="meter-card">
+            <div class="meter-label">Nodes (8×H100) in use</div>
+            <div class="meter-value" id="nodes-value"></div>
+            <div class="meter"><span id="nodes-bar"></span></div>
+            <div class="hint" id="nodes-hint"></div>
+          </div>
+          <div class="meter-card">
+            <div class="meter-label">Storage under <code>tmp/ttl=30d/belay/</code></div>
+            <div class="meter-value" id="storage-value"></div>
+            <div class="meter"><span id="storage-bar"></span></div>
+            <div class="hint" id="storage-hint"></div>
+          </div>
+        </div>
+        <div class="scroll"><table>
+          <thead><tr><th>Run</th><th>State</th><th>Progress</th><th>Paloma macro</th><th>Submitted</th><th>Links</th></tr></thead>
+          <tbody id="run-rows"></tbody>
+        </table></div>
+      </section>
+
+      <section id="sessions" aria-labelledby="sessions-h">
+        <h2 id="sessions-h">Agent sessions</h2>
+        <p class="note">
+          A session reads state, acts on its events, submits runs and exits. It never waits for runs; the watcher
+          starts the next session when one finishes.
+        </p>
+        <div id="session-list" class="sessions"></div>
+      </section>
+
+      <section id="activity" aria-labelledby="activity-h">
+        <h2 id="activity-h">Activity</h2>
+        <p class="note">Batch plans, results and every approval and dispatch, newest first.</p>
+        <ol id="feed" class="feed"></ol>
+      </section>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
