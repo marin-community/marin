@@ -45,7 +45,7 @@ class CohortModel:
     num_inference_engines: int = 1
     gpu_memory_utilization: float = 0.85
     max_num_seqs: int = 8
-    max_num_batched_tokens: int | None = None
+    max_num_batched_tokens: int = 8192
     chat_template_file: str | None = None
     chat_template_kwargs: dict | None = None
 
@@ -116,13 +116,10 @@ def cohort_model(key: str) -> CohortModel:
 def engine_init_kwargs(model: CohortModel) -> dict:
     """SkyRL generator engine arguments bound to the model's parser bindings.
 
-    Expert parallel is not passed here: SkyRL forwards its own actor option
-    under the same name, so a duplicate engine kwarg fails actor creation.
+    SkyRL sets the actor-level engine kwargs (expert parallel, concurrency,
+    prefill budget) itself from the generator config, so none are passed here.
     """
-    kwargs = {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
-    if model.max_num_batched_tokens is not None:
-        kwargs["max_num_batched_tokens"] = model.max_num_batched_tokens
-    return kwargs
+    return {"enable_auto_tool_choice": True, "tool_call_parser": model.tool_parser}
 
 
 def chat_template_config(model: CohortModel) -> dict:
