@@ -8,13 +8,15 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 16384
-  (4096 through step 257553), query/key multiplier 1.48 (1.3 at 4K), sliding window 2048, and every
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 65536
+  (4096 through step 257553, 16384 through step 360000), query/key multiplier 1.66 (1.3 at 4K, 1.48 at
+  16K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
   the `replica_dcn` axis. Six experts are on each GPU in each rack.
-- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 2816 global
-  sequences across 11 racks at 16K (11264 at 4K). A one-rack diagnostic defaults to 256 sequences.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 704 global
+  sequences across 11 racks at 65K (11264 at 4K, 2816 at 16K). A one-rack diagnostic defaults to 64
+  sequences.
 - Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
   stop-gradient expert biases and no auxiliary balancing loss.
 - MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
@@ -170,7 +172,7 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 ## Context-length switches
 
 The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
-at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning rates, and weight
+at 4K, 5632 at 8K, 2816 at 16K, and 704 at 65K with the same 390251-step schedule, learning rates, and weight
 decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
@@ -257,7 +259,7 @@ Three quantities set what a sweep can fit on one rack:
 - The receiver buffer is token assignments multiplied by the receiver capacity factor, split
   across the transport's two expert chunks.
 
-The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15 (1.5 at 65K).
 
 ## Diagnostic controls
 
@@ -268,7 +270,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
 | `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
 | `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
-| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.48; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66; extension recipe 1.84), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (1.1386 gives 1.48 from 1.3; 1.2964 gives 1.68) |
 | `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
@@ -340,7 +342,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --version dev --run
 ```
 
-The default batch, 256 at 16K, keeps the production local batch of 4 sequences per GPU. The trace
+The default batch, 64 at 65K, keeps the production local batch of 1 sequence per GPU. The trace
 does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
 ### Profile-guided scheduling
@@ -437,7 +439,7 @@ checkpoint policy all follow `--size`:
 | d1024 | 2 | 2048 | 15,276 | every 5% | final only |
 | d1536 | 6 | 6144 | 15,128 | every 5% | final only |
 | d2048 | 11 | 11264 | 20,072 | every 5% | final only |
-| d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
 batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
