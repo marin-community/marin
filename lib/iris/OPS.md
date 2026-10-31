@@ -1109,104 +1109,34 @@ gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 
 ## Direct sandbox connections
 
-Shellbox's Kubernetes adapter runs its trusted driver inside Iris with explicit
-Pod networking. Each sandbox primary starts a Python process helper. Iris
-allocates the sandbox, authorizes its owning driver, and returns the current
-Pod address and identity through `GetTaskConnection`. Primary commands,
-transfers and persistent model-relay messages then travel directly between
-those Pods. They do not occupy the controller's exec pool or Kubernetes exec
-streams. Companion readiness and artifact transfers still use unary exec.
+Run Shellbox's Iris adapter inside a trusted Iris job with
+`network_attachment=NetworkAttachment.POD`, then use
+`IrisMachineFactory.in_cluster()`. The driver must run on the execution cluster;
+external callers, host-network drivers and a controller port-forward cannot
+reach this path. See [task containers and networking](docs/container-profiles.md#task-containers)
+for the API and isolation rules.
 
-The driver opts into Pod attachment independently of its container profile and
-egress policy:
+Before enabling it in a namespace:
 
-```python
-from iris.cluster.types import NetworkAttachment
+- Deploy matching controller and Shellbox/client code. Existing jobs keep their
+  networking; start a new Pod-network driver after the rollout.
+- Install the configured CPU-only gVisor RuntimeClass and enforcing sandbox
+  NetworkPolicies. No other policy may grant wider access to sandbox Pods.
+- Apply the controller's driver-connection RBAC from
+  `iris.cluster.platforms.k8s.rbac_manifests`. The CoreWeave smoke workflow
+  installs it for `iris-ci`; other namespaces need an operator rollout.
 
-job = client.submit(
-    entrypoint=driver_entrypoint,
-    resources=driver_resources,
-    network_attachment=NetworkAttachment.POD,
-)
-```
+Kubernetes needs no separate gateway or Iris worker rollout. The controller
+creates ingress policies for each owning driver attempt; deleting that driver
+Pod reclaims its policies. Provider credentials remain in the driver.
+Docker-worker backends do not support this connection path.
 
-Inside that job, use `IrisMachineFactory.in_cluster()`. Shellbox declares a
-`DriverConnectionSpec` on each child with the driver's task ID, attempt UID and
-helper port. The controller requires a live trusted driver in the same cluster
-and binds each child to that attempt. Host-network drivers and external callers
-cannot use direct sandbox connections. Run a driver in the execution cluster;
-a controller port-forward does not provide connectivity to Pod addresses.
-
-Shellbox supplies a fresh random connection capability to each helper. It grants
-execution only in that helper's container and carries no model, storage or
-Kubernetes authority. The driver retains provider authentication. Sandbox Pods
-keep gVisor, denied egress, no service-account token and no injected production
-credentials. The helper's primary image must contain Python 3.11 or newer. Companions retain
-their image ENTRYPOINT/CMD; they do not expose persistent process sessions.
-
-### Operator prerequisites and rollout
-
-The namespace needs an enforcing Kubernetes NetworkPolicy implementation, the
-configured CPU-only gVisor RuntimeClass, and Iris's base sandbox deny policies.
-For each driver attempt and declared port, the controller creates an ingress-only
-policy selecting that driver's children. It admits only the owning driver's Pod
-in the same namespace. Reply traffic follows the driver-initiated connection;
-sandbox-initiated cluster and internet connections remain denied. Additional
-namespace policies must not grant wider access to sandbox Pods: Kubernetes
-combines all matching allow rules.
-
-Deploy the matching controller and RBAC before launching new drivers. The
-controller needs permission to manage these per-driver NetworkPolicies, in
-addition to its existing Pod operations. Policies are owned by the exact driver
-Pod, so Kubernetes garbage collection removes them when that Pod is deleted.
-The controller upgrade migrates persisted task descriptions to `containers` and
-`primary_container` before reconstructing jobs. Protobuf field numbers and
-running Pod container names remain unchanged.
-Existing running tasks keep their original networking and cannot be retrofitted
-by reloading the controller. Start a new Pod-network driver to use this path.
-A replacement attempt does not inherit its predecessor's child connections.
-
-The CoreWeave smoke workflow installs the controller's namespaced policy role.
-For another namespace, render the same manifests with its controller service
-account and apply them through the operator's Kubernetes context:
-
-```bash
-uv run --package marin-iris --extra controller python - <namespace> <controller-service-account> \
-  > /tmp/iris-driver-connections.yaml <<'PY'
-import sys
-
-import yaml
-from iris.cluster.platforms.k8s.rbac_manifests import (
-    driver_connection_binding_manifest,
-    driver_connection_role_manifest,
-)
-
-namespace, service_account = sys.argv[1:]
-print(yaml.safe_dump_all([
-    driver_connection_role_manifest(namespace),
-    driver_connection_binding_manifest(namespace, service_account),
-]))
-PY
-kubectl --kubeconfig <kubeconfig> --context <context> apply -f /tmp/iris-driver-connections.yaml
-```
-
-Kubernetes needs no separate execution gateway Deployment, Service, signing key
-or port-forward. Its existing nodes already supply Pod networking and gVisor;
-this rollout changes controller code/RBAC and the submitted driver/Shellbox
-version. Docker-worker backends reject explicit Pod attachment and driver
-connections. Ordinary jobs using default attachment retain their existing
-behavior; extending direct connections to inaccessible Docker workers requires
-a separate worker transport.
-
-Inspect the owning driver, sandbox Pods and policies when diagnosing a failure:
+To diagnose a connection failure, inspect the driver, child and ingress policy:
 
 ```bash
 kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get pods -o wide
 kubectl --kubeconfig <kubeconfig> --context <context> -n <namespace> get networkpolicies -o yaml
 ```
 
-Check that the driver has `hostNetwork: false`, that the child and policy name the
-same live driver attempt, and that the target Pod has the expected attempt UID.
-Do not solve a connection failure by enabling sandbox egress or host networking.
-The live Shellbox check runs its driver inside the CI cluster and exercises
-binary transfer, process teardown and denied access from another Pod.
+Check Pod attachment and the owning driver/attempt labels. Do not enable sandbox
+egress or host networking to bypass a connection failure.
