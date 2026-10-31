@@ -5,9 +5,9 @@ import pytest
 from harbor.cli.main import app
 from harbor.environments.factory import EnvironmentFactory
 from harbor.environments.runtime import daytona_connection
+from harbor.models.job.config import JobConfig
 from harbor.models.task.config import EnvironmentConfig as TaskEnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.models.job.config import JobConfig
 from typer.testing import CliRunner
 
 runner = CliRunner()
@@ -63,7 +63,7 @@ def test_jobs_start_preserves_yaml_retry_exclude_without_cli_flag(
 
     result = runner.invoke(
         app,
-        ["jobs", "start", "--config", str(config_path), "--yes"],
+        ["jobs", "start", "--config", str(config_path)],
     )
 
     assert result.exit_code == 0, result.output
@@ -79,7 +79,7 @@ def test_jobs_start_uses_model_retry_exclude_default_without_config(
 ) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
-    result = runner.invoke(app, ["jobs", "start", "--yes"])
+    result = runner.invoke(app, ["jobs", "start"])
 
     assert result.exit_code == 0, result.output
     assert len(captured) == 1
@@ -91,9 +91,7 @@ def test_jobs_start_hugging_face_dataset_without_revision(
 ) -> None:
     captured = _capture_job_config(monkeypatch, tmp_path)
 
-    result = runner.invoke(
-        app, ["jobs", "start", "--dataset", "hf://example/tasks", "--yes"]
-    )
+    result = runner.invoke(app, ["jobs", "start", "--dataset", "hf://example/tasks"])
 
     assert result.exit_code == 0, result.output
     assert captured[0].datasets[0].name == "hf://example/tasks"
@@ -118,7 +116,6 @@ def test_jobs_start_appends_repeated_extra_docker_compose_flags(
             str(first),
             "--extra-docker-compose",
             str(second),
-            "--yes",
         ],
     )
 
@@ -152,7 +149,6 @@ def test_jobs_start_retry_exclude_cli_flag_overrides_yaml(
             str(config_path),
             "--retry-exclude",
             "VerifierTimeoutError",
-            "--yes",
         ],
     )
 
@@ -175,7 +171,6 @@ def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
             "120",
             "--trial-cleanup-grace",
             "15",
-            "--yes",
         ],
     )
 
@@ -193,7 +188,7 @@ def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
     ],
 )
 def test_jobs_start_rejects_removed_execution_paths(arguments):
-    result = runner.invoke(app, ["jobs", "start", *arguments, "--yes"])
+    result = runner.invoke(app, ["jobs", "start", *arguments])
     assert result.exit_code == 2
 
 
@@ -236,7 +231,7 @@ def test_cli_binds_private_backend_connection_until_command_closes(
         return _FakeJob(config, tmp_path)
 
     monkeypatch.setattr("harbor.job.Job.create", create)
-    arguments = ["jobs", "start", "--env", "daytona", "--yes"]
+    arguments = ["jobs", "start", "--env", "daytona"]
     if use_env_file:
         monkeypatch.setenv("DAYTONA_API_KEY", "ambient-backend-canary")
         env_file = tmp_path / "backend.env"

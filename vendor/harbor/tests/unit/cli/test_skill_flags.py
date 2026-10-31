@@ -79,7 +79,6 @@ def test_run_skill_flags_append_to_config_file_agents(
             str(first),
             "--skills",
             str(skills_root),
-            "--yes",
         ],
     )
 

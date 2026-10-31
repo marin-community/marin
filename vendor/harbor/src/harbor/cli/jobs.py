@@ -665,18 +665,6 @@ def start(
             show_default=False,
         ),
     ] = None,
-    yes: Annotated[
-        bool,
-        Option(
-            "-y",
-            "--yes",
-            help=(
-                "Auto-confirm prompts, including host environment access and "
-                "sharing with organizations you are not a member of."
-            ),
-            rich_help_panel="Job Settings",
-        ),
-    ] = False,
     env_file: Annotated[
         Path | None,
         Option(

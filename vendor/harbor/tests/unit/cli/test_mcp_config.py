@@ -47,7 +47,7 @@ def test_job_start_mcp_config_populates_agents(tmp_path, monkeypatch):
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
     result = runner.invoke(
-        app, ["jobs", "start", "--mcp-config", str(_mcp_json(tmp_path)), "--yes"]
+        app, ["jobs", "start", "--mcp-config", str(_mcp_json(tmp_path))]
     )
 
     assert result.exit_code == 0, result.output
