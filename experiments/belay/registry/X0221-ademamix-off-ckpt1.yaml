@@ -1,0 +1,8 @@
+id: X0221
+slug: ademamix-off-ckpt1
+name: AdEMAMix off at Belay Ckpt 1
+category: Optimizers
+summary: Ablate AdEMAMix (X0120, alpha 5, beta3 0.98) on the Adam groups of Belay Ckpt 1 at the 8821-step d512 budget, to
+  check whether the adoption still holds.
+source: maintainer
+status: approved
