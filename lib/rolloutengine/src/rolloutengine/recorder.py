@@ -22,6 +22,7 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
+    ContextWindowExceeded,
     Continuation,
     ConversationRecord,
     ConversationStarted,
@@ -355,6 +356,13 @@ class _Recorder:
             outcome = TimeoutError("The model turn deadline expired")
         if self._ended():
             raise RolloutEnded("The harness ended, or a deadline expired, while the model generated")
+        if isinstance(outcome, ContextWindowExceeded):
+            # Nothing was served. Preserve the pending turn so either a shorter
+            # reply or a compacted conversation can be submitted under the same
+            # attempt deadline and cumulative token/turn limits.
+            self.request = None
+            self._set_tool_deadline(self.limits.tool_turn_timeout)
+            raise outcome
         self._record_request(request)
         conversation = self.conversation
         assert conversation is not None

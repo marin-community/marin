@@ -11,6 +11,12 @@ from click.testing import CliRunner
 from experiments.evaluation.mini_policy_runtime import launch
 
 
+def test_eval_recipe_does_not_fall_back_to_harbors_shorter_eval_deadline():
+    config, _ = launch.recipe({}, {}, {}, "http://judge.invalid", "DAYTONA_EVAL_API_KEY")
+    harbor = config["terminal_bench"]["harbor"]
+    assert harbor["eval_timeout_override_sec"] == harbor["override_timeout_sec"] == 1800
+
+
 @pytest.mark.parametrize("defect", ["missing_environment", "wrong_dataset_scope"])
 def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect):
     manifest = {

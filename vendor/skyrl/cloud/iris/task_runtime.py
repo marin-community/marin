@@ -46,6 +46,7 @@ import uuid
 from typing import Any, Protocol
 
 from omegaconf import DictConfig, OmegaConf
+from marinskyrl.gpu_allocation import pin_task_cuda_devices
 
 from cloud.iris.artifacts import ArtifactSource, atomic_directory_update, file_inventory, fs_and_path, materialize
 from cloud.iris.hf_model_cache import (
@@ -2169,6 +2170,7 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    pin_task_cuda_devices()
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

@@ -113,6 +113,7 @@ def recipe(
                 "eval_daytona_api_key_env": credential_env,
                 "verifier_override_timeout_sec": 300,
                 "override_timeout_sec": 1800,
+                "eval_timeout_override_sec": 1800,
                 "trial_attempt_timeout_sec": 2460,
                 "n_concurrent_trials": 8,
                 "max_retries": 0,

@@ -22,6 +22,7 @@ from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     GenerationLimitReached,
+    ContextWindowExceeded,
     GradedRollout,
     GradedRolloutInterrupted,
     ModelRequest,
@@ -61,6 +62,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    ContextLengthExceededError,
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
@@ -172,8 +174,13 @@ async def _model_turn(
                     max_prompt_length=max_prompt_length,
                 )
             output = await client.generate(model_input)
-    except GenerationBudgetExceededError as limit:
-        raise GenerationLimitReached(limit.prompt_token_ids) from limit
+    except ContextLengthExceededError as error:
+        if isinstance(error, GenerationBudgetExceededError) and request.prompt_token_ids is not None:
+            raise GenerationLimitReached(error.prompt_token_ids) from error
+        raise ContextWindowExceeded(
+            f"This request exceeds the maximum context length of {max_context_length} tokens. "
+            "Compact the conversation and retry."
+        ) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:
         raise RolloutContractError("The canonical rollout engine requires exact model tokens")
     logprobs = output.get("response_logprobs")
@@ -220,7 +227,7 @@ def _failed_rollout(
     if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
         raise error
     if interruption.operation == RolloutOperation.MODEL and not isinstance(
-        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
+        error, (ModelServerError, ContextWindowExceeded, TimeoutError, ConnectionError, TemplateError)
     ):
         raise error
     exception_type = type(error).__name__
@@ -273,6 +280,9 @@ def _failed_rollout(
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE}:
         exception_type = VERIFIER_RUNTIME_ERROR
         diagnostics.setdefault("cause_error_type", type(error).__name__)
+    elif isinstance(error, ContextWindowExceeded):
+        exception_type = "ContextLengthExceededError"
+        diagnostics["error_category"] = "context_overflow"
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
@@ -407,6 +417,11 @@ class TaskRolloutWorker:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
             harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
+            # Harbor owns the agent deadline and must still run its verifier after
+            # an agent timeout. The outer attempt deadline covers both phases.
+            lowered = lowered.model_copy(
+                update={"limits": lowered.limits.model_copy(update={"total_turn_timeout": None})}
+            )
         elif harbor is not None and self.installed_agents is not None:
             if not is_shell_harness(lowered.harness):
                 raise ValueError("SkyRL agents require a Shellbox task grader")
