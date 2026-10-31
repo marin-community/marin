@@ -31,9 +31,11 @@ from rigging.filesystem.buckets import filesystem_for
 
 from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged
 from experiments.evaluation.mini_policy_runtime.profile import (
+    MAX_OUTPUT_TOKENS,
     MODEL,
     MODEL_REVISION,
     SEED,
+    TOTAL_CONTEXT_LENGTH,
     counterpart_environment,
     pi_agent_config,
 )
@@ -67,8 +69,8 @@ def recipe(
         "entrypoint": "generate",
         "config_groups": {"terminal_bench_config": "terminal_bench"},
         "context_budget": {
-            "request_window_tokens": 65536,
-            "max_new_tokens_per_turn": 16384,
+            "request_window_tokens": TOTAL_CONTEXT_LENGTH,
+            "max_new_tokens_per_turn": MAX_OUTPUT_TOKENS,
             "max_turns": 1024,
         },
         "environment": {

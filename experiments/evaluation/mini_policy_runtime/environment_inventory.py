@@ -7,7 +7,6 @@ import asyncio
 import hashlib
 import importlib.util
 import json
-import os
 import sys
 import tempfile
 from collections import Counter
@@ -18,25 +17,16 @@ import pyarrow.parquet as pq
 import yaml
 from harbor.utils.container_cache import environment_dir_hash_truncated
 from huggingface_hub import hf_hub_download
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.models import TaskSpec
 
+from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.profile import (
     DATASET,
-    DESTINATION,
     POLICY_INDEX,
     POLICY_INDEX_REVISION,
     REVISION,
 )
-
-
-def publish(name, data):
-    content = json.dumps(data, indent=2).encode()
-    (Path(os.environ["IRIS_OUTPUT_DIR"]) / name).write_bytes(content)
-    fs, key = filesystem_for(str(StoragePath(DESTINATION) / name))
-    fs.pipe_file(key, content)
 
 
 @dataclass(frozen=True)

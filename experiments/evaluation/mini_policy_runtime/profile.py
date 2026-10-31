@@ -7,6 +7,9 @@ DATASET = "open-athena/Marin-Mini-Eval-840"
 REVISION = "bae388a44fc0ba9ffa551a4c6347fbe03a9fefd7"
 DESTINATION = "s3://marin-us-east-02a/marin/experiments/mini-eval-policy/e2e-20261031"
 SEED = 20261030
+TOTAL_CONTEXT_LENGTH = 65536
+MAX_OUTPUT_TOKENS = 16384
+MAX_INPUT_TOKENS = TOTAL_CONTEXT_LENGTH - MAX_OUTPUT_TOKENS
 MODEL = "Qwen/Qwen3.6-35B-A3B"
 MODEL_REVISION = "995ad96eacd98c81ed38be0c5b274b04031597b0"
 
@@ -23,7 +26,7 @@ def pi_agent_config() -> dict:
             "mcp_adapter_version": "7.0.0",
             "thinking": "high",
             "thinking_format": "chat-template",
-            "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384},
+            "model_info": {"max_input_tokens": TOTAL_CONTEXT_LENGTH, "max_output_tokens": MAX_OUTPUT_TOKENS},
         },
     }
 

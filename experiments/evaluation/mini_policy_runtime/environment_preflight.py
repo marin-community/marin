@@ -16,7 +16,8 @@ from uuid import uuid4
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
 
-from experiments.evaluation.mini_policy_runtime.environment_inventory import publish, restored_environments
+from experiments.evaluation.mini_policy_runtime.artifacts import publish
+from experiments.evaluation.mini_policy_runtime.environment_inventory import restored_environments
 from experiments.evaluation.mini_policy_runtime.profile import (
     DATASET,
     MODEL,

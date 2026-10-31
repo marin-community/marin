@@ -14,7 +14,7 @@ from marin.inference.model_preparation import resolve_model_path
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.mini_policy_runtime.environment_inventory import publish
+from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, MODEL, MODEL_REVISION, REVISION
 from experiments.evaluation.mini_policy_runtime.repair_release import repaired_table
 

@@ -4,19 +4,23 @@
 """Check the frozen validation prompts against the published uniform token budgets."""
 
 import json
-import os
 from collections import defaultdict
-from pathlib import Path
 
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 from transformers import AutoTokenizer
 
-from experiments.evaluation.mini_policy_runtime.profile import DATASET, DESTINATION, MODEL, MODEL_REVISION, REVISION
+from experiments.evaluation.mini_policy_runtime.artifacts import publish
+from experiments.evaluation.mini_policy_runtime.profile import (
+    DATASET,
+    MAX_INPUT_TOKENS,
+    MODEL,
+    MODEL_REVISION,
+    REVISION,
+    TOTAL_CONTEXT_LENGTH,
+)
 
 
 def main():
@@ -43,17 +47,14 @@ def main():
             b: {
                 "count": len(v),
                 "max_prompt_tokens": max(v),
-                "over_49152": sum(n > 49152 for n in v),
-                "over_65536": sum(n > 65536 for n in v),
+                "over_49152": sum(n > MAX_INPUT_TOKENS for n in v),
+                "over_65536": sum(n > TOTAL_CONTEXT_LENGTH for n in v),
             }
             for b, v in counts.items()
         },
         "rows": rows,
     }
-    encoded = json.dumps(report, indent=2).encode()
-    (Path(os.environ["IRIS_OUTPUT_DIR"]) / "prompt-inventory.json").write_bytes(encoded)
-    fs, key = filesystem_for(str(StoragePath(DESTINATION) / "prompt-inventory.json"))
-    fs.pipe_file(key, encoded)
+    publish("prompt-inventory.json", report)
     print(json.dumps(report["summary"]), flush=True)
 
 

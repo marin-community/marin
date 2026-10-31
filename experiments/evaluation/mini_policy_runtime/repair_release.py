@@ -20,7 +20,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from rolloutengine.models import TaskRolloutSpec
 
-from experiments.evaluation.mini_policy_runtime.environment_inventory import publish
+from experiments.evaluation.mini_policy_runtime.artifacts import publish
 from experiments.evaluation.mini_policy_runtime.profile import DATASET, POLICY_INDEX, REVISION
 
 SOURCE_REQUIREMENTS = (
