@@ -293,7 +293,7 @@ the configured gateway. Idle polls do not enter the controller's synchronous exe
 pool or start container processes. Deploy the gateway and its verification key
 before enabling the controller's `exec_gateway` configuration, and provide a route
 reachable by the trusted driver. A controller reload alone does not provide that
-route. See [gateway operations](../lib/iris/OPS.md#persistent-execution-gateway)
+route. See [gateway operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#persistent-execution-gateway)
 for deployment, session expiry and observability. The same relay uses owned local
 process pipes or Daytona's SDK session; provider credentials remain on the host.
 

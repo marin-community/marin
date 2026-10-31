@@ -3,13 +3,12 @@
 
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
-import asyncio
-import tempfile
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
 
 import shellsim
+from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import (
     BaseEnvironment,
     ExecResult,
@@ -38,13 +37,6 @@ from shellbox.machine import (
 @cache
 def _worker_context() -> shellsim.Context:
     return shellsim.Context(trusted_precompiled=True)
-
-
-def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
-    path = StoragePath(str(target))
-    if path.is_local:
-        return Path("/" + path.key) if path.scheme == "file" else Path(str(path))
-    return path
 
 
 class TaskNetworkPolicy(StrEnum):
@@ -164,28 +156,11 @@ class ShellSimEnvironment(BaseEnvironment):
     ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        target = _download_target(target_path)
-        if isinstance(target, Path):
-            await self.machine.download(source_path, target)
-            return
-        with tempfile.TemporaryDirectory() as staging_dir:
-            staged = Path(staging_dir) / "download"
-            await self.machine.download(source_path, staged)
-            await asyncio.to_thread(target.upload_from, str(staged))
+        await download_artifact(self.machine, source_path, str(target_path), directory=False)
 
     async def download_dir(
         self, source_dir: str, target_dir: Path | StoragePath | str
     ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        target = _download_target(target_dir)
-        if isinstance(target, Path):
-            target.mkdir(parents=True, exist_ok=True)
-            await self.machine.download(source_dir, target)
-            return
-        with tempfile.TemporaryDirectory() as staging_dir:
-            staged = Path(staging_dir)
-            await self.machine.download(source_dir, staged)
-            await asyncio.to_thread(
-                target.upload_from, str(staged) + "/", recursive=True
-            )
+        await download_artifact(self.machine, source_dir, str(target_dir), directory=True)

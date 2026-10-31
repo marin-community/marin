@@ -21,10 +21,12 @@ async def download_artifact(
             if destination.scheme == "file"
             else Path(str(destination))
         )
+        if directory:
+            local.mkdir(parents=True, exist_ok=True)
         await machine.download(source, local)
         return
     with tempfile.TemporaryDirectory() as staging:
-        local = Path(staging) / "download"
+        local = Path(staging) if directory else Path(staging) / "download"
         await machine.download(source, local)
         await asyncio.to_thread(
             destination.upload_from,
