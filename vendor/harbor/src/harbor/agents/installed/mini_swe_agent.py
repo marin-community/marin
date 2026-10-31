@@ -475,7 +475,7 @@ class MiniSweAgent(BaseInstalledAgent):
                 "--with 'openai>=2' --with 'httpx>=0.27' --with 'tenacity>=9.1.2' "
                 "--excludes <(echo litellm) && "
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
-                "-c 'from mcp.types import CacheableResult' && "
+                "-P -c 'from mcp.types import CacheableResult' && "
                 "mini-swe-agent --help"
             ),
         )
@@ -490,7 +490,7 @@ class MiniSweAgent(BaseInstalledAgent):
             command=(
                 'source "$HOME/.local/bin/env"; '
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
-                "-c 'import mini_swe_model'"
+                "-P -c 'import mini_swe_model'"
             ),
         )
 

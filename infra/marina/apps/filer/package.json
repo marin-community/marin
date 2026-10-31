@@ -6,7 +6,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "marked": "^18.1.0",
     "pdfjs-dist": "^6.4.299",
     "vue": "^3.5.0"

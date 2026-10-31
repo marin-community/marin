@@ -37,7 +37,8 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia]", "gcsfs", "s3fs", "pydantic-settings"]
+sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
