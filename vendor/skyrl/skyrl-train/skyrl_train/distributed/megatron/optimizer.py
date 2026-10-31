@@ -53,6 +53,35 @@ def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
 HybridDeviceOptimizer._update_fp32_params_by_new_state = _update_fp32_params_by_new_state
 
 
+def _register_load_state_dict_hooks(self: HybridDeviceOptimizer) -> None:
+    """Load moments directly onto the device and dtype used by each sub-optimizer."""
+
+    def pre_load(optimizer, state_dict):
+        # MCore 0.18 only substitutes reduced-precision parameters here. FP32 CUDA
+        # shards therefore pull all CPU-offloaded moments onto CUDA during Torch's
+        # load_state_dict cast, before MCore can move them back to CPU.
+        optimizer.state = {optimizer.param_to_inner_param[param]: state for param, state in optimizer.state.items()}
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.param_to_inner_param[param] for param in group["params"]]
+        return state_dict
+
+    def post_load(optimizer):
+        optimizer.state = {
+            optimizer.inner_param_to_orig_param[param]: state for param, state in optimizer.state.items()
+        }
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.inner_param_to_orig_param[param] for param in group["params"]]
+        optimizer._init_sub_optimizers()
+        optimizer._sync_hdo_param_groups_to_sub_optimizers()
+        optimizer._sync_hdo_state_to_sub_optimizers()
+
+    self.register_load_state_dict_pre_hook(pre_load)
+    self.register_load_state_dict_post_hook(post_load)
+
+
+HybridDeviceOptimizer._register_load_state_dict_hooks = _register_load_state_dict_hooks
+
+
 def _grug_muonh_extra(optim_config: Mapping) -> dict:
     raw = optim_config.get("optimizer_kwargs", {})
     if not isinstance(raw, Mapping):
