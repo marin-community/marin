@@ -158,6 +158,15 @@ egress policy determine their isolation separately. Docker workers lower
 one-service Iris-command tasks to their existing execution path and reject
 multi-service tasks and image-command startup.
 
+`TaskSpec.network_attachment` selects the network attachment separately from
+egress policy. `NetworkAttachment.DEFAULT` retains the cluster's existing host
+or Pod networking choice; `POD` explicitly requests Pod networking. Trusted
+drivers need `POD` when managing children through direct connections. A child's
+optional `DriverConnectionSpec` declares the live driver task, driver attempt
+and one ingress port. Iris binds this to the actual driver Pod UID; it does not
+grant sandbox egress or pass driver credentials to the child. Docker workers
+reject explicit Pod attachment and driver connections.
+
 `TaskSpec.primary` names the primary service; omitting it uses `task`. Exec
 accepts that logical name, while the physical primary Kubernetes container
 remains `task`. Companions accept literal environment variables but cannot run
@@ -192,15 +201,18 @@ all capabilities dropped and privilege escalation disabled. A dedicated policy
 selecting `iris.egress=loopback` denies both ingress and egress, including DNS.
 Operator controller startup installs this durable policy. Before creating a
 group pod, the controller reads the named policy and verifies its selector and
-deny-all rules; missing or changed isolation prevents dispatch. Its runtime
-RBAC permits only reading that policy, with no NetworkPolicy write access.
-Existing clusters need the updated RBAC and an operator controller restart
-before service groups can run. The namespace must have an enforcing
-NetworkPolicy implementation and no other allow policy selecting these pods;
-Kubernetes policy permissions are additive.
+deny-all rules; missing or changed isolation prevents dispatch. For direct
+connections, it also manages an ingress-only policy per driver attempt and port,
+allowing only the exact owning driver Pod. The policy belongs to the driver Pod
+and is garbage-collected with it. Existing clusters need the updated RBAC and an
+operator controller restart before this path can run. The namespace must have
+an enforcing NetworkPolicy implementation and no wider allow policy selecting
+these Pods; Kubernetes policy permissions are additive.
 
-Shellbox starts the group, installs any host capability relay through exec, then
-runs bounded readiness probes. Timed probes require Python 3 in each service
+Shellbox starts the primary's process helper with the group and connects directly
+from its trusted Pod-network driver. It installs the host capability relay over
+that process connection, then runs bounded readiness probes. Companion readiness
+and artifact transfers still use unary exec. Timed probes require Python 3 in each service
 image; a guest supervisor kills a timed-out probe's process group and retries
 without stopping the service. Exhausting the readiness budget closes the group.
 Closing any machine cancels the shared job; a container exiting fails the group

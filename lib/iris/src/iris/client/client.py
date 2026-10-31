@@ -68,6 +68,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
+    NetworkAttachment,
     ResourceSpec,
     TaskAttempt,
     TaskSpec,
@@ -941,6 +942,7 @@ class IrisClient:
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
         egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
+        network_attachment: NetworkAttachment = NetworkAttachment.DEFAULT,
     ) -> Job:
         """Submit a single Iris command through the named-service task model."""
         return self._submit(
@@ -966,6 +968,7 @@ class IrisClient:
             egress_policy=egress_policy,
             egress_allow=egress_allow,
             submit_argv=submit_argv,
+            network_attachment=network_attachment,
         )
 
     def submit_task(
@@ -1041,6 +1044,7 @@ class IrisClient:
         egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
         task: TaskSpec | None = None,
+        network_attachment: NetworkAttachment = NetworkAttachment.DEFAULT,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -1183,6 +1187,8 @@ class IrisClient:
                 environment_proto.secrets.update(forwarded_secrets(exclude=supplied))
         if task is not None:
             environment_proto = task.to_proto(environment_proto)
+        else:
+            environment_proto.network_attachment = network_attachment.to_proto()
         normalized = controller_pb2.Controller.LaunchJobRequest(
             environment=environment_proto,
             task_image=task_image or "",

@@ -17,7 +17,16 @@ import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, ServiceSpec, TaskSpec
+from iris.cluster.types import (
+    DriverConnectionSpec,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    NetworkAttachment,
+    ResourceSpec,
+    ServiceSpec,
+    TaskSpec,
+)
 from iris.rpc import job_pb2
 from rigging.secrets import SecretBehavior
 
@@ -37,9 +46,11 @@ class _RecordingClusterClient:
     captured_primary_service: str = ""
     captured_services: list[job_pb2.ServiceSpec] = field(default_factory=list)
     captured_resources: job_pb2.ResourceSpecProto | None = None
+    captured_environment: job_pb2.EnvironmentConfig | None = None
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, resources=None, **kwargs) -> JobName:
         if environment:
+            self.captured_environment = environment
             self.captured_services = list(environment.services)
             self.captured_primary_service = environment.primary_service
             primary = next(member for member in environment.services if member.name == environment.primary_service)
@@ -354,6 +365,8 @@ def test_submit_task_preserves_named_services_and_aggregates_member_resources(ca
             ),
         ],
         primary="agent",
+        network_attachment=NetworkAttachment.POD,
+        driver_connection=DriverConnectionSpec(JobName.from_wire("/test-user/driver/0"), "driver-attempt", 10003),
     )
 
     client.submit_task(task, "native-services")
@@ -371,6 +384,25 @@ def test_submit_task_preserves_named_services_and_aggregates_member_resources(ca
     assert stub.captured_resources.cpu_millicores == 3000
     assert stub.captured_resources.memory_bytes == 3 * 1024**3
     assert stub.captured_resources.disk_bytes == 3 * 1024**3
+    assert stub.captured_environment is not None
+    assert stub.captured_environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
+    assert stub.captured_environment.driver_connection == job_pb2.DriverConnectionSpec(
+        driver_task_id="/test-user/driver/0",
+        driver_attempt_uid="driver-attempt",
+        port=10003,
+    )
+
+
+def test_submit_convenience_preserves_explicit_pod_attachment(capturing_client):
+    client, stub = capturing_client
+    client.submit(
+        Entrypoint.from_command("python", "driver.py"),
+        "driver",
+        ResourceSpec(cpu=1, memory="1g"),
+        network_attachment=NetworkAttachment.POD,
+    )
+    assert stub.captured_environment is not None
+    assert stub.captured_environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
 
 
 def test_task_client_presents_the_task_token_from_its_env(monkeypatch):

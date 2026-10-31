@@ -45,6 +45,11 @@ class PeerStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PEER_STATUS_SYNCED: _ClassVar[PeerStatus]
     PEER_STATUS_REJECTED: _ClassVar[PeerStatus]
 
+class NetworkAttachment(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    NETWORK_ATTACHMENT_DEFAULT: _ClassVar[NetworkAttachment]
+    NETWORK_ATTACHMENT_POD: _ClassVar[NetworkAttachment]
+
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     CONSTRAINT_OP_EQ: _ClassVar[ConstraintOp]
@@ -127,6 +132,8 @@ PEER_STATUS_PENDING_SCHEDULING: PeerStatus
 PEER_STATUS_ASSIGNED: PeerStatus
 PEER_STATUS_SYNCED: PeerStatus
 PEER_STATUS_REJECTED: PeerStatus
+NETWORK_ATTACHMENT_DEFAULT: NetworkAttachment
+NETWORK_ATTACHMENT_POD: NetworkAttachment
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -616,8 +623,20 @@ class ResourceSpecProto(_message.Message):
     device: DeviceConfig
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
+class DriverConnectionSpec(_message.Message):
+    __slots__ = ("driver_task_id", "driver_attempt_uid", "port", "driver_pod_uid")
+    DRIVER_TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    DRIVER_ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    DRIVER_POD_UID_FIELD_NUMBER: _ClassVar[int]
+    driver_task_id: str
+    driver_attempt_uid: str
+    port: int
+    driver_pod_uid: str
+    def __init__(self, driver_task_id: _Optional[str] = ..., driver_attempt_uid: _Optional[str] = ..., port: _Optional[int] = ..., driver_pod_uid: _Optional[str] = ...) -> None: ...
+
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "secrets", "setup_scripts", "services", "primary_service")
+    __slots__ = ("env_vars", "secrets", "setup_scripts", "services", "primary_service", "network_attachment", "driver_connection")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -637,12 +656,16 @@ class EnvironmentConfig(_message.Message):
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     SERVICES_FIELD_NUMBER: _ClassVar[int]
     PRIMARY_SERVICE_FIELD_NUMBER: _ClassVar[int]
+    NETWORK_ATTACHMENT_FIELD_NUMBER: _ClassVar[int]
+    DRIVER_CONNECTION_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
     secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
     services: _containers.RepeatedCompositeFieldContainer[ServiceSpec]
     primary_service: str
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., services: _Optional[_Iterable[_Union[ServiceSpec, _Mapping]]] = ..., primary_service: _Optional[str] = ...) -> None: ...
+    network_attachment: NetworkAttachment
+    driver_connection: DriverConnectionSpec
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., services: _Optional[_Iterable[_Union[ServiceSpec, _Mapping]]] = ..., primary_service: _Optional[str] = ..., network_attachment: _Optional[_Union[NetworkAttachment, str]] = ..., driver_connection: _Optional[_Union[DriverConnectionSpec, _Mapping]] = ...) -> None: ...
 
 class ImageCommand(_message.Message):
     __slots__ = ("entrypoint", "arguments")

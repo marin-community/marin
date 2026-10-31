@@ -91,10 +91,24 @@ class SessionAPI:
         pending, descendants = [process.pid], []
         while pending:
             pid = pending.pop()
-            descendants.append(pid)
             try:
+                # Freeze before enumerating: the shell/bridge may otherwise fork
+                # between this snapshot and its kill, retaining the output pipes.
+                os.kill(pid, signal.SIGSTOP)
+                while True:
+                    state = next(
+                        row.split()[1]
+                        for row in Path(f"/proc/{pid}/status").read_text().splitlines()
+                        if row.startswith("State:")
+                    )
+                    if state in {"T", "t", "Z", "X"}:
+                        break
+                    # Yield until the kernel has delivered SIGSTOP, rather than
+                    # guessing a duration during which the child can still fork.
+                    await asyncio.sleep(0)
+                descendants.append(pid)
                 pending.extend(map(int, Path(f"/proc/{pid}/task/{pid}/children").read_text().split()))
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 pass
         for pid in reversed(descendants):
             try:

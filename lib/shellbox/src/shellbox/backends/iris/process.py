@@ -1,40 +1,50 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded asynchronous process pipes through an Iris exec gateway."""
+"""Bounded process pipes over a direct, authenticated primary-container socket."""
 
 import asyncio
+import json
+import struct
 from collections.abc import Callable
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
-from iris.rpc import exec_gateway_pb2
-from iris.rpc.exec_gateway_connect import ExecGatewayServiceClient
-
-from shellbox.machine import MachineTerminated
+from shellbox.backends.iris.process_guest import (
+    CHUNK_BYTES,
+    CLOSE,
+    EOF,
+    ERROR,
+    EXIT,
+    OPEN,
+    READY,
+    STDERR,
+    STDIN,
+    STDOUT,
+    WRITTEN,
+    authenticate_client,
+    read_frame,
+    write_frame,
+)
+from shellbox.machine import Command, MachineTerminated
 from shellbox.process_session import await_cleanup, own_cleanup
 
-CHUNK_BYTES = 65536
 BUFFER_CHUNKS = 16
-RECEIVE_WAIT_MS = 20000
-RPC_TIMEOUT_MS = 30000
+CONNECT_TIMEOUT = 30
+CLOSE_TIMEOUT = 10
 
 
 class IrisProcessSession:
-    """One gateway process, with bounded stdout and independently drained stderr."""
+    """One process with bounded stdout and independently drained stderr."""
 
     def __init__(
         self,
-        client: ExecGatewayServiceClient,
-        grant: str,
-        session_id: str,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
         *,
         stderr_limit: int,
         on_close: Callable[["IrisProcessSession"], None],
     ):
-        self._client = client
-        self._grant = grant
-        self._session_id = session_id
+        self._reader = reader
+        self._writer = writer
         self._stderr_limit = stderr_limit
         self._on_close = on_close
         self._stderr = bytearray()
@@ -42,10 +52,43 @@ class IrisProcessSession:
         self._remaining = b""
         self._reading = asyncio.Lock()
         self._writing = asyncio.Lock()
+        self._input_written = asyncio.Event()
+        self._acknowledged = False
         self._exit_code: int | None = None
         self._error: Exception | None = None
         self._closing: asyncio.Task[None] | None = None
         self._receiver = asyncio.create_task(self._receive())
+
+    @classmethod
+    async def connect(
+        cls,
+        host: str,
+        port: int,
+        capability: bytes,
+        command: Command,
+        *,
+        on_close: Callable[["IrisProcessSession"], None],
+    ) -> "IrisProcessSession":
+        async with asyncio.timeout(CONNECT_TIMEOUT):
+            reader, writer = await asyncio.open_connection(host, port, limit=CHUNK_BYTES)
+            try:
+                await authenticate_client(reader, writer, capability)
+                await write_frame(
+                    writer,
+                    OPEN,
+                    json.dumps({"argv": command.argv, "cwd": command.cwd, "env": command.env}).encode(),
+                )
+                kind, data = await read_frame(reader)
+                if kind != READY or data:
+                    raise RuntimeError("Iris process did not acknowledge startup")
+                return cls(reader, writer, stderr_limit=command.output_limit_bytes, on_close=on_close)
+            except BaseException as error:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except (ConnectionError, OSError) as cleanup_error:
+                    error.add_note(f"Iris socket cleanup failed ({type(cleanup_error).__name__})")
+                raise
 
     @property
     def stderr(self) -> bytes:
@@ -54,29 +97,30 @@ class IrisProcessSession:
     async def _receive(self) -> None:
         try:
             while True:
-                response = await self._client.receive(
-                    exec_gateway_pb2.ReceiveRequest(
-                        grant=self._grant, session_id=self._session_id, max_bytes=CHUNK_BYTES, wait_ms=RECEIVE_WAIT_MS
-                    ),
-                    timeout_ms=RPC_TIMEOUT_MS,
-                )
-                if response.error:
-                    raise RuntimeError("Iris process transport failed")
-                if len(response.stdout) + len(response.stderr) > CHUNK_BYTES:
-                    raise RuntimeError("Iris process output chunk exceeds its limit")
-                self._stderr.extend(response.stderr[: max(0, self._stderr_limit - len(self._stderr))])
-                if response.stdout:
-                    await self._stdout.put(response.stdout)
-                if response.exited:
-                    self._exit_code = response.exit_code
+                kind, data = await read_frame(self._reader)
+                if kind == STDERR:
+                    self._stderr.extend(data[: max(0, self._stderr_limit - len(self._stderr))])
+                elif kind == STDOUT:
+                    if data:
+                        await self._stdout.put(data)
+                elif kind == WRITTEN and not data:
+                    self._acknowledged = True
+                    self._input_written.set()
+                elif kind == EXIT:
+                    self._exit_code = struct.unpack("!i", data)[0]
                     return
+                elif kind == ERROR:
+                    raise RuntimeError("Iris process transport failed")
+                else:
+                    raise RuntimeError("Unexpected Iris process output frame")
         except Exception as error:
             self._error = error
         finally:
+            self._input_written.set()
             try:
                 self._stdout.put_nowait(None)
             except asyncio.QueueFull:
-                # A reader drains queued data before observing receiver completion.
+                # Readers drain queued bytes before observing receiver completion.
                 pass
 
     def _completed(self) -> bytes:
@@ -104,12 +148,18 @@ class IrisProcessSession:
             if self._closing is not None or self._receiver.done():
                 raise MachineTerminated("Iris process session is closed")
             for offset in range(0, len(data), CHUNK_BYTES):
-                await self._client.send(
-                    exec_gateway_pb2.SendRequest(
-                        grant=self._grant, session_id=self._session_id, stdin=data[offset : offset + CHUNK_BYTES]
-                    ),
-                    timeout_ms=RPC_TIMEOUT_MS,
-                )
+                self._acknowledged = False
+                self._input_written.clear()
+                await write_frame(self._writer, STDIN, data[offset : offset + CHUNK_BYTES])
+                await self._input_written.wait()
+                if not self._acknowledged:
+                    self._completed()
+                    raise MachineTerminated("Iris process exited before accepting stdin")
+
+    async def write_eof(self) -> None:
+        """Finish the stdin of a finite command without closing its output pipes."""
+        async with self._writing:
+            await write_frame(self._writer, EOF)
 
     async def wait(self) -> int:
         await asyncio.shield(self._receiver)
@@ -126,16 +176,28 @@ class IrisProcessSession:
         self._receiver.cancel()
         await asyncio.gather(self._receiver, return_exceptions=True)
         try:
-            try:
-                await self._client.close_session(
-                    exec_gateway_pb2.CloseRequest(grant=self._grant, session_id=self._session_id),
-                    timeout_ms=RPC_TIMEOUT_MS,
-                )
-            except ConnectError as error:
-                if error.code != Code.NOT_FOUND:
-                    raise
+            if self._exit_code is None:
+                # Releasing stdout backpressure lets the guest acknowledge process
+                # group reclamation even when the caller stopped reading output.
+                async with asyncio.timeout(CLOSE_TIMEOUT):
+                    async with self._writing:
+                        await write_frame(self._writer, CLOSE)
+                    while True:
+                        kind, data = await read_frame(self._reader)
+                        if kind == EXIT:
+                            self._exit_code = struct.unpack("!i", data)[0]
+                            break
+                        if kind == ERROR:
+                            raise RuntimeError("Iris process cleanup failed")
+        except (ConnectionError, OSError, asyncio.IncompleteReadError):
+            # A disconnected broker reclaims the process, or its Pod has exited.
+            pass
         finally:
+            self._writer.close()
             try:
-                await self._client.close()
+                try:
+                    await self._writer.wait_closed()
+                except (ConnectionError, OSError):
+                    pass
             finally:
                 self._on_close(self)

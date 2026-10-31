@@ -1,38 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a registry image as a gVisor Iris job and exec into its container."""
+"""Run a registry image with direct primary pipes and unary companion exec."""
 
 import asyncio
 import base64
 import math
 import re
+import secrets
 import shlex
 import tarfile
 import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cli.connect import ControllerEndpoint, connect_controller
+from iris.cli.connect import ControllerEndpoint
 from iris.client import IrisClient, Job, Task
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.runtime.sandbox import validate_sandbox_environment
-from iris.cluster.types import Entrypoint, ResourceSpec, ServiceSpec
+from iris.cluster.types import DriverConnectionSpec, Entrypoint, NetworkAttachment, ResourceSpec, ServiceSpec
 from iris.cluster.types import TaskSpec as IrisTaskSpec
 from iris.resources.state import TaskState
-from iris.rpc import controller_pb2, exec_gateway_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSED
-from iris.rpc.exec_gateway_connect import ExecGatewayServiceClient
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
+from shellbox.backends.iris import process_guest
 from shellbox.backends.iris.process import IrisProcessSession
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -60,8 +61,6 @@ TRANSFER_CHUNK_BYTES = 64 * 1024
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_DISK_MB = 10240
 DEFAULT_SCHEDULING_TIMEOUT = 600
-IDLE_ENTRYPOINT = "trap 'exit 0' TERM INT; sleep infinity & wait"
-"""Keeps the sandbox alive for exec while exiting promptly when Iris stops it."""
 DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 # How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
@@ -106,7 +105,7 @@ class IrisExecutionState:
 
 
 class IrisMachine:
-    """One Iris task container; file transfer uses bounded base64 exec calls."""
+    """One Iris task container, sharing allocation lifetime with its companions."""
 
     def __init__(
         self,
@@ -119,6 +118,8 @@ class IrisMachine:
         *,
         container_name: str = "",
         execution: IrisExecutionState | None = None,
+        capability: bytes = b"",
+        driver: DriverConnectionSpec | None = None,
     ):
         self.endpoint = endpoint
         self.client = client
@@ -129,9 +130,42 @@ class IrisMachine:
         self.container_name = container_name
         self.execution = execution if execution is not None else IrisExecutionState()
         self._container_user: tuple[str, str] | None = None
+        self._capability = capability
+        self._driver = driver
+        self._connection: controller_pb2.Controller.GetTaskConnectionResponse | None = None
+        self._connecting = asyncio.Lock()
+
+    async def _primary_connection(self) -> controller_pb2.Controller.GetTaskConnectionResponse:
+        async with self._connecting:
+            if self._connection is not None:
+                return self._connection
+            if self._driver is None or not self._capability:
+                raise UnsupportedMachineSpec("Direct Iris processes require an owning driver task on the Pod network")
+            status = await asyncio.to_thread(self.task.status)
+            attempt = next(
+                (attempt for attempt in status.attempts if attempt.attempt_number == status.current_attempt_number), None
+            )
+            if attempt is None or not attempt.attempt_uid:
+                raise MachineTerminated("Iris sandbox has no current allocation identity")
+            response = await asyncio.to_thread(
+                self.rpc.get_task_connection,
+                controller_pb2.Controller.GetTaskConnectionRequest(
+                    driver_task_id=self._driver.driver_task_id.to_wire(),
+                    driver_attempt_uid=self._driver.driver_attempt_uid,
+                    task_id=self.task.task_id.to_wire(),
+                    attempt_uid=attempt.attempt_uid,
+                ),
+                timeout_ms=RPC_PADDING_SECONDS * 1000,
+            )
+            if response.attempt_uid != attempt.attempt_uid or not response.pod_uid or response.port != self._driver.port:
+                raise MachineTerminated("Iris returned a mismatched sandbox connection identity")
+            self._connection = response
+            return response
 
     async def open_process(self, command: Command) -> IrisProcessSession:
-        """Authorize one exec on the controller, then use the gateway's pipes."""
+        """Open primary-container pipes directly from the owning driver Pod."""
+        if self.container_name:
+            raise UnsupportedMachineSpec("Persistent Iris process sessions support the primary container only")
         if not command.argv or command.stdin or command.timeout is not None:
             raise ValueError("Process sessions require argv and own stdin and their lifetime")
         if command.output_limit_bytes < 0:
@@ -142,66 +176,75 @@ class IrisMachine:
             raise ValueError("Environment variable names must be shell identifiers")
         if command.user is not None and command.user not in await self._user_identity():
             raise UnsupportedMachineSpec("Iris process sessions cannot switch the container user")
-        exports = "\n".join(f"export {key}={shlex.quote(value)}" for key, value in environment.items())
-        script = f'{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\nexec "$@"'
-        argv = ["sh", "-c", script, "shellbox-process", *command.argv]
-        request = controller_pb2.Controller.OpenExecSessionRequest(
-            task_id=self.task.task_id.to_wire(), container_name=self.container_name, command=argv
-        )
-        uncertain_open = False
 
         async def acquire() -> IrisProcessSession:
-            nonlocal uncertain_open
-            attempt_id = uuid.uuid4().hex
-            with self.execution.admission:
-                if self.execution.closed:
-                    raise RuntimeError("Machine is closed")
-                self.execution.in_flight[attempt_id] = argv
-            client: ExecGatewayServiceClient | None = None
-            try:
-                # No retry: a lost Open response may already have launched the process.
-                authorization = await asyncio.to_thread(
-                    self.rpc.open_exec_session, request, timeout_ms=RPC_PADDING_SECONDS * 1000
-                )
-                client = ExecGatewayServiceClient(address=authorization.gateway_address)
-                uncertain_open = True
-                opened = await client.open(exec_gateway_pb2.OpenRequest(grant=authorization.grant), timeout_ms=30000)
-                uncertain_open = False
-                session = IrisProcessSession(
-                    client,
-                    authorization.grant,
-                    opened.session_id,
-                    stderr_limit=command.output_limit_bytes,
-                    on_close=self.execution.sessions.discard,
-                )
-                self.execution.sessions.add(session)
-                if self.execution.closed:
-                    await session.close()
-                    raise MachineTerminated("Machine closed while opening the process")
-                return session
-            except BaseException as error:
-                if client is not None:
-                    try:
-                        await client.close()
-                    except Exception as cleanup_error:
-                        error.add_note(f"Iris gateway client cleanup failed ({type(cleanup_error).__name__})")
-                raise
-            finally:
-                with self.execution.admission:
-                    del self.execution.in_flight[attempt_id]
-                    self.execution.admission.notify_all()
+            if self.execution.closed:
+                raise RuntimeError("Machine is closed")
+            connection = await self._primary_connection()
+            if self.execution.closed:
+                raise RuntimeError("Machine is closed")
+            session = await IrisProcessSession.connect(
+                connection.pod_ip,
+                connection.port,
+                self._capability,
+                replace(command, cwd=command.cwd or self.spec.workdir, env=environment),
+                on_close=self.execution.sessions.discard,
+            )
+            self.execution.sessions.add(session)
+            if self.execution.closed:
+                await session.close()
+                raise MachineTerminated("Machine closed while opening the process")
+            return session
 
+        # Acquisition is owned: interruption closes a late socket/process instead
+        # of replaying an Open whose command may already have started.
         try:
             return await acquire_owned(asyncio.create_task(acquire()))
-        except BaseException as error:
-            if uncertain_open:
-                # The gateway may have accepted Open without returning a session
-                # ID. Reclaim its container instead of repeating an ambiguous exec.
-                try:
-                    await finish_owned(own_cleanup(self.close()))
-                except BaseException as cleanup_error:
-                    error.add_note(f"Iris sandbox cleanup failed ({type(cleanup_error).__name__})")
+        except ConnectionRefusedError:
+            # Startup readiness may race the listener, before any Open was sent.
             raise
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(self.close()))
+            except BaseException as cleanup_error:
+                error.add_note(f"Iris sandbox cleanup failed ({type(cleanup_error).__name__})")
+            raise
+
+    async def _direct_command(self, command: Command) -> Result:
+        limit = command.output_limit_bytes
+        session = await self.open_process(replace(command, stdin=b"", timeout=None, output_limit_bytes=limit + 1))
+
+        async def input_bytes() -> None:
+            await session.write(command.stdin)
+            await session.write_eof()
+
+        sending = asyncio.create_task(input_bytes())
+        output = bytearray()
+        try:
+            while data := await session.read():
+                output.extend(data[: max(0, limit + 1 - len(output))])
+            await sending
+            code = await session.wait()
+            result = Result(
+                code,
+                bytes(output[:limit]),
+                session.stderr[:limit],
+                len(output) > limit,
+                len(session.stderr) > limit,
+                ExitReason.EXITED,
+            )
+        except BaseException as error:
+            try:
+                await finish_owned(own_cleanup(session.close()))
+            except BaseException as cleanup_error:
+                error.add_note(f"Iris process cleanup failed ({type(cleanup_error).__name__})")
+            raise
+        else:
+            await session.close()
+            return result
+        finally:
+            sending.cancel()
+            await asyncio.gather(sending, return_exceptions=True)
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
         seconds = math.ceil(timeout) if timeout is not None else -1
@@ -254,7 +297,11 @@ class IrisMachine:
             ) from cause
 
     async def _script(self, script: str, timeout: float | None = None) -> ExecOutput:
-        return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
+        if self.container_name:
+            return await asyncio.to_thread(self._exec_sync, ["sh", "-c", script], timeout)
+        result = await self._direct_command(Command(("sh", "-c", script)))
+        assert result.exit_code is not None
+        return ExecOutput(result.exit_code, result.stdout.decode(), result.stderr.decode())
 
     async def _checked(self, script: str) -> str:
         response = await self._script(script)
@@ -263,6 +310,20 @@ class IrisMachine:
         return response.stdout
 
     async def _upload_bytes(self, data: bytes, target: str) -> None:
+        if not self.container_name:
+            result = await self._direct_command(
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && cat > {shlex.quote(target)}",
+                    ),
+                    stdin=data,
+                )
+            )
+            if result.exit_code:
+                raise RuntimeError(f"Iris upload failed ({result.exit_code})")
+            return
         quoted = shlex.quote(target)
         await self._checked(f"mkdir -p {shlex.quote(str(PurePosixPath(target).parent))} && : > {quoted}")
         for offset in range(0, len(data), TRANSFER_CHUNK_BYTES):
@@ -273,6 +334,11 @@ class IrisMachine:
         quoted = shlex.quote(source)
         size = int((await self._checked(f"wc -c < {quoted}")).strip())
         count = size if limit is None else min(size, limit)
+        if not self.container_name:
+            result = await self._direct_command(Command(("head", "-c", str(count), source), output_limit_bytes=count))
+            if result.exit_code:
+                raise RuntimeError(f"Iris download failed ({result.exit_code})")
+            return result.stdout, size > count
         chunks = []
         for offset in range(0, count, TRANSFER_CHUNK_BYTES):
             length = min(TRANSFER_CHUNK_BYTES, count - offset)
@@ -468,8 +534,9 @@ class IrisMachineFactory:
         self,
         spec: MachineSpec,
         task_spec: IrisTaskSpec,
+        capability: bytes,
     ) -> IrisMachine:
-        submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, task_spec))
+        submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, task_spec, capability))
         try:
             machine = await asyncio.shield(submission)
         except asyncio.CancelledError as cancellation:
@@ -489,9 +556,12 @@ class IrisMachineFactory:
                         raise
                 else:
                     if status.state == TaskState.RUNNING:
-                        created = await asyncio.to_thread(machine._exec_sync, ["mkdir", "-p", spec.workdir])
-                        if created.exit_code:
-                            raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
+                        try:
+                            await machine._checked("true")
+                        except ConnectionRefusedError:
+                            # RUNNING can precede the broker binding its socket.
+                            await asyncio.sleep(0.1)
+                            continue
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
@@ -506,6 +576,18 @@ class IrisMachineFactory:
 
     async def create_task(self, spec: TaskSpec) -> ContainerTask:
         """Start a singleton or private peer group through the same Iris path."""
+        info = get_job_info()
+        if info is None or not info.controller_address or not info.attempt_uid or info.credentials is None:
+            raise UnsupportedMachineSpec("Direct Iris sandboxes require an in-cluster driver task and attempt token")
+        if (
+            self.cluster is not None
+            or self.controller_url is None
+            or self.controller_url.rstrip("/") != info.controller_address.rstrip("/")
+        ):
+            raise UnsupportedMachineSpec("An Iris task must create sandboxes on its own controller URL")
+        if any(endpoint.port == process_guest.PORT for container in spec.containers for endpoint in container.endpoints):
+            raise UnsupportedMachineSpec(f"Iris reserves TCP port {process_guest.PORT} for the primary process broker")
+        capability = secrets.token_bytes(32)
         primary = spec.primary_container
         companions = tuple(container for container in spec.containers if container.name != spec.primary)
         if primary.entrypoint is not None or primary.arguments is not None:
@@ -516,9 +598,23 @@ class IrisMachineFactory:
             ServiceSpec(
                 name=service.name,
                 image=self._check_spec(service.machine).reference,
-                workdir=service.machine.workdir,
+                # OCI runtimes chdir before starting Python, so bootstrap from
+                # an existing directory and let the broker create the workdir.
+                workdir="/" if service.name == spec.primary else service.machine.workdir,
                 env_vars=service.machine.env,
-                command=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT) if service.name == spec.primary else None,
+                command=(
+                    Entrypoint.from_command(
+                        "python3",
+                        "-u",
+                        "-c",
+                        Path(process_guest.__file__).read_text(),
+                        capability.hex(),
+                        str(process_guest.PORT),
+                        service.machine.workdir,
+                    )
+                    if service.name == spec.primary
+                    else None
+                ),
                 entrypoint=service.entrypoint,
                 arguments=service.arguments,
                 resources=ResourceSpec(
@@ -529,7 +625,16 @@ class IrisMachineFactory:
             )
             for service in spec.containers
         )
-        task = await self._create(primary.machine, IrisTaskSpec(services=services, primary=spec.primary))
+        task = await self._create(
+            primary.machine,
+            IrisTaskSpec(
+                services=services,
+                primary=spec.primary,
+                network_attachment=NetworkAttachment.POD,
+                driver_connection=DriverConnectionSpec(info.task_id, info.attempt_uid, process_guest.PORT),
+            ),
+            capability,
+        )
         members = {
             service.name: IrisMachine(
                 task.endpoint,
@@ -550,6 +655,7 @@ class IrisMachineFactory:
         self,
         spec: MachineSpec,
         task_spec: IrisTaskSpec,
+        capability: bytes,
     ) -> IrisMachine:
         info = get_job_info()
         if info is not None:
@@ -567,7 +673,7 @@ class IrisMachineFactory:
             # consult the host's broader cluster credentials from inside a job.
             endpoint = ControllerEndpoint(url=self.controller_url, credentials=credentials, config=None)
         else:
-            endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
+            raise UnsupportedMachineSpec("Direct Iris sandboxes require an in-cluster driver task")
         url, credentials = endpoint.url, endpoint.credentials
         client = None
         job = None
@@ -590,7 +696,9 @@ class IrisMachineFactory:
                 max_retries_failure=0,
                 max_retries_preemption=0,
             )
-            return IrisMachine(endpoint, client, rpc, job, job.task(0), spec)
+            return IrisMachine(
+                endpoint, client, rpc, job, job.task(0), spec, capability=capability, driver=task_spec.driver_connection
+            )
         except BaseException:
             try:
                 if job is not None:

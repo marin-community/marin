@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in proof of Iris service groups against an already deployed controller.
+"""Opt-in proof run by an in-cluster driver against a deployed controller.
 
 Select both ``integration`` and ``requires_cluster`` and explicitly configure
 SHELLBOX_IRIS_CONTROLLER_URL, SHELLBOX_IRIS_PYTHON_IMAGE (digest pinned), and
@@ -17,6 +17,7 @@ import os
 import re
 import uuid
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -25,10 +26,11 @@ import pytest
 
 pytest.importorskip("iris")
 
-from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
-from iris.cluster.types import JobName
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, NetworkAttachment, ResourceSpec
 from iris.resources.state import TERMINAL_TASK_STATES, JobState, TaskState, is_job_finished
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.http_service import HttpRequest, HttpResponse, serve_http
@@ -41,6 +43,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_cluster, pytest.mark
 RUNTIME_PORT = 8123
 RELAY_PORT = 8787
 HOST_AUTH_NAME = "SHELLBOX_IRIS_LIVE_HOST_AUTH"
+_FOREIGN_PROBE = """\
+import json, socket, sys
+control, broker = json.loads(sys.argv[1])
+with socket.create_connection(control, timeout=10) as connection:
+    assert connection.makefile('rb').read() == b'driver-control'
+try:
+    with socket.create_connection(broker, timeout=5):
+        pass
+except OSError:
+    sys.exit(0)
+sys.exit(1)
+"""
 _SERVER = """\
 import http.server, pathlib, sys
 state = pathlib.Path('/tmp/shellbox-live-state')
@@ -133,7 +147,112 @@ def _jobs_terminal(observer: IrisClient, jobs: list[JobName]) -> bool:
     return True
 
 
-def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(monkeypatch, record_property):
+async def _direct_processes(machine: IrisMachine) -> None:
+    payload = bytes(range(256)) * 4096
+    process = await machine.open_process(
+        Command(
+            (
+                "python3",
+                "-u",
+                "-c",
+                "import sys; data=sys.stdin.buffer.read(); "
+                "sys.stderr.buffer.write(b'e'*8192); sys.stdout.buffer.write(data); sys.exit(7)",
+            ),
+            output_limit_bytes=1024,
+        )
+    )
+    try:
+        await process.write(payload)
+        await process.write_eof()
+        output = bytearray()
+        while chunk := await process.read(32768):
+            output.extend(chunk)
+        assert bytes(output) == payload
+        assert await process.wait() == 7
+        assert process.stderr == b"e" * 1024
+    finally:
+        await process.close()
+
+    process = await machine.open_process(
+        Command(("python3", "-u", "-c", "import os,time; print(os.getpid(), flush=True); time.sleep(300)"))
+    )
+    try:
+        pid = int(await process.read(64))
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(1):
+                await process.read()
+    finally:
+        await process.close()
+    assert (
+        await _output(
+            machine,
+            ("python3", "-c", "import pathlib,sys; assert not pathlib.Path('/proc',sys.argv[1]).exists()", str(pid)),
+        )
+        == b""
+    )
+
+
+async def _foreign_driver_blocked(observer: IrisClient, machine: IrisMachine, image: str) -> None:
+    info = get_job_info()
+    assert info is not None and info.attempt_uid
+    attempt = await asyncio.to_thread(machine.task.current_attempt)
+    assert attempt is not None
+    status = await asyncio.to_thread(attempt.status)
+    connection = await asyncio.to_thread(
+        machine.rpc.get_task_connection,
+        controller_pb2.Controller.GetTaskConnectionRequest(
+            driver_task_id=info.task_id.to_wire(),
+            driver_attempt_uid=info.attempt_uid,
+            task_id=machine.task.task_id.to_wire(),
+            attempt_uid=status.attempt_uid,
+        ),
+    )
+    assert connection.attempt_uid == status.attempt_uid and connection.pod_uid == status.pod_uid
+
+    async def control(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        del reader
+        writer.write(b"driver-control")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(control, "0.0.0.0", 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        addresses = ((info.advertise_host, port), (connection.pod_ip, connection.port))
+        probe = await asyncio.to_thread(
+            observer.submit,
+            Entrypoint.from_command("python3", "-c", _FOREIGN_PROBE, json.dumps(addresses)),
+            name="shellbox-foreign-driver-" + uuid.uuid4().hex[:12],
+            resources=ResourceSpec(cpu=0.25, memory="128MB", disk="256MB"),
+            environment=EnvironmentSpec(setup_scripts=[]),
+            task_image=image,
+            network_attachment=NetworkAttachment.POD,
+            egress_policy=job_pb2.EGRESS_POLICY_CLUSTER,
+            max_retries_failure=0,
+            max_retries_preemption=0,
+            scheduling_timeout=Duration.from_seconds(180),
+            timeout=Duration.from_seconds(240),
+        )
+        print(f"Foreign driver probe: {probe.job_id.to_wire()}", flush=True)
+        try:
+            result = await asyncio.to_thread(probe.wait, timeout=300, poll_interval=2, raise_on_failure=False)
+            assert result.state == JobState.SUCCEEDED, "A foreign Pod must reach the driver control but not its broker"
+        finally:
+            await asyncio.to_thread(probe.cancel)
+            await asyncio.to_thread(
+                ExponentialBackoff(initial=0.2, maximum=2).wait_until_or_raise,
+                lambda: _jobs_terminal(observer, [probe.job_id]),
+                timeout=Duration.from_seconds(120),
+                error_message="Foreign driver probe did not terminate",
+            )
+
+
+def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(
+    monkeypatch, record_property, tmp_path: Path
+):
+    info = get_job_info()
+    assert info is not None and info.attempt_uid and info.task_token, "Run this proof inside an Iris driver Pod"
     controller = _required("SHELLBOX_IRIS_CONTROLLER_URL")
     endpoint = urlsplit(controller)
     if endpoint.scheme not in {"http", "https"} or not endpoint.hostname or endpoint.username or endpoint.password:
@@ -189,6 +308,11 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
                     jobs.append(cast(IrisMachine, group.primary).job.job_id)
                     record_property("iris_job_" + marker, jobs[-1].to_wire())
                     await group.wait_ready()
+                    handoff = tmp_path / (marker + "-state")
+                    await group.containers["runtime"].download("/tmp/shellbox-live-state", handoff)
+                    assert handoff.read_bytes() == marker.encode()
+                    await group.primary.upload(handoff, "/tmp/runtime-handoff")
+                    assert await _output(group.primary, ("cat", "/tmp/runtime-handoff")) == marker.encode()
                     assert (
                         await _output(
                             group.primary, ("python3", "-c", _FETCH, "http://" + group.endpoint("runtime", "http"))
@@ -222,6 +346,9 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
                         )
                         == marker.encode()
                     )
+
+                await _direct_processes(cast(IrisMachine, groups[0].primary))
+                await _foreign_driver_blocked(observer, cast(IrisMachine, groups[0].primary), image)
 
                 async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as provider:
 
@@ -267,5 +394,5 @@ def test_iris_service_groups_isolate_peers_relay_host_calls_and_reclaim_jobs(mon
             for job in jobs
         ), "Successful live jobs must be killed by explicit group cleanup"
 
-    with open_iris_client(controller_url=controller, workspace=None) as observer:
+    with IrisClient.in_cluster(controller, workspace=None) as observer:
         asyncio.run(scenario(observer))

@@ -207,18 +207,10 @@ def make_backend(
     """
     which = config.provider_kind()
     capabilities = (
-        frozenset({BackendCapability.DIRECT_DISPATCH, BackendCapability.TASK_SERVICES})
+        frozenset({BackendCapability.DIRECT_DISPATCH, BackendCapability.TASK_SERVICES, BackendCapability.POD_NETWORK})
         if which == "kubernetes_provider"
         else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
     )
-    if (
-        which == "kubernetes_provider"
-        and config.exec_gateway is not None
-        and config.auth is not None
-        and config.auth.signing_key
-        and auth.jwt_manager is not None
-    ):
-        capabilities |= {BackendCapability.PERSISTENT_EXEC}
     descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name=config.name or DEFAULT_BACKEND_ID,

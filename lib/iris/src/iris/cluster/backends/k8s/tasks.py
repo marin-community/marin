@@ -66,7 +66,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -95,7 +94,13 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 )
 from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
-from iris.cluster.platforms.k8s.network_policies import SERVICE_GROUP_NETWORK_POLICY_NAME
+from iris.cluster.platforms.k8s.network_policies import (
+    DRIVER_OWNER_LABEL,
+    DRIVER_POD_UID_LABEL,
+    DRIVER_PORT_LABEL,
+    SERVICE_GROUP_NETWORK_POLICY_NAME,
+    driver_connection_policy,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -150,6 +155,7 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
+from iris.cluster.task_connection import TaskPod
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
@@ -863,6 +869,7 @@ def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, netwo
     """
     if (
         not config.host_network
+        or run_req.environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
         or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR
         or len(run_req.environment.services) > 1
     ):
@@ -1037,6 +1044,7 @@ def _build_pod_manifest(
     ]
     container = containers[0]
     container["env"] = env_list
+    container["env"].append({"name": "IRIS_POD_UID", "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}}})
     container["volumeMounts"] = vol_mounts
     if job_secrets or _needs_task_policy(run_req, network):
         # The required volume also holds task startup until the pod's egress
@@ -1075,6 +1083,12 @@ def _build_pod_manifest(
     }
     if run_req.attempt_uid:
         labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
+    if run_req.environment.HasField("driver_connection"):
+        connection = run_req.environment.driver_connection
+        if not connection.driver_pod_uid:
+            raise PodManifestError("Driver connection has no controller-bound Pod identity")
+        labels[DRIVER_OWNER_LABEL] = connection.driver_pod_uid
+        labels[DRIVER_PORT_LABEL] = str(connection.port)
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
@@ -2628,6 +2642,10 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD and _needs_infiniband(
+            request.replicas, request.resources.device
+        ):
+            return "POD network attachment does not support multi-host GPU InfiniBand networking"
         if len(request.environment.services) > 1 and _needs_infiniband(request.replicas, request.resources.device):
             return "Multi-service tasks do not support multi-host GPU InfiniBand networking"
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
@@ -2829,25 +2847,67 @@ class K8sTaskProvider:
 
         return resp
 
-    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
-        """Fence a grant to the exact current Pod and declared running container."""
+    def resolve_task_pod(self, target: TaskTarget) -> TaskPod:
         if not target.attempt_uid:
-            raise ProviderError("Persistent execution requires an exact attempt UID")
-        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
-        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+            raise ProviderError("A direct connection requires an exact task attempt")
+        name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id, target.attempt_uid)
+        pod = self.kubectl.get_json(K8sResource.PODS, name)
         if pod is None:
-            raise ProviderError("Execution target Pod does not exist")
+            raise ProviderError("Task Pod is unavailable")
         metadata = pod.get("metadata", {})
-        if metadata.get("labels", {}).get(_LABEL_ATTEMPT_UID) != target.attempt_uid:
-            raise ProviderError("Execution target Pod belongs to another attempt")
-        if metadata.get("deletionTimestamp") or not metadata.get("uid"):
-            raise ProviderError("Execution target Pod is terminating or has no UID")
-        declared = {container["name"] for container in pod.get("spec", {}).get("containers", [])}
-        statuses = pod.get("status", {}).get("containerStatuses", [])
-        running = any(status["name"] == container_name and "running" in status.get("state", {}) for status in statuses)
-        if container_name not in declared or not running:
-            raise ProviderError("Execution target container is not running")
-        return ExecPodTarget(self.kubectl.namespace, pod_name, metadata["uid"], container_name, target.attempt_uid)
+        status = pod.get("status", {})
+        primary = _task_container_status(pod)
+        if (
+            not metadata.get("uid")
+            or metadata.get("deletionTimestamp")
+            or metadata.get("labels", {}).get(_LABEL_ATTEMPT_UID) != target.attempt_uid
+            or status.get("phase") != "Running"
+            or not status.get("podIP")
+            or primary is None
+            or "running" not in primary.get("state", {})
+        ):
+            raise ProviderError("Task Pod is stale, terminating, or not running")
+        return TaskPod(
+            self.pods.namespace,
+            name,
+            metadata["uid"],
+            status["podIP"],
+            target.attempt_uid,
+            bool(pod.get("spec", {}).get("hostNetwork")),
+        )
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskPod:
+        source = self.resolve_task_pod(driver)
+        if source.host_network:
+            raise ProviderError("A direct connection driver requires POD network attachment")
+        try:
+            self.kubectl.patch_pod_labels(source.pod_name, source.pod_uid, {DRIVER_POD_UID_LABEL: source.pod_uid})
+            self.kubectl.apply_json(
+                driver_connection_policy(source.namespace, source.pod_name, source.pod_uid, source.attempt_uid, port)
+            )
+        except KubectlError as error:
+            raise ProviderError(str(error)) from error
+        if self.resolve_task_pod(driver).pod_uid != source.pod_uid:
+            raise ProviderError("Owning driver Pod changed")
+        return source
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskPod:
+        source = self.resolve_task_pod(driver)
+        endpoint = self.resolve_task_pod(target)
+        if source.pod_uid != spec.driver_pod_uid or source.host_network or endpoint.host_network:
+            raise ProviderError("Driver or endpoint Pod identity/network attachment changed")
+        pod = self.kubectl.get_json(K8sResource.PODS, endpoint.pod_name)
+        labels = pod["metadata"].get("labels", {}) if pod is not None else {}
+        if labels.get(DRIVER_OWNER_LABEL) != source.pod_uid or labels.get(DRIVER_PORT_LABEL) != str(spec.port):
+            raise ProviderError("Endpoint Pod does not declare this owning driver and port")
+        # Refuse address reuse across provider reads.
+        if self.resolve_task_pod(driver).pod_uid != source.pod_uid:
+            raise ProviderError("Owning driver Pod changed")
+        if self.resolve_task_pod(target).pod_uid != endpoint.pod_uid:
+            raise ProviderError("Endpoint Pod changed")
+        return endpoint
 
     def exec_in_container(
         self,

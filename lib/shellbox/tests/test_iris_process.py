@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris process pipes over a real loopback gateway and subprocess transport."""
+"""Direct Iris process pipes over real loopback sockets and subprocesses."""
 
 import asyncio
+import fcntl
+import json
 import os
-import signal
 import socket
 import threading
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,56 +18,38 @@ import pytest
 
 pytest.importorskip("iris")
 
-import uvicorn
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
-from iris.cluster.exec_gateway.auth import ExecPodTarget, exec_audience, mint_exec_grant
-from iris.cluster.exec_gateway.main import gateway_application
-from iris.cluster.exec_gateway.service import ExecGatewayService
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, exec_gateway_pb2
-from iris.rpc.exec_gateway_connect import ExecGatewayServiceClient
-from iris.testing.exec_gateway import ProcessExecConnector
-from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
-from shellbox.backends.iris import machine as iris_backend
+from iris.cluster.types import DriverConnectionSpec, JobName
+from iris.rpc import controller_pb2
+from shellbox.backends.iris import process_guest
 from shellbox.backends.iris.machine import IrisMachine
+from shellbox.backends.iris.process import IrisProcessSession
 from shellbox.http_service import HttpRequest, HttpResponse, serve_http
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated
 
 
-class GatewayController:
-    """The controller authorizes execution; guest data bypasses this boundary."""
+class ConnectionController:
+    """Authorization returns an allocation identity, never carries process bytes."""
 
-    def __init__(self, signer: JwtSigner, address: str):
-        self.signer = signer
-        self.address = address
-        self.opened: list[controller_pb2.Controller.OpenExecSessionRequest] = []
+    def __init__(self, port):
+        self.port = port
+        self.opened = []
         self.admitted: threading.Event | None = None
         self.release: threading.Event | None = None
 
-    def open_exec_session(self, request, *, timeout_ms):
+    def get_task_connection(self, request, *, timeout_ms):
         del timeout_ms
         self.opened.append(request)
         if self.admitted is not None:
             self.admitted.set()
         if self.release is not None:
             assert self.release.wait(10)
-        target = ExecPodTarget("iris", "pod", "pod-uid", request.container_name or "task", "attempt-one")
-        token = mint_exec_grant(
-            self.signer,
-            gateway_id="gateway",
-            grant_id=uuid.uuid4().hex,
-            subject="test-user",
-            target=target,
-            command=list(request.command),
-        )
-        return controller_pb2.Controller.OpenExecSessionResponse(
-            gateway_address=self.address, grant=token, attempt_uid=target.attempt_uid
+        return controller_pb2.Controller.GetTaskConnectionResponse(
+            pod_ip="127.0.0.1", port=self.port, pod_uid="pod-uid", attempt_uid="attempt-one"
         )
 
     def exec_in_container(self, *args, **kwargs):
-        raise AssertionError("Persistent relay data must not use controller exec")
+        raise AssertionError("Primary process data must not use controller exec")
 
 
 class Endpoint:
@@ -81,56 +63,48 @@ class Client:
 
 
 class Job:
-    def __init__(self, connector: ProcessExecConnector):
+    def __init__(self):
         self.cancelled = False
-        self.connector = connector
 
     def cancel(self):
         self.cancelled = True
-        for process in self.connector.processes:
-            if process.returncode is None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
 
 
 @asynccontextmanager
-async def gateway_machine(tmp_path: Path):
-    keypair = generate_ed25519_keypair()
-    signer = JwtSigner(signing_key_from_private_pem(keypair.private_pem), issuer="test-controller")
-    verifier = JwksVerifier(
-        issuers={"test-controller": [keypair.public_pem]},
-        expected_audiences=frozenset({exec_audience("gateway")}),
-        leeway_seconds=0,
+async def direct_machine(tmp_path: Path):
+    capability = os.urandom(32)
+    connections = set()
+
+    def connected(reader, writer):
+        task = asyncio.create_task(process_guest.serve_process(reader, writer, capability))
+        connections.add(task)
+        task.add_done_callback(connections.discard)
+
+    server = await process_guest.start_server(connected, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    controller = ConnectionController(port)
+    status = SimpleNamespace(
+        current_attempt_number=0, attempts=(SimpleNamespace(attempt_number=0, attempt_uid="attempt-one"),)
     )
-    connector = ProcessExecConnector()
-    service = ExecGatewayService(verifier, connector)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.setblocking(False)
-        controller = GatewayController(signer, f"http://127.0.0.1:{listener.getsockname()[1]}")
-        job = Job(connector)
-        machine = IrisMachine(
-            Endpoint(),
-            Client(),
-            controller,
-            job,
-            SimpleNamespace(task_id=JobName.from_wire("/test-user/shellbox/0")),
-            MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path)),
-            container_name="runtime-api",
-        )
-        application = gateway_application(service)
-        async with application.router.lifespan_context(application):
-            server = uvicorn.Server(uvicorn.Config(application, log_level="error", lifespan="off", log_config=None))
-            serving = asyncio.create_task(server.serve(sockets=[listener]))
-            try:
-                yield machine, controller, connector
-            finally:
-                await machine.close()
-                server.should_exit = True
-                await serving
+    machine = IrisMachine(
+        Endpoint(),
+        Client(),
+        controller,
+        Job(),
+        SimpleNamespace(task_id=JobName.from_wire("/test-user/shellbox/0"), status=lambda: status),
+        MachineSpec(RegistryImage("fixture"), workdir=str(tmp_path)),
+        capability=capability,
+        driver=DriverConnectionSpec(JobName.from_wire("/test-user/driver/0"), "driver-attempt", port),
+    )
+    try:
+        yield machine, controller, connections
+    finally:
+        await machine.close()
+        server.close()
+        await server.wait_closed()
+        for task in tuple(connections):
+            task.cancel()
+        await asyncio.gather(*connections, return_exceptions=True)
 
 
 def available_port() -> int:
@@ -156,7 +130,7 @@ def test_iris_http_relay_streams_large_binary_frames_concurrently_and_reclaims_p
                     cancelled.set()
             return HttpResponse(201, request.body[::-1], "application/octet-stream")
 
-        async with gateway_machine(tmp_path) as (machine, controller, connector):
+        async with direct_machine(tmp_path) as (machine, controller, _):
             async with httpx.AsyncClient(trust_env=False) as client:
                 pending = []
                 try:
@@ -173,8 +147,6 @@ def test_iris_http_relay_streams_large_binary_frames_concurrently_and_reclaims_p
                         await asyncio.wait_for(waiting.wait(), 5)
                     assert cancelled.is_set()
                     assert len(controller.opened) == 1
-                    assert connector.targets[0].container_name == "runtime-api"
-                    assert len(connector.processes) == 1 and connector.processes[0].returncode is not None
                 finally:
                     release.set()
                     for task in pending:
@@ -195,7 +167,7 @@ def test_iris_process_chunks_binary_stdin_and_stdout_and_drains_bounded_stderr(t
     )
 
     async def check():
-        async with gateway_machine(tmp_path) as (machine, controller, connector):
+        async with direct_machine(tmp_path) as (machine, controller, _):
             session = await machine.open_process(
                 Command(("python3", "-u", "-c", script), env={"EXPECTED_CWD": str(tmp_path)}, output_limit_bytes=32)
             )
@@ -209,14 +181,13 @@ def test_iris_process_chunks_binary_stdin_and_stdout_and_drains_bounded_stderr(t
             assert session.stderr == b"x" * 32
             await session.close()
             assert len(controller.opened) == 1
-            assert connector.processes[0].returncode == 7
 
     asyncio.run(check())
 
 
 def test_iris_process_cancelled_admission_waits_for_ownership_and_reclaims_process(tmp_path):
     async def check():
-        async with gateway_machine(tmp_path) as (machine, controller, connector):
+        async with direct_machine(tmp_path) as (machine, controller, _):
             controller.admitted, controller.release = threading.Event(), threading.Event()
             opening = asyncio.create_task(machine.open_process(Command(("sh", "-c", "read line"))))
             try:
@@ -231,7 +202,6 @@ def test_iris_process_cancelled_admission_waits_for_ownership_and_reclaims_proce
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await asyncio.wait_for(opening, 5)
                 assert caught.value.args == ("original cancellation",)
-                assert len(connector.processes) == 1 and connector.processes[0].returncode is not None
                 assert len(controller.opened) == 1
             finally:
                 controller.release.set()
@@ -242,7 +212,7 @@ def test_iris_process_cancelled_admission_waits_for_ownership_and_reclaims_proce
 
 def test_iris_machine_close_reclaims_every_open_process_and_rejects_more_writes(tmp_path):
     async def check():
-        async with gateway_machine(tmp_path) as (machine, controller, connector):
+        async with direct_machine(tmp_path) as (machine, controller, _):
             first = await machine.open_process(Command(("cat",)))
             second = await machine.open_process(Command(("cat",)))
             await first.write(b"first process\n")
@@ -250,8 +220,7 @@ def test_iris_machine_close_reclaims_every_open_process_and_rejects_more_writes(
             assert await first.read() == b"first process\n"
             assert await second.read() == b"second process\n"
             await asyncio.gather(machine.close(), machine.close())
-            assert len(controller.opened) == 2
-            assert all(process.returncode is not None for process in connector.processes)
+            assert len(controller.opened) == 1
             for session in (first, second):
                 with pytest.raises(MachineTerminated):
                     await session.write(b"late")
@@ -259,27 +228,119 @@ def test_iris_machine_close_reclaims_every_open_process_and_rejects_more_writes(
     asyncio.run(check())
 
 
-def test_iris_process_lost_open_response_terminates_sandbox_without_repeating_exec(tmp_path, monkeypatch):
-    class LostOpenClient(ExecGatewayServiceClient):
-        async def open(self, request, **kwargs):
-            opened = await super().open(request, **kwargs)
-            # The command has started before its Open response is lost.
-            await self.receive(
-                exec_gateway_pb2.ReceiveRequest(
-                    grant=request.grant, session_id=opened.session_id, max_bytes=65536, wait_ms=20000
-                )
-            )
-            raise ConnectError(Code.UNAVAILABLE, "Open response lost")
-
-    monkeypatch.setattr(iris_backend, "ExecGatewayServiceClient", LostOpenClient)
+def test_direct_primary_commands_and_large_files_bypass_controller_exec(tmp_path):
+    payload = bytes(range(256)) * 8192
 
     async def check():
-        async with gateway_machine(tmp_path) as (machine, controller, connector):
-            with pytest.raises(ConnectError) as caught:
-                await machine.open_process(Command(("sh", "-c", "printf ready; read line")))
-            assert caught.value.code == Code.UNAVAILABLE
-            assert machine.job.cancelled
-            assert len(controller.opened) == len(connector.processes) == 1
-            assert await asyncio.wait_for(connector.processes[0].wait(), 5) != 0
+        async with direct_machine(tmp_path) as (machine, controller, _):
+            source, remote, target = (tmp_path / name for name in ("input", "remote", "output"))
+            source.write_bytes(payload)
+            await machine.upload(source, str(remote))
+            result = await machine.run(Command(("sh", "-c", "cat; printf '\\000\\377' >&2"), stdin=b"input\x00\xff"))
+            assert result.exit_code == 0 and result.stdout == b"input\x00\xff" and result.stderr == b"\x00\xff"
+            await machine.download(str(remote), target)
+            assert target.read_bytes() == payload
+            assert len(controller.opened) == 1
+
+    asyncio.run(check())
+
+
+def test_process_close_reaps_descendants_even_with_unread_output(tmp_path):
+    lockfile = tmp_path / "descendant.lock"
+    child_program = (
+        "import fcntl,sys; lock=open(sys.argv[1],'w'); fcntl.flock(lock,fcntl.LOCK_EX); "
+        "print('ready',flush=True); sys.stdin.read()"
+    )
+    script = (
+        "import os,subprocess,sys\n"
+        f"child=subprocess.Popen([sys.executable,'-u','-c',{child_program!r},sys.argv[1]],"
+        "stdin=subprocess.PIPE,stdout=subprocess.PIPE)\n"
+        "assert child.stdout.readline()==b'ready\\n'\n"
+        "print('ready',flush=True)\n"
+        "while True: os.write(1,b'x'*65536)\n"
+    )
+
+    async def check():
+        async with direct_machine(tmp_path) as (machine, _, _):
+            session = await machine.open_process(Command(("python3", "-u", "-c", script, str(lockfile))))
+            readiness = bytearray()
+            while b"\n" not in readiness:
+                readiness.extend(await session.read())
+            assert readiness.startswith(b"ready\n")
+            await asyncio.wait_for(session.close(), 5)
+            with lockfile.open() as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with pytest.raises(MachineTerminated):
+                await session.write(b"late")
+
+    asyncio.run(check())
+
+
+def test_broker_rejects_another_machine_capability_without_running_its_command(tmp_path):
+    marker = tmp_path / "unauthorized"
+
+    async def check():
+        capability = os.urandom(32)
+        server = await process_guest.start_server(
+            lambda reader, writer: process_guest.serve_process(reader, writer, capability), "127.0.0.1", 0
+        )
+        async with server:
+            with pytest.raises((PermissionError, asyncio.IncompleteReadError)):
+                await IrisProcessSession.connect(
+                    "127.0.0.1",
+                    server.sockets[0].getsockname()[1],
+                    os.urandom(32),
+                    Command(("touch", str(marker)), cwd=str(tmp_path)),
+                    on_close=lambda _: None,
+                )
+            assert not marker.exists()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("blocked_stdin", [False, True])
+def test_broker_disconnect_reclaims_the_running_process_group(tmp_path, blocked_stdin):
+    lockfile = tmp_path / "process.lock"
+    program = (
+        "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f,fcntl.LOCK_EX); "
+        "print('ready',flush=True); " + ("__import__('signal').pause()" if blocked_stdin else "sys.stdin.read()")
+    )
+
+    async def check():
+        capability = os.urandom(32)
+        finished = asyncio.Event()
+
+        async def connected(reader, writer):
+            try:
+                await process_guest.serve_process(reader, writer, capability)
+            finally:
+                finished.set()
+
+        server = await process_guest.start_server(connected, "127.0.0.1", 0)
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+            await process_guest.authenticate_client(reader, writer, capability)
+            import_frame = json.dumps(
+                {"argv": ["python3", "-u", "-c", program, str(lockfile)], "cwd": str(tmp_path), "env": {}}
+            ).encode()
+            await process_guest.write_frame(writer, process_guest.OPEN, import_frame)
+            assert await process_guest.read_frame(reader) == (process_guest.READY, b"")
+            readiness = bytearray()
+            while b"\n" not in readiness:
+                kind, data = await process_guest.read_frame(reader)
+                assert kind == process_guest.STDOUT
+                readiness.extend(data)
+            assert readiness == b"ready\n"
+            if blocked_stdin:
+                # This valid sender has at most one unacknowledged chunk, so EOF
+                # reaches the broker even when its child's pipe cannot drain.
+                await process_guest.write_frame(writer, process_guest.STDIN, b"x" * process_guest.CHUNK_BYTES)
+                assert await process_guest.read_frame(reader) == (process_guest.WRITTEN, b"")
+                await process_guest.write_frame(writer, process_guest.STDIN, b"x" * process_guest.CHUNK_BYTES)
+            writer.close()
+            await writer.wait_closed()
+            await asyncio.wait_for(finished.wait(), 5)
+            with lockfile.open() as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     asyncio.run(check())

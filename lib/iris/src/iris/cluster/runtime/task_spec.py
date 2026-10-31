@@ -22,7 +22,10 @@ _PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 
 def required_task_capabilities(environment: job_pb2.EnvironmentConfig) -> frozenset[str]:
     """Execution features a destination must retain when accepting this task."""
-    return frozenset({TASK_SERVICES_CAPABILITY}) if len(environment.services) > 1 else frozenset()
+    capabilities = {TASK_SERVICES_CAPABILITY} if len(environment.services) > 1 else set()
+    if environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD or environment.HasField("driver_connection"):
+        capabilities.add("pod-network")
+    return frozenset(capabilities)
 
 
 @dataclass(frozen=True)
