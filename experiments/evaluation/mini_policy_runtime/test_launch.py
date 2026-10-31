@@ -90,12 +90,15 @@ def test_qwen3_serves_at_its_native_context():
     assert agent["kwargs"]["model_info"] == {"max_input_tokens": 32768, "max_output_tokens": 16384}
 
 
-def test_snowball_serves_tp1_engines_on_the_two_gpu_bundle():
+def test_snowball_serves_one_tp1_engine_with_dp4_expert_parallel():
     entry = cohort_model("snowball-67b-a2b")
     config, plan = launch.recipe(entry, {}, {}, {}, "http://judge.invalid/v1", "DAYTONA_EVAL_API_KEY")
-    assert plan.num_inference_engines == 2
+    assert plan.num_inference_engines == 1
     assert plan.inference_engine_tensor_parallel_size == 1
-    assert config["generator"]["gpu_memory_utilization"] == 0.95
+    assert plan.inference_engine_data_parallel_size == 4
+    assert plan.inference_engine_expert_parallel_size == 4
+    assert plan.policy_num_gpus_per_node == 4
+    assert config["generator"]["gpu_memory_utilization"] == 0.92
     assert config["generator"]["max_num_seqs"] == 4
     assert config["generator"]["max_num_batched_tokens"] == 4096
     assert config["trainer"]["policy"]["megatron_config"]["tensor_model_parallel_size"] == 1

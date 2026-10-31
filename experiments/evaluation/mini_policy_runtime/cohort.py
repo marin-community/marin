@@ -17,12 +17,11 @@ Serving bindings follow each checkpoint's own training configuration:
 - Context length: the uniform profile requests 65,536 tokens; when a model's
   native context is smaller, the policy adopts the model's maximum (Qwen3-30B
   is natively 32,768).
-- Snowball 67B-A2B serves TP1 because the Marin vLLM fork's GrugMoE GPU path
-  requires tensor parallelism 1; two TP1 engines cover the two allocated H100s,
-  with raised memory utilization and a reduced prefill-token and sequence
-  budget so the 67 GB of weights still leave KV and activation headroom on one
-  H100 (the campaign's Grug serving configs bound the same way). SkyRL manages
-  the expert parallel actor option itself, so no engine kwarg is added.
+- Snowball 67B-A2B (134 GB BF16) serves one TP1 engine with DP4 expert
+  parallelism over four H100s: the fork's GrugMoE GPU path requires tensor
+  parallelism 1 and shards experts over the data-parallel group instead, which
+  is how the campaign's TP1 Grug serving configs fit the same checkpoint
+  family. Four DP ranks keep each GPU near 36 GB of weights with ample KV.
 - ``chat_template_file`` prepends a tools system section to a checkpoint whose
   training template drops the API ``tools`` array (Snowball, Nemotron). The
   vendored files are the checkpoints' exact training templates plus that
@@ -41,8 +40,11 @@ class CohortModel:
     revision: str
     tool_parser: str
     context_length: int = 65536
+    gpus_per_node: int = 2
     tensor_parallel_size: int = 2
     num_inference_engines: int = 1
+    inference_engine_data_parallel_size: int = 1
+    expert_parallel_size: int = 1
     gpu_memory_utilization: float = 0.85
     max_num_seqs: int = 8
     max_num_batched_tokens: int = 8192
@@ -86,9 +88,12 @@ COHORT_MODELS: dict[str, CohortModel] = {
         repo="open-athena/Snowball-67B-A2B-Chat-Aligned-Base-2026.10.22",
         revision="72ef8bf91f13a4d384ec3efc889ea90856510d61",
         tool_parser="hermes",
+        gpus_per_node=4,
         tensor_parallel_size=1,
-        num_inference_engines=2,
-        gpu_memory_utilization=0.95,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        expert_parallel_size=4,
+        gpu_memory_utilization=0.92,
         max_num_seqs=4,
         max_num_batched_tokens=4096,
         chat_template_file="snowball-67b-a2b.jinja",

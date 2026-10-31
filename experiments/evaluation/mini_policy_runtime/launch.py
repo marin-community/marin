@@ -61,12 +61,12 @@ def recipe(
     plan = SkyRLRolePlan(
         colocate_all=True,
         policy_num_nodes=1,
-        policy_num_gpus_per_node=2,
+        policy_num_gpus_per_node=model.gpus_per_node,
         num_inference_engines=model.num_inference_engines,
         inference_engine_tensor_parallel_size=model.tensor_parallel_size,
         inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=1,
+        inference_engine_data_parallel_size=model.inference_engine_data_parallel_size,
+        inference_engine_expert_parallel_size=model.expert_parallel_size,
         train_batch_size=1,
         policy_mini_batch_size=1,
         micro_train_batch_size_per_gpu=1,
@@ -222,7 +222,9 @@ def main(
             ),
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path="rollouts.parquet"),),
-            topology=SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=plan),
+            topology=SkyRLTopology(
+            num_nodes=1, gpus_per_node=model.gpus_per_node, gpu_variant="H100", role_plan=plan
+        ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=SEED,
         ),
