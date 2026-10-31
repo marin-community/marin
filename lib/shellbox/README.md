@@ -356,7 +356,7 @@ canary; use that workflow for CI deployment rather than an unsynchronized restar
 
 `LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
 
-An external `SIGKILL` of the bwrap launcher during its internal startup handshake
+Without a delegated cgroup, an external `SIGKILL` of the bwrap launcher during its internal startup handshake
 can strand a namespace init before Shellbox receives its identity. The local
 backend cannot guarantee reclamation in that window. Use disposable workers;
 ordinary caller cancellation waits for allocation before reclaiming the sandbox.
@@ -387,10 +387,21 @@ finally:
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
 - Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines close the namespace; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
-- The backend enforces no memory limit, since an address-space limit breaks NumPy and SymPy allocations. `memory_mb`, CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
+- Pass an explicit writable cgroup v2 `cgroup_parent` to enforce `MachineSpec.cpus` and `memory_mb` across every process in each machine. The parent must delegate the CPU and memory controllers, and the worker must have permission to move its children within that hierarchy. The backend enables these controllers, creates one child cgroup per machine, disables swapping when memory is limited, and kills and removes the child on close. The guest sees no writable cgroup filesystem. Without this configuration, CPU and memory requests raise `UnsupportedMachineSpec`. Disk quotas and GPU allocation remain unsupported.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
 
 The factory mounts exactly the directories in `read_only` and infers nothing from `bin_dirs`, which only sets `PATH`. The caller must keep each `read_only` directory self-contained. A symlink whose target lies outside the mounted directories does not resolve in the sandbox. A uv venv, for example, links `python` to an interpreter elsewhere on the host, so mounting the venv alone leaves `python3` missing. The factory raises `ValueError` for a `read_only` path that is not an existing directory.
+
+A systemd user service can supply delegation without granting the worker host administration privileges. Set `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`, then pass the service's cgroup directory as `cgroup_parent`. The supervisor subgroup keeps the delegated parent empty so it can distribute CPU and memory to machine subgroups. For example, on a host whose user manager has these controllers delegated, run the aggregate limit tests from the repository root:
+
+```bash
+systemd-run --user --unit=shellbox-limits --collect --wait --pipe \
+  --working-directory="$PWD" --property=Type=exec \
+  --property='Delegate=cpu memory pids' --property=DelegateSubgroup=supervisor \
+  uv run --no-sync --package marin-shellbox pytest -o addopts='' -m manual \
+  lib/shellbox/tests/test_local_cgroup.py \
+  --local-cgroup-parent="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/shellbox-limits.service"
+```
 
 For an OCI image, pass a `PreparedImage` from `ImageCache.prepare` or a
 `RegistryImage` reference pinned by digest. Trusted host preparation

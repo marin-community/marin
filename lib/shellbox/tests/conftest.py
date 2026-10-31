@@ -13,6 +13,10 @@ import pytest
 from shellbox.image import PreparedImage, RegistryImage
 
 
+def pytest_addoption(parser):
+    parser.addoption("--local-cgroup-parent", help="Writable delegated cgroup v2 parent for manual local-limit tests")
+
+
 @pytest.fixture
 def oci_image(tmp_path: Path) -> Callable[[tuple[bytes, ...], dict[str, object]], PreparedImage]:
     sequence = count()

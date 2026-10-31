@@ -110,6 +110,82 @@ def test_local_image_rejects_changed_or_invalid_identity_before_unpack(tmp_path,
     assert not destination.exists()
 
 
+def test_pinned_registry_image_reuses_verified_local_layout_offline(tmp_path, layered_oci_image, monkeypatch):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    destination = cache_dir / image.manifest_digest.replace(":", "-")
+    shutil.copytree(image.layout, destination)
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("An immutable local cache hit must not invoke an external image tool")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
+    prepared = ImageCache(cache_dir).prepare(source)
+    assert prepared.manifest_digest == image.manifest_digest
+    assert prepared.layout == destination
+    assert prepared_image_workdir(prepared) == "/data"
+
+
+@pytest.mark.parametrize("tampering", ["config", "layer", "tag"])
+@pytest.mark.parametrize("already_loaded", [False, True])
+def test_pinned_registry_cache_rejects_corruption(tmp_path, layered_oci_image, monkeypatch, tampering, already_loaded):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    destination = cache_dir / image.manifest_digest.replace(":", "-")
+    shutil.copytree(image.layout, destination)
+    cache = ImageCache(cache_dir)
+    source = RegistryImage(f"registry.invalid/task@{image.manifest_digest}")
+    if already_loaded:
+        cache.prepare(source)
+    manifest = json.loads((destination / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_bytes())
+    if tampering == "tag":
+        index = json.loads((destination / "index.json").read_text())
+        index["manifests"][0]["digest"] = manifest["config"]["digest"]
+        (destination / "index.json").write_text(json.dumps(index))
+    else:
+        descriptor = manifest["config"] if tampering == "config" else manifest["layers"][0]
+        (destination / "blobs/sha256" / descriptor["digest"].split(":")[1]).write_bytes(b"corrupt")
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("Corrupt local cache entries must fail closed")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    with pytest.raises(ValueError):
+        cache.prepare(source)
+
+
+def test_pinned_registry_cache_still_requires_configured_signature_verification(
+    tmp_path, layered_oci_image, monkeypatch
+):
+    image = layered_oci_image
+    cache_dir = tmp_path / "cache"
+    shutil.copytree(image.layout, cache_dir / image.manifest_digest.replace(":", "-"))
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"default": [{"type": "reject"}]}))
+
+    def rejected(args, **_kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="signature verification rejected")
+
+    monkeypatch.setattr(subprocess, "run", rejected)
+    with pytest.raises(RuntimeError, match="signature verification rejected"):
+        ImageCache(cache_dir, policy=policy).prepare(RegistryImage(f"registry.invalid/task@{image.manifest_digest}"))
+
+
+def test_registry_index_pin_can_resolve_platform_manifest_online(tmp_path, layered_oci_image, monkeypatch):
+    image = layered_oci_image
+
+    def copy(args, **_kwargs):
+        destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
+        shutil.copytree(image.layout, destination)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", copy)
+    prepared = ImageCache(tmp_path / "cache").prepare(RegistryImage(f"registry.invalid/task@sha256:{'0' * 64}"))
+    assert prepared.manifest_digest == image.manifest_digest
+    assert prepared_image_workdir(prepared) == "/data"
+
+
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
     contexts = [tmp_path / name for name in ("first", "second")]
     contexts[0].mkdir()
