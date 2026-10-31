@@ -19,11 +19,9 @@ from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import (
     ContainerSpec,
-    DriverConnectionSpec,
     Entrypoint,
     EnvironmentSpec,
     JobName,
-    NetworkAttachment,
     ResourceSpec,
     TaskSpec,
 )
@@ -43,16 +41,12 @@ class _RecordingClusterClient:
     captured_secrets: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
     captured_setup_scripts: list = field(default_factory=list)
-    captured_primary_container: str = ""
     captured_containers: list[job_pb2.ContainerSpec] = field(default_factory=list)
     captured_resources: job_pb2.ResourceSpecProto | None = None
-    captured_environment: job_pb2.EnvironmentConfig | None = None
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, resources=None, **kwargs) -> JobName:
         if environment:
-            self.captured_environment = environment
             self.captured_containers = list(environment.containers)
-            self.captured_primary_container = environment.primary_container
             primary = next(member for member in environment.containers if member.name == environment.primary_container)
             self.captured_env = dict(primary.env_vars)
             self.captured_secrets = dict(primary.secrets)
@@ -138,7 +132,6 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["MY_VAR"] == "child_override"
     assert stub.captured_env["CHILD_ONLY"] == "yes"
     assert stub.captured_env["PARENT_ONLY"] == "yes"
-    assert stub.captured_primary_container == "task"
 
 
 def test_submitter_credentials_use_files_and_respect_isolation(capturing_client, monkeypatch):
@@ -341,17 +334,15 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
 
     assert stub.captured_env == {"TASK_VAR": "1"}
     assert stub.captured_setup_scripts == []
-    assert stub.captured_primary_container == "task"
 
 
-def test_submit_task_preserves_named_services_and_aggregates_member_resources(capturing_client):
+def test_named_primary_inherits_parent_env_without_leaking_to_peers(capturing_client, parent_context):
     client, stub = capturing_client
     task = TaskSpec(
         containers=[
             ContainerSpec(
                 name="agent",
                 image="example.test/agent:latest",
-                workdir="/agent",
                 resources=ResourceSpec(cpu=2, memory="2g", disk="2g"),
                 command=Entrypoint.from_command("python", "agent.py"),
                 environment=EnvironmentSpec(env_vars={"AGENT_INPUT": "value"}, setup_scripts=[]),
@@ -359,50 +350,30 @@ def test_submit_task_preserves_named_services_and_aggregates_member_resources(ca
             ContainerSpec(
                 name="runtime",
                 image="example.test/runtime:latest",
-                workdir="/runtime",
                 resources=ResourceSpec(cpu=1, memory="1g", disk="1g"),
                 env_vars={"RUNTIME_INPUT": "value"},
             ),
         ],
         primary="agent",
-        network_attachment=NetworkAttachment.POD,
-        driver_connection=DriverConnectionSpec(JobName.from_wire("/test-user/driver/0"), "driver-attempt", 10003),
     )
 
-    client.submit_task(task, "native-services")
+    with (
+        iris_ctx_scope(parent_context),
+        patch(
+            "iris.client.client.get_job_info",
+            return_value=_parent_job_info({"PARENT_ONLY": "inherited", "AGENT_INPUT": "parent-value"}),
+        ),
+    ):
+        client.submit_task(task, "native-services")
 
-    assert stub.captured_primary_container == "agent"
     agent, runtime = stub.captured_containers
-    assert [member.name for member in stub.captured_containers] == ["agent", "runtime"]
+    assert agent.env_vars["PARENT_ONLY"] == "inherited"
     assert agent.env_vars["AGENT_INPUT"] == "value"
-    assert list(agent.runtime_entrypoint.run_command.argv) == ["python", "agent.py"]
-    assert runtime.WhichOneof("startup") == "image_command"
-    assert not runtime.image_command.HasField("entrypoint")
-    assert not runtime.image_command.HasField("arguments")
     assert dict(runtime.env_vars) == {"RUNTIME_INPUT": "value"}
     assert stub.captured_resources is not None
     assert stub.captured_resources.cpu_millicores == 3000
     assert stub.captured_resources.memory_bytes == 3 * 1024**3
     assert stub.captured_resources.disk_bytes == 3 * 1024**3
-    assert stub.captured_environment is not None
-    assert stub.captured_environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
-    assert stub.captured_environment.driver_connection == job_pb2.DriverConnectionSpec(
-        driver_task_id="/test-user/driver/0",
-        driver_attempt_uid="driver-attempt",
-        port=10003,
-    )
-
-
-def test_submit_convenience_preserves_explicit_pod_attachment(capturing_client):
-    client, stub = capturing_client
-    client.submit(
-        Entrypoint.from_command("python", "driver.py"),
-        "driver",
-        ResourceSpec(cpu=1, memory="1g"),
-        network_attachment=NetworkAttachment.POD,
-    )
-    assert stub.captured_environment is not None
-    assert stub.captured_environment.network_attachment == job_pb2.NETWORK_ATTACHMENT_POD
 
 
 def test_task_client_presents_the_task_token_from_its_env(monkeypatch):

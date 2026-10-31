@@ -26,8 +26,8 @@ SETUP_ERROR_LIMIT_BYTES = 512
 """At most POSIX's minimum PIPE_BUF, so reporting cannot block before the host reads."""
 
 
-def enter(configuration_fd: int) -> None:
-    """Enter pinned namespaces without exposing the host's control descriptors to the guest."""
+def execute_in_namespaces(configuration_fd: int) -> None:
+    """Join pinned namespaces and exec the configured program or sandboxed command."""
     with os.fdopen(configuration_fd) as configuration:
         config = json.load(configuration)
     status = config.get("status")
@@ -113,4 +113,4 @@ def drop_privileges(account: list[int] | None) -> None:
 
 
 if __name__ == "__main__":
-    enter(int(sys.argv[1]))
+    execute_in_namespaces(int(sys.argv[1]))
