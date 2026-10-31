@@ -5,8 +5,8 @@
 
 Each entry binds one evaluated checkpoint to the tokenizer, chat-template
 behavior and tool parser its family needs on the pinned Marin vLLM wheel.
-Qwen3.6 stays in the registry because the validated runtime candidate and the
-E2E instructions launch through the same code path.
+Qwen3.6 stays in the registry because the runtime candidate in these
+instructions launches through the same code path.
 
 Serving bindings follow the frozen policy model configs
 (``eval-campaign-09-25-unlabeled/model-configs``): every family keeps its

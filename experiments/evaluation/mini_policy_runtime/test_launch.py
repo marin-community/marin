@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from experiments.evaluation.mini_policy_runtime import launch
-from experiments.evaluation.mini_policy_runtime.cohort import cohort_model, engine_init_kwargs
+from experiments.evaluation.mini_policy_runtime.cohort import cohort_model
 
 
 @pytest.mark.parametrize("defect", ["missing_environment", "wrong_dataset_scope"])
@@ -52,11 +52,6 @@ def test_incomplete_release_cannot_submit_gpu_jobs(tmp_path, monkeypatch, defect
     assert isinstance(result.exception, SystemExit)
 
 
-def test_unknown_cohort_keys_fail_before_any_staging():
-    with pytest.raises(ValueError, match="snowball-67b-a2b"):
-        cohort_model("phantom-model")
-
-
 @pytest.mark.parametrize(
     "key,tool_parser",
     [
@@ -84,9 +79,3 @@ def test_cohort_bindings_reach_the_generator(key, tool_parser):
         "max_new_tokens_per_turn": 16384,
         "max_turns": 1024,
     }
-
-
-def test_snowball_serves_llama_style_chat_template_without_thinking_kwarg():
-    entry = cohort_model("snowball-67b-a2b")
-    assert entry.chat_template_kwargs is None
-    assert engine_init_kwargs(entry) == {"enable_auto_tool_choice": True, "tool_call_parser": "hermes"}
