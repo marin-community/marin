@@ -114,11 +114,11 @@ develop the checkers, and no reviewer had seen them. Round 2 prompted two more
 checker changes, one of them the fix for F43, and no later round has measured
 the changed checkers.
 
-Counting only the cases where both verdicts are definite (279 in round 1 and
-134 in round 2), Marin strict contradicts the consensus on 6.3% and 6.8%,
-fixes only on 2.4% and 2.9%, and the paired difference is +3.9 points in both
-rounds, [+3.3, +4.4] in round 2. These come from the dataset's `blind_review`
-records.
+Counting only the cases where both verdicts are definite and agree (279 in
+round 1 and 134 in round 2), Marin strict contradicts the consensus on 6.3%
+and 6.8%, fixes only on 2.4% and 2.9%, and the paired difference is +3.9
+points in both rounds, [+3.3, +4.4] in round 2. These come from the dataset's
+`blind_review` records.
 
 Each reviewer batch was a separate agent run on Claude Opus 5.5 at max effort.
 Parts of four round-1 batches ran on earlier Claude models
