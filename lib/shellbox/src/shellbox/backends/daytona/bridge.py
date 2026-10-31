@@ -12,8 +12,17 @@ import subprocess
 import sys
 import threading
 
-CHUNK_BYTES = 65536
-FRAME_BYTES = 4 * ((CHUNK_BYTES + 2) // 3) + 32
+from shellbox.process_framing import (
+    CHUNK_BYTES,
+    EXIT,
+    FRAME_BYTES,
+    STDERR,
+    STDIN,
+    STDOUT,
+    FrameDecoder,
+    decode_frame,
+    encode_frame,
+)
 
 
 def main() -> None:
@@ -30,21 +39,16 @@ def main() -> None:
     assert child.stdin is not None and child.stdout is not None and child.stderr is not None
 
     def input_stream() -> None:
-        pending = bytearray()
+        decoder = FrameDecoder()
         try:
             while data := os.read(0, FRAME_BYTES):
-                pending.extend(data)
-                while (end := pending.find(b"\n")) >= 0:
-                    if end > FRAME_BYTES:
-                        raise ValueError("Daytona process input frame exceeds its limit")
-                    decoded = base64.b64decode(pending[:end], validate=True)
-                    del pending[: end + 1]
-                    if len(decoded) > CHUNK_BYTES:
-                        raise ValueError("Daytona process input exceeds its limit")
+                for frame in decoder.feed(data):
+                    kind, decoded = decode_frame(frame)
+                    if kind != STDIN:
+                        raise ValueError("Unexpected process input frame")
                     child.stdin.write(decoded)
                     child.stdin.flush()
-                if len(pending) > FRAME_BYTES:
-                    raise ValueError("Daytona process input frame exceeds its limit")
+            decoder.finish()
         except BrokenPipeError:
             return
         finally:
@@ -53,12 +57,12 @@ def main() -> None:
 
     def output_stream(source, target, prefix: bytes) -> None:
         while data := os.read(source.fileno(), CHUNK_BYTES):
-            target.write(prefix + base64.b64encode(data) + b"\n")
+            target.write(encode_frame(prefix, data))
             target.flush()
 
     threading.Thread(target=input_stream, daemon=True).start()
-    stdout = threading.Thread(target=output_stream, args=(child.stdout, sys.stdout.buffer, b"D"))
-    stderr = threading.Thread(target=output_stream, args=(child.stderr, sys.stderr.buffer, b"E"))
+    stdout = threading.Thread(target=output_stream, args=(child.stdout, sys.stdout.buffer, STDOUT))
+    stderr = threading.Thread(target=output_stream, args=(child.stderr, sys.stderr.buffer, STDERR))
     stdout.start()
     stderr.start()
     # Keep the leader unreaped until its descendants are stopped, preventing
@@ -68,7 +72,7 @@ def main() -> None:
     code = child.wait()
     stdout.join()
     stderr.join()
-    sys.stdout.buffer.write(f"X{code}\n".encode())
+    sys.stdout.buffer.write(encode_frame(EXIT, str(code).encode()))
     sys.stdout.buffer.flush()
 
 
