@@ -203,8 +203,11 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
 
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():
     spec = _spec(ConvertedCheckpointModel(conversion=_fake_conversion()))
-    other = dataclasses.replace(spec, name="checkpoints/another-sft")
+    names = [spec.name, "checkpoints/another-sft", "checkpoints/test/sft", "checkpoints/nested/test-sft"]
     configs = [
-        materialized_config(sft_step(run, ResourceConfig.with_cpu()), _PREFIX).train_config for run in (spec, other)
+        materialized_config(
+            sft_step(dataclasses.replace(spec, name=name), ResourceConfig.with_cpu()), _PREFIX
+        ).train_config
+        for name in names
     ]
-    assert configs[0].trainer.id != configs[1].trainer.id
+    assert len({config.trainer.id for config in configs}) == len(names)

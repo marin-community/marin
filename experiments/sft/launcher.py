@@ -653,7 +653,8 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
 
 def sft_run_id(spec: SFTSpec) -> str:
     """Include the artifact name so a shared version does not merge tracker histories."""
-    return f"{spec.name.split('/', 1)[-1].replace('/', '-')}-{spec.version}"
+    identity = hashlib.sha256(f"{spec.name}@{spec.version}".encode()).hexdigest()[:12]
+    return f"{spec.name.split('/')[-1]}-{spec.version}-{identity}"
 
 
 def _trainer(
