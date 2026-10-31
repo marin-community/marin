@@ -157,6 +157,25 @@ def test_peer_probe_populates_backends_and_reachability():
     assert heartbeat.last_contact_ms > 0
 
 
+@pytest.mark.parametrize("pinned", [False, True])
+def test_service_tasks_route_only_to_peers_that_retain_all_services(pinned):
+    backend = _backend("kubernetes")
+    peer = _peer("cw", _StubConnection((backend,)))
+    peer.probe()
+    router = PeerRouter([peer])
+    request = RoutingRequest(
+        constraints=[],
+        local_feasible=False,
+        cluster_pin="cw" if pinned else "",
+        required_capabilities=frozenset({"task-containers"}),
+    )
+    assert router.classify(request).disposition == SubmitDisposition.REJECT
+
+    backend.capabilities.append("task-containers")
+    peer.probe()
+    assert router.classify(request).disposition == SubmitDisposition.QUEUE
+
+
 def test_peer_probe_failure_marks_unreachable_and_keeps_last_backends():
     connection = _StubConnection((_backend("tpu-fleet"),))
     peer = _peer("cw", connection)

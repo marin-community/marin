@@ -16,7 +16,7 @@ import functools
 import hashlib
 import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -29,6 +29,7 @@ from rigging.secrets import SecretBehavior, validate_secret_name
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
+from iris.cluster.entrypoint import build_runtime_entrypoint
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -839,6 +840,106 @@ class EnvironmentSpec:
             secrets=self.secrets,
             setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
         )
+
+
+@dataclass(frozen=True)
+class ContainerSpec:
+    """One named container, using either an Iris command or its image startup."""
+
+    name: str
+    image: str
+    resources: ResourceSpec
+    workdir: str = "/app"
+    env_vars: Mapping[str, str] = field(default_factory=dict)
+    entrypoint: tuple[str, ...] | None = None
+    arguments: tuple[str, ...] | None = None
+    command: "Entrypoint | None" = None
+    environment: EnvironmentSpec | None = None
+
+    def to_proto(self, environment: job_pb2.EnvironmentConfig | None = None) -> job_pb2.ContainerSpec:
+        if self.command is not None and (self.entrypoint is not None or self.arguments is not None):
+            raise ValueError("An Iris command cannot also override image ENTRYPOINT or CMD")
+        if environment is None:
+            environment = (self.environment or EnvironmentSpec(setup_scripts=[])).to_sandbox_proto()
+        spec = job_pb2.ContainerSpec(
+            name=self.name,
+            image=self.image,
+            workdir=self.workdir,
+            resources=self.resources.to_proto(),
+            env_vars={**environment.env_vars, **self.env_vars},
+            secrets=environment.secrets,
+            setup_scripts=environment.setup_scripts,
+        )
+        if self.command is not None:
+            spec.runtime_entrypoint.CopyFrom(build_runtime_entrypoint(self.command, environment))
+        else:
+            if environment.setup_scripts:
+                raise ValueError("Image startup cannot run Iris setup scripts; supply an Iris command")
+            spec.image_command.SetInParent()
+            if self.entrypoint is not None:
+                spec.image_command.entrypoint.argv.extend(self.entrypoint)
+            if self.arguments is not None:
+                spec.image_command.arguments.argv.extend(self.arguments)
+        return spec
+
+
+class NetworkAttachment(IntEnum):
+    """Native network attachment, independent of a task's egress policy."""
+
+    DEFAULT = job_pb2.NETWORK_ATTACHMENT_DEFAULT
+    POD = job_pb2.NETWORK_ATTACHMENT_POD
+
+    def to_proto(self) -> job_pb2.NetworkAttachment:
+        return job_pb2.NETWORK_ATTACHMENT_POD if self is NetworkAttachment.POD else job_pb2.NETWORK_ATTACHMENT_DEFAULT
+
+
+@dataclass(frozen=True)
+class DriverConnectionSpec:
+    """One primary endpoint accessible only to this live driver attempt."""
+
+    driver_task_id: JobName
+    driver_attempt_uid: str
+    port: int
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """A task's complete named container set and primary lifecycle owner."""
+
+    containers: Sequence[ContainerSpec]
+    primary: str = "task"
+    network_attachment: NetworkAttachment = NetworkAttachment.DEFAULT
+    driver_connection: DriverConnectionSpec | None = None
+
+    def __post_init__(self) -> None:
+        names = [container.name for container in self.containers]
+        if not names or len(set(names)) != len(names):
+            raise ValueError("A task requires a nonempty set of uniquely named containers")
+        if self.primary not in names:
+            raise ValueError("The primary container must belong to the task")
+
+    @property
+    def primary_container(self) -> ContainerSpec:
+        return next(container for container in self.containers if container.name == self.primary)
+
+    def to_proto(self, primary_environment: job_pb2.EnvironmentConfig) -> job_pb2.EnvironmentConfig:
+        result = job_pb2.EnvironmentConfig(
+            containers=[
+                container.to_proto(primary_environment if container.name == self.primary else None)
+                for container in self.containers
+            ],
+            primary_container=self.primary,
+            network_attachment=self.network_attachment.to_proto(),
+        )
+        if self.driver_connection is not None:
+            result.driver_connection.CopyFrom(
+                job_pb2.DriverConnectionSpec(
+                    driver_task_id=self.driver_connection.driver_task_id.to_wire(),
+                    driver_attempt_uid=self.driver_connection.driver_attempt_uid,
+                    port=self.driver_connection.port,
+                )
+            )
+        return result
 
 
 class Namespace(str):
