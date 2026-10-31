@@ -85,7 +85,6 @@ COHORT_MODELS: dict[str, CohortModel] = {
         tensor_parallel_size=1,
         num_inference_engines=2,
         gpu_memory_utilization=0.95,
-        expert_parallel=True,
         chat_template_file="snowball-67b-a2b.jinja",
     ),
 }
