@@ -29,7 +29,7 @@ from marin.rl.skyrl import (
 )
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged
+from experiments.evaluation.mini_policy_runtime.judge import JudgedEvaluation, run_judged, run_with_existing_judge
 from experiments.evaluation.mini_policy_runtime.profile import (
     MAX_OUTPUT_TOKENS,
     MODEL,
@@ -218,7 +218,7 @@ def main(
         export_hf=False,
     )
     if judge_base_url:
-        return step
+        return replace(step, run=run_with_existing_judge)
     root = Path(__file__).resolve().parents[3]
     judge = load_model_config(
         root / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/"

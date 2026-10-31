@@ -13,6 +13,7 @@ MAX_OUTPUT_TOKENS = 16384
 MAX_INPUT_TOKENS = TOTAL_CONTEXT_LENGTH - MAX_OUTPUT_TOKENS
 MODEL = "Qwen/Qwen3.6-35B-A3B"
 MODEL_REVISION = "995ad96eacd98c81ed38be0c5b274b04031597b0"
+COUNTERPART_MODEL = "openai/openai/gpt-oss-120b"
 
 POLICY_INDEX = "open-athena/Marin-Mini-Eval-Policy-Index"
 POLICY_INDEX_REVISION = "d5d2f92ce4866c431063bd123ea31a3865530809"
@@ -35,7 +36,9 @@ def pi_agent_config() -> dict:
 def counterpart_environment() -> dict[str, str]:
     return {
         "OPENAI_BASE_URL": "https://api.together.xyz/v1",
-        "TAU2_USER_MODEL": "openai/gpt-oss-120b",
-        "TAU2_NL_ASSERTIONS_MODEL": "openai/gpt-oss-120b",
+        # LiteLLM consumes the first openai/ as its provider prefix. Together's
+        # actual model ID retains the second openai/ in the HTTP request.
+        "TAU2_USER_MODEL": COUNTERPART_MODEL,
+        "TAU2_NL_ASSERTIONS_MODEL": COUNTERPART_MODEL,
         "TAU2_USER_REASONING_EFFORT": "low",
     }
