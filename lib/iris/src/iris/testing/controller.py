@@ -104,6 +104,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
+from iris.preemption import DEFAULT_TERMINATION_GRACE, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
@@ -391,6 +392,7 @@ def make_direct_job_request(
     )
     if coscheduling_group_by:
         req.coscheduling.group_by = coscheduling_group_by
+    req.termination_grace.CopyFrom(duration_to_proto(DEFAULT_TERMINATION_GRACE))
     return req
 
 
@@ -619,6 +621,15 @@ def submit_job(
     mirror service-layer behavior, then submits and returns the created tasks.
     """
     inject_device_constraints(request)
+    request.termination_grace.CopyFrom(
+        duration_to_proto(
+            resolve_termination_grace(
+                Duration.from_ms(request.termination_grace.milliseconds)
+                if request.HasField("termination_grace")
+                else None
+            )
+        )
+    )
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
@@ -710,6 +721,7 @@ def make_job_request(
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
+    request.termination_grace.CopyFrom(duration_to_proto(DEFAULT_TERMINATION_GRACE))
     return request
 
 

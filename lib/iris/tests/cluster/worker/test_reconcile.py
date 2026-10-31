@@ -7,6 +7,7 @@ These exercise the Reconcile RPC handler in-process by calling
 ``worker.handle_reconcile(request)`` directly on a real Worker instance.
 """
 
+import threading
 from unittest.mock import Mock
 
 import pytest
@@ -72,6 +73,17 @@ def _observations_by_uid(
     response: worker_pb2.Worker.ReconcileResponse,
 ) -> dict[str, worker_pb2.Worker.AttemptObservation]:
     return {obs.attempt_uid: obs for obs in response.observed}
+
+
+def _running_handle_exits_on_term():
+    handle = create_mock_container_handle()
+    stopped = threading.Event()
+    handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+    handle.stop_hook = lambda _force: stopped.set()
+    return handle
 
 
 def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
@@ -163,11 +175,7 @@ def test_stop_intent_kills_running_attempt(worker, mock_runtime):
     uid = "uid-stop-intent"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     # Submit a task so it's locally known.
     worker.submit_task(run_req)
@@ -212,11 +220,7 @@ def test_zombie_attempt_is_killed(worker, mock_runtime):
     uid = "uid-zombie"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     worker.submit_task(run_req)
     task = worker.task_by_uid(uid)
@@ -247,11 +251,7 @@ def test_reconcile_addressed_to_other_worker_is_refused(worker, mock_runtime):
     uid = "uid-not-a-zombie"
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid=uid)
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
 
     worker.submit_task(run_req)
     task = worker.task_by_uid(uid)
@@ -529,11 +529,7 @@ def test_stop_intent_routes_to_attempt_by_uid(worker, mock_runtime):
     task_id = _task_id("stop-uid")
     run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-stop-1")
 
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
+    mock_runtime.create_container = Mock(return_value=_running_handle_exits_on_term())
     worker.submit_task(run_req)
     task = worker.task_by_uid("uid-stop-1")
     assert task is not None

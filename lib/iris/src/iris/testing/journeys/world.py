@@ -10,7 +10,7 @@ from pathlib import Path
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
@@ -189,6 +189,7 @@ class JourneyWorld:
         coscheduled: bool = False,
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
+        termination_grace: Duration | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
@@ -201,6 +202,7 @@ class JourneyWorld:
             coscheduled=coscheduled,
             scheduling_timeout=scheduling_timeout,
             execution_timeout=execution_timeout,
+            termination_grace=termination_grace,
             required_attributes=required_attributes,
             include_resources=include_resources,
         )
@@ -234,6 +236,7 @@ class JourneyWorld:
         coscheduled: bool = False,
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
+        termination_grace: Duration | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
@@ -259,6 +262,8 @@ class JourneyWorld:
             request.scheduling_timeout.milliseconds = int(scheduling_timeout * 1000)
         if execution_timeout is not None:
             request.timeout.milliseconds = int(execution_timeout * 1000)
+        if termination_grace is not None:
+            request.termination_grace.milliseconds = termination_grace.to_ms()
         for key, value in (required_attributes or {}).items():
             constraint = request.constraints.add(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
             constraint.value.string_value = value

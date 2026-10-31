@@ -112,6 +112,7 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+    termination_grace_ms: int
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
@@ -646,6 +647,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.max_retries_failure,
             job_config_table.c.max_retries_preemption,
             job_config_table.c.timeout_ms,
+            job_config_table.c.termination_grace_ms,
             job_config_table.c.preemption_policy,
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
@@ -1688,6 +1690,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.constraints_json,
     job_config_table.c.task_image,
     job_config_table.c.timeout_ms,
+    job_config_table.c.termination_grace_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
     # Current stamped task band; see PendingDispatchRow.priority_band.
@@ -1719,6 +1722,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         constraints_json=r.constraints_json,
         task_image=str(r.task_image),
         timeout_ms=int(_tms) if _tms is not None else None,
+        termination_grace_ms=int(r.termination_grace_ms),
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),

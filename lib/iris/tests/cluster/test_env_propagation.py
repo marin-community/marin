@@ -18,6 +18,7 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.preemption import TERMINATION_GRACE_ENV
 from iris.rpc import job_pb2
 from rigging.secrets import SecretBehavior
 
@@ -265,6 +266,7 @@ def test_child_region_placement_uses_parent_worker_region(
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     monkeypatch.setenv("IRIS_TASK_ID", "/test-user/parent-job/0:0")
+    monkeypatch.setenv(TERMINATION_GRACE_ENV, "10000")
     monkeypatch.setenv("IRIS_WORKER_REGION", "us-central2")
 
     set_job_info(None)
@@ -326,6 +328,7 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
 
 def test_task_client_presents_the_task_token_from_its_env(monkeypatch):
     monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv(TERMINATION_GRACE_ENV, "10000")
     monkeypatch.setenv("IRIS_TASK_TOKEN", "task-token")
 
     set_job_info(None)

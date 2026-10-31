@@ -5,8 +5,10 @@
 
 import logging
 import shutil
+import signal
 import subprocess
 from pathlib import Path
+from types import FrameType
 
 import click
 from rigging.log_setup import configure_logging
@@ -88,6 +90,17 @@ def serve(worker_config: str):
     click.echo(f"  Controller: {config.controller_address}")
     click.echo("  Runtime: docker")
     worker.start()
+
+    stopping = False
+
+    def stop_worker(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal stopping
+        if not stopping:
+            stopping = True
+            worker.stop()
+
+    signal.signal(signal.SIGTERM, stop_worker)
+    signal.signal(signal.SIGINT, stop_worker)
     worker.wait()
 
 

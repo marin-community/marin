@@ -54,6 +54,7 @@ def build_run_request_fields(
     ports_json: list,
     constraints_json: str | None,
     task_image: str,
+    termination_grace_ms: int,
     task_id: str = "",
     attempt_id: int = 0,
     priority: int = 0,
@@ -90,6 +91,7 @@ def build_run_request_fields(
         egress_policy=egress_policy,
         egress_allow=parse_egress_rules(egress_allow_json or []),
     )
+    request.termination_grace.milliseconds = termination_grace_ms
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
     return request
@@ -156,6 +158,7 @@ class RunTemplatesProjection(Projection):
             ports_json=job.ports_json,
             constraints_json=job.constraints_json,
             task_image=job.task_image,
+            termination_grace_ms=job.termination_grace_ms,
             container_profile=job.container_profile,
             egress_policy=job.egress_policy,
             egress_allow_json=job.egress_allow_json,
