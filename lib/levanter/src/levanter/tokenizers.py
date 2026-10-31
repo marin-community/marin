@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-import threading
 import time
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -897,12 +896,6 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
 
-# lru_cache does not serialize concurrent first calls. Threads and local GPU
-# processes share the staging directory; both locks are needed to keep a
-# downloader from truncating files while another loader reads them.
-_STAGE_LOCK = threading.Lock()
-
-
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
     """Download the full set of tokenizer files to a stable local directory.
@@ -934,7 +927,7 @@ def _stage_tokenizer(name_or_path: str) -> str:
     )
     os.makedirs(local_dir, exist_ok=True)
 
-    with _STAGE_LOCK, FileLock(local_dir + ".lock"):
+    with FileLock(local_dir + ".lock"):
         # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
