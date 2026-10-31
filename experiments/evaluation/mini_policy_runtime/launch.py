@@ -176,7 +176,7 @@ def validate_environment_preflight(manifest: dict, data_uri: str) -> None:
 @click.option("--model-uri", required=True, help="Complete, revision-pinned RNO2A weight mirror.")
 @click.option("--data-uri", required=True, help="Preflight-validated rollouts.parquet on RNO2A storage.")
 @click.option("--environment-manifest", required=True, help="Immutable CPU environment-preflight manifest URI.")
-@click.option("--priority", type=click.Choice(["batch", "production"]), default="batch")
+@click.option("--priority", type=click.Choice(["batch", "interactive", "production"]), default="batch")
 @click.option("--judge-base-url", help="Existing MiniMax endpoint; otherwise co-host the pinned 131k judge.")
 @rl_build_options
 def main(
