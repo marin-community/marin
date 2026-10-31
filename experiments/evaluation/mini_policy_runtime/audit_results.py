@@ -9,13 +9,14 @@ from collections import Counter
 from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 
 def audit(result_uri: str, expected_rollouts: int) -> dict:
-    fs, root = filesystem_for(result_uri.rstrip("/") + "/exports/dumped_evals/eval_only")
+    fs, pattern = filesystem_for(str(StoragePath(result_uri) / "exports" / "dumped_evals" / "eval_only" / "*.jsonl"))
     summaries = []
     failures = Counter()
-    for path in sorted(fs.glob(root + "/*.jsonl")):
+    for path in sorted(fs.glob(pattern)):
         if path.endswith("/aggregated_results.jsonl"):
             continue
         rows = [json.loads(line) for line in fs.cat_file(path).decode().splitlines() if line.strip()]

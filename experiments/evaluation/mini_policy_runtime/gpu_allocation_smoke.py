@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Check privileged-task CUDA and Ray visibility against NVIDIA's allocation."""
 
 import json
@@ -20,8 +23,11 @@ def main() -> None:
         workers = [DeviceActor.remote() for _ in range(2)]
         observed = set(ray.get([worker.uuid.remote() for worker in workers]))
         assert observed == expected, (observed, expected)
-        print(json.dumps({"allocated_gpu_count": 2, "torch_gpu_count": 2, "ray_gpu_count": 2,
-                          "assigned_uuids_match": True}))
+        print(
+            json.dumps(
+                {"allocated_gpu_count": 2, "torch_gpu_count": 2, "ray_gpu_count": 2, "assigned_uuids_match": True}
+            )
+        )
     finally:
         ray.shutdown()
 
