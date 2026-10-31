@@ -46,6 +46,13 @@ def mmlu() -> list[dict]:
     return rows
 
 
+def mmlu_pro() -> list[dict]:
+    ds = load_dataset("TIGER-Lab/MMLU-Pro", split="test")
+    return [
+        {"id": f"mmlu_pro-test-{r['question_id']}", "text": r["question"] + "\n" + "\n".join(r["options"])} for r in ds
+    ]
+
+
 def humaneval() -> list[dict]:
     ds = load_dataset("openai/openai_humaneval", split="test")
     return [{"id": f"humaneval-test-{i}", "text": r["prompt"] + r["canonical_solution"]} for i, r in enumerate(ds)]
@@ -69,6 +76,7 @@ def main() -> None:
     out_dir, raw_dir = Path(sys.argv[1]), Path(sys.argv[2])
     write(out_dir, "gsm8k", gsm8k())
     write(out_dir, "mmlu", mmlu())
+    write(out_dir, "mmlu_pro", mmlu_pro())
     write(out_dir, "humaneval", humaneval())
     for name, rows in uncheatable(raw_dir).items():
         write(out_dir, name, rows)

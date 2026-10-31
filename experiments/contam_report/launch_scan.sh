@@ -8,4 +8,4 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --target-cluster cw-us-east-02a --job-name "$job_name" \
   --cpu 1 --memory 2GB --timeout 86400 \
   -- python -m experiments.contam_report.scan "$plan" "$out" \
-  s3://marin-us-east-02a/marin/analysis/contam_report/bloom_v2 --max-workers "$workers"
+  s3://marin-us-east-02a/marin/analysis/contam_report/bloom_v3 --max-workers "$workers"
