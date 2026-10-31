@@ -19,6 +19,7 @@ Plan or run one arm::
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
@@ -65,6 +66,15 @@ GRUG_RLVR_SFT_WEIGHTS = {
     "cw-rno2a": "s3://marin-rno2a/marin/checkpoints/glm53-rlvr-snowball-sft-2026.09.23/hf/step-135/step-135",
 }
 """A copy of the weights in the region of each cluster, so that a run reads them locally."""
+
+
+ADOPTED_WEIGHTS_VERSION = "2026.10.31"
+
+
+def adopted_weights(model: str, url: str) -> ArtifactStep[LevanterCheckpoint]:
+    """The HF export at ``url`` (for example a trained run's terminal export) as the policy's initial weights."""
+    digest = hashlib.sha256(url.encode()).hexdigest()[:12]
+    return ArtifactStep.adopt(f"models/{model}-weights-{digest}", ADOPTED_WEIGHTS_VERSION, url, kind=LevanterCheckpoint)
 
 
 def grug_rlvr_sft(cluster: str) -> ArtifactStep[LevanterCheckpoint]:
@@ -357,10 +367,13 @@ def build_run(
     request_window_tokens: int | None,
     cluster: str = CLUSTER,
     checkpoint_every: int = CHECKPOINT_EVERY,
+    weights: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
     if model == "grug":
         profile = replace(profile, step=grug_rlvr_sft(cluster))
+    if weights is not None:
+        profile = replace(profile, step=adopted_weights(model, weights))
     if export_every % checkpoint_every:
         raise click.BadParameter(f"must be a multiple of {checkpoint_every}", param_hint="--export-every")
     if not feed_root.startswith("s3://"):
@@ -454,6 +467,13 @@ def build_run(
     show_default=True,
     help="Steps between resume checkpoints (about 0.9 TB each for Grug); --export-every must be a multiple.",
 )
+@click.option(
+    "--weights",
+    help=(
+        "An HF export to start from in place of the profile's weights, for example the terminal export of an earlier "
+        "run, to train in stages shorter than the steps at which long runs fail."
+    ),
+)
 @rl_build_options
 def main(
     model: str,
@@ -468,6 +488,7 @@ def main(
     export_every: int,
     request_window_tokens: int | None,
     checkpoint_every: int,
+    weights: str | None,
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         model=model,
@@ -482,6 +503,7 @@ def main(
         request_window_tokens=request_window_tokens,
         cluster=cluster,
         checkpoint_every=checkpoint_every,
+        weights=weights,
     )
 
 
