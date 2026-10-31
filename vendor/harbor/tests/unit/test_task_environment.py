@@ -13,7 +13,14 @@ from harbor.utils.env import (
 
 
 @pytest.mark.parametrize(
-    "key", ["AWS_SECRET_ACCESS_KEY", "DAYTONA_API_KEY", "DAYTONA_JWT_TOKEN"]
+    "key",
+    [
+        "AWS_SECRET_ACCESS_KEY",
+        "DAYTONA_API_KEY",
+        "DAYTONA_JWT_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+    ],
 )
 def test_task_alias_cannot_resolve_ambient_host_credentials(monkeypatch, key):
     monkeypatch.setenv(key, "storage-private-canary")
@@ -68,6 +75,7 @@ def test_task_model_capabilities_resolve_without_exposing_parent_secrets(monkeyp
         "DATABRICKS_TOKEN",
         "TETRATE_API_KEY",
         "OPENCODE_API_KEY",
+        "AIDER_API_KEY",
     ],
 )
 def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch, key):
@@ -94,6 +102,8 @@ def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch,
         "IRIS_TASK_TOKEN",
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
     ],
 )
 def test_storage_and_control_plane_credentials_cannot_be_explicit_task_capabilities(
@@ -102,3 +112,10 @@ def test_storage_and_control_plane_credentials_cannot_be_explicit_task_capabilit
     with pytest.raises(ValueError):
         with task_environment({key: "private"}):
             resolve_env_vars({key: "private"})
+
+
+def test_transformed_aider_authentication_cannot_be_granted(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+    with pytest.raises(ValueError):
+        with task_environment({"AIDER_API_KEY": "openai=host-provider-private-canary"}):
+            resolve_env_vars({"AIDER_API_KEY": "${AIDER_API_KEY}"})

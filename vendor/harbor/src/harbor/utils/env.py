@@ -35,6 +35,7 @@ _MODEL_CREDENTIAL_KEYS = frozenset(
     "DATABRICKS_TOKEN",
     "TETRATE_API_KEY",
     "OPENCODE_API_KEY",
+    "AIDER_API_KEY",
     "COPILOT_GITHUB_TOKEN",
     "ROVODEV_USER_API_TOKEN",
 }
@@ -69,6 +70,8 @@ _HOST_CREDENTIAL_KEYS = frozenset(
         "FSSPEC_S3",
         "CODEX_AUTH_JSON_PATH",
         "CODEX_FORCE_AUTH_JSON",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
     }
 )
 

@@ -32,7 +32,9 @@ Responses tool histories to the configured Chat Completions endpoint. It retains
 token IDs and log probabilities when the serving backend returns them.
 
 Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
-those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
+those harnesses require LiteLLM. Preinstalled Aider execution is also blocked.
+Copilot CLI installation and execution are unsupported because it requires
+GitHub authentication without a guest relay. Use Mini-SWE or Terminus instead. NeMo's
 LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
 endpoint.
 
@@ -423,7 +425,7 @@ Task, agent, solution and verifier environment templates resolve against an expl
 mapping whose default is empty. They cannot resolve arbitrary host variables. Storage,
 control-plane and model-provider credential keys and known credential values are rejected before
 sandbox commands run. Model clients receive inert keys for a declared relay. Host authentication
-files and AWS/Bedrock credentials cannot be forwarded to installed agents.
+files, GitHub tokens and AWS/Bedrock credentials cannot be forwarded to installed agents.
 Below, persistent variables are explicit `persistent_env` / `--ae` settings;
 Harbor infrastructure values name images, resource limits and log mount paths.
 
