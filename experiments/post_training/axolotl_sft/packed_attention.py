@@ -13,7 +13,14 @@ model's KV cache is turned off for training; packed and unpacked logits then agr
 """
 
 from axolotl.integrations.base import BasePlugin
+from axolotl.monkeypatch.models.qwen3_5.modeling import patch_qwen3_5_moe_modeling_packing
 from axolotl.utils.collators.batching import V2BatchSamplerDataCollatorForSeq2Seq
+
+
+def apply_packing_patch(model_type: str) -> None:
+    """Apply the architecture patch that Axolotl training uses for packed segments."""
+    if model_type in {"qwen3_5_moe", "qwen3_5_moe_text"}:
+        patch_qwen3_5_moe_modeling_packing()
 
 
 class SegmentPositionCollator(V2BatchSamplerDataCollatorForSeq2Seq):

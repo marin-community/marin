@@ -38,6 +38,7 @@ import torch
 from experiments.post_training.mismatch_probe.sequence_kl import (
     KLForm,
     ProbeBucket,
+    SequenceFlipRow,
     SequenceKLRow,
     binned_kl,
     exact_kl,
@@ -201,54 +202,51 @@ def kl_rows_from_passes(
         raise ValueError("reference and candidate passes hold different supports")
     rows: list[SequenceKLRow] = []
     for row, sequence in enumerate(sequences):
-        padded_start = candidate_gathered.shape[1] - len(sequence.token_ids)
-        for position in sequence.scored_positions():
-            logits_position = padded_start + position - 1
-            token_id = int(sequence.token_ids[position])
-            support = torch.from_numpy(reference_topk_logprobs[row, logits_position].astype(np.float64))
-            scored = torch.from_numpy(candidate_gathered[row, logits_position, :top_k].astype(np.float64))
-            reference_tail = float(reference_tail_logmass[row, logits_position])
-            candidate_tail = float(candidate_tail_logmass[row, logits_position])
-            kl = float(
-                binned_kl(
-                    support,
-                    torch.tensor(reference_tail, dtype=torch.float64),
-                    scored,
-                    torch.tensor(candidate_tail, dtype=torch.float64),
-                )
-            )
-            if not np.isfinite(kl):
-                raise ValueError(f"{sequence.sample_id}@{position}: KL is not finite")
+        positions = np.asarray(sequence.scored_positions(), dtype=np.int64)
+        if not len(positions):
+            continue
+        logits_positions = candidate_gathered.shape[1] - len(sequence.token_ids) + positions - 1
+        token_ids = np.asarray(sequence.token_ids, dtype=np.int64)[positions]
+        support_ids = reference_topk_ids[row, logits_positions]
+        support_logprobs = reference_topk_logprobs[row, logits_positions].astype(np.float64)
+        reference_tail = reference_tail_logmass[row, logits_positions].astype(np.float64)
+        candidate_tail = candidate_tail_logmass[row, logits_positions].astype(np.float64)
+        kls = binned_kl(
+            torch.from_numpy(support_logprobs),
+            torch.from_numpy(reference_tail),
+            torch.from_numpy(candidate_gathered[row, logits_positions, :top_k].astype(np.float64)),
+            torch.from_numpy(candidate_tail),
+        ).numpy()
+        bad = np.flatnonzero(~np.isfinite(kls))
+        if len(bad):
+            raise ValueError(f"{sequence.sample_id}@{int(positions[bad[0]])}: KL is not finite")
+        in_support = support_ids == token_ids[:, None]
+        reference_logprobs = np.where(
+            in_support.any(-1), support_logprobs[np.arange(len(positions)), in_support.argmax(-1)], -np.inf
+        )
+        candidate_logprobs = candidate_gathered[row, logits_positions, top_k]
+        probe_hash = sequence.probe_hash  # a sha256 over the whole sequence: once per sequence
+        for index, position in enumerate(positions.tolist()):
             rows.append(
                 SequenceKLRow(
                     sequence_id=sequence.sample_id,
                     position=position,
-                    token_id=token_id,
-                    kl=kl,
-                    reference_logprob=reference_logprob_at(
-                        reference_topk_ids[row, logits_position],
-                        reference_topk_logprobs[row, logits_position],
-                        token_id,
-                    ),
-                    candidate_logprob=float(candidate_gathered[row, logits_position, top_k]),
+                    token_id=int(token_ids[index]),
+                    kl=float(kls[index]),
+                    reference_logprob=float(reference_logprobs[index]),
+                    candidate_logprob=float(candidate_logprobs[index]),
                     candidate_step=candidate_step,
                     reference_id=reference_id,
-                    probe_hash=sequence.probe_hash,
+                    probe_hash=probe_hash,
                     top_k=top_k,
-                    reference_tail_mass=reference_tail,
-                    candidate_tail_mass=candidate_tail,
+                    reference_tail_mass=float(reference_tail[index]),
+                    candidate_tail_mass=float(candidate_tail[index]),
                     form=KLForm.FORWARD,
                     token_type_tag=ProbeBucket(sequence.token_type_tags[position]),
                     position_tag=sequence.position_tags[position],
                 )
             )
     return rows
-
-
-def reference_logprob_at(ids: np.ndarray, logprobs: np.ndarray, token_id: int) -> float:
-    """The stored support's logprob at ``token_id``; -inf outside the top-K."""
-    matches = np.nonzero(np.asarray(ids) == token_id)[0]
-    return float(logprobs[matches[0]]) if len(matches) else -np.inf
 
 
 def exact_rows_from_passes(
@@ -328,6 +326,53 @@ def write_rows_parquet(rows: list[SequenceKLRow], output_path: str | Path) -> in
 
 
 def read_rows_parquet(input_path: str | Path) -> list[SequenceKLRow]:
-    """The rows of one pass's parquet file."""
+    """The rows of one pass's parquet file, with the form and bucket back as their enums."""
     table = pq.read_table(str(input_path))
-    return [SequenceKLRow(**record) for record in table.to_pylist()]
+    return [
+        SequenceKLRow(
+            **{
+                **record,
+                "form": KLForm(record["form"]),
+                "token_type_tag": ProbeBucket(record["token_type_tag"]),
+            }
+        )
+        for record in table.to_pylist()
+    ]
+
+
+def write_flip_rows_parquet(rows: list[SequenceFlipRow], output_path: str | Path) -> int:
+    """One parquet file of SequenceFlipRow records; returns the row count."""
+    if not rows:
+        raise ValueError("refusing to write an empty parquet file")
+    schema = pa.schema(
+        [
+            ("sequence_id", pa.string()),
+            ("position", pa.int64()),
+            ("reference_top1", pa.int64()),
+            ("candidate_top1", pa.int64()),
+            ("flipped", pa.bool_()),
+            ("reference_top1_logprob", pa.float64()),
+            ("candidate_top1_logprob", pa.float64()),
+            ("candidate_step", pa.int64()),
+            ("reference_id", pa.string()),
+            ("candidate_id", pa.string()),
+            ("probe_hash", pa.string()),
+            ("token_type_tag", pa.string()),
+            ("position_tag", pa.int64()),
+        ]
+    )
+    records = [{**row.__dict__, "token_type_tag": row.token_type_tag.value} for row in rows]
+    table = pa.Table.from_pylist(records, schema=schema)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(output_path))
+    return len(rows)
+
+
+def read_flip_rows_parquet(input_path: str | Path) -> list[SequenceFlipRow]:
+    """The flip rows of one pass's parquet file, with the bucket back as its enum."""
+    table = pq.read_table(str(input_path))
+    return [
+        SequenceFlipRow(**{**record, "token_type_tag": ProbeBucket(record["token_type_tag"])})
+        for record in table.to_pylist()
+    ]

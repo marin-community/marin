@@ -308,3 +308,13 @@ def test_the_shared_r_instruction_alone_is_not_an_overlap(tmp_path, inputs):
     rows = [row("other-problem", r_prompt(distinct(5))), row("same-problem", r_prompt(distinct(901)))]
     kept, _drops = screen(rows, screening_hits(rows, instructed), x_task_rows=False)
     assert [r.probe_id for r in kept] == ["other-problem"]
+
+
+def test_a_terminus_value_cut_at_the_cap_runs_to_the_end_of_the_reply():
+    messages = [
+        {"role": "user", "content": "fix it"},
+        {"role": "assistant", "content": '{"analysis": "look at the failing'},
+    ]
+    tokenizer = tiny_tokenizer(QWEN_TOKENS)
+    words = bucket_words(tokenizer, "qwen3_moe", messages, tag_conversation(tokenizer, "qwen3_moe", messages))
+    assert words[Bucket.REASONING] == ["look", "at", "the", "failing"]

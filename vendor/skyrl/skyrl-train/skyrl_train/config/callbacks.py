@@ -16,6 +16,18 @@ def interval_hf_export_enabled(cfg: DictConfig) -> bool:
 
 def validate_hf_export_config(cfg: DictConfig) -> None:
     """Validate checkpoint and model-save callback interval alignment."""
+    export_steps = [int(step) for step in (cfg.trainer.get("hf_export_steps") or ())]
+    if export_steps:
+        # Step-list mode: every export step must be a saved checkpoint, or the
+        # trainer dies requesting the export of a checkpoint that does not exist.
+        checkpoint_steps = [int(step) for step in (cfg.trainer.get("checkpoint_steps") or ())]
+        unsaved = [step for step in export_steps if step not in checkpoint_steps]
+        if unsaved:
+            raise ValueError(
+                f"trainer.hf_export_steps {unsaved} must be checkpoint steps {checkpoint_steps}; "
+                "an export converts a saved checkpoint"
+            )
+        return
     callbacks = cfg.trainer.get("callbacks")
     if has_explicit_callbacks(cfg):
 

@@ -17,7 +17,6 @@ from typing import Any
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY
 from omegaconf import OmegaConf
 
-from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
 from skyrl_train.io import io
 
 OPTIMIZER_STATE_MARKER = "optimizer_state.json"
@@ -54,7 +53,6 @@ class CheckpointSchedule:
                 "list the steps whose checkpoints must resume training"
             )
         _require_savable_optimizer_steps(weight_steps, optimizer_steps, checkpoint_interval(trainer))
-        _require_fully_reshardable(trainer, optimizer_steps)
         return cls(
             interval=checkpoint_interval(trainer),
             weight_steps=weight_steps,
@@ -115,25 +113,6 @@ def _require_savable_optimizer_steps(weight_steps: tuple[int, ...], optimizer_st
         )
 
 
-def _require_fully_reshardable(trainer: Mapping[str, Any], optimizer_steps: tuple[int, ...]):
-    """Master-only checkpoints need the DP-gathered optimizer format.
-
-    The ``dp_reshardable`` format stores each bucket's param, master, and moment shards
-    as records named by bucket position, so a masters-only filter cannot separate them.
-    """
-    if not optimizer_steps:
-        return
-    policy = trainer.get("policy")
-    megatron_config = policy.get("megatron_config") if policy is not None else None
-    sharding_type = megatron_config.get("optimizer_checkpoint_sharding_type") if megatron_config is not None else None
-    if sharding_type is not None and sharding_type != "fully_reshardable":
-        raise ValueError(
-            "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type must be 'fully_reshardable' "
-            f"when trainer.optimizer_checkpoint_steps is set; got {sharding_type!r}, whose optimizer "
-            "records cannot be filtered down to masters only"
-        )
-
-
 def _step_list(trainer: Mapping[str, Any], field: str) -> tuple[int, ...]:
     value = OmegaConf.to_container(trainer[field], resolve=True) if field in trainer else []
     if not isinstance(value, list) or any(
@@ -155,33 +134,3 @@ def assert_optimizer_resumable(checkpoint_path: str) -> None:
             f"the checkpoint at {checkpoint_path} carries no optimizer state; resume from a checkpoint "
             "whose step is listed in trainer.optimizer_checkpoint_steps"
         )
-
-
-def master_only_optimizer_state(optimizer_state: Mapping[str, Any]) -> dict[str, Any]:
-    """Drop moment and scalar records, keeping the param and FP32 master records.
-
-    DCP names records by their ShardedTensor key, which differs from the dict path that
-    carries it, so the filter matches ``leaf.key``. The dropped moment states are what
-    a resume needs, so master-only checkpoints are not optimizer-resumable.
-    """
-
-    def keep_leaf(value: Any) -> bool:
-        key = getattr(value, "key", None)
-        return isinstance(key, str) and model_key_for_master(key) is not None
-
-    def filter_subtree(value: Any) -> tuple[Any, bool]:
-        if not isinstance(value, Mapping):
-            return (value, keep_leaf(value))
-        kept: dict[str, Any] = {}
-        for key, child in value.items():
-            subtree, has_master = filter_subtree(child)
-            if has_master:
-                kept[key] = subtree
-        return (kept, bool(kept))
-
-    filtered, _ = filter_subtree(optimizer_state)
-    if not filtered:
-        raise ValueError(
-            "optimizer state carries no param or FP32 master records; cannot write a master-only checkpoint"
-        )
-    return filtered

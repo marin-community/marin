@@ -109,7 +109,7 @@ def vocabulary_size_of(model_path: str) -> int:
 
 
 @contextmanager
-def scoring_worker(model_path: str, *, num_gpus: int) -> Iterator[object]:
+def scoring_worker(model_path: str, *, num_gpus: int, worker_type=PolicyWorker) -> Iterator[object]:
     """The policy worker with the checkpoint loaded for forward-only scoring.
 
     ``init_model_for_export`` builds the model without DDP gradient buffers or an
@@ -130,7 +130,7 @@ def scoring_worker(model_path: str, *, num_gpus: int) -> Iterator[object]:
         cfg,
         num_nodes=1,
         num_gpus_per_node=num_gpus,
-        ray_actor_type=PolicyWorker,
+        ray_actor_type=worker_type,
         pg=pg,
         num_gpus_per_actor=0.75,
         colocate_all=False,

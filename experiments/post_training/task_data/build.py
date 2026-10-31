@@ -21,22 +21,28 @@ from pathlib import Path
 
 import click
 from marin.inference.openai_chat import OpenAIChatClient
-from verifyit.grade import GradingInfraError
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
 from experiments.post_training.task_data.code_x import write_split as write_x_split
-from experiments.post_training.task_data.expert_outputs import GRADERS, sample_completions, write_m1_rows
+from experiments.post_training.task_data.expert_outputs import (
+    GRADERS,
+    CompletionRow,
+    bounded_grade,
+    sample_completions,
+    write_m1_rows,
+)
 from experiments.post_training.task_data.expert_traces import (
     R_COMPLETION_TOKEN_CAP,
     X_COMPLETION_TOKEN_CAP,
+    ExpertResponse,
     collect_traces,
     family_tokenizer,
     glm_chat_client,
     token_counter,
     write_trace_batch,
 )
-from experiments.post_training.task_data.math_r import build_r_tasks, cpu_bounded
+from experiments.post_training.task_data.math_r import build_r_tasks
 
 TOKEN_CAPS = {"X": X_COMPLETION_TOKEN_CAP, "R": R_COMPLETION_TOKEN_CAP}
 DATA_SOURCES = {"X": "task_X", "R": "task_R"}
@@ -50,10 +56,6 @@ def _read_tasks(path: str) -> list[dict]:
 
 def _write_manifest(path: Path, manifest: dict) -> None:
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-
-
-GRADE_CPU_SECONDS = 60
-"""CPU budget for grading one trace: math-verify's own deadline can be swallowed (see math_r)."""
 
 
 @click.group()
@@ -110,14 +112,6 @@ def chunk(tasks_path: str, rows_per_chunk: int, chunk_count: int | None, output_
         print(f"{stem}.chunk{index:02d}.jsonl: rows {start}..{start + len(chunk_lines) - 1}")
 
 
-def _settled_grade(grader, task: dict, trace: dict) -> bool | None:
-    """The grader's verdict, or ``None`` when the math verifier exhausts its own deadline."""
-    try:
-        return grader(task, trace["content"])
-    except GradingInfraError:
-        return None
-
-
 @cli.command()
 @click.option("--task", "task_name", required=True, type=click.Choice(sorted(GRADERS)))
 @click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
@@ -128,12 +122,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
     tasks = {task["task_id"]: task for task in _read_tasks(tasks_path)}
     traces = [trace for path in traces_paths for trace in _read_tasks(path)]
     grader = GRADERS[task_name]
-    verdicts = [
-        cpu_bounded(
-            lambda trace=trace: _settled_grade(grader, tasks[trace["task_id"]], trace), cpu_seconds=GRADE_CPU_SECONDS
-        )
-        for trace in traces
-    ]
+    verdicts = [bounded_grade(grader, tasks[trace["task_id"]], trace["content"]) for trace in traces]
     # A trace the grader cannot settle (CPU budget or verifier deadline) is not graded correct.
     correct = [trace for trace, verdict in zip(traces, verdicts, strict=True) if verdict]
     with open(output_path, "w") as handle:
@@ -246,6 +235,49 @@ def m1(
         Path(output_path).with_suffix(".manifest.json"),
         {"tasks": tasks_path, "expert_model": expert_model, "dropped_over_cap": batch.dropped_over_cap, **report},
     )
+
+
+# The strong teacher's route on expert-training rows; teacher routes only matter to M4 scoring.
+GLM_TEACHER_ROUTE = "glm"
+
+
+@cli.command("trace-rows")
+@click.option("--task", "task_name", required=True, type=click.Choice(sorted(TOKEN_CAPS)))
+@click.option("--traces", "traces_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--out", "output_path", required=True, type=click.Path(dir_okay=False))
+@click.option("--family", required=True)
+@click.option("--temperature", required=True, type=float, help="the traces' sampling temperature, recorded")
+@click.option("--max-tokens", required=True, type=int, help="the traces' max_tokens, recorded")
+def trace_rows(
+    task_name: str, traces_path: str, output_path: str, family: str, temperature: float, max_tokens: int
+) -> None:
+    """Write graded GLM teacher traces as tokenized rows: the expert-training set for E_X or E_R.
+
+    The rows have the M1 format (WP1's fixed-completion loader), rendered with the
+    family's tokenizer through the shared template, reasoning included.
+    """
+    traces = _read_tasks(traces_path)
+    rows = [
+        CompletionRow(
+            task_id=trace["task_id"],
+            prompt=trace["prompt"],
+            response=ExpertResponse(reasoning=trace["reasoning"], content=trace["content"], truncated=False),
+            graded_correct=True,
+        )
+        for trace in traces
+    ]
+    tokenizer = family_tokenizer(family)
+    report = write_m1_rows(
+        rows,
+        output_path,
+        tokenizer=tokenizer,
+        family=family,
+        data_source=DATA_SOURCES[task_name],
+        teacher_route=GLM_TEACHER_ROUTE,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    _write_manifest(Path(output_path).with_suffix(".manifest.json"), {"traces": traces_path, **report})
 
 
 if __name__ == "__main__":

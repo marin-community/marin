@@ -8,8 +8,8 @@ JSON payload per run: the fork's training YAML with the shared chat template inl
 the pins, and the object-storage locations of the CL12 data, the init checkpoint and
 the output. The job runs in the pinned Axolotl task image, where
 :mod:`experiments.post_training.axolotl_sft.pod_runner` (standard library only)
-clones the fork, stages the inputs, trains through ``torchrun`` with FSDP2 on one
-8-GPU node, checks the saved tokenizer embeds the template, and uploads the output.
+clones the fork, stages the inputs, trains through ``torchrun`` with FSDP2 on the
+configured GPU nodes, checks the saved tokenizer embeds the template, and uploads the output.
 
 Launch one stage (``--dry-run`` prints the Iris command without submitting)::
 
@@ -27,6 +27,7 @@ import os
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass, replace
+from enum import StrEnum
 from typing import Any
 
 AXOLOTL_FORK_REPO = "https://github.com/marin-community/axolotl"
@@ -57,8 +58,6 @@ FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
 ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
 # Packed conversations isolated in attention; see packed_attention.py.
 PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
-# A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
-PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
 CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
 # Per-architecture load-time checks shipped next to the pod runner (see nemotron_h_checks.py).
@@ -70,6 +69,25 @@ ARCHITECTURE_PLUGINS: dict[str, tuple[str, ...]] = {
 GPUS_PER_NODE = 8
 POD_RUNNER = "experiments/post_training/axolotl_sft/pod_runner.py"
 PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
+
+
+class AttentionKernel(StrEnum):
+    """Attention backends a spec may train with.
+
+    Under sdpa, transformers isolates packed conversations with a materialized block-diagonal
+    mask, so every layer computes attention over the whole 32k pack. The flash kernels take
+    the packed segments as varlen sequences from the position-id resets instead.
+    """
+
+    SDPA = "sdpa"
+    FLASH_ATTN3 = "kernels-community/flash-attn3"
+    FLASH_ATTN2 = "kernels-community/flash-attn2"
+    FLEX = "flex_attention"
+
+
+class PromptStrategy(StrEnum):
+    CHAT_TEMPLATE = "chat_template"
+    GENERATION_MASK = "experiments.post_training.axolotl_sft.generation_mask"
 
 
 @dataclass(frozen=True)
@@ -109,7 +127,7 @@ class AxolotlBaseModel:
 
 @dataclass(frozen=True)
 class AxolotlSpec:
-    """One Axolotl SFT run: pinned base, data, shared template, optimizer, seed.
+    """One Axolotl SFT run: pinned base, data, explicit template, optimizer, seed.
 
     ``data_uri`` is one CL12 ``{source}.jsonl.gz`` in object storage; ``init_uri``,
     when set, is a previous stage's uploaded export, which initializes the weights
@@ -122,8 +140,7 @@ class AxolotlSpec:
     base: AxolotlBaseModel
     data_uri: str
     optimizer: AxolotlOptimizer
-    # The shared chat template for this family and its end-of-turn token, from
-    # chat_template.FAMILY_TOKEN_MAPS[architecture].
+    # The complete training template and its end-of-turn token.
     chat_template: str
     template_sha256: str
     turn_close: str
@@ -137,6 +154,8 @@ class AxolotlSpec:
     epochs: int
     nodes: int
     init_uri: str | None = None
+    prompt_strategy: PromptStrategy = PromptStrategy.CHAT_TEMPLATE
+    attn_implementation: AttentionKernel = AttentionKernel.SDPA
 
     def __post_init__(self) -> None:
         if self.base.architecture not in SUPPORTED_ARCHITECTURES:
@@ -196,7 +215,7 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
                 "path": spec.data_uri,
                 "ds_type": "json",
                 "split": "train",
-                "type": "chat_template",
+                "type": spec.prompt_strategy.value,
                 "field_messages": "messages",
                 "roles_to_train": ["assistant"],
                 "train_on_eot": "turn",
@@ -228,7 +247,7 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "seed": spec.seed,
         "bf16": True,
         "tf32": True,
-        "attn_implementation": "sdpa",
+        "attn_implementation": spec.attn_implementation.value,
         "experts_implementation": "grouped_mm",
         # Reduce-scatter gradients after every micro-batch. Skipping the sync during accumulation
         # keeps the whole model's unsharded bf16 gradients on every GPU (~61 GB for Qwen3-30B).
@@ -281,6 +300,8 @@ def run_manifest(spec: AxolotlSpec, *, max_steps: int | None) -> dict[str, Any]:
         "epochs": spec.epochs,
         "max_steps": max_steps,
         "template_sha256": spec.template_sha256,
+        "prompt_strategy": spec.prompt_strategy.value,
+        "attn_implementation": spec.attn_implementation.value,
         "master_weights": "fp32 (bf16 compute)",
         "router_rules": (
             {"output_router_logits": True}
@@ -370,13 +391,24 @@ def iris_command(
 
 def main() -> None:
     # Imported here: the stage chain imports this module for its dataclasses.
-    from experiments.post_training.stage0.axolotl_stage0 import stage_output, stage_specs  # noqa: PLC0415
+    from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415
+        QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT,
+        qwen_native_curriculum_specs,
+        qwen_native_s3_spec,
+        stage_output,
+        stage_specs,
+    )
 
     parser = argparse.ArgumentParser(description="Submit one Axolotl Stage 0 stage to Iris.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     submit = subparsers.add_parser("submit")
     submit.add_argument("--base", required=True)
     submit.add_argument("--stage", type=int, choices=(1, 2, 3), required=True)
+    submit.add_argument(
+        "--recipe",
+        choices=("shared-curriculum", "qwen-native-s3", "qwen-native-curriculum"),
+        default="shared-curriculum",
+    )
     submit.add_argument("--data-root", required=True, help="the CL12 artifact directory")
     submit.add_argument("--output-root", required=True)
     submit.add_argument("--job-name", required=True)
@@ -385,19 +417,25 @@ def main() -> None:
     submit.add_argument("--timeout-hours", type=int, default=96)
     submit.add_argument("--dry-run", action="store_true")
     submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
-    submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
     submit.add_argument("--init-uri", default=None, help="override the stage's init checkpoint (reload tests)")
     args = parser.parse_args()
 
-    spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
+    if args.recipe == "qwen-native-s3":
+        if args.stage != 3 or args.init_uri is not None:
+            parser.error("qwen-native-s3 requires stage 3 initialized from the pinned base")
+        spec = qwen_native_s3_spec(args.base, data_root=args.data_root)
+    elif args.recipe == "qwen-native-curriculum":
+        if args.output_root != QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT:
+            parser.error(f"qwen-native-curriculum chains its stages under {QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT}")
+        spec = qwen_native_curriculum_specs(args.base, data_root=args.data_root)[args.stage - 1]
+    else:
+        spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
     if args.init_uri is not None:
         spec = replace(spec, init_uri=args.init_uri)
     output_uri = stage_output(spec, output_root=args.output_root)
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"
     payload = launch_payload(spec, output_uri=output_uri, max_steps=args.max_steps)
-    if args.probe_precision:
-        payload["config"]["plugins"].append(PRECISION_PROBE_PLUGIN)
     command = iris_command(
         payload,
         job_name=args.job_name,

@@ -11,6 +11,8 @@ inputs, including ragged left-padded batches; most pass the logits themselves
 as the hidden states under an identity projection.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -218,3 +220,54 @@ def test_chunked_projection_of_hidden_states_matches_full_logits(mode):
             scores["exact_logprobs"] = scores["exact_logprobs"][order]
     for key in full:
         torch.testing.assert_close(chunked[key], full[key])
+
+
+@pytest.mark.parametrize("micro_batch_size", [1, 2])
+def test_megatron_probe_forward_matches_full_log_softmax(megatron_wrapper, monkeypatch, micro_batch_size):
+    wrapper = megatron_wrapper(packing=False, controller=None, num_experts=1)
+    # The fixture installs stubs for the optional Megatron dependency before this import.
+    from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronForwardMicroBatch
+
+    embeddings = torch.tensor([[0.0, 0.5], [1.0, -0.5], [-0.5, 1.0]])
+    weights = torch.tensor([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.5]])
+    sequences = torch.tensor([[0, 1, 2, 1], [0, 0, 1, 2]])
+    attention_mask = torch.tensor([[True, True, True, True], [False, False, True, True]])
+    expected_logprobs, expected_ids = (embeddings[sequences] @ weights.T).log_softmax(-1).topk(2, dim=-1)
+
+    def project(hidden, *, weight, runtime_gather_output):
+        return hidden @ weights.T, None
+
+    def model(input_ids, position_ids, model_attention_mask, *, packed_seq_params, output_processor):
+        return output_processor(
+            hidden_states=embeddings[input_ids].transpose(0, 1),
+            output_layer=project,
+            output_weight=None,
+            scale_logits=lambda logits: logits,
+            config=SimpleNamespace(mtp_num_layers=0),
+        )
+
+    def serial_forward(*, forward_step_func, data_iterator, model, num_microbatches, **kwargs):
+        # Replace the distributed pipeline scheduler with a single-rank CPU executor.
+        outputs = []
+        for _ in range(num_microbatches):
+            hidden, score = forward_step_func(data_iterator, model[0])
+            _, scores = score(hidden)
+            outputs.append(scores)
+        return outputs
+
+    monkeypatch.setattr(
+        "skyrl_train.workers.megatron.megatron_model_wrapper.get_forward_backward_func", lambda: serial_forward
+    )
+    wrapper.actor_module = [model]
+    micro_batches = [
+        MegatronForwardMicroBatch(
+            sequences=sequences[start : start + micro_batch_size],
+            attention_mask=attention_mask[start : start + micro_batch_size],
+            position_ids=attention_mask[start : start + micro_batch_size].long().cumsum(-1) - 1,
+            num_actions=sequences.shape[1],
+        )
+        for start in range(0, len(sequences), micro_batch_size)
+    ]
+    scores = wrapper.probe_score_forward(micro_batches, seq_len=4, micro_batch_size=micro_batch_size, top_k=2)
+    torch.testing.assert_close(scores["topk_ids"][attention_mask], expected_ids[attention_mask], rtol=0, atol=0)
+    torch.testing.assert_close(scores["topk_logprobs"][attention_mask], expected_logprobs[attention_mask])

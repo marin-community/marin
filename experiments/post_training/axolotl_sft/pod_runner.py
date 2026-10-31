@@ -206,7 +206,7 @@ def main() -> None:
     output_dir = Path(config["output_dir"])
     output_uri = payload["output_uri"].rstrip("/")
 
-    environment = os.environ | {"PYTHONPATH": str(PLUGIN_DIR)}
+    environment = os.environ | {"PYTHONPATH": os.pathsep.join((str(PLUGIN_DIR), str(PLUGIN_DIR.parents[2])))}
     if os.environ.get(PREPROCESS_ONLY_ENV):
         # Validate the config and tokenize the data on CPU, before any GPU job.
         _run([IMAGE_PYTHON, "-m", "axolotl.cli.preprocess", str(config_path)], env=environment, cwd=WORK_ROOT)

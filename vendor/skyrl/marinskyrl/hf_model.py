@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import tempfile
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,13 @@ def normalize_fast_tokenizer_metadata_bytes(payload: bytes, *, has_tokenizer_jso
 def immutable_model_cache_key(source: str, identity: str) -> str:
     """Return a stable cache key for one immutable model source."""
     return hashlib.sha256(f"{source}@{identity}".encode()).hexdigest()
+
+
+def staged_model_path(source: str, identity: str) -> str:
+    """The node-local directory where the launcher stages one immutable object-store model."""
+    return os.path.join(
+        tempfile.gettempdir(), "marinskyrl", "model_metadata", immutable_model_cache_key(source, identity)
+    )
 
 
 @contextlib.contextmanager

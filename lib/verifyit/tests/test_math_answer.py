@@ -366,3 +366,11 @@ def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, can
 def test_an_undefined_reference_is_an_invalid_task():
     with pytest.raises(InvalidTask, match="undefined"):
         grade_math.grade_math_candidate(MathSpec(expected=r"\frac{1}{0}"), "1")
+
+
+@pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
+def test_a_candidate_sympy_cannot_build_scores_zero(profile):
+    # A sampled 70,000-digit integer exceeds Python's integer string limit inside sympify.
+    huge = "8" * 70_000
+    result = grade_math.grade_math_text_candidate(MathSpec("12", profile=profile), rf"\boxed{{{huge}}}")
+    assert result.reward == 0

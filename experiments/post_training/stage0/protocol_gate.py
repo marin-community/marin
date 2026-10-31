@@ -4,7 +4,8 @@
 """The Stage 0 gate's protocol check on a Snowball ``B``: turn ends and thinking closure.
 
 DESIGN, "Stage 0 gate": on 200 prompts per probe family, at least 98% of turns end with the
-end-of-turn token and at least 98% of thinking blocks close. This module serves the
+end-of-turn token and at least 98% of thinking blocks close. Replies capped inside an open
+thinking block are excluded from both shares and counted separately. This module serves the
 checkpoint with vLLM (no reasoning parser, special tokens kept), samples one completion per
 prompt and scores the raw text. Generation ignores the tokenizer's EOS list and stops only on
 the end-of-turn token, so a turn counts as ended exactly when vLLM reports that token as its
@@ -103,10 +104,44 @@ class Completion:
     text: str
 
 
+def _think_block_open(text: str, delimiters: Delimiters) -> bool:
+    """Whether the text ends inside an unclosed think block (a new open after the last close)."""
+    think_open, think_close = delimiters.tokens.think_open, delimiters.tokens.think_close
+    opens, closes = text.count(think_open), text.count(think_close)
+    if opens == 0:
+        return False
+    return opens > closes or text.rfind(think_open) > text.rfind(think_close)
+
+
+def ends_in_repetition_loop(text: str, window: int = 4096, max_period: int = 128, repeats: int = 12) -> bool:
+    """Whether the tail of a length-limited reply repeats one short unit over and over.
+
+    Reporting aid only, not a gate criterion: a capped reply is excluded from the protocol
+    shares, and this separates "ran out of tokens mid-thought" from "stuck in a loop".
+    """
+    tail = text[-window:]
+    for period in range(1, min(max_period, len(tail) // repeats) + 1):
+        if tail.endswith(tail[-period:] * repeats):
+            return True
+    return False
+
+
 def completion_protocol(
-    text: str, finish_reason: str, stop_reason: int | str | None, delimiters: Delimiters = GRUG_DELIMITERS
+    text: str,
+    finish_reason: str,
+    stop_reason: int | str | None,
+    delimiters: Delimiters = GRUG_DELIMITERS,
+    *,
+    prefill: str = "",
 ) -> dict[str, bool | int]:
-    """One completion's protocol facts: did the turn end, and did every think block close."""
+    """One completion's protocol facts: did the turn end, and did every think block close.
+
+    A reply that hits the output cap while its think block is still open is length-limited, not
+    malformed: it counts against neither share (DESIGN, "Stage 0 gate"). ``prefill`` is the forced
+    template prefix (for example an opened think block) that the server does not echo back; it is
+    part of the reply's protocol shape and counts here.
+    """
+    text = prefill + text
     think_open, think_close = delimiters.tokens.think_open, delimiters.tokens.think_close
     opens = text.count(think_open)
     closes = text.count(think_close)
@@ -114,27 +149,50 @@ def completion_protocol(
         "turn_ended": finish_reason == "stop" and stop_reason == delimiters.end_of_turn_id,
         "think_blocks": opens,
         "think_closed": opens > 0 and opens == closes and text.rfind(think_close) > text.rfind(think_open),
+        "length_limited": finish_reason == "length" and _think_block_open(text, delimiters),
     }
 
 
+# Terminus-2's JSON turn carries these keys; a single-turn reply in that shape is the agent format.
+AGENT_TURN_KEYS = ('"analysis"', '"plan"', '"commands"')
+
+
+def is_agent_turn(text: str, delimiters: Delimiters = GRUG_DELIMITERS) -> bool:
+    """Whether a reply's answer (after any thinking) is a Terminus-2 JSON agent turn."""
+    answer = text.rsplit(delimiters.tokens.think_close, 1)[-1]
+    return answer.lstrip().startswith("{") and all(key in answer for key in AGENT_TURN_KEYS)
+
+
 def protocol_report(completions: list[Completion], delimiters: Delimiters = GRUG_DELIMITERS) -> dict:
-    """Per-family shares and the gate verdict."""
+    """Per-family shares and the gate verdict, over the replies the cap did not length-limit."""
     families: dict[str, dict] = {}
     for family in sorted({completion.family for completion in completions}):
+        family_completions = [completion for completion in completions if completion.family == family]
         facts = [
-            completion_protocol(c.text, c.finish_reason, c.stop_reason, delimiters)
-            for c in completions
-            if c.family == family
+            (completion_protocol(c.text, c.finish_reason, c.stop_reason, delimiters), c.text) for c in family_completions
         ]
-        with_think = [fact for fact in facts if fact["think_blocks"]]
-        turn_share = sum(bool(fact["turn_ended"]) for fact in facts) / len(facts)
+        scored = [fact for fact, _ in facts if not fact["length_limited"]]
+        length_limited = [text for fact, text in facts if fact["length_limited"]]
+        with_think = [fact for fact in scored if fact["think_blocks"]]
+        turn_share = sum(bool(fact["turn_ended"]) for fact in scored) / len(scored) if scored else None
         think_share = sum(bool(fact["think_closed"]) for fact in with_think) / len(with_think) if with_think else None
+        texts = [c.text for c in family_completions]
         families[family] = {
             "completions": len(facts),
+            # Replies that hit the cap mid-thought: excluded from both shares, reported here.
+            "length_limited": len(length_limited),
+            "length_limited_repetition_loop": sum(ends_in_repetition_loop(text) for text in length_limited),
+            "scored": len(scored),
+            # Reported, not gated (DESIGN decision log, 2026-10-24).
+            "agent_format_share": sum(is_agent_turn(text, delimiters) for text in texts) / len(texts),
             "turn_end_share": turn_share,
             "completions_with_thinking": len(with_think),
             "think_close_share": think_share,
-            "passed": turn_share >= MIN_TURN_END_SHARE and (think_share is None or think_share >= MIN_THINK_CLOSE_SHARE),
+            "passed": (
+                turn_share is not None
+                and turn_share >= MIN_TURN_END_SHARE
+                and (think_share is None or think_share >= MIN_THINK_CLOSE_SHARE)
+            ),
         }
     return {
         "passed": all(entry["passed"] for entry in families.values()),
@@ -180,7 +238,7 @@ def _complete_item(
     return _complete(endpoint, item[0], item[1], seed, decode, end_of_turn_id)
 
 
-def checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
+def checkpoint_model(name: str, checkpoint: str, max_model_len: int = MAX_MODEL_LEN) -> ModelConfig:
     """Serve an exported Stage 0 MoE checkpoint with its embedded template and no reasoning parser.
 
     Data parallel with expert parallelism over one 8-GPU node serves Snowball and the 30B-class
@@ -195,7 +253,7 @@ def checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
         serve=ServeConfig(
             tensor_parallel_size=1,
             data_parallel_size=8,
-            max_model_len=MAX_MODEL_LEN,
+            max_model_len=max_model_len,
             max_num_batched_tokens=7168,
             max_num_seqs=32,
             auto_overrides=False,
@@ -214,6 +272,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--family", choices=sorted(FAMILY_TOKEN_MAPS), default="grug")
     parser.add_argument("--prompts-per-family", type=int, default=PROMPTS_PER_FAMILY)
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=MAX_MODEL_LEN,
+        help="the served context; models with a shorter native context (Qwen3-30B: 32,768) need less",
+    )
+    parser.add_argument("--max-tokens", type=int, default=Decode.max_tokens, help="must leave room for the prompt")
     parser.add_argument("--temperature", type=float, default=Decode.temperature)
     parser.add_argument("--top-p", type=float, default=Decode.top_p)
     parser.add_argument(
@@ -224,7 +289,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     decodes = [
-        Decode(temperature=args.temperature, top_p=args.top_p, repetition_penalty=penalty)
+        Decode(temperature=args.temperature, top_p=args.top_p, repetition_penalty=penalty, max_tokens=args.max_tokens)
         for penalty in args.repetition_penalty or [Decode.repetition_penalty]
     ]
 
@@ -236,7 +301,7 @@ def main() -> None:
     ]
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a")
     inference = inference_config_for_model(
-        checkpoint_model(args.name, args.checkpoint),
+        checkpoint_model(args.name, args.checkpoint, args.max_model_len),
         accelerator,
         env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         priority=job_pb2.PRIORITY_BAND_INHERIT,

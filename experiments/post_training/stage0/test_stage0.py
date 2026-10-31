@@ -10,8 +10,10 @@ requires at token granularity, not text presence.
 """
 
 import gzip
+import itertools
 import json
 import os
+from dataclasses import replace
 
 import pytest
 from transformers import AutoTokenizer
@@ -19,7 +21,13 @@ from transformers.utils.chat_template_utils import _compile_jinja_template
 
 import experiments.post_training.stage0.convert as convert_module
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES
-from experiments.post_training.axolotl_sft.launcher import GPUS_PER_NODE, axolotl_config
+from experiments.post_training.axolotl_sft.launcher import (
+    GPUS_PER_NODE,
+    ROUTER_AUX_LOSS_PLUGIN,
+    AttentionKernel,
+    PromptStrategy,
+    axolotl_config,
+)
 from experiments.post_training.chat_template import (
     FAMILY_TOKEN_MAPS,
     GRUG_TOKENS,
@@ -32,7 +40,9 @@ from experiments.post_training.chat_template import (
 )
 from experiments.post_training.stage0 import budget
 from experiments.post_training.stage0.axolotl_stage0 import (
+    QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT,
     ROUTER_AUX_LOSS,
+    qwen_native_curriculum_specs,
     stage_optimizer,
     stage_output,
     stage_specs,
@@ -509,6 +519,23 @@ def test_axolotl_stage_1_pins_the_base_and_later_stages_init_from_the_chain():
         assert specs[index].init_uri == f"{output_root}/{specs[index - 1].name}"
 
 
+def test_a_qwen_stage_without_the_router_aux_plugin_fails_at_construction():
+    from experiments.post_training.axolotl_sft.launcher import ROUTER_AUX_LOSS_PLUGIN  # noqa: PLC0415
+    from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415
+        require_router_aux_loss,
+        stage_specs,
+    )
+
+    spec = stage_specs("qwen3-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    config = axolotl_config(spec)
+    assert ROUTER_AUX_LOSS_PLUGIN in config["plugins"]
+    regressed = dict(config, plugins=[p for p in config["plugins"] if p != ROUTER_AUX_LOSS_PLUGIN])
+    with pytest.raises(ValueError, match="router aux loss is required"):
+        require_router_aux_loss(spec, regressed)
+    nemotron = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    require_router_aux_loss(nemotron, axolotl_config(nemotron))  # NemotronH's recorded deviation: off
+
+
 def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
     from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415 - pulls the launcher's iris stack
         stage_specs,
@@ -562,6 +589,44 @@ def test_axolotl_router_policy_is_explicit_per_architecture():
     assert ROUTER_AUX_LOSS["qwen3_moe"] is True
     assert ROUTER_AUX_LOSS["qwen3_5_moe"] is True
     assert ROUTER_AUX_LOSS["nemotron_h"] is False
+
+
+# The pinned Qwen3-30B-A3B-Base template with generation markers (stage0/qwen3_native_template.py).
+QWEN3_NATIVE_TEMPLATE_SHA256 = "d8fd920a1572fc0db59063895afceaad3423a6dbffcfb5fa198c8ecbe9612dcb"
+
+
+def test_qwen3_native_curriculum_chains_three_stages_from_the_base_under_its_own_root():
+    specs = qwen_native_curriculum_specs("qwen3-30b-a3b-base", data_root="/data/cl12")
+    assert [spec.name for spec in specs] == [
+        f"stage0-qwen3-30b-a3b-base/s{index + 1}-{source}" for index, source in enumerate(STAGE_ORDER)
+    ]
+    assert specs[0].init_uri is None
+    assert axolotl_config(specs[0])["base_model"] == "Qwen/Qwen3-30B-A3B-Base"
+    for previous, spec in itertools.pairwise(specs):
+        assert spec.init_uri == f"{QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT}/{previous.name}"
+
+
+def test_qwen3_native_curriculum_differs_from_the_shared_one_only_in_template_labels_and_kernel():
+    native = qwen_native_curriculum_specs("qwen3-30b-a3b-base", data_root="/data/cl12")
+    shared = stage_specs("qwen3-30b-a3b-base", data_root="/data/cl12", output_root=QWEN_NATIVE_CURRICULUM_OUTPUT_ROOT)
+    for native_spec, shared_spec in zip(native, shared, strict=True):
+        assert native_spec.template_sha256 == QWEN3_NATIVE_TEMPLATE_SHA256
+        assert native_spec.prompt_strategy is PromptStrategy.GENERATION_MASK
+        config = axolotl_config(native_spec)
+        assert config["chat_template_jinja"] == native_spec.chat_template
+        assert config["datasets"][0]["type"] == PromptStrategy.GENERATION_MASK.value
+        assert native_spec.output_router_logits is True
+        assert ROUTER_AUX_LOSS_PLUGIN in config["plugins"]
+        assert config["attn_implementation"] == AttentionKernel.FLASH_ATTN3.value
+        assert axolotl_config(shared_spec)["attn_implementation"] == AttentionKernel.SDPA.value
+        # Data, optimizer, batch, epochs, seed, nodes and the init chain are the shared stage's.
+        assert native_spec == replace(
+            shared_spec,
+            chat_template=native_spec.chat_template,
+            template_sha256=native_spec.template_sha256,
+            prompt_strategy=PromptStrategy.GENERATION_MASK,
+            attn_implementation=AttentionKernel.FLASH_ATTN3,
+        )
 
 
 @pytest.mark.skipif(not _hf_reachable(), reason="HF hub unreachable")

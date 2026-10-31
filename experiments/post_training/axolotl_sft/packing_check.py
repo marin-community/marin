@@ -3,7 +3,7 @@
 
 """Packed-attention isolation check for the fork's multipack path (pod-side, Axolotl image).
 
-Tokenizes a few real CL12 conversations through the training strategy, packs them with the
+Tokenizes a few real CL12 conversations through the payload's own prompt strategy, packs them with the
 collator Axolotl uses for the configured attention backend, and compares each segment's
 logits and loss with the same conversation run alone. Also checks that position ids reset
 per segment and that the packed labels keep the template's ``{% generation %}`` spans, and
@@ -27,18 +27,13 @@ import json
 import sys
 
 import torch
-from axolotl.monkeypatch.models.qwen3_5.modeling import patch_qwen3_5_moe_modeling_packing
-from axolotl.prompt_strategies.chat_template import StrategyLoader
+from axolotl.prompt_strategies import load as load_strategy
 from axolotl.utils.collators.batching import V2BatchSamplerDataCollatorForSeq2Seq
 from axolotl.utils.dict import DictDefault
-from packed_attention import SegmentPositionCollator
+from packed_attention import SegmentPositionCollator, apply_packing_patch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 IGNORE = -100
-# Packing patches Axolotl's PatchManager applies under sample_packing, by model type: Qwen3.5's
-# Gated DeltaNet layers take segment boundaries (cu_seqlens) from the position ids only once
-# patched, so the check must run the patched layers that training runs.
-PACKING_PATCHES = {"qwen3_5_moe": patch_qwen3_5_moe_modeling_packing}
 # bf16 logits differ at about 1e-2 relative between packed and unpacked kernels.
 RELATIVE_TOLERANCE = {torch.float32: 1e-4, torch.bfloat16: 3e-2}
 # The swap test reruns the pack with the first segment's tokens reversed: same layout, same
@@ -113,14 +108,14 @@ def main() -> None:
         config = json.load(handle)["config"]
     tokenizer = AutoTokenizer.from_pretrained(config["base_model"], revision=config["revision_of_model"])
     tokenizer.add_special_tokens({"eos_token": config["special_tokens"]["eos_token"]})
-    strategy = StrategyLoader()(tokenizer, DictDefault(config), dict(config["datasets"][0]))
+    dataset_config = dict(config["datasets"][0])
+    strategy = load_strategy(dataset_config["type"], tokenizer, DictDefault(config), dataset_config)
     with gzip.open(args.data, "rt") as handle:
         rows = [json.loads(line) for _, line in zip(range(args.rows), handle, strict=False)]
     features = _features(strategy, rows)
 
     model_type = AutoConfig.from_pretrained(config["base_model"], revision=config["revision_of_model"]).model_type
-    if model_type in PACKING_PATCHES:
-        PACKING_PATCHES[model_type]()
+    apply_packing_patch(model_type)
     if args.model is None:
         model = _tiny_model(config["base_model"], config["revision_of_model"], args.attn)
     else:

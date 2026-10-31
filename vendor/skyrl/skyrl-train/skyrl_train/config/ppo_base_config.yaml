@@ -324,6 +324,9 @@ trainer:
   checkpoint_steps: []
   optimizer_checkpoint_steps: []
   hf_save_interval: ${trainer.ckpt_interval}
+  # HF export steps as an explicit list, overriding hf_save_interval. Must be a
+  # subset of checkpoint_steps: an export converts a saved checkpoint.
+  hf_export_steps: []
   export_hf_artifact: false
   hf_upload_mode: latest
   export_path: "${oc.env:HOME}/exports"
