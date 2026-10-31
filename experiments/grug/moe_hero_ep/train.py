@@ -28,7 +28,7 @@ from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
@@ -504,20 +504,75 @@ def build_train_loader(
     )
 
 
-def _reshard_tree_to_mesh(tree, mesh: Mesh):
-    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+_EXPERT_COLLAPSED_EVAL_AXIS_NAMES = ("replica_dcn", "context", "data", "expert", "model")
 
-    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
-    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
-    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
-    the target mesh suffices here. Non-array leaves pass through.
+
+def expert_collapsed_eval_mesh(train_mesh: Mesh) -> Mesh:
+    """Fold the training mesh's ``expert`` axis into ``data``, keeping every device's collective groups.
+
+    The dropless local MoE backend needs ``expert`` of size one. Each device's eval ``data`` group is its
+    training ``(data, expert)`` group and its ``context`` group is unchanged, so eval collectives reuse
+    the NCCL communicators training already holds instead of creating new ones that stay resident for
+    the life of the process. With training ``data`` of size one, the flat device order also matches
+    training.
+    """
+    order = [train_mesh.axis_names.index(name) for name in _EXPERT_COLLAPSED_EVAL_AXIS_NAMES]
+    r, c, d, e, m = (train_mesh.devices.shape[i] for i in order)
+    folded = train_mesh.devices.transpose(order).reshape(r, c, d * e, 1, m)
+    return Mesh(
+        folded,
+        _EXPERT_COLLAPSED_EVAL_AXIS_NAMES,
+        axis_types=tuple(AxisType.Explicit for _ in _EXPERT_COLLAPSED_EVAL_AXIS_NAMES),
+    )
+
+
+def _expert_folded_spec(spec: P, train_mesh: Mesh) -> P:
+    """Rename a training-mesh PartitionSpec onto ``expert_collapsed_eval_mesh(train_mesh)``.
+
+    The eval ``data`` axis is the training ``(data, expert)`` pair, so ``("data", "expert")`` (or
+    ``"expert"`` alone when training ``data`` has size one) becomes eval ``"data"``. Every device then
+    holds the same shard it held in training and the move needs no collective. When training ``data``
+    is larger than one, no eval axis matches ``"expert"`` alone, so such a leaf is replicated over the
+    eval ``data`` axis and the move transfers it.
+    """
+    data_is_trivial = train_mesh.shape["data"] == 1
+
+    def rename(entry):
+        if entry is None:
+            return None
+        names = list(entry) if isinstance(entry, tuple) else [entry]
+        if "data" in names and "expert" in names:
+            i = names.index("data")
+            if names[i + 1 : i + 2] != ["expert"]:
+                raise ValueError(f"cannot fold expert into data for spec entry {entry!r}")
+            names.pop(i)
+        elif "data" in names and not data_is_trivial:
+            raise ValueError(f"spec entry {entry!r} shards over training data without expert, which the eval mesh folds")
+        elif "data" in names:
+            names.remove("data")
+        elif "expert" in names and not data_is_trivial:
+            names.remove("expert")
+        names = ["data" if name == "expert" else name for name in names]
+        if not names:
+            return None
+        return tuple(names) if len(names) > 1 else names[0]
+
+    return P(*(rename(entry) for entry in spec))
+
+
+def _reshard_tree_to_mesh(tree, train_mesh: Mesh, eval_mesh: Mesh):
+    """Move each array leaf from ``train_mesh`` onto its expert-collapsed ``eval_mesh``.
+
+    Each leaf's spec is renamed by ``_expert_folded_spec``; when training ``data`` has size one, every
+    device keeps exactly the shard it already holds. The model's own ``reshard`` calls fix the layout the
+    forward needs, so any valid placement on the eval mesh suffices here. Non-array leaves pass through.
     """
 
     def move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
         spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
-        return jax.device_put(leaf, NamedSharding(mesh, spec))
+        return jax.device_put(leaf, NamedSharding(eval_mesh, _expert_folded_spec(spec, train_mesh)))
 
     return jax.tree.map(move, tree)
 
@@ -1198,12 +1253,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # weights dropless under the local backend on an expert-collapsed mesh (expert folded
             # into `data`), which the local backend requires. FSDP runs already have expert=1.
             if dropless:
-                dropless_eval_mesh = compact_grug_mesh(
-                    expert_axis_size=1,
-                    replica_axis_size=mesh.shape["replica_dcn"],
-                    model_axis_size=mesh.shape["model"],
-                    context_axis_size=mesh.shape["context"],
-                )
+                dropless_eval_mesh = expert_collapsed_eval_mesh(mesh)
                 # Build under the eval mesh so every constant the evaluator captures at construction
                 # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
                 # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
@@ -1297,16 +1347,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 last_dropless_eval_step: int | None = None
 
                 def dropless_eval_hook(
-                    step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                    step,
+                    *args,
+                    _mesh=dropless_eval_mesh,
+                    _train_mesh=mesh,
+                    _ev=dropless_evaluator,
+                    _prefix=dropless_prefix,
+                    **kwargs,
                 ):
                     nonlocal last_dropless_eval_step
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
-                    # the expert axis lands replicated, and the copy is much larger than the
-                    # train-mesh params. The train step needs almost the whole device budget for
-                    # its temporary buffer, thus this copy must die before the next step.
+                    # `model` must stay a local. The reshard copies the params onto the eval mesh,
+                    # and the train step needs almost the whole device budget for its temporary
+                    # buffer, thus this copy must die before the next step.
                     with (
                         callbacks.progress_event_scope(
                             step.emit_event,
@@ -1315,7 +1370,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         ),
                         set_mesh(_mesh),
                     ):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _reshard_tree_to_mesh(step.model, _train_mesh, _mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
