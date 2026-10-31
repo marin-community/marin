@@ -20,6 +20,11 @@ _CONTAINER_NAME = re.compile(r"[a-z](?:[a-z0-9-]*[a-z0-9])?")
 _PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 
 
+def required_task_capabilities(environment: job_pb2.EnvironmentConfig) -> frozenset[str]:
+    """Execution features a destination must retain when accepting this task."""
+    return frozenset({TASK_SERVICES_CAPABILITY}) if len(environment.services) > 1 else frozenset()
+
+
 @dataclass(frozen=True)
 class ContainerSpec:
     name: str

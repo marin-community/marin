@@ -1,13 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standard-library HTTP listener copied into a machine by http_service."""
+"""Standard-library loopback HTTP listener carried by one foreground process."""
 
 import base64
 import json
-import queue
-import select
-import subprocess
 import sys
 import threading
 import uuid
@@ -17,8 +14,7 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_PENDING = 16
 MAX_PATH = 4096
 REQUEST_TIMEOUT = 600
-IDLE_POLL_TIMEOUT = 20
-CONTROL = "/__shellbox_http__/"
+WIRE_LIMIT = MAX_BODY * 2 + 16384
 
 
 class Pending:
@@ -33,13 +29,42 @@ class Server(ThreadingHTTPServer):
     def __init__(self, port):
         self.pending = {}
         self.lock = threading.Lock()
-        self.requests = queue.Queue(MAX_PENDING)
+        self.output_lock = threading.Lock()
+        self.slots = threading.BoundedSemaphore(MAX_PENDING)
         super().__init__(("127.0.0.1", port), Handler)
+
+    def emit(self, message):
+        frame = json.dumps(message, separators=(",", ":")).encode() + b"\n"
+        if len(frame) > WIRE_LIMIT:
+            raise ValueError("HTTP request frame exceeds its limit")
+        with self.output_lock:
+            sys.stdout.buffer.write(frame)
+            sys.stdout.buffer.flush()
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, message, *args):
         pass
+
+    def setup(self):
+        self.request.settimeout(REQUEST_TIMEOUT)
+        super().setup()
 
     def send_body(self, status, body, content_type="application/json"):
         self.send_response(status)
@@ -49,67 +74,55 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_request(self):
-        self.connection.settimeout(REQUEST_TIMEOUT)
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             self.send_body(400, b'{"error":"invalid content length"}')
             return
         if not 0 <= length <= MAX_BODY * 2 or self.headers.get("Transfer-Encoding"):
-            self.send_body(413, b'{"error":"request too large or chunked"}')
+            self.send_body(400, b'{"error":"unsupported request"}')
+            return
+        if length > MAX_BODY:
+            # Drain a bounded oversized body before replying so a client can
+            # receive the rejection while its HTTP library finishes sending.
+            remaining = length
+            while remaining:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+            self.send_body(400, b'{"error":"unsupported request"}')
+            return
+        if len(self.path) > MAX_PATH:
+            self.send_body(400, b'{"error":"unsupported request"}')
             return
         body = self.rfile.read(length)
-        if self.path == CONTROL + "ready":
-            self.send_body(200, b"{}")
-            return
-        if self.path == CONTROL + "poll":
-            try:
-                request = self.server.requests.get(timeout=min(IDLE_POLL_TIMEOUT, json.loads(body)["wait"]))
-            except queue.Empty:
-                request = None
-            self.send_body(200, json.dumps(request).encode())
-            return
-        if self.path == CONTROL + "respond":
-            response = json.loads(body)
-            with self.server.lock:
-                pending = self.server.pending.get(response["id"])
-                if pending is not None:
-                    pending.response = response
-                    pending.ready.set()
-            self.send_body(200, b"{}")
-            return
-        if self.path == CONTROL + "stop":
-            self.send_body(200, b"{}")
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return
-        if self.path.startswith(CONTROL) or length > MAX_BODY or len(self.path) > MAX_PATH:
-            self.send_body(400, b'{"error":"unsupported request"}')
+        if len(body) != length:
             return
         request_id = uuid.uuid4().hex
         pending = Pending()
         with self.server.lock:
-            if len(self.server.pending) >= MAX_PENDING:
-                self.send_body(503, b'{"error":"service busy"}')
-                return
             self.server.pending[request_id] = pending
         try:
-            try:
-                self.server.requests.put_nowait(
-                    {
-                        "id": request_id,
-                        "method": self.command,
-                        "path": self.path,
-                        "body": base64.b64encode(body).decode(),
-                    }
-                )
-            except queue.Full:
-                self.send_body(503, b'{"error":"service busy"}')
-                return
+            self.server.emit(
+                {
+                    "type": "request",
+                    "id": request_id,
+                    "method": self.command,
+                    "path": self.path,
+                    "body": base64.b64encode(body).decode(),
+                }
+            )
             if not pending.ready.wait(REQUEST_TIMEOUT):
                 self.send_body(504, b'{"error":"service timed out"}')
                 return
             response = pending.response
-            self.send_body(response["status"], base64.b64decode(response["body"]), response["content_type"])
+            if response is None:
+                self.send_body(502, b'{"error":"host service closed"}')
+                return
+            self.send_body(
+                response["status"], base64.b64decode(response["body"], validate=True), response["content_type"]
+            )
         finally:
             with self.server.lock:
                 del self.server.pending[request_id]
@@ -118,32 +131,30 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = handle_request
 
 
-def start(port):
-    process = subprocess.Popen(
-        [sys.executable, __file__, "serve", str(port)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+def receive_responses(server):
     try:
-        assert process.stdout is not None
-        ready, _, _ = select.select([process.stdout], [], [], 10)
-        if not ready or process.stdout.readline() != b"ready\n":
-            raise RuntimeError("HTTP listener failed to bind its port")
-    except BaseException:
-        process.terminate()
-        process.wait()
-        raise
+        while frame := sys.stdin.buffer.readline(WIRE_LIMIT + 1):
+            if len(frame) > WIRE_LIMIT or not frame.endswith(b"\n"):
+                raise ValueError("Invalid HTTP response frame")
+            response = json.loads(frame)
+            with server.lock:
+                pending = server.pending.get(response["id"])
+                if pending is not None:
+                    pending.response = response
+                    pending.ready.set()
     finally:
-        if process.stdout is not None:
-            process.stdout.close()
+        with server.lock:
+            for pending in server.pending.values():
+                pending.ready.set()
+        server.shutdown()
+
+
+def serve(port):
+    with Server(port) as server:
+        server.emit({"type": "ready"})
+        threading.Thread(target=receive_responses, args=(server,), daemon=True).start()
+        server.serve_forever(poll_interval=0.05)
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "start":
-        start(int(sys.argv[2]))
-    else:
-        with Server(int(sys.argv[2])) as server:
-            print("ready", flush=True)
-            server.serve_forever(poll_interval=0.01)
+    serve(int(sys.argv[1]))

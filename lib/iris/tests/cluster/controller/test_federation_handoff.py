@@ -23,6 +23,7 @@ from iris.cluster.bundle import content_id
 from iris.cluster.config import AuthConfig, IrisClusterConfig, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -243,6 +244,54 @@ def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log
             template = tx.caches[RunTemplatesProjection].get(tx, job_id)
         assert template is not None
         assert template.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+@pytest.mark.parametrize("supported", [False, True])
+def test_worker_hub_routes_complete_service_groups_only_to_capable_peers(tmp_path, log_client, pinned, supported):
+    class ServicePeer(_InProcessPeerConnection):
+        def list_backends(self):
+            return [
+                controller_pb2.Controller.BackendSummary(
+                    backend_id="default", capabilities=["task-services"] if supported else []
+                )
+            ]
+
+    with ExitStack() as stack:
+        parent, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        peer._controller.backend.descriptor = BackendDescriptor(backend_id="default", kind=BackendKind.KUBERNETES)
+        manager = _attach_federation(parent, ServicePeer(peer))
+        request = _cluster_pinned_request("native-group") if pinned else make_direct_job_request("native-group")
+        request.environment.primary_service = "agent"
+        for name in ("agent", "runtime"):
+            service = request.environment.services.add(
+                name=name,
+                image="example.test/" + name,
+                workdir="/app",
+                resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            )
+            service.image_command.entrypoint.argv.extend(["sleep", "600"])
+        request.ClearField("entrypoint")
+        request.ClearField("resources")
+        if not supported:
+            with pytest.raises(ConnectError) as error:
+                parent.launch_job(request, None)
+            assert error.value.code == Code.FAILED_PRECONDITION
+            assert query_tasks_for_job(peer_state, JobName.root(_USER, "native-group")) == []
+            return
+        response = parent.launch_job(request, None)
+        promote_queued_federation(manager, parent_state)
+        manager.sync_once()
+        job_id = JobName.from_wire(response.job_id)
+        assert all(task.cluster == "cw" for task in query_tasks_for_job(parent_state, job_id))
+        assert len(query_tasks_for_job(peer_state, job_id)) == 1
+        with peer_state._db.read_snapshot() as snapshot:
+            template = snapshot.caches[RunTemplatesProjection].get(snapshot, job_id)
+        assert template is not None
+        assert template.environment.primary_service == "agent"
+        assert [service.name for service in template.environment.services] == ["agent", "runtime"]
+        assert template.resources.cpu_millicores == 2000
 
 
 # ---------------------------------------------------------------------------

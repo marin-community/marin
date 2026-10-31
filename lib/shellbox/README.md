@@ -62,11 +62,9 @@ for policy and image requirements. Inside an Iris job, the factory submits to th
 job's own controller with its scoped task token; local callers select a cluster
 or controller explicitly.
 
-For a trusted private grader, `IrisMachineFactory(secret_env={"JUDGE_API_KEY":
-("env:JUDGE_API_KEY",)})` resolves existing Rigging secret references at submission
-and injects them into the Iris job environment. Keep credentials out of
-`MachineSpec.env`, serialized task data, and command arguments. A factory with
-secrets must never be used for actor jobs; ordinary factories inject none.
+Model and judge credentials belong to the trusted host handler used by
+`serve_http`. Sandboxes receive neither secret references nor resolved provider
+credentials. Keep keys out of `MachineSpec.env`, task data and command arguments.
 
 ## Tasks and containers
 
@@ -137,13 +135,38 @@ finally:
     await group.close()
 ```
 
-`serve_http` uploads a small Python HTTP listener into a group member. The host
-handler receives bounded requests through machine exec and performs only the
+`serve_http` starts one Python HTTP listener through a persistent process session.
+The host handler receives bounded requests on that process's stdout and performs only the
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.
 The group needs no route to a model server or cloud storage. The listener requires
 Python 3 in its member image. It supports bounded nonstreaming GET and POST
-requests, with no caller headers forwarded to the host handler.
+requests, with no caller headers forwarded to the host handler. Request IDs allow
+concurrent calls; responses remain whole messages, without SSE or token streaming.
+There is no per-request exec or guest control endpoint.
+
+Local, Docker, gVisor, Daytona and Iris expose `ProcessMachine.open_process`.
+Its `ProcessSession` provides incremental binary `read`/`write`, bounded stderr,
+exit status and explicit close. `Machine.run` still executes complete commands.
+QEMU and ShellSim do not expose process sessions; online relays require a supported
+backend and fail explicitly otherwise.
+
+Iris requires an operator-deployed exec gateway and a controller configured with
+its reachable address and identity. The controller authorizes one live attempt
+and declared container, then returns a host-only grant. The async gateway owns
+one Kubernetes exec connection per helper, outside the controller's synchronous
+exec pool. Send and Receive are bounded unary Connect calls; an empty Receive
+waits asynchronously. A lost response fails the session rather than replaying
+an uncertain operation. The gateway gets only the controller's public verification
+key. Provider credentials remain in the trusted handler. See
+[gateway operations](../iris/OPS.md#persistent-execution-gateway) for deployment,
+reachability, lifetime and rollout requirements. Worker-daemon Iris backends do
+not yet provide persistent process sessions.
+
+For a coordinator already running in Iris, use
+`IrisMachineFactory.in_cluster()` to select its own controller and task identity.
+An explicitly configured different controller is rejected instead of falling
+back to host credentials.
 
 The same API works with `DockerMachineFactory` and `GvisorMachineFactory`.
 Create the machine with `NetworkPolicy.DENY`, then enter `serve_http` before
@@ -174,7 +197,7 @@ paths and bodies as untrusted input. Credentials belong to that host function,
 never to the machine environment or command arguments.
 
 Docker retains `--network=none`: the listener uses guest loopback, while its
-request queue and responses cross `docker exec` stdin/stdout. No published port,
+request and response frames cross one `docker exec` stdin/stdout connection. No published port,
 host gateway or guest Docker socket is needed. The guest image needs Python 3
 in addition to the Docker backend's normal command and transfer utilities.
 Responses are buffered, with a 4 MiB body limit and at most 16 pending requests;
@@ -376,7 +399,7 @@ finally:
 - With `system_directories=SystemDirectories.COPY_ON_WRITE`, each host-program machine overlays `/usr`, `/bin`, `/sbin` and `/lib*` with a writable layer and makes its private `/etc` writable. Writes persist between commands and `close` discards them; the host's files never change. Writes follow file permissions. `/sys` and host submounts inside overlaid program directories stay read-only; `read_only_system_mounts()` lists those submounts. Downloading the entire host-program root is refused. This mode needs overlayfs and a temporary directory that is not itself on overlayfs.
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Command output goes to private temporary files, subject to the 1 GiB file-size limit; returned bytes are truncated to `output_limit_bytes` and report truncation flags.
-- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files, files of at most 1 GiB, and, for a command with a timeout, at most the timeout multiplied by the usable CPUs plus 5 seconds of CPU time per process. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
+- Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files and files of at most 1 GiB. Command deadlines close the namespace; no inherited CPU-time limit later kills a background service started by a successful command. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
 - The backend enforces no memory limit, since an address-space limit breaks NumPy and SymPy allocations. `memory_mb`, CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
 - `Command.user` keeps the process's user when it is omitted or names that user. Another user requires a root process; the command then runs with that account's UID and primary group, no supplementary groups and no capabilities. A user without a host account raises `UnsupportedMachineSpec`.
 
@@ -394,6 +417,13 @@ A service starts its image's `ENTRYPOINT` and `CMD` unless its
 variables. Images need `/bin/sh`, `sleep` and `tar` for exec and transfers; timed readiness
 and `serve_http` additionally require Python 3. `LocalMachineFactory(umoci=...)`
 selects an explicit unpacker. No Docker daemon runs inside the guest.
+
+Install OCI preparation tools on the trusted host before using registry or
+prepared images. On Debian/Ubuntu: `sudo apt-get install umoci skopeo`.
+`umoci` applies OCI layers, whiteouts and rootless filesystem rules; Shellbox
+reuses it for local and QEMU preparation. Host-program and package machines do
+not need it. The unpacker is an external executable, not a Python dependency;
+see [umoci's rootless workflow](https://umo.ci/quick-start/rootless/).
 
 `build_python_environment(root, lock, python_version)` builds such a directory for Python. It installs a uv-managed CPython of the given full version under `root/python`, creates a venv at `root/venv` from it, and runs `uv pip sync --require-hashes` with the lock, a requirements file with hashes such as `uv pip compile --generate-hashes` writes. Every file and symlink of the environment lies under `root`, and the venv refers to its interpreter by absolute path, so the root must stay where it was built. It returns a `PythonEnvironment` whose `root` goes in `read_only` and whose `bin_dir` goes in `bin_dirs`. Concurrent builders of one root on a host take an exclusive `flock` on a file beside it, so the environment is built once. A completion marker records a finished build; a root without one is a failed or interrupted build and is removed and rebuilt. A finished root built from another lock or Python version raises `ValueError`, and a failed uv command raises `UvError` with uv's error output. The builder needs `uv` on `PATH` and network access to download the interpreter and packages.
 

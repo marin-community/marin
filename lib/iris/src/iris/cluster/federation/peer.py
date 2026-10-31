@@ -86,6 +86,10 @@ class PeerConnection(Protocol):
         self, request: controller_pb2.Controller.ExecInContainerRequest
     ) -> controller_pb2.Controller.ExecInContainerResponse: ...
 
+    def open_exec_session(
+        self, request: controller_pb2.Controller.OpenExecSessionRequest
+    ) -> controller_pb2.Controller.OpenExecSessionResponse: ...
+
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse: ...
 
     def shutdown(self) -> None: ...
@@ -179,6 +183,11 @@ class _PeerRpcConnection:
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
 
+    def open_exec_session(
+        self, request: controller_pb2.Controller.OpenExecSessionRequest
+    ) -> controller_pb2.Controller.OpenExecSessionResponse:
+        return self._client.open_exec_session(request)
+
     def shutdown(self) -> None:
         self._client.close()
 
@@ -271,6 +280,12 @@ class FederationPeer:
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         """Proxy a process-status RPC for a handed-off task to the peer (reuses its ``GetProcessStatus``)."""
         return self._connection.get_process_status(request)
+
+    def open_exec_session(
+        self, request: controller_pb2.Controller.OpenExecSessionRequest
+    ) -> controller_pb2.Controller.OpenExecSessionResponse:
+        """Resolve an owned attempt's persistent exec session at its execution peer."""
+        return self._connection.open_exec_session(request)
 
     def close(self) -> None:
         """Release the peer connection."""

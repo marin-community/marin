@@ -45,11 +45,17 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
     workdir = process.get("WorkingDir") or "/"
     if not PurePosixPath(workdir).is_absolute() or "\0" in workdir:
         raise ValueError("OCI working directory must be absolute")
-    subprocess.run(
-        [str(umoci), "unpack", "--rootless", "--image", f"{image.layout}:{OCI_TAG}", str(directory)],
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            [str(umoci), "unpack", "--rootless", "--image", f"{image.layout}:{OCI_TAG}", str(directory)],
+            check=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"OCI image preparation requires umoci ({umoci}); install it on the host "
+            "or pass LocalMachineFactory(umoci=Path(...))"
+        ) from error
     metadata = json.loads((directory / "umoci.json").read_text())
     unpacked_digest = metadata["from_descriptor_path"]["descriptor_walk"][-1]["digest"]
     if unpacked_digest != image.manifest_digest:

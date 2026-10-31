@@ -629,7 +629,7 @@ def test_a_downloaded_archive_keeps_inner_symlinks_as_links_and_refuses_host_rea
         (_member("data.txt"), b"data"),
         (_member("link", tarfile.SYMTYPE, str(secret)), b""),
     )
-    unpack_local_archive(tree, tmp_path / "tree")
+    unpack_local_archive(tree, tmp_path / "tree", source_name="tree")
     assert (tmp_path / "tree/data.txt").read_text() == "data"
     assert os.readlink(tmp_path / "tree/link") == str(secret)
 
@@ -642,8 +642,27 @@ def test_a_downloaded_archive_keeps_inner_symlinks_as_links_and_refuses_host_rea
     ]
     for stream in refused:
         with pytest.raises((ValueError, tarfile.FilterError)):
-            unpack_local_archive(stream, tmp_path / "refused")
+            unpack_local_archive(stream, tmp_path / "refused", source_name="source")
     assert not (tmp_path / "refused").exists()
+
+
+def test_a_download_cannot_choose_an_unrelated_host_filename(tmp_path):
+    destination = tmp_path / "results"
+    destination.mkdir()
+    protected = destination / "configuration.json"
+    protected.write_bytes(b"host configuration")
+    forged = _stream((_member("configuration.json"), b"guest replacement"))
+
+    with pytest.raises(ValueError, match="requested source"):
+        unpack_local_archive(forged, destination, source_name="result.json")
+
+    assert protected.read_bytes() == b"host configuration"
+    assert not (destination / "result.json").exists()
+
+    valid = _stream((_member("result.json"), b"task result"))
+    unpack_local_archive(valid, destination, source_name="result.json")
+    assert (destination / "result.json").read_bytes() == b"task result"
+    assert protected.read_bytes() == b"host configuration"
 
 
 def test_an_uploaded_archive_holds_what_a_symlinked_source_leads_to(tmp_path):

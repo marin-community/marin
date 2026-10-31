@@ -56,6 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
+from iris.cluster.exec_gateway.auth import ExecPodTarget
 from iris.cluster.runtime.task_spec import TASK_SERVICES_CAPABILITY
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -93,6 +94,7 @@ class BackendCapability(StrEnum):
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
     TASK_SERVICES = TASK_SERVICES_CAPABILITY
+    PERSISTENT_EXEC = "persistent-exec"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +141,8 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
         capabilities.append("autoscaler")
     if BackendCapability.TASK_SERVICES in descriptor.capabilities:
         capabilities.append(TASK_SERVICES_CAPABILITY)
+    if BackendCapability.PERSISTENT_EXEC in descriptor.capabilities:
+        capabilities.append(BackendCapability.PERSISTENT_EXEC)
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
         capabilities=capabilities,
@@ -558,6 +562,10 @@ class TaskBackend(Protocol):
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         """Profile a task attempt. Raises ProviderUnsupportedError if N/A."""
+        ...
+
+    def resolve_exec_target(self, target: TaskTarget, container_name: str) -> ExecPodTarget:
+        """Resolve an exact running Pod for a persistent execution grant."""
         ...
 
     def exec_in_container(

@@ -45,7 +45,9 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
 # tasks or its controller. authorize_method admits these; each operation
 # validates ownership against the peer's received handoff.
-FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus", "KickTasks"})
+FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset(
+    {"ProfileTask", "ExecInContainer", "OpenExecSession", "GetProcessStatus", "KickTasks"}
+)
 
 
 class AuthzAction(StrEnum):

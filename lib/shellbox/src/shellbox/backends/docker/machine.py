@@ -25,6 +25,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import SubprocessSession, acquire_process
 
 logger = logging.getLogger(__name__)
 IMAGE_PLATFORM = "linux/amd64"
@@ -136,6 +137,76 @@ class DockerMachine:
         self.name = name
         self.spec = spec
         self._closed = False
+
+    async def open_process(self, command: Command) -> SubprocessSession:
+        """Keep one docker exec attached to the foreground guest process."""
+        if self._closed:
+            raise RuntimeError("Machine is closed")
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+        args = ["docker", "exec", "-i"]
+        if workdir := command.cwd or self.spec.workdir:
+            args.extend(("-w", workdir))
+        if command.user is not None:
+            args.extend(("--user", command.user))
+        for key, value in command.env.items():
+            args.extend(("-e", f"{key}={value}"))
+        args.extend(
+            (
+                self.name,
+                "/bin/sh",
+                "-c",
+                START_COMMAND,
+                "shellbox-start",
+                "/bin/sh",
+                "-c",
+                RUN_COMMAND,
+                "shellbox-command",
+                *command.argv,
+            )
+        )
+
+        async def acquire() -> SubprocessSession:
+            process = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            group: int | None = None
+
+            async def stop() -> None:
+                try:
+                    if group is not None:
+                        await self._interrupt(group, command.user)
+                    else:
+                        await self.close()
+                except Exception:
+                    await self.close()
+                    raise
+                finally:
+                    if process.returncode is None:
+                        process.kill()
+
+            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+            try:
+                assert process.stdout is not None
+                async with asyncio.timeout(INTERRUPT_TIMEOUT):
+                    header = await process.stdout.readuntil(b"\n")
+                value = header.removeprefix(PROCESS_GROUP_PREFIX).rstrip(b"\n")
+                if (
+                    len(header) > PROCESS_GROUP_HEADER_LIMIT_BYTES
+                    or not header.startswith(PROCESS_GROUP_PREFIX)
+                    or not value.isdigit()
+                    or int(value) <= 1
+                ):
+                    raise RuntimeError("Docker exec did not supply a process-group ID")
+                group = int(value)
+                return session
+            except BaseException:
+                await session.close()
+                raise
+
+        return await acquire_process(asyncio.create_task(acquire()))
 
     async def run(self, command: Command) -> Result:
         if self._closed:

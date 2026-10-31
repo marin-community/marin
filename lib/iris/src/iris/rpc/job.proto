@@ -490,8 +490,7 @@ message EnvironmentConfig {
   repeated ServiceSpec services = 10;
   string primary_service = 11;
 
-  reserved 1, 3, 4, 5, 8, 9;
-  reserved sandbox_services, primary_container_name;
+  reserved 1, 3, 4, 5;
 }
 
 // Image startup inherits ENTRYPOINT/CMD when an override is absent.

@@ -49,7 +49,12 @@ from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, Su
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.sandbox import resolve_egress_policy
-from iris.cluster.runtime.task_spec import normalize_task_request, primary_service, validate_task_services
+from iris.cluster.runtime.task_spec import (
+    normalize_task_request,
+    primary_service,
+    required_task_capabilities,
+    validate_task_services,
+)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -659,10 +664,6 @@ def _validate_launch_profile(
             "submit without a workspace.",
         )
     _validate_egress(request)
-    if len(request.environment.services) > 1 and (
-        BackendCapability.TASK_SERVICES not in dependencies.runtime.backend.descriptor.capabilities
-    ):
-        raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-service tasks")
     try:
         validate_task_services(request.container_profile, request.egress_policy, request.environment)
     except ValueError as error:
@@ -914,6 +915,10 @@ def _plan_launch(
             resources=request.resources,
         )
     )
+    required = required_task_capabilities(request.environment)
+    available = dependencies.runtime.backend.descriptor.capabilities
+    if not required.issubset(available):
+        error = f"Local backend lacks required task capabilities: {', '.join(sorted(required - available))}"
     if launch.received_handoff:
         plan = SubmitPlan(SubmitDisposition.LOCAL)
     else:
@@ -922,6 +927,7 @@ def _plan_launch(
                 constraints=constraints,
                 local_feasible=error is None,
                 cluster_pin=cluster_pin or "",
+                required_capabilities=required,
             )
         )
 
@@ -1007,6 +1013,9 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
+        required = required_task_capabilities(request.environment)
+        if not required.issubset(dependencies.runtime.backend.descriptor.capabilities):
+            raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support multi-service tasks")
         _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:

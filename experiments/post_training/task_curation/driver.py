@@ -102,11 +102,10 @@ def _image_factory(backend: Backend | None, controller_url: str | None) -> Machi
         return None
     if backend == Backend.GVISOR:
         if controller_url is None:
-            job = get_job_info()
-            controller_url = job.controller_address if job is not None else None
-        if controller_url is None:
-            raise click.UsageError("--image-backend gvisor requires --controller-url outside an Iris job")
-        return IrisMachineFactory(controller_url=controller_url, job_ttl=IRIS_JOB_TTL, secret_env=None)
+            if get_job_info() is None:
+                raise click.UsageError("--image-backend gvisor requires --controller-url outside an Iris job")
+            return IrisMachineFactory.in_cluster(job_ttl=IRIS_JOB_TTL)
+        return IrisMachineFactory(controller_url=controller_url, job_ttl=IRIS_JOB_TTL)
     if backend != Backend.DAYTONA:
         raise ValueError(f"Unsupported image backend: {backend}")
     # Daytona is an optional Shellbox dependency; local and Iris campaigns do not import its SDK.

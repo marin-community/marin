@@ -13,8 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -24,17 +23,17 @@ from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.runtime.sandbox import validate_sandbox_environment
-from iris.cluster.runtime.task_spec import TASK_SERVICES_CAPABILITY
 from iris.cluster.types import Entrypoint, ResourceSpec, ServiceSpec
 from iris.cluster.types import TaskSpec as IrisTaskSpec
 from iris.resources.state import TaskState
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, exec_gateway_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.errors import DEFAULT_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ELAPSED
-from rigging.secrets import SecretSpec, resolve_secret_spec
+from iris.rpc.exec_gateway_connect import ExecGatewayServiceClient
 from rigging.timing import Duration, ExponentialBackoff, retry_with_backoff
 
+from shellbox.backends.iris.process import IrisProcessSession
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     LINUX_PROCESS_CAPABILITIES,
@@ -50,6 +49,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import acquire_process, await_cleanup, finish_owned, own_cleanup
 from shellbox.task import Task as ContainerTask
 from shellbox.task import TaskSpec, single_container_task
 
@@ -101,6 +101,8 @@ class IrisExecutionState:
     closed: bool = False
     admission: threading.Condition = field(default_factory=threading.Condition)
     in_flight: dict[str, list[str]] = field(default_factory=dict)
+    sessions: set[IrisProcessSession] = field(default_factory=set)
+    closing: asyncio.Task[None] | None = None
 
 
 class IrisMachine:
@@ -127,6 +129,79 @@ class IrisMachine:
         self.container_name = container_name
         self.execution = execution if execution is not None else IrisExecutionState()
         self._container_user: tuple[str, str] | None = None
+
+    async def open_process(self, command: Command) -> IrisProcessSession:
+        """Authorize one exec on the controller, then use the gateway's pipes."""
+        if not command.argv or command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions require argv and own stdin and their lifetime")
+        if command.output_limit_bytes < 0:
+            raise ValueError("Output limit must be nonnegative")
+        environment = {**self.spec.env, **command.env}
+        validate_sandbox_environment(environment)
+        if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in environment):
+            raise ValueError("Environment variable names must be shell identifiers")
+        if command.user is not None and command.user not in await self._user_identity():
+            raise UnsupportedMachineSpec("Iris process sessions cannot switch the container user")
+        exports = "\n".join(f"export {key}={shlex.quote(value)}" for key, value in environment.items())
+        script = f'{exports}\ncd {shlex.quote(command.cwd or self.spec.workdir)} || exit 1\nexec "$@"'
+        argv = ["sh", "-c", script, "shellbox-process", *command.argv]
+        request = controller_pb2.Controller.OpenExecSessionRequest(
+            task_id=self.task.task_id.to_wire(), container_name=self.container_name, command=argv
+        )
+        uncertain_open = False
+
+        async def acquire() -> IrisProcessSession:
+            nonlocal uncertain_open
+            attempt_id = uuid.uuid4().hex
+            with self.execution.admission:
+                if self.execution.closed:
+                    raise RuntimeError("Machine is closed")
+                self.execution.in_flight[attempt_id] = argv
+            client: ExecGatewayServiceClient | None = None
+            try:
+                # No retry: a lost Open response may already have launched the process.
+                authorization = await asyncio.to_thread(
+                    self.rpc.open_exec_session, request, timeout_ms=RPC_PADDING_SECONDS * 1000
+                )
+                client = ExecGatewayServiceClient(address=authorization.gateway_address)
+                uncertain_open = True
+                opened = await client.open(exec_gateway_pb2.OpenRequest(grant=authorization.grant), timeout_ms=30000)
+                uncertain_open = False
+                session = IrisProcessSession(
+                    client,
+                    authorization.grant,
+                    opened.session_id,
+                    stderr_limit=command.output_limit_bytes,
+                    on_close=self.execution.sessions.discard,
+                )
+                self.execution.sessions.add(session)
+                if self.execution.closed:
+                    await session.close()
+                    raise MachineTerminated("Machine closed while opening the process")
+                return session
+            except BaseException as error:
+                if client is not None:
+                    try:
+                        await client.close()
+                    except Exception as cleanup_error:
+                        error.add_note(f"Iris gateway client cleanup failed ({type(cleanup_error).__name__})")
+                raise
+            finally:
+                with self.execution.admission:
+                    del self.execution.in_flight[attempt_id]
+                    self.execution.admission.notify_all()
+
+        try:
+            return await acquire_process(asyncio.create_task(acquire()))
+        except BaseException as error:
+            if uncertain_open:
+                # The gateway may have accepted Open without returning a session
+                # ID. Reclaim its container instead of repeating an ambiguous exec.
+                try:
+                    await finish_owned(own_cleanup(self.close()))
+                except BaseException as cleanup_error:
+                    error.add_note(f"Iris sandbox cleanup failed ({type(cleanup_error).__name__})")
+            raise
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
         seconds = math.ceil(timeout) if timeout is not None else -1
@@ -304,9 +379,13 @@ class IrisMachine:
 
     async def close(self) -> None:
         with self.execution.admission:
-            if self.execution.closed:
-                return
-            self.execution.closed = True
+            if self.execution.closing is None:
+                self.execution.closed = True
+                self.execution.closing = own_cleanup(self._close())
+            closing = self.execution.closing
+        await await_cleanup(closing)
+
+    async def _close(self) -> None:
         try:
             await asyncio.to_thread(self.job.cancel)
             # Terminating the task ends execs the controller already admitted and refuses later ones,
@@ -314,17 +393,16 @@ class IrisMachine:
             await asyncio.to_thread(self._drain_in_flight)
         finally:
             try:
-                await asyncio.to_thread(self.client.shutdown)
+                await asyncio.gather(*(session.close() for session in tuple(self.execution.sessions)))
             finally:
-                self.endpoint.close()
+                try:
+                    await asyncio.to_thread(self.client.shutdown)
+                finally:
+                    self.endpoint.close()
 
 
 class IrisMachineFactory:
-    """Submit a CPU-only gVisor job from a registry image.
-
-    Secret references are resolved only at job submission. A factory configured
-    with secrets must be reserved for trusted private grading, never actor jobs.
-    """
+    """Submit a CPU-only gVisor job from a registry image."""
 
     backend: Backend = Backend.GVISOR
 
@@ -336,7 +414,6 @@ class IrisMachineFactory:
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
-        secret_env: Mapping[str, SecretSpec] | None = None,
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
@@ -345,16 +422,33 @@ class IrisMachineFactory:
         self.scheduling_timeout = scheduling_timeout
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
-        self.secret_env = dict(secret_env or {})
 
     def _check_spec(self, spec: MachineSpec) -> RegistryImage:
         validate_sandbox_environment(spec.env)
-        validate_sandbox_environment({name: "" for name in self.secret_env})
         if spec.gpus:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
             raise UnsupportedMachineSpec("Iris requires a registry image reference")
         return spec.source
+
+    @classmethod
+    def in_cluster(
+        cls,
+        *,
+        scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
+        job_ttl: int = DEFAULT_JOB_TTL,
+        disk_mb: int = DEFAULT_DISK_MB,
+    ) -> "IrisMachineFactory":
+        """Create child sandboxes using the current task's controller and identity."""
+        info = get_job_info()
+        if info is None or info.controller_address is None:
+            raise UnsupportedMachineSpec("Current-controller creation requires an Iris task")
+        return cls(
+            controller_url=info.controller_address,
+            scheduling_timeout=scheduling_timeout,
+            job_ttl=job_ttl,
+            disk_mb=disk_mb,
+        )
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
         source = self._check_spec(spec)
@@ -378,9 +472,12 @@ class IrisMachineFactory:
         submission = asyncio.create_task(asyncio.to_thread(self._submit_sync, spec, task_spec))
         try:
             machine = await asyncio.shield(submission)
-        except asyncio.CancelledError:
-            machine = await submission
-            await asyncio.shield(machine.close())
+        except asyncio.CancelledError as cancellation:
+            try:
+                machine = await finish_owned(submission)
+                await finish_owned(asyncio.create_task(machine.close()))
+            except BaseException as cleanup_error:
+                cancellation.add_note(f"Sandbox acquisition cleanup failed ({type(cleanup_error).__name__})")
             raise
         try:
             deadline = time.monotonic() + self.scheduling_timeout
@@ -400,8 +497,11 @@ class IrisMachineFactory:
                         raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
-        except BaseException:
-            await machine.close()
+        except BaseException as error:
+            try:
+                await finish_owned(asyncio.create_task(machine.close()))
+            except BaseException as cleanup_error:
+                error.add_note(f"Sandbox cleanup failed ({type(cleanup_error).__name__})")
             raise
 
     async def create_task(self, spec: TaskSpec) -> ContainerTask:
@@ -410,8 +510,6 @@ class IrisMachineFactory:
         companions = tuple(container for container in spec.containers if container.name != spec.primary)
         if primary.entrypoint is not None or primary.arguments is not None:
             raise UnsupportedMachineSpec("The Iris primary container is kept alive for machine commands")
-        if companions and self.secret_env:
-            raise UnsupportedMachineSpec("Private service groups accept no secret-enabled machine factory")
         if companions and spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("Iris multi-container tasks require denied external networking")
         services = tuple(
@@ -482,28 +580,6 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
-            if self.secret_env:
-                task_spec = replace(
-                    task_spec,
-                    services=tuple(
-                        (
-                            replace(
-                                service,
-                                env_vars={
-                                    **service.env_vars,
-                                    **{name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
-                                },
-                            )
-                            if service.name == task_spec.primary
-                            else service
-                        )
-                        for service in task_spec.services
-                    ),
-                )
-            if len(task_spec.services) > 1:
-                backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
-                if not any(TASK_SERVICES_CAPABILITY in backend.capabilities for backend in backends):
-                    raise UnsupportedMachineSpec("Controller does not advertise task service support")
             job = client.submit_task(
                 task=task_spec,
                 name=f"shellbox-{uuid.uuid4().hex}",

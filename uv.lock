@@ -7058,6 +7058,7 @@ controller = [
     { name = "kubernetes" },
     { name = "marin-finelog-server" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "websockets" },
 ]
 iap = [
     { name = "marin-rigging", extra = ["iap"] },
@@ -7129,6 +7130,7 @@ requires-dist = [
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "websockets", marker = "extra == 'controller'", specifier = ">=15,<16" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]
 provides-extras = ["controller", "worker", "iap"]

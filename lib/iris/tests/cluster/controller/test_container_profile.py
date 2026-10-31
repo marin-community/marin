@@ -244,7 +244,7 @@ def test_worker_backend_rejects_multi_service_submission_before_persisting(servi
 
     with pytest.raises(ConnectError) as error:
         _as("user", "alice", service.launch_job, request, None)
-    assert error.value.code == Code.INVALID_ARGUMENT
+    assert error.value.code == Code.FAILED_PRECONDITION
     with pytest.raises(ConnectError) as missing:
         _as(
             "user",

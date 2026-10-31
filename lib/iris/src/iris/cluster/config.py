@@ -25,6 +25,7 @@ import os
 from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
@@ -856,6 +857,13 @@ class ClusterFinelogConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
+class ExecGatewayConfig(_Config):
+    """Public gateway endpoint and audience, enabled only after operator deployment."""
+
+    address: str = Field(min_length=1)
+    gateway_id: str = Field(min_length=1)
+
+
 class IrisClusterConfig(_OneofConfig):
     """Full cluster configuration: platform, defaults, storage, controller, scale groups, auth."""
 
@@ -870,6 +878,7 @@ class IrisClusterConfig(_OneofConfig):
     controller: ControllerVmConfig = Field(default_factory=ControllerVmConfig)
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
     auth: AuthConfig | None = None
+    exec_gateway: ExecGatewayConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     worker_provider: WorkerProviderConfig | None = None
     user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
@@ -1169,9 +1178,27 @@ def _validate_peers(config: IrisClusterConfig) -> None:
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
 
 
+def _validate_exec_gateway(config: IrisClusterConfig) -> None:
+    gateway = config.exec_gateway
+    if gateway is None:
+        return
+    if config.provider_kind() != "kubernetes_provider":
+        raise ValueError("exec_gateway requires kubernetes_provider")
+    if config.auth is None or not config.auth.signing_key:
+        raise ValueError("exec_gateway requires a persistent auth.signing_key")
+    address = urlsplit(gateway.address)
+    if address.scheme not in {"http", "https"} or not address.hostname or address.username or address.password:
+        raise ValueError("exec_gateway.address must be an absolute HTTP(S) URL without credentials")
+    if address.query or address.fragment:
+        raise ValueError("exec_gateway.address must not contain a query or fragment")
+    if not gateway.gateway_id.strip():
+        raise ValueError("exec_gateway.gateway_id must be nonempty")
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_cluster_name(config)
+    _validate_exec_gateway(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
     _validate_egress_allowlist(config)

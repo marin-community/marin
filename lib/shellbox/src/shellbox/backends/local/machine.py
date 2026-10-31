@@ -12,7 +12,6 @@ import fcntl
 import io
 import json
 import logging
-import math
 import os
 import pwd
 import re
@@ -52,6 +51,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.process_session import SubprocessSession, acquire_process
 from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
@@ -64,8 +64,6 @@ LAUNCH_SOURCE = Path(launch.__file__).read_text()
 NPROC_HEADROOM = 256
 """Tasks a command may add beyond the host's task count when it starts; RLIMIT_NPROC counts all of a user's tasks."""
 FILE_SIZE_LIMIT = 1 << 30
-CPU_GRACE = 5
-"""CPU seconds a command may use beyond the most its timeout allows on the CPUs it may run on."""
 # Reserve program directories and private configuration paths from caller-supplied mounts.
 SYSTEM_DIRECTORIES = (
     "/bin",
@@ -323,18 +321,13 @@ def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirecto
     )
 
 
-def _resource_limits(timeout: float | None) -> list[tuple[int, int]]:
+def _resource_limits() -> list[tuple[int, int]]:
     host_tasks = int(Path("/proc/loadavg").read_text().split()[3].split("/")[1])
-    limits = [
+    return [
         (resource.RLIMIT_NPROC, host_tasks + NPROC_HEADROOM),
         (resource.RLIMIT_FSIZE, FILE_SIZE_LIMIT),
         (resource.RLIMIT_CORE, 0),
     ]
-    if timeout is not None:
-        # A process's CPU time accrues on every CPU it runs on, so only a process that escapes the timeout's
-        # kill can reach this limit.
-        limits.append((resource.RLIMIT_CPU, math.ceil(timeout * len(os.sched_getaffinity(0))) + CPU_GRACE))
-    return limits
 
 
 def _command_account(user: str | None) -> pwd.struct_passwd | None:
@@ -630,6 +623,51 @@ class LocalMachine:
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
+    async def open_process(self, command: Command) -> SubprocessSession:
+        """Start a foreground process in the same pinned namespaces as run."""
+        if command.stdin or command.timeout is not None:
+            raise ValueError("Process sessions own stdin and their lifetime")
+        self._check_open()
+        environment = {**self._environment, **self.spec.env, **command.env}
+        config = self._command_config(command, environment)
+
+        async def acquire() -> SubprocessSession:
+            # Keep all private descriptors alive until asyncio returns the child
+            # handle. The launcher closes them before executing guest code.
+            with tempfile.TemporaryFile() as configuration:
+                configuration.write(json.dumps(config).encode())
+                configuration.seek(0)
+                assert self._root_fd is not None
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    LAUNCH_SOURCE,
+                    str(configuration.fileno()),
+                    pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                    env=CONTROL_ENVIRONMENT,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                )
+            self._commands.add(process)
+
+            async def stop() -> None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    await process.wait()
+                finally:
+                    self._commands.discard(process)
+
+            return SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes)
+
+        return await acquire_process(asyncio.create_task(acquire()))
+
     async def _control(
         self,
         script: str,
@@ -645,7 +683,7 @@ class LocalMachine:
             CONTROL_ENVIRONMENT,
         )
 
-    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
+    def _command_config(self, command: Command, environment: dict[str, str]) -> dict:
         self._check_open()
         if not command.argv:
             raise ValueError("Command argv is empty")
@@ -661,7 +699,7 @@ class LocalMachine:
         config = {
             "namespaces": self._namespaces,
             "root": self._root_fd,
-            "limits": _resource_limits(command.timeout),
+            "limits": _resource_limits(),
             "account": account,
             "script": RUN_SCRIPT,
             "cwd": command.cwd or self.spec.workdir or "/",
@@ -670,6 +708,10 @@ class LocalMachine:
         }
         if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
+        return config
+
+    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
+        config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
         status_read, status_write = os.pipe()
@@ -777,7 +819,7 @@ class LocalMachine:
             raise RuntimeError(result.stderr.decode(errors="replace").strip())
         if result.stdout_truncated:
             raise RuntimeError(f"{source} exceeds the {ARCHIVE_LIMIT_BYTES}-byte download limit")
-        await asyncio.to_thread(unpack_local_archive, result.stdout, target)
+        await asyncio.to_thread(unpack_local_archive, result.stdout, target, source_name=path.name)
 
     async def close(self) -> None:
         if self._task_close is not None:

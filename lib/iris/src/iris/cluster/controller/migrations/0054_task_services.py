@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Promote each persisted primary and its old companions into one service list.
+"""Promote persisted single-container jobs into the canonical service list.
 
 Inline files remain in job_workdir_files. Existing flat columns are retained as
 the primary worker projection; resource columns continue to hold the task total.
@@ -20,22 +20,15 @@ def migrate(raw_conn) -> None:
         environment = json.loads(environment_json)
         if environment.get("services"):
             continue
-        companions = environment.pop("sandbox_services", [])
-        primary_name = environment.pop("primary_container_name", "") or "task"
         resources = {
             "cpu_millicores": int(cpu),
             "memory_bytes": int(memory),
             "disk_bytes": int(disk),
         }
-        for companion in companions:
-            for name in ("cpu_millicores", "memory_bytes", "disk_bytes"):
-                resources[name] = int(resources[name]) - int(companion.get("resources", {}).get(name, 0))
-                if resources[name] < 0:
-                    raise ValueError(f"Stored task {job_id} has inconsistent service resource reservations")
         if device_json:
             resources["device"] = json.loads(device_json)
         primary = {
-            "name": primary_name,
+            "name": "task",
             "image": image or "",
             "workdir": "/app",
             "resources": resources,
@@ -44,15 +37,8 @@ def migrate(raw_conn) -> None:
             "setup_scripts": list(environment.get("setup_scripts", [])),
             "runtime_entrypoint": json.loads(entrypoint_json),
         }
-        services = [primary]
-        for companion in companions:
-            service = dict(companion)
-            service["image_command"] = {
-                name: service.pop(name) for name in ("entrypoint", "arguments") if name in service
-            }
-            services.append(service)
-        environment["services"] = services
-        environment["primary_service"] = primary_name
+        environment["services"] = [primary]
+        environment["primary_service"] = "task"
         raw_conn.execute(
             "UPDATE job_config SET environment_json = ? WHERE job_id = ?",
             (json.dumps(environment), job_id),

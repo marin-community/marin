@@ -103,6 +103,7 @@ def _backend_availability(peer_id: str, backend: controller_pb2.Controller.Backe
             else {}
         ),
         advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
+        capabilities=frozenset(backend.capabilities),
     )
 
 
