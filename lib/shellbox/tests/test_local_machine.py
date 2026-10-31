@@ -501,6 +501,75 @@ def test_cancelled_creation_reclaims_a_process_before_its_handle_is_returned(fac
     asyncio.run(scenario())
 
 
+def test_repeated_image_creation_cancellation_waits_for_external_unpacker_and_removes_bundle(tmp_path, oci_image):
+    image = oci_image((), {})
+    unpacker = tmp_path / "umoci"
+    factory = make_factory(umoci=unpacker)
+
+    async def scenario():
+        connected = asyncio.get_running_loop().create_future()
+
+        def accept(reader, writer):
+            connected.set_result((reader, writer))
+
+        server = await asyncio.start_server(accept, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        unpacker.write_text(
+            f"#!{sys.executable}\n"
+            "import json, pathlib, socket, sys\n"
+            f"connection = socket.create_connection(('127.0.0.1', {port}))\n"
+            "bundle = pathlib.Path(sys.argv[-1])\n"
+            "connection.sendall(str(bundle).encode() + b'\\n')\n"
+            "assert connection.makefile('rb').readline() == b'finish\\n'\n"
+            "(bundle / 'rootfs').mkdir(parents=True)\n"
+            "(bundle / 'rootfs' / 'late-write').write_text('completed')\n"
+            "(bundle / 'umoci.json').write_text(json.dumps(\n"
+            f"    {{'from_descriptor_path': {{'descriptor_walk': [{{'digest': {image.manifest_digest!r}}}]}}}}))\n"
+            "connection.sendall(b'written\\n')\n"
+        )
+        unpacker.chmod(0o755)
+        creation = asyncio.create_task(factory.create(MachineSpec(image)))
+        reader = writer = None
+        parent = None
+        released = False
+        try:
+            reader, writer = await asyncio.wait_for(connected, 5)
+            parent = Path((await reader.readline()).decode().strip()).parent
+            for message in ("original cancellation", "second cancellation"):
+                creation.cancel(message)
+                # Deliver both cancellations while the external writer remains
+                # blocked, without releasing it between cleanup checkpoints.
+                checkpoint = asyncio.Event()
+                asyncio.get_running_loop().call_soon(checkpoint.set)
+                await checkpoint.wait()
+            assert not creation.done()
+            assert parent.exists()
+            writer.write(b"finish\n")
+            released = True
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readline(), 5) == b"written\n"
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await asyncio.wait_for(creation, 5)
+            assert caught.value.args == ("original cancellation",)
+            assert not parent.exists()
+        finally:
+            if writer is not None and not released:
+                writer.write(b"finish\n")
+                await writer.drain()
+            if reader is not None:
+                await reader.read()
+            await asyncio.gather(creation, return_exceptions=True)
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+            server.close()
+            await server.wait_closed()
+            if parent is not None and parent.exists():
+                shutil.rmtree(parent)
+
+    asyncio.run(scenario())
+
+
 def test_output_beyond_the_limit_is_truncated(factory):
     result = run_command(factory, Command(("sh", "-c", "yes | head -c 1000000; printf ab >&2"), output_limit_bytes=4))
     assert (result.exit_code, result.stdout, result.stdout_truncated) == (0, b"y\ny\n", True)
