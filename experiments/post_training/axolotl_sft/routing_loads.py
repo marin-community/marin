@@ -57,6 +57,8 @@ def record_nemotron_h_selections(model) -> list[list[torch.Tensor]]:
         # The torch fallback scan ignores seq_idx, so Mamba state would leak across documents.
         raise RuntimeError("NemotronH Mamba kernels did not load; packed documents would not be isolated")
     moes = [module for module in model.modules() if isinstance(module, modeling_nemotron_h.NemotronHMoE)]
+    if not moes:
+        raise RuntimeError(f"no transformers NemotronHMoE layers in {type(model).__module__}")
     selections: list[list[torch.Tensor]] = [[] for _ in moes]
     for moe, sink in zip(moes, selections, strict=True):
         route = moe.route_tokens_to_experts
