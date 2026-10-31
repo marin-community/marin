@@ -26,7 +26,7 @@ import logging
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 import fsspec
@@ -42,7 +42,7 @@ from transformers import AutoTokenizer
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
 from experiments.post_training.mismatch_probe.protocol import request_seed
 from experiments.post_training.probe_sets.buckets import decode_token_bytes, tag_token_ids
-from experiments.post_training.stage0.protocol_gate import Decode, checkpoint_model
+from experiments.post_training.stage0.protocol_gate import MAX_MODEL_LEN, Decode, checkpoint_model
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,14 @@ def sample_token_ids(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int
 
 
 def _sampled_responses(
-    endpoint: OpenAIEndpoint, rows: list[dict[str, Any]], prompt_ids: list[list[int]], stop_id: int, raw_path: str
+    endpoint: OpenAIEndpoint,
+    rows: list[dict[str, Any]],
+    prompt_ids: list[list[int]],
+    stop_id: int,
+    raw_path: str,
+    *,
+    decode: Decode = SNOWBALL_DECODE,
+    context_window: int = MAX_MODEL_LEN,
 ) -> list[list[int]]:
     """Each probe's sampled ids, checkpointed to ``raw_path`` as they land.
 
@@ -169,8 +176,16 @@ def _sampled_responses(
             continue
         todo.append((row, ids))
     if todo:
+        if any(len(ids) >= context_window for _, ids in todo):
+            raise ValueError("a probe prompt leaves no room for a completion")
         bodies = [
-            request_body(endpoint.model, ids, request_seed(MASTER_SEED, row["probe_id"], 0), SNOWBALL_DECODE, stop_id)
+            request_body(
+                endpoint.model,
+                ids,
+                request_seed(MASTER_SEED, row["probe_id"], 0),
+                replace(decode, max_tokens=min(decode.max_tokens, context_window - len(ids))),
+                stop_id,
+            )
             for row, ids in todo
         ]
         with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
@@ -189,8 +204,8 @@ def _sampled_responses(
                 pending_write += 1
                 if pending_write >= RAW_WRITE_EVERY:
                     pending_write = 0
-                    _write_raw(path, rows, sampled)
-        _write_raw(path, rows, sampled)
+                    _write_raw(raw_path, rows, sampled)
+        _write_raw(raw_path, rows, sampled)
     return [sampled[row["probe_id"]]["response_ids"] for row in rows]
 
 
@@ -242,16 +257,24 @@ def main() -> None:
     parser.add_argument("--probe-dir", required=True)
     parser.add_argument("--sets", nargs="+", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--max-model-len", type=int, default=MAX_MODEL_LEN)
+    parser.add_argument("--max-tokens-for-set", action="append", default=[], metavar="SET=TOKENS")
     args = parser.parse_args()
     if args.family != "grug":
         raise ValueError("only Snowball serving is wired; other families need their serve config")
 
+    caps = dict(spec.split("=", 1) for spec in args.max_tokens_for_set)
+    if set(caps) - set(args.sets):
+        raise ValueError("response caps must name a requested probe set")
+    decodes = {
+        name: replace(SNOWBALL_DECODE, max_tokens=int(caps.get(name, SNOWBALL_DECODE.max_tokens))) for name in args.sets
+    }
     tokenizer = local_tokenizer(args.checkpoint)
     stop_id = turn_close_id(tokenizer, args.family)
     probes = {name: read_jsonl(f"{args.probe_dir.rstrip('/')}/{name}.jsonl") for name in args.sets}
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a")
     inference = inference_config_for_model(
-        checkpoint_model(args.name, args.checkpoint),
+        checkpoint_model(args.name, args.checkpoint, max_model_len=args.max_model_len),
         accelerator,
         env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         priority=job_pb2.PRIORITY_BAND_INHERIT,
@@ -261,16 +284,36 @@ def main() -> None:
         "family": args.family,
         "decode": asdict(SNOWBALL_DECODE),
         "master_seed": MASTER_SEED,
+        "context_window": args.max_model_len,
+        "decode_by_set": {name: asdict(decode) for name, decode in decodes.items()},
         "probe_dir": args.probe_dir,
         "sets": {},
     }
+    manifest_path = f"{args.out.rstrip('/')}/manifest.json"
+    filesystem, path = fsspec.core.url_to_fs(manifest_path)
+    if filesystem.exists(path):
+        with filesystem.open(path, "rt") as handle:
+            previous = json.load(handle)
+        identity_fields = ("checkpoint", "family", "context_window", "decode_by_set", "master_seed", "probe_dir")
+        if any(previous.get(field) != manifest[field] for field in identity_fields):
+            raise ValueError(f"{manifest_path} records a different generation configuration; use a fresh output path")
+    with fsspec.open(manifest_path, "wt") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
     with remote_inference(inference) as session:
         endpoint = session.model.endpoint
         for name, rows in probes.items():
             prompt_ids = [render_prompt_ids(tokenizer, args.family, row["messages"]) for row in rows]
             raw_path = f"{args.out.rstrip('/')}/{name}.raw.jsonl"
             started = time.monotonic()
-            responses = _sampled_responses(endpoint, rows, prompt_ids, stop_id, raw_path)
+            responses = _sampled_responses(
+                endpoint,
+                rows,
+                prompt_ids,
+                stop_id,
+                raw_path,
+                decode=decodes[name],
+                context_window=args.max_model_len,
+            )
             seconds = time.monotonic() - started
             out_rows = [
                 continuation_row(tokenizer, args.family, name, row, ids, response)

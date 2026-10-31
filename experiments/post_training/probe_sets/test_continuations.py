@@ -166,3 +166,30 @@ def test_a_raw_file_with_a_different_prompt_is_rejected(monkeypatch, tmp_path):
     raw_path_file.write_text(json.dumps({"probe_id": "p-0", "prompt_ids": [99], "response_ids": [1]}) + "\n")
     with pytest.raises(ValueError, match="different prompt"):
         continuations._sampled_responses(endpoint, rows, [[1]], stop_id=9, raw_path=raw_path)
+
+
+@pytest.mark.parametrize("cap,expected", [(32768, 32768), (131072, 131068)])
+def test_generation_keeps_remote_raw_records_and_reserves_prompt_context(monkeypatch, tmp_path, cap, expected):
+    endpoint = OpenAIEndpoint(base_url="http://endpoint/v1", model="theta")
+    bodies = []
+
+    def post(url, json=None, headers=None, timeout=None):
+        bodies.append(json)
+        return _Response(200, {"choices": [{"token_ids": [7, 9]}]})
+
+    monkeypatch.setattr(continuations.requests, "post", post)
+    raw_path = f"memory://{tmp_path}/P_R.raw.jsonl"
+    responses = continuations._sampled_responses(
+        endpoint,
+        [_probe_row("p-0")],
+        [[1, 2, 3, 4]],
+        9,
+        raw_path,
+        decode=Decode(repetition_penalty=1.05, max_tokens=cap),
+        context_window=131072,
+    )
+    assert responses == [[7, 9]]
+    assert bodies[0]["max_tokens"] == expected
+    assert continuations.read_jsonl(raw_path) == [
+        {"probe_id": "p-0", "prompt_ids": [1, 2, 3, 4], "response_ids": [7, 9]},
+    ]
