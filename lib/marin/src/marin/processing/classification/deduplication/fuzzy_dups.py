@@ -30,6 +30,8 @@ import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 
+import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
@@ -153,13 +155,15 @@ def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     for entry in entries:
         for batch in _load_batches(entry.input_path, columns=["id", "buckets"]):
             ids = batch["id"]
-            buckets_col = batch["buckets"]
+            # String-encoded and uint64 attrs must map to the same shuffle key: str and int
+            # keys never meet in the LSH group_by, so mixing them would silently drop links.
+            buckets_col = pc.cast(batch["buckets"], pa.list_(pa.uint64()))
             for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
                 if not doc_buckets.is_valid:
                     continue
                 cc_id = _cc_id(entry.source_tag, doc_id.as_py())
                 for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry.file_idx}
+                    yield {"bucket": b, "id": cc_id, "file_idx": entry.file_idx}
 
 
 # Key under which ``entries`` is staged via ``ZephyrContext.put`` for the
