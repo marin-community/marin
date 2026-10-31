@@ -7651,6 +7651,8 @@ shellsim = [
 [package.dev-dependencies]
 test = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
 ]
 
 [package.metadata]
@@ -7667,7 +7669,11 @@ requires-dist = [
 provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 
 [package.metadata.requires-dev]
-test = [{ name = "pytest", specifier = ">=8" }]
+test = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
 
 [[package]]
 name = "marin-taskcompendium"
