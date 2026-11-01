@@ -198,7 +198,7 @@
   "to": "aughero",
   "from": "s7"
  },
- "caveat": "Extrapolates ~3.6 decades past the largest rung; \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: s7n and s7l-d1024 byte-weighted, the rest token-weighted.",
+ "caveat": "Extrapolates ~4,000× past the largest rung's compute; \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: s7n and s7l-d1024 byte-weighted, the rest token-weighted.",
  "sources": {
   "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic \u00d7 batch \u00d7 steps",
   "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
