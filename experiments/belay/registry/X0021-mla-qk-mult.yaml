@@ -4,7 +4,7 @@ name: MLA logit scale (qk_mult)
 category: Attention variants
 summary: Multiply MLA attention logits by a fixed or learnable per-layer scalar.
 source: maintainer
-status: running
+status: done
 first_batch: 3
 tags:
 - mla
@@ -400,6 +400,13 @@ trials:
     qk_mult: '4.0'
     learnable_qk_mult: 'true'
   commit: 7c9ee8fcaf
+  loss:
+  - 3.0446
+  delta:
+  - -0.0005
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '17'
