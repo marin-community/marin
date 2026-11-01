@@ -19,6 +19,7 @@ be written, committed, pushed, launched or posted, without doing it.
 """
 
 import argparse
+import dataclasses
 import datetime
 import importlib.util
 import json
@@ -53,7 +54,17 @@ from experiments.belay.code_change import (
     run_tests,
 )
 from experiments.belay.config import CHECKPOINT_TAG_PREFIX, CONFIG, CONTROL_RUN, TRACKS, WEEKLY_BRANCH, Baseline, Track
-from experiments.belay.page import Idea, PageRun, Post, page_state, post_activity, report_idea
+from experiments.belay.page import (
+    Idea,
+    PageRun,
+    Post,
+    comment_times,
+    page_state,
+    post_activity,
+    report_idea,
+    require_unedited,
+    visible_text,
+)
 from experiments.belay.registry_entry import (
     ENTRIES,
     add_trial,
@@ -195,6 +206,25 @@ def categories() -> list[str]:
     return json.loads((CONFIG.registry_checkout / ENTRIES / "categories.json").read_text())
 
 
+def approved_idea(idea: Idea) -> tuple[Idea, list[str]]:
+    """The idea with only the text that was approved and is visible: refuses a comment edited after approval, and
+    strips hidden HTML and invisible characters (returned as notes for the plan)."""
+    if idea.url and "issuecomment-" in idea.url:
+        updated, transferred = comment_times(idea.url)
+        approved = transferred or (datetime.datetime.fromisoformat(idea.decided_at) if idea.decided_at else None)
+        if approved is None:
+            raise SystemExit(f"refusing: idea #{idea.id} has no approval time.\nnext: {BELAY} escalate ...")
+        try:
+            require_unedited(updated, approved)
+        except SystemExit as refusal:  # add the escalation as the next step
+            raise SystemExit(
+                f"{refusal}\nnext: {BELAY} escalate --idea-id {idea.id} --title "
+                f'"Idea #{idea.id} was edited after approval" --body "It needs re-approval of the edited text."'
+            ) from None
+    body, notes = visible_text(idea.body)
+    return dataclasses.replace(idea, body=body), notes
+
+
 def idea_track(idea: Idea) -> tuple[Track, bool]:
     """The idea's Track and whether it defaulted to speedrun; refuses an unknown one with the escalation to run."""
     try:
@@ -313,6 +343,9 @@ def new_idea(
     idea = state.idea(idea_id)
     if idea.state != "approved" or (idea.note or "").startswith(ESCALATED):
         raise SystemExit(f"refusing: idea #{idea_id} is {idea.state} ({idea.note or 'no note'}).\nnext: stop")
+    idea, hidden = approved_idea(idea)
+    if hidden:
+        print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
     track, defaulted = idea_track(idea)
     runnable(idea, track)
     if category is None:
@@ -348,7 +381,10 @@ def new_idea(
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
-    plan = plan_of(spec, summary.strip().split("\n\n")[0], commit, branch, track_label(track, defaulted))
+    summary = summary.strip().split("\n\n")[0]
+    if hidden:
+        summary += f" (Hidden text in the intake comment: {', '.join(hidden)}; this plan uses the visible text.)"
+    plan = plan_of(spec, summary, commit, branch, track_label(track, defaulted))
     report_idea(idea.id, {"state": "planned", "plan": asdict(plan)}, dry_run=dry_run)
     title = f"Plan: {registry_id} {idea.name}"
     post = Post("plan", title, plan_markdown(registry_id, idea.name, plan), registry_id=registry_id, idea_id=idea.id)

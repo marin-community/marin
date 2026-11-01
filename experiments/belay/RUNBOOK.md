@@ -179,3 +179,12 @@ metric and rule. Nothing else spells out a launch.
 | Runs | Seed 0; cluster, priority and nodes per Track (`B tracks`) |
 | Budget | Soft cap of 8 nodes across all Belay runs |
 | Posts | Always the Belay page. Also #9451, but only when an approver turns GitHub posting on |
+
+## 10. Known limits
+
+- Sessions run with an allowlisted environment (`demo.SESSION_ENV`) and no storage keys. Training jobs they launch
+  still get the cluster's shared `iris-task-env` credentials; a Belay-scoped key or workload identity is a later fix.
+- `code-change` probes a tiny CPU model. It proves the flag-off path is unchanged and that the flag-on path does not
+  leak future tokens. It does not prove an optimizer flag is inert when off: only its default is checked.
+- Ideas run from the text that was approved. A comment edited after approval is refused until it is re-approved.
+  Hidden HTML and invisible characters are removed before a session reads the text, and the plan says so.

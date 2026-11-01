@@ -469,6 +469,19 @@ Your first command: `uv run python -m experiments.belay start --events {events_f
 """
 
 
+# The only variables a session inherits: no storage keys (CW_*, AWS_*), no other tokens. Training jobs get the
+# cluster's iris-task-env credentials, not these.
+SESSION_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "SSH_AUTH_SOCK", "WANDB_API_KEY")
+SESSION_ENV_PREFIXES = ("UV_", "XDG_")
+BOT_TOKEN_ENV = "BELAY_INTAKE_TOKEN"
+
+
+def session_env() -> dict[str, str]:
+    """The allowlisted part of this process's environment, for a session."""
+    keep = {*SESSION_ENV, BOT_TOKEN_ENV}
+    return {k: v for k, v in os.environ.items() if k in keep or k.startswith(SESSION_ENV_PREFIXES)}
+
+
 def run_session(
     session_id: str,
     events: list[dict],
@@ -502,7 +515,7 @@ def run_session(
         process = subprocess.run(
             command,
             cwd=agent_dir,
-            env={**os.environ, TOKEN_ENV: token},
+            env={**session_env(), TOKEN_ENV: token},
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
