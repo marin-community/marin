@@ -76,6 +76,7 @@ SESSION_TIMEOUT = datetime.timedelta(hours=3)
 # Re-offer approved work that no session has picked up after this long.
 WORK_PENDING_INTERVAL = datetime.timedelta(hours=1)
 TRANSCRIPT_LIMIT = 600_000
+LABEL_WIDTH = 90
 RECENT_SESSIONS = 20
 RECENT_ACTIVITY = 60
 
@@ -146,14 +147,13 @@ class IdeaState(StrEnum):
     RECORDED = "recorded"
     """Results are in the registry."""
     DECLINED = "declined"
-    """A session found it outside the house rules and explained why."""
+    """Closed without a run: a session found it outside the house rules, or a maintainer declined it."""
 
 
 class EventKind(StrEnum):
     APPROVED = "approved"
     RUN_FINISHED = "run_finished"
     WORK_PENDING = "work_pending"
-    NOTE = "note"
 
 
 class SessionState(StrEnum):
@@ -304,6 +304,11 @@ def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
     return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)
 
 
+def _label(idea: dict[str, Any], width: int = LABEL_WIDTH) -> str:
+    """An idea's title, else the start of its text's first line."""
+    return idea["title"] or idea["body"].strip().splitlines()[0][:width]
+
+
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
 
@@ -336,7 +341,7 @@ GITHUB_APPROVER = "GitHub 👍 (intake bot)"
 ESCALATED = "Escalated:"
 # Approved ideas a session may take up: not one a session escalated, until a maintainer re-queues or declines it.
 OFFERABLE_IDEAS = (
-    "SELECT id, title, body FROM ideas WHERE state = 'approved' AND (note IS NULL OR note NOT LIKE 'Escalated:%')"
+    f"SELECT id, title, body FROM ideas WHERE state = 'approved' AND (note IS NULL OR note NOT LIKE '{ESCALATED}%')"
 )
 
 
@@ -394,7 +399,7 @@ def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datet
         ),
         {"by": caller, "at": at, "id": idea_id},
     )
-    label = idea["title"] or idea["body"].strip().splitlines()[0][:90]
+    label = _label(idea)
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{label}”"))
     queued = _rows(conn, "SELECT id FROM events WHERE kind = 'approved' AND ref = :ref", ref=str(idea_id))
     if not queued:
@@ -568,7 +573,7 @@ def _public_activity(ideas: list[dict], runs: list[dict], posts: list[dict]) -> 
     for i in ideas:
         if i["origin"] == "intake":
             items.append({"at": i["posted_at"], "kind": "intake", "text": f"New suggestion from {i['author']}"})
-        title = i["title"] or i["body"].strip().splitlines()[0][:80]
+        title = _label(i)
         if i["decided_at"] and i["state"] not in ("pending", "dismissed"):
             items.append({"at": i["decided_at"], "kind": "approved", "text": f"Approved: {title}"})
         if i["state"] == "declined":
@@ -617,7 +622,7 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
     plan = idea["plan"] or {}
     return {
         "id": idea["id"],
-        "title": idea["title"] or idea["body"].strip().splitlines()[0][:120],
+        "title": _label(idea),
         "state": idea["state"],
         "origin": idea["origin"],
         # Intake authors posted publicly on GitHub; maintainers' Marina identities are not published.
@@ -678,7 +683,9 @@ def create_api(services: Services) -> RegisteredApi:
             settings = _settings(conn)
         identity = get_verified_identity()
         if not agent_caller_ok(settings, None if identity is None else identity.user_id, x_belay_token):
-            raise HTTPException(401, "Belay agent endpoints need a Belay session identity or an approver.")
+            raise HTTPException(
+                401, f"Belay agent endpoints need a Belay session identity, an approver, or {TOKEN_HEADER}."
+            )
 
     public = APIRouter(prefix="/public")
     admin = APIRouter(prefix="/admin", dependencies=[Depends(approver)])
@@ -774,12 +781,16 @@ def create_api(services: Services) -> RegisteredApi:
             _activity(conn, ActivityPost(kind="proposal", idea_id=idea_id, title=f"{caller} proposed: {proposal.title}"))
         return {"id": idea_id}
 
-    def _decide(idea_id: int, approve: bool, caller: str) -> dict[str, str]:
+    @admin.post("/ideas/{idea_id}/approve")
+    def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
         with engine.begin() as conn:
-            if approve:
-                if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller)):
-                    raise HTTPException(409, f"idea {idea_id} is already approved or further along")
-                return {"state": IdeaState.APPROVED.value}
+            if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller)):
+                raise HTTPException(409, f"idea {idea_id} is already approved or further along")
+        return {"state": IdeaState.APPROVED.value}
+
+    @admin.post("/ideas/{idea_id}/dismiss")
+    def dismiss(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
+        with engine.begin() as conn:
             idea = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
             if not idea:
                 raise HTTPException(404, f"no idea {idea_id}")
@@ -792,13 +803,10 @@ def create_api(services: Services) -> RegisteredApi:
                 ),
                 {"by": caller, "id": idea_id},
             )
-            label = idea[0]["title"] or idea[0]["body"].strip().splitlines()[0][:90]
-            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} dismissed “{label}”"))
+            _activity(
+                conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} dismissed “{_label(idea[0])}”")
+            )
         return {"state": IdeaState.DISMISSED.value}
-
-    @admin.post("/ideas/{idea_id}/approve")
-    def approve(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
-        return _decide(idea_id, approve=True, caller=caller)
 
     @admin.post("/ideas/{idea_id}/requeue")
     def requeue(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
@@ -814,7 +822,7 @@ def create_api(services: Services) -> RegisteredApi:
                 text("UPDATE ideas SET state = 'approved', note = :n, updated_at = now() WHERE id = :id"),
                 {"n": note, "id": idea_id},
             )
-            label = rows[0]["title"] or rows[0]["body"].strip().splitlines()[0][:90]
+            label = _label(rows[0])
             _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{label}”"))
             _enqueue(
                 conn,
@@ -836,10 +844,6 @@ def create_api(services: Services) -> RegisteredApi:
             )
             _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
         return {"state": IdeaState.DECLINED.value}
-
-    @admin.post("/ideas/{idea_id}/dismiss")
-    def dismiss(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
-        return _decide(idea_id, approve=False, caller=caller)
 
     @admin.post("/settings")
     def update_settings(update: SettingsUpdate, caller: str = Depends(approver)) -> dict[str, Any]:
