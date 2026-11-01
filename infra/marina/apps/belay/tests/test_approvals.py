@@ -7,7 +7,15 @@ import datetime
 import json
 
 import pytest
-from belay.app import IntakeComment, approve_idea, migrate, offer_pending_work, sync_intake_comments
+from belay.app import (
+    DEFAULT_SETTINGS,
+    IntakeComment,
+    agent_caller_ok,
+    approve_idea,
+    migrate,
+    offer_pending_work,
+    sync_intake_comments,
+)
 from sqlalchemy import create_engine, text
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
@@ -89,3 +97,11 @@ def test_comment_already_in_the_registry_is_not_queued(conn) -> None:
     assert not approve_idea(conn, idea_id(conn), "maintainer")
     row = conn.execute(text("SELECT state, registry_id FROM ideas WHERE comment_id = '1'")).one()
     assert tuple(row) == ("recorded", "X0220")
+
+
+def test_agent_endpoints_take_the_session_identity_or_an_approver() -> None:
+    settings = {**DEFAULT_SETTINGS, "service_token_sha256": None}
+    assert agent_caller_ok(settings, "loom-vm@hai-gcp-models.iam.gserviceaccount.com", None)
+    assert agent_caller_ok(settings, "larry.dial@openathena.ai", None)
+    assert not agent_caller_ok(settings, "someone@example.com", None)
+    assert not agent_caller_ok(settings, None, "any token")

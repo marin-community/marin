@@ -15,8 +15,9 @@ The kernel serves three groups of routes under ``/belay/api``:
   same page can be served from Marina's GET/HEAD-only public applet host or from GitHub Pages.
 - ``/admin/*``: the maintainers' view and controls. The caller must be a signed-in Marina user listed in the
   ``approvers`` setting; anyone else gets 403.
-- ``/agent/*``: the watcher's and sessions' writes. They require the service token in the ``X-Belay-Token`` header,
-  checked against the ``service_token_sha256`` setting, so a browser session alone cannot call them.
+- ``/agent/*``: the watcher's and sessions' event queue, session reports and syncs. The caller must be a Marina
+  identity listed in ``session_identities`` (Loom's session service account) or an approver; a local preview may
+  instead send the service token in the ``X-Belay-Token`` header, checked against ``service_token_sha256``.
 """
 
 import datetime
@@ -28,6 +29,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
+from marina.apps import RegisteredApi, Services, registered_api
 from pydantic import BaseModel
 from rigging.server_auth import get_verified_identity
 from sqlalchemy import text
@@ -42,7 +44,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Who may use the admin view: Marina identities. Seeded from the intake bot's BELAY_APPROVER_IDS
     # (ops-belay-intake.yaml); an entry without an identity cannot sign in until a maintainer maps it.
     "approvers": [
-        {"github": "ClassicLarry", "github_id": 42926649, "identity": None},
+        {"github": "ClassicLarry", "github_id": 42926649, "identity": "larry.dial@openathena.ai"},
         {"github": "dlwh", "github_id": 9633, "identity": None},
         {"github": "Helw150", "github_id": 9847335, "identity": None},
         {"github": "hammer", "github_id": 15233, "identity": None},
@@ -53,6 +55,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         {"github": "atqamar", "github_id": 1707358, "identity": None},
         {"github": "muchanem", "github_id": 8000756, "identity": None},
     ],
+    # Marina identities of the Belay sessions (Loom's VM service account): they may call the agent endpoints.
+    "session_identities": ["loom-vm@hai-gcp-models.iam.gserviceaccount.com"],
+    # When set, approvers must also hold Marina's admin role.
+    "admin_role_required": False,
     # Local previews only: the identity an unauthenticated loopback caller acts as. Never set in production.
     "demo_approver": None,
     # SHA-256 of the watcher's and sessions' shared token; unset means every agent call is refused.
@@ -282,6 +288,13 @@ def _signed_in_user(settings: dict[str, Any]) -> str | None:
 
 def _approver_identities(settings: dict[str, Any]) -> set[str]:
     return {a["identity"] for a in settings["approvers"] if a.get("identity")}
+
+
+def agent_caller_ok(settings: dict[str, Any], user: str | None, token: str | None) -> bool:
+    """Whether a caller may use the agent endpoints: a session identity, an approver, or the service token."""
+    if _token_ok(settings, token):
+        return True
+    return user is not None and user in set(settings["session_identities"]) | _approver_identities(settings)
 
 
 def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
@@ -643,7 +656,7 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     return {k: _iso(run[k]) for k in keys}
 
 
-def create_api(services: Any) -> FastAPI:
+def create_api(services: Services) -> RegisteredApi:
     api = FastAPI()
     engine: Engine = services.engine()
 
@@ -655,13 +668,17 @@ def create_api(services: Any) -> FastAPI:
             raise HTTPException(401, "Sign in to Marina to use the Belay admin view.")
         if user not in _approver_identities(settings):
             raise HTTPException(403, f"{user} is not a Belay approver. Ask a maintainer to add you in settings.")
+        identity = get_verified_identity()
+        if settings["admin_role_required"] and (identity is None or identity.role != "admin"):
+            raise HTTPException(403, f"{user} needs Marina's admin role for the Belay admin view.")
         return user
 
     def service(x_belay_token: str | None = Header(default=None)) -> None:
         with engine.connect() as conn:
             settings = _settings(conn)
-        if not _token_ok(settings, x_belay_token):
-            raise HTTPException(401, f"Belay agent endpoints need the service token in {TOKEN_HEADER}.")
+        identity = get_verified_identity()
+        if not agent_caller_ok(settings, None if identity is None else identity.user_id, x_belay_token):
+            raise HTTPException(401, "Belay agent endpoints need a Belay session identity or an approver.")
 
     public = APIRouter(prefix="/public")
     admin = APIRouter(prefix="/admin", dependencies=[Depends(approver)])
@@ -1017,4 +1034,4 @@ def create_api(services: Any) -> FastAPI:
     for router in (public, admin, agent):
         api.include_router(router)
 
-    return api
+    return registered_api(api)
