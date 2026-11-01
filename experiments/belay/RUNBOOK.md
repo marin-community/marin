@@ -34,7 +34,11 @@ A human then decides what happens. Never work around a refusal.
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown, `custom` or `hero-mfu`): run the escalate command it prints,
      then stop working on this idea. A missing Track is `speedrun`.
-2. **Check 1, house rules.** Does the idea ask for anything in section 8?
+   - **If it prints a `MAINTAINER NOTE`:** a maintainer re-queued the idea with instructions. Follow them; they
+     settle any check they address (for example, how a port keeps a house rule), and list each choice they fix in
+     `--defaults`.
+2. **Check 1, house rules.** Does the idea ask for anything in section 8? A maintainer note that says how to meet
+   the rule settles it.
    - **If yes, or you cannot tell:** run section 6 with `--idea-id <N>` and the title
      `"Idea #<N> may break house rule: <rule>"`. Stop working on this idea.
 3. **Check 2, category.** Pick the listed category whose name best matches the idea. If none clearly matches,
