@@ -21,6 +21,7 @@ from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 
 import equinox as eqx
 import fsspec
@@ -29,6 +30,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import marin.profiling.step_profile as step_profile
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
@@ -749,6 +751,27 @@ def _compute_match_flops(
     return 3 * flops_per_token * model_config.max_seq_len
 
 
+def summarize_profile(profile_dir: Path, last_profiled_step: int) -> Callable:
+    """A hook that, once the profile window ends, summarizes process 0's capture (its local devices) and logs it:
+    ``profile/*`` keys in the W&B summary and a plain-text table in the logs, so nobody needs the trace itself."""
+
+    def hook(step_info) -> None:
+        if step_info.step != last_profiled_step or jax.process_index() != 0:
+            return
+        sessions = sorted((profile_dir / "plugins" / "profile").glob("*"), key=lambda p: p.stat().st_mtime)
+        if not sessions:
+            logger.warning("profile summary: no capture under %s", profile_dir)
+            return
+        summary = dataclasses.replace(
+            step_profile.profile_dir_summary(sessions[-1]),
+            peak_memory_bytes=max(d.memory_stats()["peak_bytes_in_use"] for d in jax.local_devices()),
+        )
+        levanter.tracker.log_summary(step_profile.wandb_metrics(summary))
+        logger.info("%s", step_profile.render(summary, f"profile of steps up to {last_profiled_step}"))
+
+    return hook
+
+
 def log_device_memory(step_info) -> None:
     """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB.
 
@@ -1370,15 +1393,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
         if profiler_enabled:
+            # One directory per process: processes on one host would otherwise write the same trace file.
+            profile_dir = trainer.log_dir / run_id / "profiler" / f"process{jax.process_index()}"
             state_callbacks.add_hook(
-                profiler_cfg.build(
-                    # One directory per process: processes on one host would otherwise write the same trace file.
-                    str(trainer.log_dir / run_id / "profiler" / f"process{jax.process_index()}"),
-                    run_id=run_id,
-                    num_steps=profiler_num_steps,
-                ),
-                every=1,
+                profiler_cfg.build(str(profile_dir), run_id=run_id, num_steps=profiler_num_steps), every=1
             )
+            last_profiled = profiler_cfg.start_step + profiler_num_steps - 1
+            state_callbacks.add_hook(summarize_profile(profile_dir, last_profiled), every=1)
         if train_dataset is not None:
             state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)

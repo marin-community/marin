@@ -12,8 +12,8 @@ and confirmed field by field against the run's W&B config.
     # first time for a program: seed the XLA autotune cache on one GPU (the timed run refuses without it)
     uv run python -m experiments.grug.fast_track.belay_hero_mfu --stack mfl-mp-qall --seed-xla-autotune-cache \\
         --run-id <id>-seed --submit
-    # the timed run
-    uv run python -m experiments.grug.fast_track.belay_hero_mfu --stack mfl-mp-qall [--model-set ...] \\
+    # the timed run; --profile also captures steps 24-28, after the timed window, and logs a profile/* summary
+    uv run python -m experiments.grug.fast_track.belay_hero_mfu --stack mfl-mp-qall [--profile] [--model-set ...] \\
         --run-id <id> --submit --target-cluster cw-us-east-08a --priority production
     # acceptance and step time of finished runs
     uv run python -m experiments.grug.fast_track.belay_hero_mfu --accept <run> [<run> ...]
@@ -131,6 +131,9 @@ class Acceptance:
 
 ACCEPTANCE = Acceptance()
 WALL_STEPS = (6, 24)
+# --profile captures launch.PROFILE_NUM_STEPS (5) steps from here: after the wall-clock window, so the capture's
+# overhead never touches the measured step time, and before the 30-step run ends.
+PROFILE_START = WALL_STEPS[1]
 
 
 def stack_args(name: str, *, seed_autotune: bool = False) -> list[str]:
@@ -226,6 +229,10 @@ def main(argv: list[str]) -> None:
     rest = [a for a in rest if a != "--plan"]
     seed = "--seed-xla-autotune-cache" in rest
     rest = [a for a in rest if a != "--seed-xla-autotune-cache"]
+    if (
+        "--profile" in rest
+    ):  # capture steps PROFILE_START.. and log a profile/* summary of them (train.summarize_profile)
+        rest = [a for a in rest if a != "--profile"] + ["--profile-start-step", str(PROFILE_START)]
     args = [*stack_args(name, seed_autotune=seed), *rest]
     if plan:
         print("experiments.grug.fast_track.launch " + " ".join(args))

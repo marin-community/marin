@@ -1,0 +1,210 @@
+{
+"displayTimeUnit": "ns",
+"traceEvents": [
+{
+"ph": "M",
+"pid": 1,
+"tid": 0,
+"name": "process_name",
+"args": {
+"name": "/device:GPU:0"
+}
+},
+{
+"ph": "M",
+"pid": 1,
+"tid": 1,
+"name": "thread_name",
+"args": {
+"name": "Steps"
+}
+},
+{
+"ph": "M",
+"pid": 1,
+"tid": 2,
+"name": "thread_name",
+"args": {
+"name": "Stream #13(compute)"
+}
+},
+{
+"ph": "M",
+"pid": 1,
+"tid": 3,
+"name": "thread_name",
+"args": {
+"name": "Stream #20(nccl)"
+}
+},
+{
+"ph": "M",
+"pid": 1,
+"tid": 4,
+"name": "thread_name",
+"args": {
+"name": "Stream #30(memcpy)"
+}
+},
+{
+"ph": "M",
+"pid": 2,
+"tid": 0,
+"name": "process_name",
+"args": {
+"name": "/host:CPU"
+}
+},
+{
+"ph": "M",
+"pid": 2,
+"tid": 1,
+"name": "thread_name",
+"args": {
+"name": "python"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 1,
+"name": "0",
+"ts": 0,
+"dur": 1000,
+"args": {}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 2,
+"name": "gemm_bf16_tn",
+"ts": 0,
+"dur": 400,
+"args": {
+"long_name": "fusion.1"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 2,
+"name": "flash_attn_fwd",
+"ts": 400,
+"dur": 200,
+"args": {
+"long_name": "custom-call.2"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 3,
+"name": "ncclDevKernel_SendRecv",
+"ts": 300,
+"dur": 200,
+"args": {
+"long_name": "all-to-all.3"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 3,
+"name": "ncclDevKernel_AllGather_RING_LL",
+"ts": 700,
+"dur": 150,
+"args": {
+"long_name": "all-gather.4"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 4,
+"name": "MemcpyD2H",
+"ts": 560,
+"dur": 80,
+"args": {}
+},
+{
+"ph": "X",
+"pid": 2,
+"tid": 1,
+"name": "host_work",
+"ts": 0,
+"dur": 500,
+"args": {}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 1,
+"name": "1",
+"ts": 1000,
+"dur": 1000,
+"args": {}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 2,
+"name": "gemm_bf16_tn",
+"ts": 1000,
+"dur": 400,
+"args": {
+"long_name": "fusion.1"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 2,
+"name": "flash_attn_fwd",
+"ts": 1400,
+"dur": 200,
+"args": {
+"long_name": "custom-call.2"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 3,
+"name": "ncclDevKernel_SendRecv",
+"ts": 1300,
+"dur": 200,
+"args": {
+"long_name": "all-to-all.3"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 3,
+"name": "ncclDevKernel_AllGather_RING_LL",
+"ts": 1700,
+"dur": 150,
+"args": {
+"long_name": "all-gather.4"
+}
+},
+{
+"ph": "X",
+"pid": 1,
+"tid": 4,
+"name": "MemcpyD2H",
+"ts": 1560,
+"dur": 80,
+"args": {}
+},
+{
+"ph": "X",
+"pid": 2,
+"tid": 1,
+"name": "host_work",
+"ts": 1000,
+"dur": 500,
+"args": {}
+}
+]
+}
