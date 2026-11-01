@@ -44,6 +44,23 @@ def entry_url(path: Path) -> str:
     return f"https://github.com/{CONFIG.repository}/blob/{CONFIG.registry_branch}/{ENTRIES}/{path.name}"
 
 
+def all_entries() -> list[dict]:
+    """Every registry entry, in id order."""
+    return [yaml.safe_load(p.read_text()) for p in sorted((CONFIG.registry_checkout / ENTRIES).glob("X*.yaml"))]
+
+
+def record_code_commit(registry_id: str, commit: str, *, dry_run: bool) -> Path:
+    """Add an idea's code-change commit to its entry, so a rollover or a retest can cherry-pick it."""
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    commits = entry.setdefault("code_commits", [])
+    if commit not in commits:
+        commits.append(commit)
+    if not dry_run:
+        path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return path
+
+
 def load_entry(registry_id: str) -> dict:
     return yaml.safe_load(entry_path(registry_id).read_text())
 

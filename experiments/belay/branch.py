@@ -73,36 +73,24 @@ def run_git(repo: Path, args: list[str], *, dry_run: bool) -> None:
         git(repo, *args)
 
 
-def cut_week_branch(repo: Path, today: datetime.date, *, fresh: bool, dry_run: bool) -> bool:
-    """Check out this week's branch, creating it if needed, and merge the base branch in.
-
-    A new week's branch starts from last week's (keeping its flags), or from the base branch with ``fresh`` or when
-    there is no last week. Returns False, with nothing pushed, when merging the base branch in conflicts.
-    """
+def cut_fresh_week(repo: Path, target: str, commits: list[str], *, dry_run: bool) -> str | None:
+    """Check out ``target`` new from ``origin/<base branch>`` (the last accepted recipe) and cherry-pick ``commits``
+    onto it, in order. Returns the first commit that does not apply cleanly (the checkout is then left at the base,
+    nothing pushed), else None. The caller gates and pushes the result."""
     if dirty_files(repo):
         raise SystemExit(f"refusing: {repo} has uncommitted changes to tracked files")
-    target = CONFIG.week_branch(today)
-    last = CONFIG.week_branch(today - datetime.timedelta(days=7))
     git(repo, "fetch", "--quiet", "origin", CONFIG.base_branch)
-    if current_branch(repo) != target:
-        if remote_branch_exists(repo, target):
-            source = target
-        elif not fresh and remote_branch_exists(repo, last):
-            source = last
-        else:
-            source = CONFIG.base_branch
-        print(f"checking out {target} from origin/{source}")
-        run_git(repo, ["fetch", "--quiet", "origin", source], dry_run=dry_run)
-        run_git(repo, ["checkout", "-B", target, f"origin/{source}"], dry_run=dry_run)
-    if dry_run:
-        print(f"would run: git merge --no-edit origin/{CONFIG.base_branch} (when {target} lacks it)")
-    elif not head_contains(repo, f"origin/{CONFIG.base_branch}"):
-        merge = subprocess.run(["git", "merge", "--no-edit", f"origin/{CONFIG.base_branch}"], cwd=repo)
-        if merge.returncode != 0:
-            git(repo, "merge", "--abort")
-            return False
-    run_git(repo, ["push", "--quiet", "-u", "origin", target], dry_run=dry_run)
-    return True
+    print(f"cutting {target} from origin/{CONFIG.base_branch}")
+    run_git(repo, ["checkout", "--quiet", "-B", target, f"origin/{CONFIG.base_branch}"], dry_run=dry_run)
+    for commit in commits:
+        print(f"{'would carry' if dry_run else 'carrying'} {git(repo, 'log', '-1', '--format=%h %s', commit)}")
+        if dry_run:
+            continue
+        if subprocess.run(["git", "cherry-pick", "-x", commit], cwd=repo, capture_output=True).returncode != 0:
+            git(repo, "cherry-pick", "--abort")
+            git(repo, "reset", "--quiet", "--hard", f"origin/{CONFIG.base_branch}")
+            return commit
+    return None
 
 
 @contextlib.contextmanager

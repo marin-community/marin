@@ -17,6 +17,7 @@ import yaml
 from experiments.belay.__main__ import (
     EventKind,
     WaitOutcome,
+    carried_ideas,
     launch,
     prior_trials_hold,
     reproduce,
@@ -26,11 +27,11 @@ from experiments.belay.__main__ import (
     write_spec,
 )
 from experiments.belay.analysis import Header, series_from_rows, write_report
-from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
+from experiments.belay.branch import cut_fresh_week, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
 from experiments.belay.demo import GithubApproval, approval_time
-from experiments.belay.page import publish_comment, read_comment, require_unedited, visible_text
+from experiments.belay.page import Idea, PageState, publish_comment, read_comment, require_unedited, visible_text
 from experiments.belay.posts import (
     Comment,
     Row,
@@ -75,7 +76,8 @@ def commit_file(repo: Path, name: str, text: str) -> None:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A clone whose origin has the base branch and last week's branch (base plus one commit)."""
+    """A clone whose origin has the base branch and last week's branch: base plus a winning idea's flag commit and a
+    losing idea's flag commit."""
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--quiet", "--bare", str(origin)], check=True)
     clone = tmp_path / "clone"
@@ -87,22 +89,58 @@ def repo(tmp_path: Path) -> Path:
     git(clone, "push", "--quiet", "origin", CONFIG.base_branch)
     last_week = CONFIG.week_branch(MONDAY - datetime.timedelta(days=7))
     git(clone, "checkout", "--quiet", "-b", last_week)
-    commit_file(clone, "flag.txt", "last week's flag\n")
+    commit_file(clone, "winner.txt", "X0001: winner (default off)\n")
+    commit_file(clone, "loser.txt", "X0002: loser (default off)\n")
     git(clone, "push", "--quiet", "origin", last_week)
     return clone
 
 
-def test_weekly_rollover_keeps_last_weeks_code_and_adds_the_base(repo: Path) -> None:
+def commit_of(repo: Path, path: str) -> str:
+    return git(repo, "log", "-1", "--format=%H", "--", path)
+
+
+def test_a_fresh_week_is_the_recipe_plus_only_the_carried_commits(repo: Path) -> None:
+    winner = commit_of(repo, "winner.txt")
     git(repo, "checkout", "--quiet", CONFIG.base_branch)
     commit_file(repo, "recipe_fix.txt", "fix\n")
     git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
-
-    assert cut_week_branch(repo, MONDAY, fresh=False, dry_run=False)
-
     week = CONFIG.week_branch(MONDAY)
-    assert git(repo, "ls-remote", "--heads", "origin", week)
-    assert (repo / "flag.txt").exists() and (repo / "recipe_fix.txt").exists()
-    assert require_week_branch(repo, MONDAY) == week
+
+    assert cut_fresh_week(repo, week, [winner], dry_run=False) is None
+
+    assert git(repo, "rev-parse", "HEAD~1") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+    assert (repo / "winner.txt").exists() and (repo / "recipe_fix.txt").exists()
+    assert not (repo / "loser.txt").exists()
+
+
+def test_a_carried_commit_that_conflicts_with_the_recipe_is_refused(repo: Path) -> None:
+    winner = commit_of(repo, "winner.txt")
+    git(repo, "checkout", "--quiet", CONFIG.base_branch)
+    commit_file(repo, "winner.txt", "the recipe changed this file too\n")
+    git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
+
+    assert cut_fresh_week(repo, CONFIG.week_branch(MONDAY), [winner], dry_run=False) == winner
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{CONFIG.base_branch}")
+    assert not git(repo, "ls-remote", "--heads", "origin", CONFIG.week_branch(MONDAY))
+
+
+def test_only_ideas_in_play_are_carried() -> None:
+    def entry(xid: str, delta: float, step: str = "0%", **extra) -> dict:
+        trial = {"rung": "speedrun", "protocol": "equal_steps", "delta": [delta], "step_time_change": step}
+        return {"id": xid, "code_commits": ["c" + xid], "trials": [trial], "events": [], **extra}
+
+    adopted = {"type": "adopted", "checkpoint": CONFIG.recipe_tag}
+    entries = [
+        entry("X0001", -0.012),  # won at equal time, not adopted: carried
+        entry("X0002", +0.020),  # lost: left behind
+        entry("X0003", -0.012, events=[adopted]),  # already in the recipe: nothing to carry
+        entry("X0004", -0.002),  # noise: left behind
+        entry("X0005", -0.012, "+8%"),  # stage 2 pending, and running on the page: carried
+        {"id": "X0006", "trials": [], "events": []},  # settings only: nothing to carry
+    ]
+    running = Idea(5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None)
+    state = PageState([running], [], False, 8, [], [])
+    assert carried_ideas(entries, state) == ["X0001", "X0005"]
 
 
 def test_launch_refused_off_this_weeks_branch(repo: Path) -> None:
@@ -124,7 +162,7 @@ def test_launch_refused_from_a_dirty_or_unpushed_tree(repo: Path) -> None:
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     assert require_clean_pushed_head(repo, branch) == git(repo, "rev-parse", "HEAD")
 
-    (repo / "flag.txt").write_text("edited\n")
+    (repo / "winner.txt").write_text("edited\n")
     with pytest.raises(SystemExit, match="differ from HEAD"):
         require_clean_pushed_head(repo, branch)
 
@@ -307,8 +345,9 @@ def test_github_approval_queues_only_after_the_cutover() -> None:
 
 def test_first_spec_on_a_fresh_weekly_branch(repo: Path) -> None:
     """A weekly branch cut fresh from the recipe has no runs/ directory yet; the first spec creates it."""
-    assert cut_week_branch(repo, MONDAY, fresh=True, dry_run=False)
     branch = CONFIG.week_branch(MONDAY)
+    assert cut_fresh_week(repo, branch, [], dry_run=False) is None
+    git(repo, "push", "--quiet", "-u", "origin", branch)
     spec = write_spec(repo, branch, SPEC, dry_run=False)
     assert (repo / "experiments/belay/runs/X0001.yaml").read_text() == SPEC
     assert spec.track is Track.COMPETITIVE_D512

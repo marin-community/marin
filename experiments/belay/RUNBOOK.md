@@ -93,7 +93,9 @@ A human then decides what happens. Never work around a refusal.
 The change goes straight onto this week's branch. No human reviews it: passing `--finish` is the only gate.
 
 1. **Run:** `B code-change X#### --start`
-   - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`.
+   - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`. For an
+     idea with recorded code that this branch lacks, it first prints `applied X####'s recorded code (uncommitted)`;
+     check it, then go to step 4.
 2. **If the idea points at a pull request** (`#NNNN`), read it with `gh pr view NNNN --json title,body,files` and
    `gh pr diff NNNN`, and the PRs it builds on the same way. Port the change, and everything it depends on, into
    `experiments/grug/fast_track/`:
@@ -196,15 +198,24 @@ sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line
 
 ## 4. weekly-rollover (when start prints `next: B weekly-rollover`)
 
+Each week's branch starts fresh from `marin_belay_v1_recipe`, the last accepted recipe, and carries only the code
+of ideas still in play: ideas in progress (approved, planned or running, or with a stage still pending) and wins
+not yet adopted. Their code commits come from the registry (`code_commits`). Losses, noise, declined and closed
+ideas stay behind on the old branch; settings-only ideas carry nothing.
+
 1. **Run:** `B weekly-rollover`
    - **Expect:**
-     - `checking out <this week's branch> from origin/<source>`. The source is last week's branch, which keeps its
-       flags, or `marin_belay_v1_recipe` when there is no last week.
-     - The push, then `on <branch>, which contains origin/<base>`.
-     - The list of flag commits since the recipe. A maintainer deletes the flags that never won; sessions do not.
+     - `carrying <n> idea(s): X####, ...`, then `cutting <branch> from origin/marin_belay_v1_recipe` and one
+       `carrying <commit> X####: <flag> (default off)` line per carried commit;
+     - the push, then `on <branch>: origin/marin_belay_v1_recipe plus <n> carried commit(s)`;
      - `next: B start ...`.
-   - **If it prints `merging ... conflicts`:** run the escalate command it prints, then stop.
+   - **If a carried commit conflicts, or the carried code fails its code-change gates on the recipe:** it pushes
+     nothing; run the escalate command it prints, then stop.
 2. Go back to section 0.
+
+To retest an idea that stayed behind, a maintainer re-queues it with the note "retest on current recipe". If it
+needs its code, `B code-change X#### --start` applies its recorded commits (uncommitted), and `--finish` runs the
+gates again and commits them.
 
 ## 5. recipe-change (maintainers only; a session never does this)
 
@@ -215,10 +226,9 @@ section 6 and stops.
    - checks that every Track's launch module exists;
    - merges the branch into `marin_belay_v1_recipe` (fast-forward when possible);
    - tags the new tip `belay-ckpt-<YYYY-MM-DD>`, named "Belay Ckpt <Mon DD YYYY>";
-   - pushes both, and lists the flag commits since the old recipe.
+   - pushes both.
 2. Set `recipe_tag` in `experiments/belay/config.py` to the new tag, then commit and push.
-3. At the next weekly rollover, run `B weekly-rollover --fresh` once. This cuts the new week's branch from the new
-   recipe.
+3. The next weekly rollover cuts the new week's branch from the new recipe.
 
 ## 6. escalate (any mismatch, refusal or judgment call)
 

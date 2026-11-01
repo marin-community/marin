@@ -25,6 +25,7 @@ import datetime
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -39,10 +40,11 @@ import yaml
 from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
 from experiments.belay.branch import (
     current_branch,
-    cut_week_branch,
+    cut_fresh_week,
     git,
     head_contains,
     named_checkout,
+    remote_branch_exists,
     repo_root,
     require_clean_pushed_head,
     require_week_branch,
@@ -52,7 +54,6 @@ from experiments.belay.branch import (
 from experiments.belay.code_change import (
     changed_paths,
     checkout_python,
-    flag_commits,
     new_flags,
     probe,
     refuse_flag_off_change,
@@ -108,6 +109,7 @@ from experiments.belay.registry_entry import (
     ENTRIES,
     add_trial,
     add_trial_run,
+    all_entries,
     comment_url_of,
     commit_and_push,
     create_entry,
@@ -117,6 +119,7 @@ from experiments.belay.registry_entry import (
     entry_with_results,
     load_entry,
     potential_of,
+    record_code_commit,
     require_registry_checkout,
     with_step_time,
 )
@@ -803,9 +806,36 @@ def code_checkout(registry_id: str) -> tuple[Path, str]:
     return named_checkout(repo, code), code
 
 
+def apply_recorded_code(repo: Path, registry_id: str) -> list[str]:
+    """Bring back an idea's recorded code-change commits that this branch lacks (it ran on an earlier week's branch),
+    uncommitted, so ``--finish`` gates and commits them; returns their subjects."""
+    recorded = load_entry(registry_id).get("code_commits") or []
+    if not recorded:
+        return []
+    git(repo, "fetch", "--quiet", "origin")
+    here = set(git(repo, "log", "--format=%s", f"origin/{CONFIG.base_branch}..HEAD").splitlines())
+    applied = []
+    for commit in recorded:
+        subject = git(repo, "log", "-1", "--format=%s", commit)
+        if subject in here:
+            continue
+        if subprocess.run(["git", "cherry-pick", "--no-commit", commit], cwd=repo, capture_output=True).returncode:
+            git(repo, "cherry-pick", "--abort")
+            raise SystemExit(
+                f"refusing: {registry_id}'s commit {commit[:10]} ({subject}) does not apply to this branch.\n"
+                f'next: {BELAY} escalate --title "{registry_id}: its code does not apply to the recipe" '
+                f'--body "A maintainer ports it." --registry-id {registry_id}'
+            )
+        applied.append(subject)
+    return applied
+
+
 def code_change_start(registry_id: str) -> None:
     repo, branch = code_checkout(registry_id)
     require_clean_pushed_head(repo, branch)
+    applied = apply_recorded_code(repo, registry_id)
+    if applied:
+        print(f"applied {registry_id}'s recorded code (uncommitted): {'; '.join(applied)}. Check it, then --finish.")
     print(f"{registry_id}: edit {repo} on {branch} (clean, at origin/{branch}).\n{CODE_RULES}")
     say_next(f"{BELAY} code-change {registry_id} --finish --model-set <flag>=<on value>   (or --opt-set)")
 
@@ -847,18 +877,14 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
     run_git(repo, ["add", "--", *paths], dry_run=dry_run)
     run_git(repo, ["commit", "--quiet", "-m", message], dry_run=dry_run)
     run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+    if not dry_run:
+        commit = git(repo, "rev-parse", "HEAD")
+        path = record_code_commit(registry_id, commit, dry_run=False)
+        commit_and_push([path], f"Belay registry: {registry_id} code commit {commit[:10]}", dry_run=False)
     idea = page_state().idea_for(registry_id)
     idea_id = "<N>" if idea is None else idea.id
     flags_text = " ".join(f"{option} {s}" for option, s in settings)
     say_next(f'{BELAY} new-idea --idea-id {idea_id} --category "<category>" --variant "<what changes>" {flags_text}')
-
-
-def report_flags(repo: Path) -> None:
-    """List the flag commits since the base branch, for a maintainer to delete the ones that never won."""
-    commits = flag_commits(repo, f"origin/{CONFIG.base_branch}")
-    print(f"flags added since {CONFIG.base_branch} ({len(commits)}); a maintainer deletes those that never won:")
-    for line in commits:
-        print(f"  {line}")
 
 
 # ---------- 2. run finished ----------
@@ -1193,18 +1219,104 @@ def run_failed(registry_id: str, run: str, *, dry_run: bool) -> None:
 # ---------- 4. weekly rollover ----------
 
 
-def weekly_rollover(today: datetime.date, *, fresh: bool, dry_run: bool) -> None:
+# A trial note marking a result outside the protocol's verdict (a dropped stage, say).
+OUTSIDE_PROTOCOL = re.compile(r"outside the verdict|not part of the verdict")
+
+
+def final_verdict(entry: dict, noise: float) -> Verdict | None:
+    """The idea's last recorded verdict on its Track: for speedrun the equal-time result, or the equal-data result
+    when that already was equal time; None while a stage is pending or nothing ran."""
+    trials = [t for t in entry.get("trials") or [] if (t.get("loss_delta") or t.get("delta"))]
+    trials = [t for t in trials if not OUTSIDE_PROTOCOL.search(t.get("note") or "")]
+    if not trials:
+        return None
+    last = trials[-1]
+    if last.get("rung") == Track.SPEEDRUN.value and last.get("protocol") == "equal_steps":
+        change = (last.get("step_time_change") or "0%").rstrip("%")
+        if abs(float(change or 0)) > 1:
+            return None  # a stage-2 run decides
+    return verdict(
+        (last.get("loss_delta") or last["delta"])[0], dataclasses.replace(TRACKS[Track.SPEEDRUN], noise=noise)
+    )
+
+
+def carried_ideas(entries: list[dict], state: PageState) -> list[str]:
+    """Registry ids whose code a new weekly branch carries: ideas in progress (approved, planned or running on the
+    page, or a stage still pending) and wins not yet adopted into the live recipe. Losses, noise, declined and closed
+    ideas stay on the old branch; settings-only ideas carry nothing."""
+    in_play = {i.registry_id for i in state.ideas if i.state in ("approved", "planned", "running")}
+    carried = []
+    for entry in entries:
+        if not entry.get("code_commits"):
+            continue
+        marks = [e for e in entry.get("events") or [] if e.get("checkpoint") == CONFIG.recipe_tag]
+        adopted = bool(marks) and marks[-1]["type"] == "adopted"
+        verdict_now = final_verdict(entry, TRACKS[Track.SPEEDRUN].noise)
+        if entry["id"] in in_play or (verdict_now is Verdict.WIN and not adopted) or entry.get("status") == "running":
+            carried.append(entry["id"])
+    return carried
+
+
+def gate_carried(repo: Path, entries: dict[str, dict]) -> None:
+    """The code-change gates for the carried commits on the new base, all together: every new flag defaults off,
+    with every flag off the tiny model matches the base, no flag leaks the future, their tests and pre-commit
+    pass. Raises SystemExit on the first failure."""
+    base = f"origin/{CONFIG.base_branch}"
+    paths = git(repo, "diff", "--name-only", f"{base}..HEAD").splitlines()
+    if not paths:
+        return
+    refuse_outside_allowed(paths)
+    python = checkout_python(repo)
+    with temporary_worktree(repo, base) as before_dir:
+        before = probe(before_dir, [], python)
+    after = probe(repo, [], python)
+    flags = new_flags(before.defaults, after.defaults)
+    refuse_flag_off_change(before, after)
+    names = {f.split(".")[1]: f.split(".")[0] for f in flags}
+    for entry in entries.values():
+        values = {k: v for t in entry.get("trials") or [] for k, v in (t.get("settings") or {}).items() if k in names}
+        model = [f"{k}={v}" for k, v in values.items() if "Model" in names[k]]
+        if model:
+            refuse_leak(probe(repo, model, python))
+    run_tests(repo, paths)
+    run_precommit(repo, paths)
+
+
+def weekly_rollover(today: datetime.date, *, dry_run: bool) -> None:
+    """Cut this week's branch fresh from the recipe and carry only the code of ideas still in play."""
     repo = repo_root()
     target = CONFIG.week_branch(today)
-    if not cut_week_branch(repo, today, fresh=fresh, dry_run=dry_run):
-        print(f"merging {CONFIG.base_branch} into {target} conflicts; aborted, nothing pushed")
+    if remote_branch_exists(repo, target):
+        raise SystemExit(f"refusing: {target} already exists; check it out and run start again")
+    require_registry_checkout()
+    entries = {e["id"]: e for e in all_entries()}
+    carried = carried_ideas(list(entries.values()), page_state())
+    commits = [c for x in carried for c in entries[x]["code_commits"]]
+    git(repo, "fetch", "--quiet", "origin")
+    print(f"carrying {len(carried)} idea(s): {', '.join(carried) or 'none'}")
+    conflict = cut_fresh_week(repo, target, commits, dry_run=dry_run)
+    if conflict is not None:
+        owner = next(x for x in carried if conflict in entries[x]["code_commits"])
+        print(f"carrying {owner} ({conflict[:10]}) onto {CONFIG.base_branch} conflicts; aborted, nothing pushed")
         say_next(
-            f'{BELAY} escalate --title "{target} conflicts with {CONFIG.base_branch}" '
-            '--body "A maintainer resolves the merge, or runs weekly-rollover --fresh."'
+            f'{BELAY} escalate --title "{target}: {owner} does not apply to the recipe" --registry-id {owner} '
+            f'--body "Its commit {conflict[:10]} conflicts with {CONFIG.base_branch}. A maintainer ports it or drops '
+            'it, then reruns weekly-rollover."'
         )
         return
-    print(f"on {target}, which contains origin/{CONFIG.base_branch}")
-    report_flags(repo)
+    if not dry_run:
+        try:
+            gate_carried(repo, {x: entries[x] for x in carried})
+        except SystemExit as failure:  # one carried change fails its gates on the new base: escalate, push nothing
+            git(repo, "reset", "--quiet", "--hard", f"origin/{CONFIG.base_branch}")
+            print(f"the carried code fails its gates on {CONFIG.base_branch}; aborted, nothing pushed:\n{failure}")
+            say_next(
+                f'{BELAY} escalate --title "{target}: carried code fails its gates on the recipe" '
+                '--body "<the gate output above>. A maintainer ports or drops the idea, then reruns weekly-rollover."'
+            )
+            return
+    run_git(repo, ["push", "--quiet", "-u", "origin", target], dry_run=dry_run)
+    print(f"on {target}: origin/{CONFIG.base_branch} plus {len(commits)} carried commit(s)")
     say_next(f"{BELAY} start --events <the same events file>")
 
 
@@ -1225,10 +1337,8 @@ def recipe_change(source: str, today: datetime.date, *, dry_run: bool) -> None:
         name = f"Belay Ckpt {today:%b %d %Y}"
         run_git(recipe, ["tag", "--annotate", tag, "--message", name], dry_run=dry_run)
         run_git(recipe, ["push", "--quiet", "origin", f"HEAD:{CONFIG.recipe_branch}", tag], dry_run=dry_run)
-    report_flags(repo)
     say_next(
-        f'set recipe_tag="{tag}" in experiments/belay/config.py and commit it; at the next weekly rollover, '
-        f"{BELAY} weekly-rollover --fresh"
+        f'set recipe_tag="{tag}" in experiments/belay/config.py and commit it; the next weekly rollover cuts from it'
     )
 
 
@@ -1369,8 +1479,7 @@ def main(argv: list[str]) -> None:
     p = command("run-failed")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True)
-    p = command("weekly-rollover")
-    p.add_argument("--fresh", action="store_true", help="cut from the base branch instead of last week's branch")
+    command("weekly-rollover")
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     p = command("recipe-change")
     p.add_argument("--from", dest="source", required=True, help="the branch whose tip becomes the new recipe")
@@ -1423,7 +1532,7 @@ def main(argv: list[str]) -> None:
     elif args.command == "run-failed":
         run_failed(args.registry_id, args.run, dry_run=args.dry_run)
     elif args.command == "weekly-rollover":
-        weekly_rollover(today, fresh=args.fresh, dry_run=args.dry_run)
+        weekly_rollover(today, dry_run=args.dry_run)
     elif args.command == "recipe-change":
         recipe_change(args.source, today, dry_run=args.dry_run)
     elif args.command == "tracks":
