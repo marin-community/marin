@@ -5,9 +5,21 @@ category: MoE and routing
 summary: Try causal token-level capacity routing in front of the MoE (Mixture-of-Depths style ([arXiv 2404.02258](https://arxiv.org/abs/2404.02258))
   ), keeping top-k + QB for expert choice.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6497735060
   author: TimS-ml
   approved_by: ClassicLarry
+trials:
+- id: t001
+  variant: 'causal MoD: 80% of tokens routed at top-10, rest shared'
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0222
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561943796
+  wandb: []
+  settings:
+    mod_routed_frac: '0.8'
+  commit: 6b8f1e9a06
