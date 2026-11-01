@@ -18,7 +18,7 @@ trials:
   protocol: equal_steps
   batch: X0221
   date: '2026-11-01'
-  comment_url: http://127.0.0.1:8091/belay/
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6556166051
   wandb:
   - belay-X0221-seed0-b
   settings:
