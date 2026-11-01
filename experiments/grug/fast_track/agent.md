@@ -2,6 +2,12 @@
 
 ## Branches and launchers (Marin Belay, #9451)
 
+Marin Belay agent sessions follow `experiments/belay/RUNBOOK.md` exactly, with fixed values in
+`experiments/belay/config.py`; people find the branch, intake and edit rules in `experiments/belay/AGENTS.md`.
+In short: the recipe is `marin_belay_v1_clean_s7` (Belay Ckpt Oct 20 2026, `belay_s7.py --ladder s7n`), and
+Belay experiment code goes on the week's `marin_belay_v1_w<monday>` branch, not a branch or issue per experiment.
+The rest of this section, and "Documentation & GitHub Issues" below, are for other fast_track research.
+
 - Branch every experiment from `marin_belay_v1_clean_s7`. It has no GB200, QuACK-MXFP8, SM100 or MFU code.
   Do not read or branch from `marin_belay_v1_fp8quality`, `marin_belay_v1_mfuladder*`, `marin_belay_v1_ckpt1`
   or the lc1 GB200 branches. If a flag seems to be missing, port it here; do not move the experiment there.
@@ -102,7 +108,7 @@ Most promotable changes land in one of these files:
 
 ## Documentation & GitHub Issues
 
-Create a new branch for each experiment issue, off `marin_belay_v1_clean_s7` (see above). Follow
+Outside Marin Belay, create a new branch for each experiment issue, off `marin_belay_v1_clean_s7` (see above). Follow
 `.agents/skills/research/SKILL.md` for explicitly requested research programs and
 their existing issue, W&B, or session records.
 

@@ -23,8 +23,10 @@ Stand-ins for the production pieces (see ``.agents/projects/belay-agent-on-loom.
 - **Dispatcher:** every few seconds it asks the app to claim queued events for a new session (the app refuses when
   dispatch is off or a session is active) and runs the session.
 - **Loom session:** headless Claude Code (``claude -p``) in the agent's experiment checkout, with
-  ``experiments/belay/AGENTS.md`` appended to its system prompt, the queued events in its prompt, and a tool
-  allowlist that admits only Belay's own commands. Its transcript and summary go back to the app.
+  ``experiments/belay/RUNBOOK.md`` appended to its system prompt, its queued events in
+  ``<state-dir>/sessions/<id>.events.json``, and a tool allowlist that admits read-only tools plus
+  ``experiments.belay.steps`` (every write a session makes goes through those commands). Its transcript and summary
+  go back to the app.
 """
 
 import argparse
@@ -49,9 +51,9 @@ import s3fs
 import sqlalchemy
 import wandb
 
+from experiments.belay.config import CONFIG
 from experiments.belay.submit import (
     NODES_BY_SIZE,
-    OUTPUT_ROOT,
     RUN_PREFIX,
     iris_jobs,
     load_spec,
@@ -67,7 +69,7 @@ HOME = Path.home()
 DEFAULT_STATE_DIR = HOME / ".belay_demo"
 DEFAULT_MARINA_CHECKOUT = HOME / "marin_wt_marina_main"
 DEFAULT_AGENT_DIR = HOME / "marin_wt_loomdemo_agent"
-DEFAULT_REGISTRY_DIR = HOME / "marin_wt_registry_demo"
+DEFAULT_REGISTRY_DIR = CONFIG.registry_checkout
 DEFAULT_PG_BIN = Path("/opt/homebrew/opt/postgresql@17/bin")
 PG_PORT = 55433
 MARINA_PORT = 8091
@@ -75,8 +77,8 @@ WATCH_INTERVAL = 120
 DISPATCH_INTERVAL = 5
 STORAGE_INTERVAL = 3600
 INTAKE_ISSUE = 9514
-REPOSITORY = "marin-community/marin"
-WANDB_PATH = "marin-community/marin_moe"
+REPOSITORY = CONFIG.repository
+WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
 CW_ENDPOINT = "https://cwobject.com"
 BOT_MARK = "🤖"
@@ -420,7 +422,7 @@ class Watcher:
             endpoint_url=CW_ENDPOINT,
             config_kwargs={"s3": {"addressing_style": "virtual"}},
         )
-        prefix = f"{STORAGE_BUCKET}/{OUTPUT_ROOT.rsplit('/', 1)[0]}/"
+        prefix = f"{STORAGE_BUCKET}/{CONFIG.output_root.rsplit('/', 1)[0]}/"
         files = fs.find(prefix, detail=True)
         self.storage_at = time.monotonic()
         return sum(f["size"] for f in files.values()), len(files)
@@ -465,60 +467,32 @@ class Watcher:
 
 ALLOWED_TOOLS = (
     "Read",
-    "Edit",
-    "Write",
     "Glob",
     "Grep",
-    "TodoWrite",
-    "Bash(cd:*)",
-    "Bash(ls:*)",
     "Bash(cat:*)",
+    "Bash(ls:*)",
     "Bash(head:*)",
     "Bash(tail:*)",
     "Bash(grep:*)",
-    "Bash(wc:*)",
     "Bash(git status:*)",
     "Bash(git diff:*)",
     "Bash(git log:*)",
     "Bash(git show:*)",
-    "Bash(git rev-parse:*)",
-    "Bash(git add:*)",
-    "Bash(git commit:*)",
-    "Bash(git fetch:*)",
-    "Bash(git pull:*)",
-    "Bash(./infra/pre-commit.py:*)",
-    "Bash(uv run python -m experiments.belay.submit:*)",
-    "Bash(uv run python -m experiments.belay.results:*)",
-    "Bash(uv run python -m experiments.belay.demo api:*)",
+    "Bash(uv run python -m experiments.belay.steps:*)",
+    "Bash(uv run python -m experiments.belay.demo api state:*)",
     "Bash(uv run iris --cluster marin job list:*)",
     "Bash(uv run iris --cluster marin job logs:*)",
 )
+RUNBOOK = REPO / "experiments/belay/RUNBOOK.md"
 
 
-def session_prompt(session_id: str, events: list[dict], agent_dir: Path, registry_dir: Path, page_url: str) -> str:
-    branch = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=agent_dir, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    registry_branch = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=registry_dir, check=True, capture_output=True, text=True
-    ).stdout.strip()
-    python = agent_dir / ".venv/bin/python"
+def session_prompt(session_id: str, events_file: Path) -> str:
     return f"""You are Belay session {session_id}, started {datetime.datetime.now().astimezone():%Y-%m-%d %H:%M %Z}.
-Follow the Belay session guidelines in your system prompt.
+Read RUNBOOK.md (in your system prompt). Identify the event type. Run its steps exactly. If anything doesn't match,
+post to the issue and stop: `uv run python -m experiments.belay.steps escalate --title "..." --body "..."`.
 
-- Experiment checkout (your working directory): {agent_dir}, branch `{branch}`. Push with `git push origin {branch}`.
-- Registry checkout: {registry_dir}, branch `{registry_branch}` (a demo copy of the registry). Run registry commands as
-  `{python} {registry_dir}/experiments/belay/registry.py ...` (e.g. `new`, `validate`). Use git there only as
-  `git -C {registry_dir} <add|commit|push origin {registry_branch}|pull --ff-only|status|log>`; do not `cd` into it.
-  Registry file URLs:
-  https://github.com/{REPOSITORY}/blob/{registry_branch}/experiments/belay/registry/<file>
-- Belay page: {page_url} (use it as --comment-url for submit).
-- Iris: `uv run iris --cluster marin job list --prefix /{getpass.getuser()}/belay-`; runs go to cw-us-east-02a.
-
-Queued events for this session:
-```json
-{json.dumps(events, indent=2)}
-```
+Your events file: {events_file}
+Your first command: `uv run python -m experiments.belay.steps start --events {events_file}`
 """
 
 
@@ -528,28 +502,18 @@ def run_session(
     agent_dir: Path,
     registry_dir: Path,
     state_dir: Path,
-    page_url: str,
     token: str,
 ) -> None:
     log_path = state_dir / "sessions" / f"{session_id}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    guidelines = (REPO / "experiments/belay/AGENTS.md").read_text()
-    python = agent_dir / ".venv/bin/python"
-    agent_branch, registry_branch = _branches(agent_dir, registry_dir)
-    registry_git = f"git -C {registry_dir}"
-    allowed = [
-        *ALLOWED_TOOLS,
-        f"Bash({python} {registry_dir}/experiments/belay/registry.py:*)",
-        f"Bash(git push origin {agent_branch}:*)",
-        *(f"Bash({registry_git} {verb}:*)" for verb in ("add", "commit", "status", "log", "diff", "pull --ff-only")),
-        f"Bash({registry_git} push origin {registry_branch}:*)",
-    ]
+    events_file = state_dir / "sessions" / f"{session_id}.events.json"
+    events_file.write_text(json.dumps(events, indent=2))
     command = [
         "claude",
         "-p",
-        session_prompt(session_id, events, agent_dir, registry_dir, page_url),
+        session_prompt(session_id, events_file),
         "--append-system-prompt",
-        guidelines,
+        RUNBOOK.read_text(),
         "--output-format",
         "stream-json",
         "--verbose",
@@ -558,7 +522,7 @@ def run_session(
         "--add-dir",
         str(registry_dir),
         "--allowedTools",
-        *allowed,
+        *ALLOWED_TOOLS,
         "--max-turns",
         str(SESSION_MAX_TURNS),
     ]
@@ -582,15 +546,6 @@ def run_session(
         token=token,
     )
     logger.info("session %s: %s ($%.2f, %s turns)", session_id, state, cost or 0, turns)
-
-
-def _branches(agent_dir: Path, registry_dir: Path) -> list[str]:
-    return [
-        subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=d, check=True, capture_output=True, text=True
-        ).stdout.strip()
-        for d in (agent_dir, registry_dir)
-    ]
 
 
 def _read_transcript(log_path: Path) -> tuple[str, str, float | None, int | None]:
@@ -623,12 +578,11 @@ def _read_transcript(log_path: Path) -> tuple[str, str, float | None, int | None
 
 
 class Dispatcher:
-    def __init__(self, agent_dir: Path, registry_dir: Path, state_dir: Path, page_url: str, token: str) -> None:
+    def __init__(self, agent_dir: Path, registry_dir: Path, state_dir: Path, token: str) -> None:
         self.token = token
         self.agent_dir = agent_dir
         self.registry_dir = registry_dir
         self.state_dir = state_dir
-        self.page_url = page_url
         self.thread: threading.Thread | None = None
 
     def dispatch(self) -> None:
@@ -646,7 +600,7 @@ class Dispatcher:
 
     def _run(self, session_id: str, events: list[dict]) -> None:
         try:
-            run_session(session_id, events, self.agent_dir, self.registry_dir, self.state_dir, self.page_url, self.token)
+            run_session(session_id, events, self.agent_dir, self.registry_dir, self.state_dir, self.token)
         except Exception as e:
             logger.exception("session %s crashed", session_id)
             call(
@@ -658,7 +612,7 @@ class Dispatcher:
 
 def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, token: str) -> None:
     watcher = Watcher(agent_dir, registry_dir, token)
-    dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, stack.page_url, token)
+    dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, token)
     last_tick = 0.0
     while True:
         if time.monotonic() - last_tick >= interval:
@@ -677,52 +631,62 @@ def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, toke
 # ---------- the session's page client ----------
 
 
-def api_command(args: argparse.Namespace) -> None:
+def service_token() -> str:
     token = os.environ.get(TOKEN_ENV)
     if not token:
         raise SystemExit(f"{TOKEN_ENV} is not set; sessions receive the Belay service token from the dispatcher")
+    return token
+
+
+def post_activity(
+    kind: str, title: str, body: str, *, registry_id: str | None, idea_id: int | None, dry_run: bool
+) -> None:
+    """Post to the Belay page's activity feed, and to the batch issue when GitHub posting is on."""
+    token = service_token()
+    github = call("agent/state", token=token)["settings"]["github_posting"]
+    item = {"kind": kind, "title": title, "body": body, "registry_id": registry_id, "idea_id": idea_id}
+    if dry_run:
+        target = f"page and #{CONFIG.batch_issue}" if github else "page only (GitHub posting is off)"
+        print(f"would post {kind} to the {target}:\n--- {title}\n{body}\n---")
+        return
+    github_url = None
+    if github:
+        github_url = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "comment",
+                str(CONFIG.batch_issue),
+                "--repo",
+                REPOSITORY,
+                "--body",
+                f"{BOT_MARK} **{title}**\n\n{body}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    call("agent/activity", {**item, "github_url": github_url}, token=token)
+    print(f"posted {kind}: {title}")
+
+
+def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
+    """Update an idea on the Belay page (state, registry id, plan, result, note)."""
+    if dry_run:
+        print(f"would report idea #{idea_id}: {json.dumps(report)}")
+        return
+    call(f"agent/ideas/{idea_id}/report", report, token=service_token())
+    print(f"reported idea #{idea_id}: state {report.get('state', 'unchanged')}")
+
+
+def api_command(args: argparse.Namespace) -> None:
     if args.api == "state":
-        print(json.dumps(call("agent/state", token=token), indent=2))
+        print(json.dumps(call("agent/state", token=service_token()), indent=2))
     elif args.api == "report":
-        report = json.loads(Path(args.file).read_text())
-        print(json.dumps(call(f"agent/ideas/{args.idea_id}/report", report, token=token)))
+        report_idea(args.idea_id, json.loads(Path(args.file).read_text()), dry_run=False)
     else:
         body = Path(args.body_file).read_text() if args.body_file else ""
-        github_url = None
-        if call("agent/state", token=token)["settings"]["github_posting"]:
-            if args.github_issue is None:
-                raise SystemExit("GitHub posting is on: pass --github-issue (the open belay-weekly issue)")
-            github_url = subprocess.run(
-                [
-                    "gh",
-                    "issue",
-                    "comment",
-                    str(args.github_issue),
-                    "--repo",
-                    REPOSITORY,
-                    "--body",
-                    f"{BOT_MARK} **{args.title}**\n\n{body}",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-        print(
-            json.dumps(
-                call(
-                    "agent/activity",
-                    {
-                        "kind": args.kind,
-                        "title": args.title,
-                        "body": body,
-                        "registry_id": args.registry_id,
-                        "idea_id": args.idea_id,
-                        "github_url": github_url,
-                    },
-                    token=token,
-                )
-            )
-        )
+        post_activity(args.kind, args.title, body, registry_id=args.registry_id, idea_id=args.idea_id, dry_run=False)
 
 
 def main(argv: list[str]) -> None:
@@ -757,7 +721,6 @@ def main(argv: list[str]) -> None:
     post.add_argument("--body-file")
     post.add_argument("--registry-id")
     post.add_argument("--idea-id", type=int)
-    post.add_argument("--github-issue", type=int, help="used only when GitHub posting is turned on")
     args = parser.parse_args(argv)
 
     if args.command == "api":
