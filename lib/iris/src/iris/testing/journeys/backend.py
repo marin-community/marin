@@ -31,6 +31,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
+from iris.cluster.task_connection import TaskConnection
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -198,6 +199,17 @@ class ScriptedTaskBackend:
         timeout_ms: int,
     ) -> job_pb2.ProfileTaskResponse:
         raise ProviderUnsupportedError("journey backend has no profiler")
+
+    def resolve_driver_connection(self, driver: TaskTarget) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def prepare_driver_connection(self, driver: TaskTarget, port: int) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
+
+    def resolve_task_connection(
+        self, driver: TaskTarget, target: TaskTarget, spec: job_pb2.DriverConnectionSpec
+    ) -> TaskConnection:
+        raise ProviderUnsupportedError("This backend does not support direct task connections")
 
     def exec_in_container(
         self,
