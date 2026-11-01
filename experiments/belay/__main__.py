@@ -506,15 +506,17 @@ def new_idea(
     if TRACKS[track].needs_go_ahead:
         request_go_ahead(idea, registry_id, track, [x for setting in settings for x in setting], dry_run=dry_run)
         return
-    if spec_path(registry_id, repo / SPECS).exists():
-        text = spec_path(registry_id, repo / SPECS).read_text()  # resuming: the committed spec decides
-    else:
+    existing = spec_path(registry_id, repo / SPECS)
+    launched = existing.exists() and "launched" in yaml.safe_load(existing.read_text())
+    if launched:
+        text = existing.read_text()  # resuming: the committed spec decides
+    else:  # a new idea, or one held at the node cap: plan its runs now, so a shared control is one still running
         jobs = iris_jobs()
         shared = shareable_control(repo, track, jobs)
         if shared is not None:
             print(f"reusing the running control {shared} (same code and seed)")
         text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, jobs), shared)
-    spec = write_spec(repo, branch, text, dry_run=dry_run)
+    spec = write_spec(repo, branch, text, dry_run=dry_run, replace=existing.exists() and not launched)
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
