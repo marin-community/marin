@@ -351,6 +351,11 @@ which keeps the Marin high-level board and the goals document below its
 - the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
   itself that mints a documents-scoped token.
 
+The disabled `belay` watch runs the `belay` profile every 30 minutes
+([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
+full runbook session only when events wait. Enable it after the Belay Marina app
+is released.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
