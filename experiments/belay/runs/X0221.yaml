@@ -20,3 +20,12 @@ runs:
     - --num-steps
     - '150'
     stage: probe
+  seed0-t-c:
+    seed: 0
+    variant: CPLM Plus copy head (cplm_plus=true)
+    flags:
+    - --model-set
+    - cplm_plus=true
+    - --num-steps
+    - '2308'
+    stage: time
