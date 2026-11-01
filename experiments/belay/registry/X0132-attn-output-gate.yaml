@@ -136,3 +136,7 @@ potential:
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 13e092726e28
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-5950896975
+  author: RavnaBergsndot
+  approved_by: ClassicLarry
