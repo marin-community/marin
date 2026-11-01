@@ -120,7 +120,8 @@ def table(rows: list[Row]) -> str:
         if r.s_step is not None:
             train = f"{r.steps * r.s_step:.0f} s" if r.loss is not None else f"~{r.steps * r.s_step:.0f} s"
             if r.time_change is not None:
-                train += f" ({signed(r.time_change * 100, 0)}%)"
+                percent = round(r.time_change * 100)
+                train += f" ({signed(percent, 0)}%)" if percent else " (±0%)"
         cells = [
             link,
             r.variant,
