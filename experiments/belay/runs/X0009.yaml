@@ -1,0 +1,13 @@
+experiment: X0009
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: 2M-row hashed bigram table as AttnRes source, LR x10
+    flags:
+    - --model-set
+    - attn_res_bigram_rows=2097152
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
