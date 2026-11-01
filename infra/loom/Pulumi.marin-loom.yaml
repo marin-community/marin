@@ -392,9 +392,12 @@ config:
         # The training launcher passes this key to each job so the run logs to W&B.
         WANDB_API_KEY:
           secretRef: projects/hai-gcp-models/secrets/BELAY_WANDB_API_KEY/versions/latest
-        # marin-belay-bot's token: #9451 is locked, and Loom's GitHub App tokens cannot comment on locked issues.
-        GH_TOKEN:
-          secretRef: projects/hai-gcp-models/secrets/BELAY_INTAKE_TOKEN/versions/latest
+        # Iris requires the submitter's CoreWeave keys on every CoreWeave job (#10475). This Belay key's access
+        # policy limits what Belay runs can read and write.
+        CW_KEY_ID:
+          secretRef: projects/hai-gcp-models/secrets/BELAY_CW_KEY_ID/versions/latest
+        CW_KEY_SECRET:
+          secretRef: projects/hai-gcp-models/secrets/BELAY_CW_KEY_SECRET/versions/latest
       restricted: false
       githubRepositories:
         - marin-community/marin

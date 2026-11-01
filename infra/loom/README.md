@@ -217,10 +217,12 @@ a session land under `/loom/<job>` instead of inheriting the session container's
 
 The `belay` profile runs approved Marin Belay ideas through
 `experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
-session at a time. It reads two Belay secrets: `BELAY_WANDB_API_KEY`, a
+session at a time. It reads three Belay secrets: `BELAY_WANDB_API_KEY`, a
 `marin-community` W&B service-account key that the training launcher passes to
-each job, and `BELAY_INTAKE_TOKEN`, marin-belay-bot's token, set as `GH_TOKEN`
-because Loom's GitHub App tokens cannot comment on the locked results issue.
+each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
+key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
+to every CoreWeave job, so this key's access policy bounds what Belay runs can
+read and write. Replies on the intake issue use Loom's GitHub App token.
 
 Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
 from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
