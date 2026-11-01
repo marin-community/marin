@@ -316,7 +316,13 @@ def page_data(experiments: list[Experiment], generated_from: str, placeholder_bp
         if placeholder_bpb_ratio is not None:
             _placeholder_bpb(idea, placeholder_bpb_ratio)
         ideas.append(idea)
-    return {"generated_from": generated_from, "categories": list(CATEGORIES), "ideas": ideas}
+    # Consumers that need macro loss (the Status checklist) divide trial deltas and losses by this ratio.
+    return {
+        "generated_from": generated_from,
+        "categories": list(CATEGORIES),
+        "placeholder_bpb_ratio": placeholder_bpb_ratio,
+        "ideas": ideas,
+    }
 
 
 def week_summary(experiments: list[Experiment], since: str, until: str) -> str:
