@@ -6,6 +6,7 @@
 import datetime
 import hashlib
 import json
+from collections.abc import Iterator
 
 import pytest
 from belay.app import (
@@ -38,7 +39,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Engine
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
 
@@ -174,7 +174,7 @@ def test_a_failed_session_report_requeues_its_events(conn) -> None:
 def test_a_retried_claim_gets_its_events_back(conn) -> None:
     record_intake_comment(conn, comment())
     approve_idea(conn, idea_id(conn), "maintainer")
-    conn.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
+    enable_dispatch(conn)
     first = claim_events(conn, "s1")
     assert first["launch"] and len(first["events"]) == 1
     with pytest.raises(HTTPException) as refused:
@@ -277,24 +277,11 @@ class _Services:
         return self._engine
 
 
-def test_only_an_approver_can_change_the_node_cap_or_grant_nodes(database_url: str) -> None:
-    token = "session-token"
-    engine = create_engine(database_url)
-    with engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA IF EXISTS belay_api_test CASCADE; CREATE SCHEMA belay_api_test"))
-        connection.execute(text("SET search_path TO belay_api_test"))
-        migrate(connection)
-        connection.execute(
-            text("UPDATE settings SET value = CAST(:v AS JSONB) WHERE key = 'service_token_sha256'"),
-            {"v": json.dumps(hashlib.sha256(token.encode()).hexdigest())},
-        )
-    client = TestClient(create_api(_Services(database_url)).app)
-    headers = {"X-Belay-Token": token}
-    assert client.get("/agent/state", headers=headers).status_code == 200
-    assert client.post("/admin/settings", json={"node_cap": 20}, headers=headers).status_code == 401
-    assert client.post("/admin/ideas/1/approve", json={"nodes": 20}, headers=headers).status_code == 401
-    with engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))
+def test_only_an_approver_can_change_the_node_cap_or_grant_nodes(api: TestClient) -> None:
+    headers = {"X-Belay-Token": API_TOKEN}
+    assert api.get("/agent/state", headers=headers).status_code == 200
+    assert api.post("/admin/settings", json={"node_cap": 20}, headers=headers).status_code == 401
+    assert api.post("/admin/ideas/1/approve", json={"nodes": 20}, headers=headers).status_code == 401
 
 
 def test_a_finished_session_records_its_token_usage(conn) -> None:
@@ -312,8 +299,13 @@ def test_a_finished_session_records_its_token_usage(conn) -> None:
     assert tuple(row) == (12, 4_000, 900, 80_000)
 
 
-def api_client(database_url: str, token: str) -> tuple[TestClient, Engine]:
-    """A test app on the ``belay_api_test`` schema whose agent endpoints accept ``token``."""
+API_TOKEN = "service"
+
+
+@pytest.fixture
+def api(database_url: str) -> Iterator[TestClient]:
+    """A test app on the ``belay_api_test`` schema whose agent endpoints accept ``API_TOKEN``, with dispatch on,
+    one approved idea and its queued event; the schema is dropped afterwards."""
     engine = create_engine(database_url)
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA IF EXISTS belay_api_test CASCADE; CREATE SCHEMA belay_api_test"))
@@ -321,7 +313,7 @@ def api_client(database_url: str, token: str) -> tuple[TestClient, Engine]:
         migrate(connection)
         connection.execute(
             text("UPDATE settings SET value = CAST(:v AS JSONB) WHERE key = 'service_token_sha256'"),
-            {"v": json.dumps(hashlib.sha256(token.encode()).hexdigest())},
+            {"v": json.dumps(hashlib.sha256(API_TOKEN.encode()).hexdigest())},
         )
         connection.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
         connection.execute(
@@ -331,12 +323,15 @@ def api_client(database_url: str, token: str) -> tuple[TestClient, Engine]:
             )
         )
         connection.execute(text("INSERT INTO events (kind, ref, summary) VALUES ('approved', '1', 'idea #1')"))
-    return TestClient(create_api(_Services(database_url)).app), engine
+    yield TestClient(create_api(_Services(database_url)).app)
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))
+    engine.dispose()
 
 
-def test_only_the_claiming_session_can_write_into_it(database_url: str) -> None:
-    client, engine = api_client(database_url, "service")
-    agent = {"X-Belay-Token": "service"}
+def test_only_the_claiming_session_can_write_into_it(api: TestClient) -> None:
+    client = api
+    agent = {"X-Belay-Token": API_TOKEN}
     secret = client.post("/agent/dispatch/claim", json={"session_id": "s1"}, headers=agent).json()["session_secret"]
     mine = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": secret}
     wrong = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": "guess"}
@@ -353,18 +348,14 @@ def test_only_the_claiming_session_can_write_into_it(database_url: str) -> None:
     assert client.post("/agent/sessions/s1/finish", json=finish, headers=mine).status_code == 200
     # A finished session's secret writes nothing more.
     assert client.post("/agent/ideas/1/report", json=note, headers=mine).status_code == 403
-    with engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))
 
 
-def test_a_lost_sessions_secret_is_refused(database_url: str) -> None:
-    client, engine = api_client(database_url, "service")
-    agent = {"X-Belay-Token": "service"}
+def test_a_lost_sessions_secret_is_refused(api: TestClient, database_url: str) -> None:
+    client = api
+    agent = {"X-Belay-Token": API_TOKEN}
     secret = client.post("/agent/dispatch/claim", json={"session_id": "s1"}, headers=agent).json()["session_secret"]
-    with engine.begin() as connection:  # past the session timeout: the next check expires it as lost
+    with create_engine(database_url).begin() as connection:  # past the session timeout: expired as lost
         connection.execute(text("UPDATE belay_api_test.sessions SET started_at = now() - interval '2 days'"))
     mine = {**agent, "X-Belay-Session": "s1", "X-Belay-Session-Secret": secret}
     refused = client.post("/agent/activity", json={"kind": "note", "title": "late"}, headers=mine)
     assert refused.status_code == 403 and "lost" in refused.json()["detail"]
-    with engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA belay_api_test CASCADE"))

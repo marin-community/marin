@@ -401,12 +401,12 @@ def _token_ok(settings: dict[str, Any], token: str | None) -> bool:
     expected = settings["service_token_sha256"]
     if not expected or not token:
         return False
-    return hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), expected)
+    return hmac.compare_digest(_sha256(token), expected)
 
 
-def _label(idea: dict[str, Any], width: int = LABEL_WIDTH) -> str:
+def _label(idea: dict[str, Any]) -> str:
     """An idea's title, else the start of its text's first line."""
-    return idea["title"] or idea["body"].strip().splitlines()[0][:width]
+    return idea["title"] or idea["body"].strip().splitlines()[0][:LABEL_WIDTH]
 
 
 def _session_active(conn: Connection) -> bool:
@@ -481,9 +481,7 @@ def offer_pending_work(conn: Connection) -> int:
     return offered
 
 
-def approve_idea(
-    conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None, node_grant: int | None = None
-) -> bool:
+def approve_idea(conn: Connection, idea_id: int, caller: str, node_grant: int | None = None) -> bool:
     """Approve an idea and queue its one ``approved`` event; False unless it is pending.
 
     Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
@@ -497,10 +495,10 @@ def approve_idea(
         return False
     conn.execute(
         text(
-            "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = COALESCE(CAST(:at AS TIMESTAMPTZ), "
-            "now()), node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
+            "UPDATE ideas SET state = 'approved', decided_by = :by, decided_at = now(), "
+            "node_grant = COALESCE(CAST(:grant AS INTEGER), node_grant), updated_at = now() WHERE id = :id"
         ),
-        {"by": caller, "at": at, "grant": node_grant, "id": idea_id},
+        {"by": caller, "grant": node_grant, "id": idea_id},
     )
     grant = f" with up to {node_grant} nodes" if node_grant else ""
     _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} approved “{_label(idea)}”{grant}"))
@@ -1263,7 +1261,7 @@ def create_api(services: Services) -> RegisteredApi:
 
     @agent.post("/dispatch/claim")
     def claim(request: Claim, x_belay_session_secret: str | None = Header(default=None)) -> dict[str, Any]:
-        """Give every undispatched event to a new session, when dispatch is on and no session is active."""
+        """``claim_events``: a new session's claim, or an existing session's (with its secret) drain claim."""
         with engine.begin() as conn:
             return claim_events(conn, request.session_id, request.kinds, x_belay_session_secret)
 

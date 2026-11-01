@@ -794,7 +794,7 @@ def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> No
 
 
 def reproduce(registry_id: str, commit: str, run: str) -> str:
-    spec = f"https://github.com/{CONFIG.repository}/blob/{commit}/experiments/belay/runs/{registry_id}.yaml"
+    spec = f"https://github.com/{CONFIG.repository}/blob/{commit}/{SPECS}/{registry_id}.yaml"
     command = f"git checkout {commit[:10]} && uv run python -m experiments.belay launch {registry_id} --run {run}"
     return f"Reproduce: [spec]({spec}) · `{command}`"
 
@@ -1159,7 +1159,7 @@ def wait_for_job(job: str) -> str:
     while True:
         listing = subprocess.run(iris_cli("job", "list", "--prefix", job), capture_output=True, text=True).stdout
         row = next((line.split() for line in listing.splitlines() if line.startswith(job + " ")), None)
-        if row is not None and row[1] in ("succeeded", "failed", "killed", "worker_failed", "unschedulable"):
+        if row is not None and row[1] in TERMINAL_RUN_STATES:
             return row[1]
         time.sleep(WAIT_POLL_SECONDS // 4)
 

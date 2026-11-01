@@ -317,8 +317,7 @@ def registry_results(registry_dir: Path) -> tuple[str, dict]:
 
 
 class Watcher:
-    def __init__(self, agent_dir: Path, registry_dir: Path, token: str) -> None:
-        self.agent_dir = agent_dir
+    def __init__(self, registry_dir: Path, token: str) -> None:
         self.registry_dir = registry_dir
         self.token = token
         self.final: dict[str, dict] = {}
@@ -598,7 +597,7 @@ class Dispatcher:
 
 
 def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, token: str) -> None:
-    watcher = Watcher(agent_dir, registry_dir, token)
+    watcher = Watcher(registry_dir, token)
     dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, token)
     last_tick = 0.0
     while True:
@@ -653,7 +652,7 @@ def main(argv: list[str]) -> None:
         print("released belay revision", release_app(stack))
         return
     if args.command == "tick":
-        Watcher(args.agent_dir, args.registry_dir, bootstrap_access(stack, args.demo_approver)).tick()
+        Watcher(args.registry_dir, bootstrap_access(stack, args.demo_approver)).tick()
         return
     start_postgres(stack)
     start_marina(stack)
