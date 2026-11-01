@@ -103,7 +103,8 @@ trials:
   batch: X0087
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562775915
-  wandb: []
+  wandb:
+  - belay-X0087-seed0
   settings:
     muon_pre_norm: in
   commit: e305cef52a
