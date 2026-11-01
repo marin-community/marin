@@ -291,7 +291,6 @@ function fillSettings() {
   if (settingsLoaded) return
   settingsLoaded = true
   const { settings } = state
-  document.getElementById('set-node-cap').value = settings.node_cap
   document.getElementById('set-github').checked = settings.github_posting
   document.getElementById('set-approvers').value = settings.approvers
     .map((a) => `${a.github} ${a.identity ?? ''}`.trim())
@@ -377,6 +376,7 @@ async function start() {
   document.getElementById('who').textContent = me.user
   wireControls()
   await refresh()
+  loadIntake()
   setInterval(refresh, REFRESH_MS)
 }
 
