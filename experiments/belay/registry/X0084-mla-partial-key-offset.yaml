@@ -117,9 +117,8 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: mla_key_offset=false'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 6
-  rationale: 'prior (Ckpt 1); retest pending: key offset -0.0061/-0.0116 equal data d512, free; d768 -0.0039 (noise); later
-    -0.0004; equal time, MFU not run -> 6'
+  score: 2
+  rationale: +0.0051 at equal time (step time within 1%) on current recipe, a loss; earlier d512 wins don't hold → 2
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: c5cca132f2cb
+  inputs_digest: e1b18be36611
