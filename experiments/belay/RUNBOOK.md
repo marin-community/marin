@@ -132,6 +132,13 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
 `run-finished` writes the report itself. Run this only when asked to backfill or redo one:
 `B analyze X####`. It rewrites, commits and pushes the reports of every finished stage.
 
+## 2c. launch (reproduce or show one run)
+
+Every launch goes through one path and records the exact submitted command in the spec under `launched:`.
+`B launch X#### --run <run> --print` prints the full command a run would submit (module, flags, steps, cluster,
+priority, run id) and submits nothing. Without `--print` it submits that run with the same checks as `new-idea`;
+sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line with the commit and command.
+
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 
 1. **Run:** `B run-failed X#### --run <run>`
