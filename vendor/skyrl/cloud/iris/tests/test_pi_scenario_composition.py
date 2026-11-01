@@ -17,13 +17,38 @@ BASE_CONFIG = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke
 
 @pytest.mark.parametrize(
     "recipe_name",
-    ("pi_teacher_distribution_smoke.yaml", "pi_teacher_trace_smoke.yaml", "pi_verifier_grpo_smoke.yaml"),
+    (
+        "pi_teacher_distribution_smoke.yaml",
+        "pi_teacher_trace_smoke.yaml",
+        "pi_verifier_grpo_smoke.yaml",
+        "pi_dagger_turn_mixture_smoke.yaml",
+    ),
 )
 def test_pi_gpu_recipes_allow_tool_followup_before_rollout_engine_stops(recipe_name):
     # At two turns the engine cancels Pi during a tool follow-up, before it can
     # return validated in-memory capture; a capped trial must fail closed.
     recipe = yaml.safe_load((BASE_CONFIG.parent / recipe_name).read_text())
     assert recipe["context_budget"]["max_turns"] >= 4
+
+
+def test_pi_dagger_gpu_recipe_is_one_update_with_disjoint_small_models(monkeypatch):
+    monkeypatch.setenv("PI_SMOKE_STUDENT_LOCAL_PATH", "Qwen/Qwen3-0.6B")
+    monkeypatch.setenv("PI_SMOKE_TASK_DATA", "/tmp/four-independent-tasks.parquet")
+    monkeypatch.setenv("PI_SMOKE_OUTPUT", "s3://marin-us-east-02a/MarinFold/pi-dagger-test/trajectories")
+    path = BASE_CONFIG.parent / "pi_dagger_turn_mixture_smoke.yaml"
+    cfg = compose_skyrl_config(
+        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=2, gpus_per_node=1, gpu_variant="H100")
+    ).config
+    plan = derive_role_plan(OmegaConf.to_container(cfg, resolve=True))
+    assert derive_num_nodes(plan) == 2
+    assert cfg.trainer.max_steps == 1
+    assert cfg.trainer.placement.policy_num_gpus_per_node == 1
+    assert cfg.trainer.algorithm.policy_loss_type == "sft"
+    assert cfg.generator.n_samples_per_prompt == 1
+    assert cfg.terminal_bench_config.harbor.daytona_api_key_env == "DAYTONA_RL_API_KEY"
+    assert cfg.terminal_bench_config.installed_agent.agent.kwargs.thinking == "off"
+    assert cfg.terminal_bench_config.installed_agent.teacher.model_path == "Qwen/Qwen3-1.7B"
+    assert cfg.terminal_bench_config.installed_agent.turn_mixture_schedule.teacher_execution_probability.start == 0.5
 
 
 def _recipe(tmp_path, preset):
