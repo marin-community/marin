@@ -157,10 +157,11 @@ def check_variant(variant: str, settings: list[tuple[str, str]]) -> None:
         check_setting(option, setting)
 
 
-def run_suffix(experiment_id: str, jobs: list[IrisJob]) -> str:
-    """A suffix for the spec's run keys so no run name repeats one that already ran on Iris ("" when none did)."""
+def run_suffix(experiment_id: str, jobs: list[IrisJob], keys: tuple[str, ...] = ()) -> str:
+    """A suffix for run keys (default: the stage-1 pair) so no run name repeats one that already ran on Iris."""
+    keys = keys or (f"seed{CONFIG.seed}", "control")
     for suffix in ("", *(f"-{c}" for c in "bcdefgh")):
-        names = [run_name(experiment_id, f"{key}{suffix}") for key in (f"seed{CONFIG.seed}", "control")]
+        names = [run_name(experiment_id, f"{key}{suffix}") for key in keys]
         if not any(j.job_id.endswith(f"/{n}-coord") for j in jobs for n in names):
             return suffix
     raise SystemExit(f"refusing: {experiment_id} has run too many times; a maintainer decides")

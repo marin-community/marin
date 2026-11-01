@@ -183,7 +183,8 @@ def finished_run_step(experiment: str, runs: list[PageRun]) -> str:
     """What a finished run of ``experiment`` needs: a ``skip:`` line, section 2, or section 3."""
     if not spec_path(experiment).exists():
         return f"skip: no run spec {experiment}.yaml on this branch, so no session launched it"
-    failed = [r for r in runs if r.terminal and r.state != "succeeded"]
+    names = {run_name(experiment, key) for key in load_spec(experiment).runs}
+    failed = [r for r in runs if r.name in names and r.terminal and r.state != "succeeded"]
     if failed:
         return f"section 3: {BELAY} run-failed {experiment} --run {failed[0].run}"
     return f"section 2: {BELAY} run-finished {experiment}"
@@ -787,7 +788,12 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     comment."""
     repo, branch, spec, registry_id, stage = nxt.repo, nxt.branch, nxt.spec, nxt.registry_id, nxt.stage
     jobs = iris_jobs()
-    runs = next_stage_runs(spec, stage, run_suffix(registry_id, jobs), nxt.steps)
+    stage_keys = {
+        Stage.PROBE: ("probe",),
+        Stage.TIME: (f"seed{CONFIG.seed}-t",),
+        Stage.CONFIRM: ("seed1-t", "control-s1"),
+    }
+    runs = next_stage_runs(spec, stage, run_suffix(registry_id, jobs, stage_keys[stage]), nxt.steps)
     text = spec_with_runs(spec_path(registry_id, repo / SPECS).read_text(), runs)
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
     commit = "dry-run" if dry_run else require_clean_pushed_head(repo, branch)
