@@ -83,8 +83,20 @@ function el(tag, attrs = {}, ...children) {
   return node
 }
 
+// Only http(s) links and this app's own paths become anchors; any other scheme (javascript:, data:, vbscript:) and
+// protocol-relative URLs stay plain text.
+function safeHref(href) {
+  const url = String(href ?? '').trim()
+  if (/^https?:\/\/\S+$/i.test(url)) return url
+  if (url.startsWith(BELAY_BASE) && !url.startsWith('//') && !/^[a-z][a-z0-9+.-]*:/i.test(url)) return url
+  return null
+}
+
 function link(href, text) {
-  return el('a', { href, target: '_blank', rel: 'noopener' }, text)
+  const safe = safeHref(href)
+  if (safe === null) return el('span', {}, text)
+  href = safe
+  return el('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text)
 }
 
 function setChildren(id, ...children) {

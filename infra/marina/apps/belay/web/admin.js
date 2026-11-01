@@ -89,10 +89,9 @@ function grantOf(input) {
 }
 
 function renderPending() {
-  // Pending ideas wait for a decision. "upstream" ideas were approved on GitHub before the cutover, so nothing
-  // queued them; Approve queues one (an idea approved on both paths still runs once).
+  // Pending ideas wait for a decision; approval happens only here.
   const escalated = (i) => i.state === 'approved' && (i.note ?? '').startsWith('Escalated:')
-  const pending = state.ideas.filter((i) => i.state === 'pending' || i.state === 'upstream' || escalated(i))
+  const pending = state.ideas.filter((i) => i.state === 'pending' || escalated(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
     setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'), alreadyRun())
@@ -126,7 +125,7 @@ function renderPending() {
               {},
               escalated(idea)
                 ? `needs maintainer: ${idea.note.replace('Escalated: ', '')} · `
-                : `${idea.state === 'upstream' ? 'approved on GitHub, not queued · ' : 'not approved · '}`,
+                : 'not approved · ',
               `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
               when(idea.posted_at),
             ),
@@ -134,7 +133,7 @@ function renderPending() {
           idea.url ? link(idea.url, '↗') : el('span'),
           escalated(idea)
             ? requeueWithGrant(idea, '')
-            : approveWithGrant(idea.state === 'upstream' ? 'Queue' : 'Approve', (body) =>
+            : approveWithGrant('Approve', (body) =>
                 act(`ideas/${idea.id}/approve`, body, 'Approved and queued'),
               ),
           idea.state === 'pending'
@@ -146,10 +145,20 @@ function renderPending() {
                 } }, 'Decline')
               : el('span'),
         ),
-        expanded ? el('div', { class: 'detail-c' }, markdown(idea.body)) : null,
+        expanded ? storedText(idea.body, idea.hidden_removed) : null,
       )
     }),
     alreadyRun(),
+  )
+}
+
+// The text a session would read, shown raw (not rendered) with what was stripped from the comment flagged.
+function storedText(text, removed) {
+  return el(
+    'div',
+    { class: 'detail-c' },
+    removed?.length ? el('div', { class: 'warn small' }, `Stripped: ${removed.join('; ')}`) : null,
+    el('pre', { class: 'raw' }, text),
   )
 }
 
@@ -171,9 +180,10 @@ function requeueWithGrant(idea, suggested) {
   })
 }
 
-// The newest #9514 comments, read from GitHub's public API in this browser (no server keys). Approving one sends
-// its URL, author and text as GitHub serves them; the server records it, refuses one the registry already holds,
-// and freezes its text at the approval.
+// The newest #9514 comments, read from GitHub's public API in this browser (no server keys), with the visible text
+// the server would store for each. Approving one sends the comment as GitHub serves it plus the text shown here;
+// the server stores exactly that text, refuses a comment that no longer strips to it, and refuses one the registry
+// already holds.
 async function loadIntake() {
   try {
     const github = async (url) => {
@@ -184,7 +194,9 @@ async function loadIntake() {
     const issue = await github(INTAKE_ISSUE)
     const last = Math.max(1, Math.ceil(issue.comments / 30))
     const page = await github(`${INTAKE_ISSUE}/comments?per_page=30&page=${last}`)
-    intakeComments = page.filter((c) => c.user.type !== 'Bot' && !BOTS.has(c.user.login)).reverse()
+    const comments = page.filter((c) => c.user.type !== 'Bot' && !BOTS.has(c.user.login)).reverse()
+    const visible = await api('intake/visible', { bodies: comments.map((c) => c.body) })
+    intakeComments = comments.map((c, i) => ({ ...c, visible: visible[i] }))
     intakeError = null
   } catch (error) {
     intakeComments = []
@@ -207,22 +219,51 @@ function renderIntakeLive() {
     'intake-live',
     intakeComments.map((c) => {
       const idea = known.get(String(c.id))
-      const waiting = !idea || idea.state === 'pending' || idea.state === 'upstream'
-      const first = c.body.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
+      const waiting = !idea || idea.state === 'pending'
+      const first = c.visible.text.trim().split('\n')[0].replace(/\*\*/g, '').slice(0, 110)
+      const key = `c${c.id}`
+      const expanded = openBodies.has(key)
+      const flag = c.visible.removed.length ? el('span', { class: 'warn' }, ' · stripped hidden text') : null
       return el(
         'div',
-        { class: 'line pending' },
-        el('span', { class: 'nm' }, el('b', {}, first), el('small', {}, `${c.user.login} · `, when(c.created_at))),
-        link(c.html_url, '↗'),
-        waiting
-          ? approveWithGrant('Approve', (grant) =>
-              act(
-                'intake/approve',
-                { comment_id: String(c.id), url: c.html_url, author: c.user.login, body: c.body, posted_at: c.created_at, ...grant },
-                'Approved and queued',
-              ),
-            )
-          : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
+        { class: 'line-wrap' },
+        el(
+          'div',
+          { class: 'line pending' },
+          el(
+            'button',
+            {
+              type: 'button',
+              class: 'nm linkish',
+              'aria-expanded': String(expanded),
+              onclick: () => {
+                expanded ? openBodies.delete(key) : openBodies.add(key)
+                renderIntakeLive()
+              },
+            },
+            el('b', {}, first),
+            el('small', {}, `${c.user.login} · `, when(c.created_at), flag),
+          ),
+          link(c.html_url, '↗'),
+          waiting
+            ? approveWithGrant('Approve', (grant) =>
+                act(
+                  'intake/approve',
+                  {
+                    comment_id: String(c.id),
+                    url: c.html_url,
+                    author: c.user.login,
+                    body: c.body,
+                    shown: c.visible.text,
+                    posted_at: c.created_at,
+                    ...grant,
+                  },
+                  'Approved and queued',
+                ),
+              )
+            : el('span', { class: 'muted small' }, idea.registry_id ? `${idea.state} → ${idea.registry_id}` : idea.state),
+        ),
+        expanded ? storedText(c.visible.text, c.visible.removed) : null,
       )
     }),
   )

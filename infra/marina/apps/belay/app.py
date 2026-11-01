@@ -24,6 +24,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -90,7 +91,8 @@ SCHEMA = (
         id BIGSERIAL PRIMARY KEY, origin TEXT NOT NULL, comment_id TEXT UNIQUE, author TEXT NOT NULL,
         body TEXT NOT NULL, url TEXT, posted_at TIMESTAMPTZ NOT NULL, state TEXT NOT NULL, title TEXT,
         registry_id TEXT, registry_url TEXT, decided_by TEXT, decided_at TIMESTAMPTZ, plan JSONB, result JSONB,
-        note TEXT, node_grant INTEGER, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
+        note TEXT, node_grant INTEGER, hidden_removed JSONB, reply_url TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
     """CREATE TABLE IF NOT EXISTS runs (
         name TEXT PRIMARY KEY, job_id TEXT NOT NULL, registry_id TEXT, run TEXT, state TEXT NOT NULL,
         submitted_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, nodes INTEGER NOT NULL DEFAULT 1, step INTEGER,
@@ -106,6 +108,9 @@ SCHEMA = (
     """CREATE TABLE IF NOT EXISTS activity (
         id BIGSERIAL PRIMARY KEY, at TIMESTAMPTZ NOT NULL DEFAULT now(), kind TEXT NOT NULL, registry_id TEXT,
         idea_id BIGINT, session_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', github_url TEXT)""",
+    """CREATE TABLE IF NOT EXISTS threads (
+        registry_id TEXT PRIMARY KEY, idea_id BIGINT, title TEXT NOT NULL, body TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now())""",
     """CREATE TABLE IF NOT EXISTS run_expectations (
         name TEXT PRIMARY KEY, expected_at TIMESTAMPTZ NOT NULL, overdue_noted BOOLEAN NOT NULL DEFAULT false)""",
     """CREATE TABLE IF NOT EXISTS registry (
@@ -145,9 +150,6 @@ ON CONFLICT (name) DO UPDATE SET
 class IdeaState(StrEnum):
     PENDING = "pending"
     """An intake suggestion or maintainer proposal waiting for a maintainer."""
-    UPSTREAM = "upstream"
-    """Approved on GitHub before ``github_approval_cutover`` (experiments/belay/config.py), when a GitHub 👍 did not
-    queue an idea; approving it on the page queues it."""
     DISMISSED = "dismissed"
     APPROVED = "approved"
     """Approved; no session has planned it yet."""
@@ -180,16 +182,20 @@ class IntakeComment(BaseModel):
     body: str
     url: str
     posted_at: datetime.datetime
-    approved_upstream: bool
-    """The intake bot transferred it (🚀): it was approved on GitHub."""
-    approved_at: datetime.datetime | None = None
-    """When the bot transferred it, sent only for approvals after the watcher's cutover; such an approval queues it."""
-    approved_by: str | None = None
-    """The GitHub login whose 👍 approved it."""
 
 
-class IntakeSync(BaseModel):
-    comments: list[IntakeComment]
+class ThreadPost(BaseModel):
+    """An idea's agent thread: its plan, each stage's table and its verdict, in one markdown post updated in place."""
+
+    title: str
+    body: str
+    idea_id: int | None = None
+    kind: str = "plan"
+    """``plan`` or ``result``: the activity entry the update adds."""
+
+
+class VisibleRequest(BaseModel):
+    bodies: list[str]
 
 
 class RunReport(BaseModel):
@@ -256,6 +262,8 @@ class IntakeApproval(BaseModel):
     url: str
     author: str
     body: str
+    shown: str
+    """The visible text the admin page showed the approver; the approval stores exactly this."""
     posted_at: datetime.datetime
     nodes: int | None = Field(default=None, ge=1)
 
@@ -303,6 +311,8 @@ class IdeaReport(BaseModel):
     plan: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     note: str | None = None
+    reply_url: str | None = None
+    """The session's one reply on the idea's #9514 comment, which it edits when the verdict lands."""
 
 
 class RegistryUpload(BaseModel):
@@ -395,7 +405,6 @@ def _enqueue(conn: Connection, kind: EventKind, ref: str, summary: str, payload:
     )
 
 
-GITHUB_APPROVER = "GitHub 👍 (intake bot)"
 ESCALATED = "Escalated:"
 # Approved ideas a session may take up: not one a session escalated, until a maintainer re-queues or declines it.
 OFFERABLE_IDEAS = (
@@ -439,7 +448,7 @@ def offer_pending_work(conn: Connection) -> int:
 def approve_idea(
     conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None, node_grant: int | None = None
 ) -> bool:
-    """Approve an idea and queue its one ``approved`` event; False unless it is pending or upstream.
+    """Approve an idea and queue its one ``approved`` event; False unless it is pending.
 
     Approving an idea that already has its ``approved`` event queues nothing more, so it runs once. A pending
     idea's text freezes here: from now on sessions get the text as it was approved.
@@ -448,7 +457,7 @@ def approve_idea(
     if not rows:
         raise HTTPException(404, f"no idea {idea_id}")
     idea = rows[0]
-    if idea["state"] not in (IdeaState.PENDING, IdeaState.UPSTREAM):
+    if idea["state"] != IdeaState.PENDING:
         return False
     conn.execute(
         text(
@@ -498,7 +507,7 @@ def link_registered_intake(conn: Connection) -> int:
         _comment_id(i["intake"]["url"]): i["xid"] for i in rows[0]["data"]["ideas"] if (i.get("intake") or {}).get("url")
     }
     marked = 0
-    for idea in _rows(conn, "SELECT id, url FROM ideas WHERE origin = 'intake' AND state IN ('pending', 'upstream')"):
+    for idea in _rows(conn, "SELECT id, url FROM ideas WHERE origin = 'intake' AND state = 'pending'"):
         xid = registered.get(_comment_id(idea["url"] or ""))
         if xid is None:
             continue
@@ -513,43 +522,57 @@ def link_registered_intake(conn: Connection) -> int:
     return marked
 
 
-def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int:
-    """Upsert #9514 comments as ideas, and approve (queue) those the watcher saw approved on GitHub after its
-    cutover, except comments the registry already holds. Returns the number of new pending ideas."""
-    added = 0
-    for c in comments:
-        state = IdeaState.UPSTREAM if c.approved_upstream else IdeaState.PENDING
-        inserted = conn.execute(
-            text(
-                "INSERT INTO ideas (origin, comment_id, author, body, url, posted_at, state) "
-                "VALUES ('intake', :cid, :author, :body, :url, :posted_at, :state) "
-                "ON CONFLICT (comment_id) DO UPDATE SET body = CASE WHEN ideas.state = 'pending' "
-                "THEN EXCLUDED.body ELSE ideas.body END RETURNING (xmax = 0)"
-            ),
-            {
-                "cid": c.comment_id,
-                "author": c.author,
-                "body": c.body,
-                "url": c.url,
-                "posted_at": c.posted_at,
-                "state": state.value,
-            },
-        ).scalar_one()
-        if inserted and state is IdeaState.PENDING:
-            added += 1
-            _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
+# Hidden content a reviewer of the rendered comment would not see, removed before a text is stored.
+HTML_COMMENT = re.compile(r"<!--.*?(-->|$)", re.DOTALL)
+DETAILS = re.compile(r"<details\b[^>]*>(.*?)</details>", re.DOTALL | re.IGNORECASE)
+# Zero-width characters and bidirectional controls, which render as nothing but can hide or reorder text.
+INVISIBLE = re.compile("[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
+def visible_text(body: str) -> tuple[str, list[str]]:
+    """``body`` as a reviewer sees it rendered, and what was removed or marked: HTML comments and invisible
+    characters are dropped; ``<details>`` bodies are kept between markers. The approved text is this, so a session
+    only ever reads what the approver saw."""
+    notes = []
+    if HTML_COMMENT.search(body):
+        notes.append("hidden HTML comment removed")
+        body = HTML_COMMENT.sub("", body)
+    if INVISIBLE.search(body):
+        notes.append("zero-width or bidi characters removed")
+        body = INVISIBLE.sub("", body)
+    if DETAILS.search(body):
+        notes.append("collapsed <details> text marked")
+        body = DETAILS.sub(lambda m: f"[collapsed on GitHub:]{m.group(1)}[end collapsed]", body)
+    return body, notes
+
+
+def record_intake_comment(conn: Connection, c: IntakeComment) -> None:
+    """Add a #9514 comment as a pending intake idea with its visible text (a pending one takes the newer text; a
+    decided one keeps the text it was decided on), then mark it recorded if the registry already holds it."""
+    body, removed = visible_text(c.body)
+    conn.execute(
+        text(
+            "INSERT INTO ideas (origin, comment_id, author, body, url, posted_at, state, hidden_removed) "
+            "VALUES ('intake', :cid, :author, :body, :url, :posted_at, 'pending', CAST(:removed AS JSONB)) "
+            "ON CONFLICT (comment_id) DO UPDATE SET body = EXCLUDED.body, hidden_removed = EXCLUDED.hidden_removed "
+            "WHERE ideas.state = 'pending'"
+        ),
+        {
+            "cid": c.comment_id,
+            "author": c.author,
+            "body": body,
+            "url": c.url,
+            "posted_at": c.posted_at,
+            "removed": json.dumps(removed),
+        },
+    )
     link_registered_intake(conn)
-    for c in comments:
-        if c.approved_at is not None:
-            idea_id = _rows(conn, "SELECT id FROM ideas WHERE comment_id = :cid", cid=c.comment_id)[0]["id"]
-            approve_idea(conn, idea_id, c.approved_by or GITHUB_APPROVER, c.approved_at)
-    return added
 
 
 # Ideas with no approval: their decided_at, if any, is not an approval time.
 UNDECIDED_STATES = (IdeaState.PENDING, IdeaState.DISMISSED)
 # Ideas a maintainer may decline: not yet planned or running, and not already closed.
-DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.UPSTREAM, IdeaState.APPROVED)
+DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED)
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
@@ -680,21 +703,20 @@ def note_overdue_runs(conn: Connection) -> int:
 
 def approve_intake_comment(conn: Connection, comment: IntakeApproval, login: str) -> dict[str, Any]:
     """Approve a #9514 comment straight from the admin page: record it as an intake idea and queue it, unless the
-    registry already holds it. Its text freezes at this approval, as with a GitHub 👍."""
+    registry already holds it. Its visible text, as stored here, is the only text a session reads."""
     if comment.url != f"{INTAKE_URL_PREFIX}{comment.comment_id}":
         raise HTTPException(422, f"{comment.url} is not #9514 comment {comment.comment_id}")
-    sync_intake_comments(
+    if visible_text(comment.body)[0] != comment.shown:
+        raise HTTPException(409, "the comment changed since the page showed it; Reload and review it again")
+    record_intake_comment(
         conn,
-        [
-            IntakeComment(
-                comment_id=comment.comment_id,
-                author=comment.author,
-                body=comment.body,
-                url=comment.url,
-                posted_at=comment.posted_at,
-                approved_upstream=False,
-            )
-        ],
+        IntakeComment(
+            comment_id=comment.comment_id,
+            author=comment.author,
+            body=comment.body,
+            url=comment.url,
+            posted_at=comment.posted_at,
+        ),
     )
     idea = _rows(conn, "SELECT id, state, registry_id FROM ideas WHERE comment_id = :c", c=comment.comment_id)[0]
     if idea["state"] == IdeaState.RECORDED:
@@ -734,6 +756,19 @@ def requeue_idea(conn: Connection, idea_id: int, login: str, note: str, nodes: i
         {"idea_id": idea_id, "title": rows[0]["title"], "body": rows[0]["body"]},
     )
     return {"state": IdeaState.APPROVED.value}
+
+
+def write_thread(conn: Connection, registry_id: str, post: ThreadPost) -> None:
+    """Create or replace an idea's agent thread, and add an activity entry for the update."""
+    conn.execute(
+        text(
+            "INSERT INTO threads (registry_id, idea_id, title, body) VALUES (:rid, :idea, :title, :body) "
+            "ON CONFLICT (registry_id) DO UPDATE SET idea_id = COALESCE(EXCLUDED.idea_id, threads.idea_id), "
+            "title = EXCLUDED.title, body = EXCLUDED.body, updated_at = now()"
+        ),
+        {"rid": registry_id, "idea": post.idea_id, "title": post.title, "body": post.body},
+    )
+    _activity(conn, ActivityPost(kind=post.kind, title=post.title, registry_id=registry_id, idea_id=post.idea_id))
 
 
 def _activity(conn: Connection, post: ActivityPost) -> int:
@@ -947,10 +982,9 @@ def create_api(services: Services) -> RegisteredApi:
         with engine.begin() as conn:
             _expire_sessions(conn)
             note_overdue_runs(conn)
-            ideas = _rows(
-                conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
-            )
+            ideas = _rows(conn, "SELECT * FROM ideas WHERE state <> 'dismissed' ORDER BY posted_at DESC")
             runs = _rows(conn, RUNS_WITH_EXPECTATIONS)
+            threads = _rows(conn, "SELECT registry_id, title, body, updated_at FROM threads ORDER BY updated_at DESC")
             active = _session_active(conn)
             queued = len(_rows(conn, "SELECT id FROM events WHERE session_id IS NULL"))
             posts = _rows(
@@ -968,6 +1002,8 @@ def create_api(services: Services) -> RegisteredApi:
             "work": {"queued_events": queued, "session_active": active},
             "ideas": [_public_idea(i) for i in ideas],
             "runs": [_public_run(r) for r in runs],
+            # The agent's posts (plans, stage tables, verdicts): no transcripts or escalations, which stay admin-only.
+            "threads": _plain(threads),
             "activity": _public_activity(ideas, runs, posts),
         }
 
@@ -1035,6 +1071,11 @@ def create_api(services: Services) -> RegisteredApi:
             ).scalar_one()
             _activity(conn, ActivityPost(kind="proposal", idea_id=idea_id, title=f"{caller} proposed: {proposal.title}"))
         return {"id": idea_id}
+
+    @admin.post("/intake/visible")
+    def intake_visible(request: VisibleRequest) -> list[dict[str, Any]]:
+        """What approving each #9514 comment would store: its visible text and what was removed."""
+        return [{"text": t, "removed": r} for t, r in map(visible_text, request.bodies)]
 
     @admin.post("/intake/approve")
     def approve_intake(comment: IntakeApproval, caller: str = Depends(approver)) -> dict[str, Any]:
@@ -1112,11 +1153,6 @@ def create_api(services: Services) -> RegisteredApi:
 
     # Watcher and agent endpoints.
 
-    @agent.post("/sync/intake")
-    def sync_intake(sync: IntakeSync) -> dict[str, int]:
-        with engine.begin() as conn:
-            return {"new_pending": sync_intake_comments(conn, sync.comments)}
-
     @agent.post("/sync/runs")
     def sync_runs(sync: RunsSync) -> dict[str, int]:
         finished = 0
@@ -1186,6 +1222,20 @@ def create_api(services: Services) -> RegisteredApi:
     def finish(session_id: str, report: SessionFinish) -> dict[str, str]:
         with engine.begin() as conn:
             return finish_session(conn, session_id, report)
+
+    @agent.get("/threads/{registry_id}")
+    def read_thread(registry_id: str) -> dict[str, Any]:
+        with engine.connect() as conn:
+            rows = _rows(conn, "SELECT * FROM threads WHERE registry_id = :rid", rid=registry_id)
+        if not rows:
+            raise HTTPException(404, f"no thread for {registry_id}")
+        return _plain(rows)[0]
+
+    @agent.post("/threads/{registry_id}")
+    def post_thread(registry_id: str, post: ThreadPost) -> dict[str, str]:
+        with engine.begin() as conn:
+            write_thread(conn, registry_id, post)
+        return {"registry_id": registry_id}
 
     @agent.post("/ideas/{idea_id}/report")
     def report(idea_id: int, update: IdeaReport) -> dict[str, str]:

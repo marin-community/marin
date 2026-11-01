@@ -101,23 +101,23 @@
       <li><b>Suggest</b>: post one idea per comment on <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>. Specify a <code>Track:</code> (the baseline it builds on and is compared to); default <code>speedrun</code>.
         <div class="chips"><code>speedrun</code> <code>competitive-d512…d1280</code> <code>moe-d512…d1280</code> <code>vanilla-d512…d1280</code> <code>hero-mfu</code> <code>custom</code></div>
         <div class="muted">Example: <code>Track: moe-d512</code>, &ldquo;Replace the sigmoid router scoring with sqrt-softplus.&rdquo;</div></li>
-      <li><b>Approval</b>: a maintainer's 👍 makes the bot copy it into <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a> and mark your comment 🚀.</li>
-      <li><b>Run</b>: an agent runs it against the track's baseline.</li>
+      <li><b>Approval</b>: a maintainer reviews it on this page; reactions on GitHub do not approve anything.</li>
+      <li><b>Run</b>: an agent runs it against the track's baseline and replies to your comment once, with a link to its row on the <a href="status">Status</a> page. The reply is edited with the verdict when the runs finish.</li>
       <li><b>Result</b>: win, noise or loss, by the track's fixed rule: Paloma macro Δ beyond ±0.005, or for <code>hero-mfu</code> step time beyond ±0.5%. It goes to the registry and this page. A win goes to maintainers, who decide whether it joins the recipe.</li>
     </ol>
     <div class="involve">
       <a class="link-card" href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">
         <span class="num">github · marin#9514</span>
         <h3>Intake</h3>
-        <p>Comment with a research direction, one idea per comment. When a maintainer approves it with a 👍, a bot copies it into the batch report issue, where the agent picks it up, and marks your comment with a 🚀.</p>
+        <p>Comment with a research direction, one idea per comment. A maintainer approves it on this page; the agent replies to your comment with a link to its row on the Status page, and edits that reply with the verdict.</p>
         <p class="ex">e.g. &ldquo;Track: competitive-d512. Replace the sigmoid router scoring function with sqrt-softplus.&rdquo;</p>
         <span class="go">Open the intake issue →</span>
       </a>
-      <a class="link-card" href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">
-        <span class="num">github · marin#9451</span>
-        <h3>Batch Report</h3>
-        <p>The agent's live log with the approved intake suggestions. Locked to maintainers.</p>
-        <span class="go">Read the batch reports →</span>
+      <a class="link-card" href="status#agent-log">
+        <span class="num">belay · status</span>
+        <h3>Agent Log</h3>
+        <p>Every plan, stage table and verdict the agent posts, one post per idea, updated in place.</p>
+        <span class="go">Read the agent log →</span>
       </a>
       <a class="link-card" href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">
         <span class="num">github · marin_belay_v1_registry</span>
@@ -277,7 +277,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
       <li><b>Recipe</b>: Belay Ckpt Oct 20 2026 on <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_recipe" target="_blank" rel="noopener"><code>marin_belay_v1_recipe</code></a>, tagged <a href="https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20" target="_blank" rel="noopener"><code>belay-ckpt-2026-10-20</code></a>. Weekly experiment branches are cut from it.</li>
       <li><b>Experiment code</b>: one branch per week, <code>marin_belay_v1_w&lt;monday&gt;</code> (latest: <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_w2026-10-19" target="_blank" rel="noopener"><code>marin_belay_v1_w2026-10-19</code></a>); every run pins a commit SHA.</li>
       <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one <code>X####</code> entry per idea; hero-scale throughput on the <a href="mfu">Hero MFU</a> page.</li>
-      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; batch plans and results in <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a>.</li>
+      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; plans and results in the <a href="status#agent-log">agent log</a>.</li>
     </ul>
   </section>
 
@@ -352,6 +352,11 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
     <section class="block"><h2>Now running</h2><div class="list" id="running"></div></section>
     <section class="block"><h2>Recent results</h2><div class="list" id="recent"></div></section>
   </div>
+  <section class="block" id="agent-log-block">
+    <div class="ck-bar"><h2 id="agent-log-h">Agent log <span class="count" id="log-n"></span></h2>
+      <input id="log-filter" type="search" placeholder="Filter by id, title or text" aria-label="Filter the agent log"></div>
+    <ol class="feed log" id="agent-log" aria-labelledby="agent-log-h"></ol>
+  </section>
   <section class="block"><h2>Activity</h2><ol class="feed" id="feed"></ol></section>
 </main>
 </template>

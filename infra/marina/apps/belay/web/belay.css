@@ -363,7 +363,8 @@ button.line:hover { background: var(--surface-2); }
 .meter-k { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
 .meter-v { font-size: 15px; font-weight: 600; }
 .meter .ok { color: var(--teal); }
-.meter .warn { color: var(--worse); }
+.meter .warn, .warn { color: var(--worse); }
+pre.raw { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
 .switch { display: flex; gap: 10px; align-items: center; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .sw-track { width: 44px; height: 24px; border-radius: 99px; background: var(--line); position: relative; flex: none; transition: background .15s; }
@@ -503,3 +504,23 @@ button.line:hover { background: var(--surface-2); }
 }
 .ck-row > span[data-label='Author'] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-row.live { background: var(--live-row); box-shadow: inset 3px 0 0 var(--teal); }
+/* A checklist row opens in place to its agent thread; on phone the thread sits inside the idea's card. */
+.ck-row:not(.ck-head) { cursor: pointer; scroll-margin-top: 72px; }
+.ck-row:not(.ck-head):focus-visible { outline: 2px solid var(--rope); outline-offset: -2px; }
+.ck-row.open { background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); }
+.ck-caret { color: var(--faint); margin-left: 6px; font-size: 11px; }
+.ck-detail { grid-column: 1 / -1; cursor: auto; display: grid; gap: 8px; padding: 10px 2px 4px; border-top: 1px dashed var(--line); font-size: 13px; min-width: 0; }
+.ck-detail .md { min-width: 0; }
+.ck-row .ck-detail a { color: var(--rope); text-decoration: underline; text-underline-offset: 2px; }
+.ck-detail .md table, .log-body .md table { font-size: 12px; }
+.md .scroll { overflow-x: auto; max-width: 100%; }
+/* Agent log: one post per idea, newest update first. */
+.feed.log li { display: block; }
+.feed.log .log-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; text-align: left; }
+.feed.log .log-body { display: grid; gap: 8px; padding: 8px 0 4px; min-width: 0; font-size: 13px; }
+#log-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; min-width: 240px; }
+@media (max-width: 760px) {
+  .ck-detail { padding-inline: 0; }
+  #log-filter { min-width: 0; width: 100%; }
+  .ck-row:not(.ck-head) { scroll-margin-top: 112px; }
+}
