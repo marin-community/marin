@@ -263,16 +263,22 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob], cap: int, grant: int | Non
 
 
 def track_command(
-    track: Track, name: str, flags: tuple[str, ...] = (), python: str = "uv run python", seed: int = CONFIG.seed
+    track: Track,
+    name: str,
+    flags: tuple[str, ...] = (),
+    python: str = "uv run python",
+    seed: int = CONFIG.seed,
+    output_root: str = CONFIG.output_root,
 ) -> list[str]:
-    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``, at ``seed``."""
+    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``, at ``seed``,
+    writing under ``output_root`` (a study passes its own prefix)."""
     baseline = TRACKS[track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
     command = [*python.split(), "-m", *baseline.launch, *flags]
     command += ["--seed", str(seed), "--run-id", name]
     if baseline.output_path:
-        command += ["--output-path", f"{CONFIG.output_root}/{name}"]
+        command += ["--output-path", f"{output_root}/{name}"]
     command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
     return command
 

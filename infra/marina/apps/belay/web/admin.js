@@ -84,8 +84,21 @@ function nodesInput() {
   })
 }
 
-function grantOf(input) {
-  return input.value ? { nodes: Number(input.value) } : {}
+// Optional study hours beside the node grant: for a custom-track study, the two are its budget.
+function hoursInput() {
+  return el('input', {
+    type: 'number',
+    min: '0.25',
+    step: '0.25',
+    class: 'nodes-in',
+    placeholder: 'hours',
+    title: 'Study budget (custom track): with the node grant, the most its runs may use. Blank: no study budget.',
+    'aria-label': 'Study hours',
+  })
+}
+
+function grantOf(nodes, hours) {
+  return { ...(nodes.value ? { nodes: Number(nodes.value) } : {}), ...(hours.value ? { hours: Number(hours.value) } : {}) }
 }
 
 function renderPending() {
@@ -162,14 +175,16 @@ function storedText(text, removed) {
   )
 }
 
-// A primary action with its node-grant field: the action gets ``{nodes}`` when the field is filled.
+// A primary action with its node-grant and study-hours fields: the action gets ``{nodes, hours}`` as filled.
 function approveWithGrant(label, run) {
   const nodes = nodesInput()
+  const hours = hoursInput()
   return el(
     'span',
     { class: 'grant' },
     nodes,
-    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grantOf(nodes)) }, label),
+    hours,
+    el('button', { type: 'button', class: 'btn primary', onclick: () => run(grantOf(nodes, hours)) }, label),
   )
 }
 

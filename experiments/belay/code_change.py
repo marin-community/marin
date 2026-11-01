@@ -140,6 +140,26 @@ def run_tests(repo: Path, paths: list[str]) -> None:
         raise SystemExit(f"refusing: the change's tests fail:\n{result.stdout[-3000:]}\nnext: fix them, then --finish")
 
 
+def refuse_outside_study(paths: list[str], script: str) -> None:
+    """A study's code change is its one analysis script: no model code, no other file."""
+    if paths != [script]:
+        raise SystemExit(
+            f"refusing: a study's change is only {script} (no model code); it touches {paths}.\n"
+            "next: git checkout -- <the other paths> (and delete new files there), then run code-change --finish"
+        )
+
+
+def run_study_selftest(repo: Path, script: str) -> None:
+    """The study script on a tiny synthetic checkpoint, on CPU: it must write its report."""
+    command = [checkout_python(repo), "-m", "experiments.belay.study_checkpoint", "selftest", "--script", script]
+    result = subprocess.run(
+        command, cwd=repo, env={**os.environ, "JAX_PLATFORMS": "cpu"}, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr)[-3000:]
+        raise SystemExit(f"refusing: {script} fails on a tiny checkpoint:\n{output}\nnext: fix it, then --finish")
+
+
 def run_precommit(repo: Path, paths: list[str]) -> None:
     files = [p for p in paths if (repo / p).exists()]
     result = subprocess.run(["./infra/pre-commit.py", *files], cwd=repo, capture_output=True, text=True)

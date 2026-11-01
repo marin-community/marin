@@ -6,8 +6,10 @@
     uv run python -m experiments.belay start --events <file>                      # section 0
     uv run python -m experiments.belay new-idea --idea-id N [--category ...]      # section 1
     uv run python -m experiments.belay code-change X#### --start | --finish       # section 1b
+    uv run python -m experiments.belay study X#### --spec <file>                  # section 1c
     uv run python -m experiments.belay run-finished X####                         # section 2
-    uv run python -m experiments.belay analyze X####                              # section 2b
+    uv run python -m experiments.belay rewrite-reports X####                      # section 2b
+    uv run python -m experiments.belay analyze X#### --script ... --input ...     # section 2e
     uv run python -m experiments.belay run-failed X#### --run <run>               # section 3
     uv run python -m experiments.belay weekly-rollover                            # section 4
     uv run python -m experiments.belay recipe-change                              # section 5
@@ -36,6 +38,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+import s3fs
 import yaml
 
 from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
@@ -61,13 +64,16 @@ from experiments.belay.code_change import (
     refuse_flag_off_change,
     refuse_leak,
     refuse_outside_allowed,
+    refuse_outside_study,
     run_precommit,
+    run_study_selftest,
     run_tests,
 )
 from experiments.belay.config import (
     CHECKPOINT_TAG_PREFIX,
     CONFIG,
     CONTROL_RUN,
+    COREWEAVE_S3_ENDPOINT,
     TRACKS,
     WEEKLY_BRANCH,
     Baseline,
@@ -137,6 +143,21 @@ from experiments.belay.results import (
     overall_verdict,
     verdict,
 )
+from experiments.belay.study import (
+    Budget,
+    Study,
+    StudyStatus,
+    check_study,
+    checkpoint_root,
+    is_study,
+    parse_study,
+    refuse_input,
+    refuse_run,
+    script_path,
+    study_command,
+    study_post,
+    study_prefix,
+)
 from experiments.belay.submit import (
     ACTIVE_JOB_STATES,
     DEFAULT_TRACK,
@@ -157,6 +178,8 @@ from experiments.belay.submit import (
     own_runs,
     parse_spec,
     parse_track,
+    refuse_over_cap,
+    refuse_reused_names,
     run_id,
     run_name,
     run_suffix,
@@ -591,7 +614,10 @@ def new_idea(
     if hidden:
         print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
     track, defaulted = idea_track(idea)
-    runnable(idea, track)
+    if track is Track.CUSTOM:
+        require_study_budget(idea)
+    else:
+        runnable(idea, track)
     registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None)
     if registry_id is not None:
         held = prior_trials_hold(load_entry(registry_id), idea.note)
@@ -625,6 +651,10 @@ def new_idea(
     report_idea(
         idea.id, {"registry_id": registry_id, "registry_url": entry_url(entry_path(registry_id))}, dry_run=dry_run
     )
+    if track is Track.CUSTOM:
+        print(f"{registry_id} is registered as a study on its budget: {study_budget(idea)}")
+        say_next(f"{BELAY} study {registry_id} --spec <file>   (write the spec as RUNBOOK.md section 1c shows)")
+        return
     if variant is None or not settings:
         print(f"{registry_id} is registered; its change needs code (section 1b)")
         say_next(f"{BELAY} code-change {registry_id} --start")
@@ -779,6 +809,21 @@ def launch_stage(
 def launch(registry_id: str, run: str, *, print_only: bool, dry_run: bool) -> None:
     """Show (``--print``) or submit one run of the committed spec, through the same path as every other launch."""
     repo = repo_root()
+    if is_study(spec_path(registry_id, repo / SPECS).read_text()):
+        plan = load_study(registry_id, repo)
+        if run not in plan.runs:
+            raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(plan.runs)}")
+        if print_only:
+            print(shlex.join(study_command(plan, plan.runs[run])))
+            return
+        require_week_branch(repo, datetime.date.today())
+        require_clean_pushed_head(repo, current_branch(repo))
+        state = page_state()
+        idea, budget = study_idea(state, registry_id)
+        check_study(plan, budget)
+        launch_study_runs(repo, plan, [run], idea, state, dry_run=dry_run)
+        say_next("stop (the watcher starts a new session when the run finishes)")
+        return
     spec = load_spec(registry_id, repo / SPECS)
     if run not in spec.runs:
         raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(spec.runs)}")
@@ -845,7 +890,25 @@ def apply_recorded_code(repo: Path, registry_id: str) -> list[str]:
     return applied
 
 
+STUDY_CODE_RULES = """Rules for a study's analysis script (code-change --finish checks every one):
+  1. Edit only {script}: no model code, no other file.
+  2. Define analyze(params, out_dir): params maps each checkpoint array path (params/...) to a NumPy array; write
+     report.md (and any PNG figures it links) into out_dir. Read nothing else.
+  3. It must write its report on a tiny synthetic checkpoint, on CPU (the gate runs it).
+  4. ./infra/pre-commit.py must pass on it."""
+
+
+def is_study_entry(registry_id: str) -> bool:
+    return load_entry(registry_id).get("track") == Track.CUSTOM.value
+
+
 def code_change_start(registry_id: str) -> None:
+    if is_study_entry(registry_id):
+        repo, branch = code_checkout(registry_id)
+        require_clean_pushed_head(repo, branch)
+        print(f"{registry_id}: edit {repo} on {branch}.\n{STUDY_CODE_RULES.format(script=script_path(registry_id))}")
+        say_next(f"{BELAY} code-change {registry_id} --finish")
+        return
     repo, branch = code_checkout(registry_id)
     require_clean_pushed_head(repo, branch)
     applied = apply_recorded_code(repo, registry_id)
@@ -861,12 +924,31 @@ def code_change_start(registry_id: str) -> None:
     say_next(f"{BELAY} code-change {registry_id} --finish --model-set <flag>=<on value>   (or --opt-set)")
 
 
+def study_code_finish(registry_id: str, repo: Path, branch: str, paths: list[str], *, dry_run: bool) -> None:
+    """A study's gates: only its analysis script changed (no model code), it writes a report on a tiny synthetic
+    checkpoint on CPU, and pre-commit passes; then commit and push it."""
+    script = script_path(registry_id)
+    refuse_outside_study(paths, script)
+    print(f"1. paths ok: {paths} (no model code)")
+    run_study_selftest(repo, script)
+    print("2. it writes its report on a tiny synthetic checkpoint, on CPU")
+    run_precommit(repo, paths)
+    print("3. pre-commit passes")
+    run_git(repo, ["add", "--", script], dry_run=dry_run)
+    run_git(repo, ["commit", "--quiet", "-m", f"{registry_id}: study analysis script"], dry_run=dry_run)
+    run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+    say_next(f"stop, or if the study's runs have finished: {BELAY} run-finished {registry_id}")
+
+
 def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry_run: bool) -> None:
     """Run every check on the uncommitted change, then commit and push it to its code branch."""
     repo, branch = code_checkout(registry_id)
     paths = changed_paths(repo)
     if not paths:
         raise SystemExit(f"refusing: nothing changed.\nnext: {BELAY} code-change {registry_id} --start")
+    if is_study_entry(registry_id):
+        study_code_finish(registry_id, repo, branch, paths, dry_run=dry_run)
+        return
     revert = f"next: git -C {repo} checkout -- . && git -C {repo} clean -fd experiments/grug/fast_track tests/grug"
     refuse_outside_allowed(paths)
     print(f"1. paths ok: {paths}")
@@ -908,6 +990,208 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
     say_next(f'{BELAY} new-idea --idea-id {idea_id} --category "<category>" --variant "<what changes>" {flags_text}')
 
 
+# ---------- 1c. study (custom track) ----------
+
+
+def study_budget(idea: Idea) -> Budget | None:
+    """The study budget the maintainer approved: the node grant and the hours; None without both."""
+    if idea.node_grant is None or idea.budget_hours is None:
+        return None
+    return Budget(idea.node_grant, idea.budget_hours)
+
+
+def require_study_budget(idea: Idea) -> Budget:
+    budget = study_budget(idea)
+    if budget is None:
+        raise SystemExit(
+            f"refusing: idea #{idea.id} is a study (track custom) and its approval set no budget (nodes and hours).\n"
+            f'next: {BELAY} escalate --idea-id {idea.id} --title "Idea #{idea.id} needs a study budget" '
+            '--body "Re-queue it with a node grant and study hours."'
+        )
+    return budget
+
+
+def load_study(registry_id: str, repo: Path) -> Study:
+    path = spec_path(registry_id, repo / SPECS)
+    if not path.exists() or not is_study(path.read_text()):
+        raise SystemExit(f"refusing: {registry_id} has no study spec on this branch")
+    return parse_study(path.read_text())
+
+
+def spec_commit(repo: Path, registry_id: str) -> str:
+    """The commit that last changed the study's spec."""
+    return git(repo, "log", "-1", "--format=%H", "--", str(SPECS / f"{registry_id}.yaml"))
+
+
+def study_idea(state: PageState, registry_id: str) -> tuple[Idea, Budget]:
+    idea = state.idea_for(registry_id)
+    if idea is None:
+        raise SystemExit(f"refusing: no idea on the Belay page is {registry_id}; a study runs only for an approved idea")
+    idea, _ = approved_idea(idea)
+    return idea, require_study_budget(idea)
+
+
+def launch_study_runs(repo: Path, study: Study, runs: list[str], idea: Idea, state: PageState, *, dry_run: bool) -> None:
+    """Submit the study's ``runs`` with their checkpoints under the study's prefix, inside the idea's node grant."""
+    jobs = iris_jobs()
+    names = [run_name(study.experiment, key) for key in runs]
+    refuse_reused_names(names, jobs)
+    nodes = sum(TRACKS[study.runs[key].track].nodes for key in runs)
+    refuse_over_cap(nodes, jobs, state.node_cap, idea.node_grant, study.experiment)
+    for key in runs:
+        run = study.runs[key]
+        refuse_run(study.experiment, run)
+        command = study_command(study, run)
+        name = run_name(study.experiment, key)
+        print(f"{'would launch' if dry_run else 'launching'} {name}:\n  {shlex.join(command)}")
+        if dry_run:
+            continue
+        subprocess.run(command, cwd=repo, check=True)
+        expect_finish(name, datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=run.hours), dry_run=False)
+
+
+def study(registry_id: str, spec_file: Path, *, dry_run: bool) -> None:
+    """Check a study spec against the approved budget, commit it, post the plan, reply on #9514 and launch the runs."""
+    repo = repo_root()
+    branch = require_week_branch(repo, datetime.date.today())
+    require_registry_checkout()
+    state = page_state()
+    idea, budget = study_idea(state, registry_id)
+    text = spec_file.read_text()
+    plan = parse_study(text)
+    if plan.experiment != registry_id:
+        raise SystemExit(f"refusing: the spec is for {plan.experiment}, not {registry_id}")
+    check_study(plan, budget)
+    print(f"checks passed: {len(plan.runs)} run(s) within {budget.nodes} nodes and {budget.hours:g} h")
+    require_clean_pushed_head(repo, branch)
+    path = spec_path(registry_id, repo / SPECS)
+    if path.exists() and path.read_text() != text:
+        raise SystemExit(f"refusing: {path.name} already exists with different runs; a maintainer decides")
+    print(f"{'would write' if dry_run else 'writing'} {path.relative_to(repo)}:\n{text}")
+    if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    run_git(repo, ["add", str(path.relative_to(repo))], dry_run=dry_run)
+    run_git(repo, ["commit", "--quiet", "-m", f"Belay {registry_id}: study spec"], dry_run=dry_run)
+    run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
+    commit = "dry-run" if dry_run else git(repo, "rev-parse", "HEAD")
+    name = load_entry(registry_id)["name"] if not dry_run or idea.registry_id else registry_id
+    heading, body = study_post(plan, name, StudyStatus.PLAN, budget, commit)
+    publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
+    url = thread_url(registry_id)
+    reply = reply_to_intake(
+        idea, f"Running as {registry_id} → {url}", github_posting=state.github_posting, dry_run=dry_run
+    )
+    summary = {"summary": plan.question, "commit": commit, "branch": branch, "track": Track.CUSTOM.value, "comment": url}
+    report_idea(
+        idea.id, {"state": "planned", "plan": summary, **({"reply_url": reply} if reply else {})}, dry_run=dry_run
+    )
+    launch_study_runs(repo, plan, list(plan.runs), idea, state, dry_run=dry_run)
+    heading, body = study_post(plan, name, StudyStatus.RUNNING, budget, commit)
+    publish_thread(registry_id, heading, body, idea.id, "plan", dry_run=dry_run)
+    say_next("stop (the watcher starts a new session when the runs finish)")
+
+
+def study_finished(registry_id: str, repo: Path, plan: Study, state: PageState, *, dry_run: bool) -> None:
+    """When every study run has finished: mark the thread for analysis and print each analysis step's command."""
+    names = {run_name(registry_id, key): key for key in plan.runs}
+    runs = [r for r in state.runs if r.name in names]
+    live = [r.name for r in runs if not r.terminal]
+    if live or len(runs) < len(names):
+        print(f"still running: {live or sorted(set(names) - {r.name for r in runs})}")
+        say_next("stop")
+        return
+    failed = [r for r in runs if r.state != "succeeded"]
+    if failed:
+        print(f"{failed[0].name} is {failed[0].state}")
+        say_next(f"{BELAY} run-failed {registry_id} --run {names[failed[0].name]}   (section 3)")
+        return
+    idea, budget = study_idea(state, registry_id)
+    commit = spec_commit(repo, registry_id)
+    heading, body = study_post(plan, load_entry(registry_id)["name"], StudyStatus.ANALYSIS, budget, commit)
+    publish_thread(registry_id, heading, body, idea.id, "result", dry_run=dry_run)
+    for step in plan.analysis:
+        root = checkpoint_root(plan, plan.runs[step.input])
+        say_next(f"{BELAY} analyze {registry_id} --script {step.script} --input {root}   (section 2e)")
+    if not plan.analysis:
+        say_next(f"{BELAY} code-change {registry_id} --start   (the study has no analysis step yet; section 1b)")
+
+
+STUDY_JOB_RESOURCES = ("--cpu", "8", "--memory", "64GB", "--disk", "50GB", "--enable-extra-resources")
+
+
+def cluster_of(checkpoint: str) -> str:
+    """The cluster whose bucket holds ``checkpoint`` (``s3://marin-<region>/...`` is on ``cw-<region>``)."""
+    bucket = checkpoint.removeprefix("s3://").split("/", 1)[0]
+    return f"cw-{bucket.removeprefix('marin-')}"
+
+
+def coreweave_fs() -> s3fs.S3FileSystem:
+    """The study bucket, read with the session's own storage keys (only ``analyze`` reads it from the session)."""
+    return s3fs.S3FileSystem(
+        key=os.environ["CW_KEY_ID"],
+        secret=os.environ["CW_KEY_SECRET"],
+        endpoint_url=COREWEAVE_S3_ENDPOINT,
+        config_kwargs={"s3": {"addressing_style": "virtual"}},
+    )
+
+
+def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) -> None:
+    """Run the study's analysis script on a checkpoint in a CPU job on its cluster, then commit the report (report.md
+    and its figures) to the registry branch, mark the thread ``report`` and the idea recorded. A study has no
+    verdict."""
+    repo = repo_root()
+    branch = require_week_branch(repo, datetime.date.today())
+    require_registry_checkout()
+    plan = load_study(registry_id, repo)
+    if script != script_path(registry_id):
+        raise SystemExit(f"refusing: {registry_id}'s analysis script is {script_path(registry_id)}")
+    if not (repo / script).exists():
+        raise SystemExit(f"refusing: {script} is not on this branch.\nnext: {BELAY} code-change {registry_id} --start")
+    refuse_input(registry_id, checkpoint)
+    require_clean_pushed_head(repo, branch)  # the job runs the committed script
+    state = page_state()
+    idea, budget = study_idea(state, registry_id)
+    cluster = cluster_of(checkpoint)
+    out = f"s3://marin-{cluster.removeprefix('cw-')}/{study_prefix(registry_id)}/report"
+    module = ["experiments.belay.study_checkpoint", "run", "--script", script, "--input", checkpoint, "--out", out]
+    name = f"belay-analyze-{registry_id}-{datetime.datetime.now():%m%d-%H%M%S}"
+    command = remote_job_command(name, cluster, module, STUDY_JOB_RESOURCES)
+    shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
+    print(f"{'would run' if dry_run else 'running'}: {shlex.join(shown)}")
+    target = report_dir(CONFIG.registry_checkout, registry_id)
+    url = report_url(registry_id, "report")
+    if dry_run:
+        print(f"would copy {out}/report.md and its figures to {target} and commit them to {CONFIG.registry_branch}")
+    else:
+        subprocess.run(command, check=True, capture_output=True)
+        job = f"/{getpass.getuser()}/{name}"
+        print(f"waiting for {job} ...")
+        job_state = wait_for_job(job)
+        print("\n".join(job_output(job)))
+        if job_state != "succeeded":
+            raise SystemExit(f"{job} {job_state}; logs: {shlex.join(iris_cli('job', 'logs', job))}")
+        fs = coreweave_fs()
+        target.mkdir(parents=True, exist_ok=True)
+        files = [f for f in fs.ls(out.removeprefix("s3://")) if f.endswith((".md", ".png"))]
+        for remote in files:
+            fs.get(remote, str(target / Path(remote).name))
+        entry_file = entry_path(registry_id)
+        entry = yaml.safe_load(entry_file.read_text())
+        entry["status"] = "report"
+        entry_file.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+        written = [entry_file, *(target / Path(f).name for f in files)]
+        commit_and_push(written, f"Belay registry: {registry_id} study report", dry_run=False)
+    commit = spec_commit(repo, registry_id)
+    heading, body = study_post(plan, load_entry(registry_id)["name"], StudyStatus.REPORT, budget, commit, url)
+    publish_thread(registry_id, heading, body, idea.id, "result", dry_run=dry_run)
+    result = {"kind": "study", "summary": "report", "report": url}
+    report_idea(idea.id, {"state": "recorded", "result": result}, dry_run=dry_run)
+    verdict_line = f"{registry_id} · {Track.CUSTOM} · report → {thread_url(registry_id)}"
+    reply_to_intake(idea, verdict_line, github_posting=state.github_posting, dry_run=dry_run)
+    say_next(f'{BELAY} score {registry_id} --score na --rationale "a study: no verdict" --model <your model>')
+
+
 # ---------- 2. run finished ----------
 
 
@@ -933,9 +1217,12 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     comparison calls for (for speedrun: equal data, then equal time by ``after_equal_data``)."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
-    spec = load_spec(registry_id)
     require_registry_checkout()
     state = page_state()
+    if is_study(spec_path(registry_id, repo / SPECS).read_text()):
+        study_finished(registry_id, repo, load_study(registry_id, repo), state, dry_run=dry_run)
+        return
+    spec = load_spec(registry_id)
     names = {run_id(spec, r) for r in spec.runs.values()}
     runs = [r for r in state.runs if r.name in names]
     live = [r.name for r in runs if not r.terminal]
@@ -1128,7 +1415,9 @@ def iris_cli(*args: str) -> list[str]:
     return ["uv", "run", "iris", "--cluster", "marin", *args]
 
 
-def remote_job_command(name: str, cluster: str, module: list[str]) -> list[str]:
+def remote_job_command(
+    name: str, cluster: str, module: list[str], resources: tuple[str, ...] = PROFILE_JOB_RESOURCES
+) -> list[str]:
     """``iris job run`` for a small CPU job on ``cluster`` with the submitter's storage keys from the environment."""
     keys = [arg for key in CLUSTER_STORAGE_KEYS if os.environ.get(key) for arg in ("-e", key, os.environ[key])]
     if cluster.startswith("cw-") and len(keys) != 3 * len(CLUSTER_STORAGE_KEYS):
@@ -1141,7 +1430,7 @@ def remote_job_command(name: str, cluster: str, module: list[str]) -> list[str]:
         cluster,
         "--priority",
         "batch",
-        *PROFILE_JOB_RESOURCES,
+        *resources,
         "--timeout",
         str(PROFILE_JOB_TIMEOUT),
         "--job-name",
@@ -1192,7 +1481,7 @@ def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: boo
         raise SystemExit(f"{job} {state}; logs: {shlex.join(iris_cli('job', 'logs', job))}")
 
 
-def analyze(registry_id: str, *, dry_run: bool) -> None:
+def rewrite_reports(registry_id: str, *, dry_run: bool) -> None:
     """Rewrite the analysis report of every finished stage of the experiment, and commit and push them."""
     spec = load_spec(registry_id)
     require_registry_checkout()
@@ -1301,10 +1590,15 @@ def score_batch(batch: Path, model: str, *, dry_run: bool) -> None:
 def run_failed(registry_id: str, run: str, *, dry_run: bool) -> None:
     """Escalate a failed run with its state and log command; never relaunch it."""
     state = page_state()
-    spec = load_spec(registry_id)
-    if run not in spec.runs:
-        raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(spec.runs)}")
-    name = run_id(spec, spec.runs[run])
+    path = spec_path(registry_id, repo_root() / SPECS)
+    if is_study(path.read_text()):
+        names = {key: run_name(registry_id, key) for key in parse_study(path.read_text()).runs}
+    else:
+        spec = load_spec(registry_id)
+        names = {key: run_id(spec, r) for key, r in spec.runs.items()}
+    if run not in names:
+        raise SystemExit(f"refusing: {registry_id} has no run {run!r}; runs: {', '.join(names)}")
+    name = names[run]
     rows = [r for r in state.runs if r.name == name]
     if not rows:
         raise SystemExit(f"refusing: no run {name} on the Belay page")
@@ -1566,8 +1860,15 @@ def main(argv: list[str]) -> None:
     step.add_argument("--finish", action="store_true")
     p.add_argument("--opt-set", action="append", default=[], help="with --finish: the new flag's on value")
     p.add_argument("--model-set", action="append", default=[], help="with --finish: the new flag's on value")
+    p = command("study")
+    p.add_argument("registry_id")
+    p.add_argument("--spec", type=Path, required=True, help="the study spec (RUNBOOK.md section 1c)")
     command("run-finished").add_argument("registry_id")
-    command("analyze").add_argument("registry_id")
+    command("rewrite-reports").add_argument("registry_id")
+    p = command("analyze")
+    p.add_argument("registry_id")
+    p.add_argument("--script", required=True, help="experiments/belay/studies/X####.py")
+    p.add_argument("--input", required=True, help="a study checkpoint: a run's checkpoints dir or one step in it")
     p = command("analyze-profile")
     p.add_argument("run", help="a run that captured a profile (for example a hero-mfu run with --profile)")
     p.add_argument("--compare", help="a second run: also print a per-kernel diff against it")
@@ -1636,8 +1937,12 @@ def main(argv: list[str]) -> None:
         score(args.registry_id, score_value(args.value), args.rationale, args.model, dry_run=args.dry_run)
     elif args.command == "analyze-profile":
         analyze_profile(args.run, args.compare, args.cluster, dry_run=args.dry_run)
+    elif args.command == "rewrite-reports":
+        rewrite_reports(args.registry_id, dry_run=args.dry_run)
     elif args.command == "analyze":
-        analyze(args.registry_id, dry_run=args.dry_run)
+        analyze(args.registry_id, args.script, args.input, dry_run=args.dry_run)
+    elif args.command == "study":
+        study(args.registry_id, args.spec, dry_run=args.dry_run)
     elif args.command == "run-failed":
         run_failed(args.registry_id, args.run, dry_run=args.dry_run)
     elif args.command == "weekly-rollover":

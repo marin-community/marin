@@ -62,6 +62,8 @@ class Idea:
     """What the app removed from the comment before storing the approved text (hidden HTML, invisible characters)."""
     reply_url: str | None
     """The session's one reply on the idea's #9514 comment."""
+    budget_hours: float | None
+    """A study's approved hours (with ``node_grant`` as its nodes): its runs may not pass that budget."""
 
     @property
     def name(self) -> str:

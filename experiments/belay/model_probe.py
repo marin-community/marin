@@ -42,10 +42,13 @@ def _defaults() -> dict[str, dict[str, str]]:
     return out
 
 
-def probe_here(model_settings: list[str]) -> dict:
-    """Probe the checkout this process imported ``experiments`` from, with ``model_settings`` applied."""
-    hidden = 64
-    config = GrugModelConfig(
+HIDDEN = 64
+
+
+def tiny_config() -> GrugModelConfig:
+    """A tiny fast_track model that exercises every mixer and routing path on CPU."""
+    hidden = HIDDEN
+    return GrugModelConfig(
         vocab_size=128,
         hidden_dim=hidden,
         intermediate_dim=hidden // 2,
@@ -77,13 +80,21 @@ def probe_here(model_settings: list[str]) -> dict:
         attn_res_num_blocks=2,
         local_mixer=LocalMixer.KDA,
     )
-    config = _apply_settings(config, _parse_settings(tuple(model_settings)))
-    mesh = Mesh(
+
+
+def tiny_mesh() -> Mesh:
+    return Mesh(
         np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1)),
         ("replica_dcn", "data", "expert", "model"),
         axis_types=(AxisType.Explicit,) * 4,
     )
-    with jax.set_mesh(mesh):
+
+
+def probe_here(model_settings: list[str]) -> dict:
+    """Probe the checkout this process imported ``experiments`` from, with ``model_settings`` applied."""
+    hidden = HIDDEN
+    config = _apply_settings(tiny_config(), _parse_settings(tuple(model_settings)))
+    with jax.set_mesh(tiny_mesh()):
         model = Transformer.init(config, key=jax.random.key(0))
         tokens = jax.random.randint(jax.random.key(1), (2, SEQ), 0, config.vocab_size)
         cotangent = jax.random.normal(jax.random.key(2), (2, SEQ, hidden), jnp.float32)

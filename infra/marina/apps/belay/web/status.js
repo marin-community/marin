@@ -353,6 +353,12 @@ function threadDetail(r, cfg) {
   )
 }
 
+// A study (custom track) has no verdict: once its report is written, a chip links it.
+function studyChip(idea) {
+  if (idea.status !== 'report') return null
+  return el('span', { class: 'gate-chip study' }, link(`${REGISTRY_BLOB}/analysis/${idea.xid}/report.md`, 'study'))
+}
+
 function toggleRow(xid) {
   openRows.has(xid) ? openRows.delete(xid) : openRows.add(xid)
   renderChecklist()
@@ -378,6 +384,7 @@ function checklistRow(r, registryUrl) {
       el('span', { class: 'xid mono' }, el('a', { href: `#status/${xid}` }, xid)),
       ' ',
       link(registryUrl(r.idea), r.idea.name),
+      studyChip(r.idea),
       el('span', { class: 'ck-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'),
     ),
     el('span', { 'data-label': 'Author' }, link(`https://github.com/${r.author}`, `@${r.author}`)),

@@ -208,9 +208,16 @@ def test_an_approval_records_its_node_grant(conn) -> None:
     assert conn.execute(text("SELECT node_grant FROM ideas")).scalar_one() == 12
 
 
-def test_a_session_report_cannot_grant_nodes() -> None:
-    with pytest.raises(ValidationError):
-        IdeaReport.model_validate({"note": "x", "node_grant": 12})
+def test_an_approval_records_a_study_budget(conn) -> None:
+    record_intake_comment(conn, comment())
+    assert approve_idea(conn, idea_id(conn), "ClassicLarry", node_grant=2, budget_hours=6.0)
+    assert tuple(conn.execute(text("SELECT node_grant, budget_hours FROM ideas")).one()) == (2, 6.0)
+
+
+def test_a_session_report_cannot_grant_nodes_or_hours() -> None:
+    for grant in ({"node_grant": 12}, {"budget_hours": 100.0}):
+        with pytest.raises(ValidationError):
+            IdeaReport.model_validate({"note": "x", **grant})
 
 
 def test_a_draining_session_takes_only_the_kinds_it_asks_for(conn) -> None:
