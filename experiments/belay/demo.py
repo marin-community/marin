@@ -5,7 +5,6 @@
 
     uv run python -m experiments.belay.demo up        # Postgres + local Marina + release the app + watch/dispatch
     uv run python -m experiments.belay.demo down      # stop Marina and Postgres (state is kept)
-    uv run python -m experiments.belay.demo api state # the full state, as a session reads it (needs the token)
     uv run python -m experiments.belay.demo export-public out/   # static public page + public.json snapshot
 
 The page has a public read-only view at ``/belay/`` and an admin view at ``/belay/admin`` (approvers only). ``up``
@@ -25,7 +24,7 @@ Stand-ins for the production pieces (see ``.agents/projects/belay-agent-on-loom.
 - **Loom session:** headless Claude Code (``claude -p``) in the agent's experiment checkout, with
   ``experiments/belay/RUNBOOK.md`` appended to its system prompt, its queued events in
   ``<state-dir>/sessions/<id>.events.json``, and a tool allowlist that admits read-only tools plus
-  ``experiments.belay.steps`` (every write a session makes goes through those commands). Its transcript and summary
+  ``python -m experiments.belay`` (every write a session makes goes through those commands). Its transcript and summary
   go back to the app.
 """
 
@@ -52,13 +51,9 @@ import sqlalchemy
 import wandb
 
 from experiments.belay.config import CONFIG
-from experiments.belay.submit import (
-    NODES_BY_SIZE,
-    RUN_PREFIX,
-    iris_jobs,
-    load_spec,
-)
-from experiments.grug.fast_track.belay_ckpt1 import LADDER_RUNGS
+from experiments.belay.page import BOT_MARK, TOKEN_ENV, call
+from experiments.belay.submit import RUN_PREFIX, iris_jobs, load_spec
+from experiments.grug.fast_track.belay_s7 import RUNGS
 
 logger = logging.getLogger("belay.demo")
 
@@ -81,11 +76,7 @@ REPOSITORY = CONFIG.repository
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
 CW_ENDPOINT = "https://cwobject.com"
-BOT_MARK = "🤖"
 SESSION_MAX_TURNS = 150
-TOKEN_HEADER = "X-Belay-Token"
-# How a session's `demo api` calls receive the service token (Loom would inject it as a profile secret).
-TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 APP_SCHEMA = "belay"
 PUBLIC_FILES = (
     "boot.js",
@@ -101,22 +92,6 @@ PUBLIC_FILES = (
 )
 # The public page's speedrun chart and results show macro loss as placeholder BPB until BPB evals land in the registry.
 PLACEHOLDER_BPB_RATIO = "0.4147"
-
-
-def api_base(port: int = MARINA_PORT) -> str:
-    return f"http://127.0.0.1:{port}/belay/api"
-
-
-def call(path: str, body: dict | None = None, *, token: str | None = None) -> dict:
-    """GET (no body) or POST JSON to the Belay app; ``token`` is required for its ``agent/`` routes."""
-    url = f"{api_base()}/{path}"
-    data = None if body is None else json.dumps(body).encode()
-    headers = {"content-type": "application/json"}
-    if token is not None:
-        headers[TOKEN_HEADER] = token
-    request = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return json.loads(response.read())
 
 
 # ---------- local Postgres and Marina ----------
@@ -375,31 +350,29 @@ class Watcher:
     def runs(self) -> list[dict]:
         self.wandb = wandb.Api()  # a fresh client per tick: Api caches each Run it has loaded
         coords, trains, submitted = {}, {}, {}
-        for job_id, state, submitted_at in iris_jobs(f"/{getpass.getuser()}/{RUN_PREFIX}"):
-            parts = job_id.strip("/").split("/")
+        for job in iris_jobs():
+            parts = job.job_id.strip("/").split("/")
             if len(parts) == 2 and parts[1].endswith("-coord"):
                 name = parts[1].removesuffix("-coord")
-                coords[name] = (job_id, state)
-                submitted[name] = submitted_at
+                coords[name] = (job.job_id, job.state)
+                submitted[name] = job.submitted_at
             elif len(parts) == 3 and parts[1].endswith("-coord"):
-                trains[parts[1].removesuffix("-coord")] = state
+                trains[parts[1].removesuffix("-coord")] = job.state
         reports = []
         for name, (job_id, coord_state) in coords.items():
             state = _run_state(coord_state, trains.get(name))
             experiment, _, run = name.removeprefix(RUN_PREFIX).partition("-")
-            nodes, total = 1, None
-            try:
-                spec = load_spec(experiment, self.agent_dir / "experiments/belay/runs")
-                size = spec.runs[run].size
-                nodes = NODES_BY_SIZE[size]
-                total = LADDER_RUNGS[size][1] if spec.launcher == "ckpt1" and size in LADDER_RUNGS else None
-            except (FileNotFoundError, KeyError):
-                pass
+            total = None
+            runs_dir = self.agent_dir / "experiments/belay/runs"
+            if (runs_dir / f"{experiment}.yaml").exists():
+                spec = load_spec(experiment, runs_dir)
+                if spec.launcher == CONFIG.launcher and run in spec.runs:
+                    total = RUNGS[spec.runs[run].size][1]
             report = {
                 "name": name,
                 "job_id": job_id,
                 "state": state,
-                "nodes": nodes,
+                "nodes": 1,
                 "total_steps": total,
                 "submitted_at": submitted.get(name),
             }
@@ -478,8 +451,7 @@ ALLOWED_TOOLS = (
     "Bash(git diff:*)",
     "Bash(git log:*)",
     "Bash(git show:*)",
-    "Bash(uv run python -m experiments.belay.steps:*)",
-    "Bash(uv run python -m experiments.belay.demo api state:*)",
+    "Bash(uv run python -m experiments.belay:*)",
     "Bash(uv run iris --cluster marin job list:*)",
     "Bash(uv run iris --cluster marin job logs:*)",
 )
@@ -489,10 +461,10 @@ RUNBOOK = REPO / "experiments/belay/RUNBOOK.md"
 def session_prompt(session_id: str, events_file: Path) -> str:
     return f"""You are Belay session {session_id}, started {datetime.datetime.now().astimezone():%Y-%m-%d %H:%M %Z}.
 Read RUNBOOK.md (in your system prompt). Identify the event type. Run its steps exactly. If anything doesn't match,
-post to the issue and stop: `uv run python -m experiments.belay.steps escalate --title "..." --body "..."`.
+post to the issue and stop: `uv run python -m experiments.belay escalate --title "..." --body "..."`.
 
 Your events file: {events_file}
-Your first command: `uv run python -m experiments.belay.steps start --events {events_file}`
+Your first command: `uv run python -m experiments.belay start --events {events_file}`
 """
 
 
@@ -631,64 +603,6 @@ def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, toke
 # ---------- the session's page client ----------
 
 
-def service_token() -> str:
-    token = os.environ.get(TOKEN_ENV)
-    if not token:
-        raise SystemExit(f"{TOKEN_ENV} is not set; sessions receive the Belay service token from the dispatcher")
-    return token
-
-
-def post_activity(
-    kind: str, title: str, body: str, *, registry_id: str | None, idea_id: int | None, dry_run: bool
-) -> None:
-    """Post to the Belay page's activity feed, and to the batch issue when GitHub posting is on."""
-    token = service_token()
-    github = call("agent/state", token=token)["settings"]["github_posting"]
-    item = {"kind": kind, "title": title, "body": body, "registry_id": registry_id, "idea_id": idea_id}
-    if dry_run:
-        target = f"page and #{CONFIG.batch_issue}" if github else "page only (GitHub posting is off)"
-        print(f"would post {kind} to the {target}:\n--- {title}\n{body}\n---")
-        return
-    github_url = None
-    if github:
-        github_url = subprocess.run(
-            [
-                "gh",
-                "issue",
-                "comment",
-                str(CONFIG.batch_issue),
-                "--repo",
-                REPOSITORY,
-                "--body",
-                f"{BOT_MARK} **{title}**\n\n{body}",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    call("agent/activity", {**item, "github_url": github_url}, token=token)
-    print(f"posted {kind}: {title}")
-
-
-def report_idea(idea_id: int, report: dict, *, dry_run: bool) -> None:
-    """Update an idea on the Belay page (state, registry id, plan, result, note)."""
-    if dry_run:
-        print(f"would report idea #{idea_id}: {json.dumps(report)}")
-        return
-    call(f"agent/ideas/{idea_id}/report", report, token=service_token())
-    print(f"reported idea #{idea_id}: state {report.get('state', 'unchanged')}")
-
-
-def api_command(args: argparse.Namespace) -> None:
-    if args.api == "state":
-        print(json.dumps(call("agent/state", token=service_token()), indent=2))
-    elif args.api == "report":
-        report_idea(args.idea_id, json.loads(Path(args.file).read_text()), dry_run=False)
-    else:
-        body = Path(args.body_file).read_text() if args.body_file else ""
-        post_activity(args.kind, args.title, body, registry_id=args.registry_id, idea_id=args.idea_id, dry_run=False)
-
-
 def main(argv: list[str]) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -709,23 +623,8 @@ def main(argv: list[str]) -> None:
         )
     export = sub.add_parser("export-public", help="write the public page and a JSON snapshot for static hosting")
     export.add_argument("directory", type=Path)
-    api = sub.add_parser("api", help="the session's client for the Belay page")
-    api_sub = api.add_subparsers(dest="api", required=True)
-    api_sub.add_parser("state")
-    report = api_sub.add_parser("report")
-    report.add_argument("idea_id", type=int)
-    report.add_argument("--file", required=True)
-    post = api_sub.add_parser("post")
-    post.add_argument("--kind", required=True, choices=["plan", "result", "escalation", "note"])
-    post.add_argument("--title", required=True)
-    post.add_argument("--body-file")
-    post.add_argument("--registry-id")
-    post.add_argument("--idea-id", type=int)
     args = parser.parse_args(argv)
 
-    if args.command == "api":
-        api_command(args)
-        return
     if args.command == "export-public":
         print("wrote", export_public(args.directory))
         return

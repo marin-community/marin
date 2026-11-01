@@ -24,8 +24,11 @@ class BelayConfig:
     """The weekly experiment branch is ``<prefix><monday as YYYY-MM-DD>``."""
     registry_branch: str
     registry_checkout: Path
+    """Local checkout of ``registry_branch`` that the commands write to."""
     launcher: str
-    """The ``experiments.belay.submit.LAUNCHERS`` key that runs the recipe."""
+    """The recipe's name in run specs (``launcher:``); a spec naming anything else is refused at launch."""
+    launch_module: tuple[str, ...]
+    """``python -m`` arguments that launch the recipe; ``--size``, the spec's flags and run options follow."""
     rung: str
     seed: int
     rung_minutes: int
@@ -33,6 +36,7 @@ class BelayConfig:
     cluster: str
     band: str
     node_cap: int
+    """Soft cap on active Belay runs; every run at ``rung`` takes one 8xH100 node."""
     output_root: str
     metric: str
     noise: float
@@ -57,6 +61,7 @@ PRODUCTION = BelayConfig(
     registry_branch="marin_belay_v1_registry",
     registry_checkout=Path.home() / "marin_wt_registry",
     launcher="s7n",
+    launch_module=("experiments.grug.fast_track.belay_s7", "--ladder", "s7n"),
     rung="d512",
     seed=0,
     rung_minutes=38,
@@ -69,7 +74,7 @@ PRODUCTION = BelayConfig(
     wandb_project="marin-community/marin_moe",
     repository="marin-community/marin",
     batch_issue=9451,
-    page_url="https://marin.community/belay/",
+    page_url="https://marina.oa.dev/belay/",
 )
 
 # The local demo: same rules, but its weekly branches are cut from the demo code branch (which carries the Belay
