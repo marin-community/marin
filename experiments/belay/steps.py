@@ -366,6 +366,9 @@ def plan_text(registry_id: str, entry: dict, runs: list[dict], branch: str, comm
 
 def launch(registry_id: str, *, dry_run: bool) -> None:
     repo = repo_root()
+    require_week_branch(repo, datetime.date.today())
+    if not (RUNS_DIR / f"{registry_id}.yaml").exists():
+        raise SystemExit(f"refusing: no run spec for {registry_id} on this branch.\nnext: {STEPS} flags")
     experiment = load_spec(registry_id)
     state = page_state()
     idea = idea_by_registry_id(state, registry_id)
