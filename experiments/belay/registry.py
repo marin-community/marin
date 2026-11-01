@@ -305,10 +305,13 @@ def _placeholder_bpb(idea: dict, ratio: float) -> None:
             event["note"] = _placeholder_text(event["note"], ratio)
 
 
-def page_data(experiments: list[Experiment], generated_from: str, placeholder_bpb_ratio: float | None = None) -> dict:
+def page_data(
+    experiments: list[Experiment], generated_from: str, default_author: str, placeholder_bpb_ratio: float | None = None
+) -> dict:
     """The Belay page's results JSON: its ``ideas`` keep the page's own field names, with ``xid`` added. The registry
     records Paloma macro loss; with ``placeholder_bpb_ratio`` the page shows it as placeholder BPB (loss times the
-    ratio) until trials record measured BPB."""
+    ratio) until trials record measured BPB. Each idea's ``author`` is its intake author, else ``default_author``
+    (the login credited for internal proposals)."""
     ideas = []
     for e in experiments:
         idea = _plain(e)
@@ -317,6 +320,7 @@ def page_data(experiments: list[Experiment], generated_from: str, placeholder_bp
         idea.setdefault("trials", [])
         idea.setdefault("events", [])
         idea.setdefault("tags", [])
+        idea["author"] = (idea.get("intake") or {}).get("author") or default_author
         if placeholder_bpb_ratio is not None:
             _placeholder_bpb(idea, placeholder_bpb_ratio)
         ideas.append(idea)
@@ -335,6 +339,7 @@ def main(argv: list[str]) -> None:
     sub.add_parser("validate", help="load and check every entry")
     build = sub.add_parser("build", help="write the Belay page's results JSON to stdout")
     build.add_argument("--generated-from", default="experiments/belay/registry")
+    build.add_argument("--default-author", required=True, help="GitHub login credited for internal proposals")
     build.add_argument("--placeholder-bpb-ratio", type=float, help="show macro loss as placeholder BPB (loss x ratio)")
     new = sub.add_parser("new", help="allocate the next id and write an approved entry")
     new.add_argument("--slug", required=True)
@@ -354,7 +359,7 @@ def main(argv: list[str]) -> None:
     if args.command == "validate":
         print(f"{len(experiments)} experiments OK")
     elif args.command == "build":
-        data = page_data(experiments, args.generated_from, args.placeholder_bpb_ratio)
+        data = page_data(experiments, args.generated_from, args.default_author, args.placeholder_bpb_ratio)
         json.dump(data, sys.stdout, ensure_ascii=False, separators=(",", ":"))
     else:
         intake = None

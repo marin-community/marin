@@ -110,9 +110,16 @@ def test_validate_rejects_duplicate_slugs():
 
 
 def test_page_data_uses_the_page_field_names():
-    idea = R.page_data([_experiment()], "test")["ideas"][0]
+    idea = R.page_data([_experiment()], "test", "ClassicLarry")["ideas"][0]
     assert idea["id"] == "sqrt-softplus-router" and idea["xid"] == "X0001"
     assert idea["trials"][0]["delta"] == [-0.001, 0.002]
+
+
+def test_page_data_credits_the_intake_author_else_the_default_author():
+    proposal = _experiment()
+    intake = _experiment(id="X0002", slug="other", intake=R.Intake(url="https://x/1", author="someone", approved_by="L"))
+    ideas = R.page_data([proposal, intake], "test", "ClassicLarry")["ideas"]
+    assert [i["author"] for i in ideas] == ["ClassicLarry", "someone"]
 
 
 def test_intake_bot_entries_are_valid_registry_files(tmp_path):
@@ -148,7 +155,7 @@ def test_placeholder_bpb_scales_losses_and_signed_deltas_only():
         loss=(3.0,),
         note="mean -0.0088, k 1.036x",
     )
-    (idea,) = R.page_data([_experiment(trials=(trial,))], "test", placeholder_bpb_ratio=0.5)["ideas"]
+    (idea,) = R.page_data([_experiment(trials=(trial,))], "test", "ClassicLarry", placeholder_bpb_ratio=0.5)["ideas"]
     (t,) = idea["trials"]
     assert t["baseline"] == "df1-ctrl 1.4772" and t["delta"] == [-0.0044] and t["loss"] == [1.5]
     assert t["note"] == "mean -0.0044, k 1.036x"
