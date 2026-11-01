@@ -67,7 +67,8 @@ trials:
   batch: X0151
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6563417128
-  wandb: []
+  wandb:
+  - belay-X0151-seed0
   settings:
     init_std_mult_gates: '2'
   commit: fd7f69c31e
