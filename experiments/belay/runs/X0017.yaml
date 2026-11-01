@@ -1,0 +1,13 @@
+experiment: X0017
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: router_combine=sqrt_softplus_renorm
+    flags:
+    - --model-set
+    - router_combine=sqrt_softplus_renorm
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
