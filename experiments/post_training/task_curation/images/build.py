@@ -50,9 +50,7 @@ from taskcompendium.runtime.local import (
 
 from experiments.post_training.task_curation.environment import Archive, Environment, Placement, placement
 
-# New GHCR packages are created org-internal and the Iris workers pull anonymously, so built
-# images are tagged into the public iris-task package until a public task-curation package exists.
-DEFAULT_REPOSITORY = "ghcr.io/marin-community/iris-task"
+DEFAULT_REPOSITORY = "ghcr.io/marin-community/rollout-images"
 BASE_IMAGE = "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
 """The image built environments start from: iris-task as of 2026-10-07, python:3.12-slim with uv."""
 PLATFORM = "linux/amd64"

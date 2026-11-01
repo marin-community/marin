@@ -1,0 +1,12 @@
+{
+  "recipe_revision": 2,
+  "platform": "linux/amd64",
+  "base_image": "ghcr.io/marin-community/rollout-images@sha256:17a0f60def260b484134ca7f137970735cd9d0a30900aeb1a037f59acac9484a",
+  "tau2_bench_commit": "fc0055dc4e0a316c3f83133267fbd6faaa770992",
+  "node_version": "22.23.4",
+  "node_sha256": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
+  "runtime_images": {
+    "retail": "ghcr.io/marin-community/rollout-images@sha256:25899b6e12e657f7850108b70dbae6ceb82dc9c988bd912355b22d7cdbdec24a",
+    "airline": "ghcr.io/marin-community/rollout-images@sha256:97798a165494fb42564dadae0eaa3b645c728d98004709e4e68c0cde2c8e6c98"
+  }
+}

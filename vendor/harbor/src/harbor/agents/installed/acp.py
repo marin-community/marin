@@ -665,12 +665,15 @@ rm -f "$tmp_archive"
         elif kind == "npx":
             package_target = target
             assert isinstance(package_target, AcpPackageDistribution)
-            quoted_parts = [
-                "npx",
-                "-y",
-                shlex.quote(package_target.package),
-                *map(shlex.quote, package_target.args),
-            ]
+            if self._pi_companion() is not None:
+                quoted_parts = ["pi-acp", *map(shlex.quote, package_target.args)]
+            else:
+                quoted_parts = [
+                    "npx",
+                    "-y",
+                    shlex.quote(package_target.package),
+                    *map(shlex.quote, package_target.args),
+                ]
         else:
             package_target = target
             assert isinstance(package_target, AcpPackageDistribution)
@@ -681,10 +684,7 @@ rm -f "$tmp_archive"
             ]
 
         exec_cmd = " ".join([*quoted_parts, '"$@"'])
-        pi = self._pi_companion()
-        load_pi = f"{pi.nvm_shell_command()}\n" if pi is not None else ""
-
-        return f"#!/usr/bin/env bash\nset -eu\n{load_pi}{env_exports}exec {exec_cmd}\n"
+        return f"#!/usr/bin/env bash\nset -eu\n{env_exports}exec {exec_cmd}\n"
 
     async def install(self, environment: BaseEnvironment) -> None:
         await self._ensure_registry_entry()
@@ -692,18 +692,25 @@ rm -f "$tmp_archive"
         kind, target = self._select_distribution(platform_id)
         self._selected_distribution_kind = kind
 
-        await self.exec_as_root(
-            environment,
-            command=self._build_dependencies_command(kind),
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-
-        if kind == "binary":
-            assert isinstance(target, AcpBinaryTarget)
-            await self._install_binary_target(environment, target)
-
-        if pi := self._pi_companion():
+        pi = self._pi_companion()
+        if pi is not None:
             await pi.install(environment)
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "command -v pi-acp && "
+                    f'{self._RUNNER_VENV_PATH}/bin/python -c "import acp"'
+                ),
+            )
+        else:
+            await self.exec_as_root(
+                environment,
+                command=self._build_dependencies_command(kind),
+                env={"DEBIAN_FRONTEND": "noninteractive"},
+            )
+            if kind == "binary":
+                assert isinstance(target, AcpBinaryTarget)
+                await self._install_binary_target(environment, target)
 
         launcher_path = self.logs_dir / "acp-launch.sh"
         launcher_path.write_text(self._build_launcher_script(kind, target))

@@ -70,6 +70,7 @@ _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _PI_ACP_REGISTRY_ID = "pi-acp"
+_TAU3_USER_AGENT = "harbor.agents.tau3_acp_relay.harbor_agent:Tau3HarborACPRelay"
 _PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
@@ -84,6 +85,8 @@ _MODEL_RELAY_ENVIRONMENT_KWARGS = frozenset(
         "model_endpoint",
         "model_name",
         "verifier_model_endpoint",
+        "candidate_model_endpoint",
+        "candidate_model_name",
     }
 )
 _LOCAL_ENVIRONMENT_KWARGS = _MODEL_RELAY_ENVIRONMENT_KWARGS | {
@@ -228,12 +231,55 @@ def _validate_prepared_policy(config: JobConfig) -> None:
     unknown_kwargs = environment.kwargs.keys() - _LOCAL_ENVIRONMENT_KWARGS
     if unknown_kwargs:
         raise ValueError(f"Unsupported {label} environment kwargs: {sorted(unknown_kwargs)}")
-    if config.user_agent is not None:
-        raise ValueError(f"{label} does not support simulated-user agents")
+    if (user_agent := config.user_agent) is not None:
+        if (
+            user_agent.name is not None
+            or user_agent.import_path != _TAU3_USER_AGENT
+            or user_agent.mode != "container"
+            or user_agent.env
+            or user_agent.skills
+            or user_agent.user_persona_path is not None
+            or user_agent.user_prompt_template_path is not None
+            or user_agent.bridge.prompt_path is not None
+            or user_agent.bridge.kwargs
+            or len(user_agent.mcp_servers) != 1
+        ):
+            raise ValueError(f"{label} supports only the sandboxed Tau3 ACP simulated user")
+        server = user_agent.mcp_servers[0]
+        if (
+            server.name != "tau3-runtime"
+            or server.transport != "streamable-http"
+            or server.url != "http://tau3-runtime:8000/mcp"
+            or server.command is not None
+            or server.args
+        ):
+            raise ValueError(f"{label} requires the prepared tau3-runtime MCP service")
+        if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & user_agent.kwargs.keys():
+            raise ValueError(f"{label} does not accept alternate simulated-user inputs")
     for agent in config.agents:
-        if agent.name not in {"terminus-2", "oracle"} or agent.import_path is not None or agent.mode != "container":
-            raise ValueError(f"{label} requires the host-side terminus-2 or oracle agent")
-        if agent.env or agent.mcp_servers or agent.skills:
+        pi_acp = (
+            agent.name is not None
+            and is_acp_registry_shorthand(agent.name)
+            and parse_registry_spec(agent.name)[0] == _PI_ACP_REGISTRY_ID
+        ) or (
+            agent.name == "acp"
+            and isinstance(agent.kwargs.get("registry_entry"), dict)
+            and agent.kwargs["registry_entry"].get("id") == _PI_ACP_REGISTRY_ID
+            and not {"registry_entry_path", "registry_spec"} & agent.kwargs.keys()
+        )
+        installed = agent.name == "pi" or pi_acp
+        if (
+            (agent.name not in {"terminus-2", "oracle"} and not installed)
+            or agent.import_path is not None
+            or agent.mode != "container"
+        ):
+            raise ValueError(f"{label} requires terminus-2, oracle, Pi, or pi-acp")
+        relay_env = {
+            "OPENAI_BASE_URL": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
+            "OPENAI_API_BASE": f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1",
+            "OPENAI_API_KEY": "EMPTY",
+        }
+        if (agent.env and (not installed or agent.env != relay_env)) or agent.mcp_servers or agent.skills:
             raise ValueError(f"{label} does not accept agent environment forwarding, MCP servers, or skills")
         if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
             raise ValueError(f"{label} does not accept alternate agent environment, MCP, skill, or callback inputs")
@@ -503,8 +549,8 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     )
     environment = config.environment
     if _installed_agent(config.agents[0]):
-        if environment.type != EnvironmentType.DAYTONA:
-            raise ValueError("Installed candidate model relays require the Daytona Shellbox backend")
+        if environment.type not in _MODEL_RELAY_ENVIRONMENTS:
+            raise ValueError("Installed candidate model relays require the local or Daytona Shellbox backend")
         environment = environment.model_copy(
             update={
                 "kwargs": {

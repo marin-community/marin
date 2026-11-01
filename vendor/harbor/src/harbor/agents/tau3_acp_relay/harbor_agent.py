@@ -71,12 +71,14 @@ class Tau3HarborACPRelay(BaseAgent):
         return "0.1.0"
 
     async def setup(self, environment: BaseEnvironment) -> None:
-        install = await environment.exec(
-            "python3 -m pip install --no-cache-dir mcp==1.25.0", user="root"
+        check = await environment.exec(
+            'python3 -c "from mcp import ClientSession; '
+            'from mcp.client.streamable_http import streamablehttp_client"',
+            user="root",
         )
-        if install.return_code != 0:
+        if check.return_code != 0:
             raise Tau3RuntimeInfrastructureError(
-                f"Failed to install MCP client: {install.stderr}"
+                f"Image does not provide the MCP client: {check.stderr}"
             )
 
         prepare = await environment.exec(

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packaging.version import InvalidVersion, Version
 from upath import UPath
 
 from harbor.agents.installed.base import (
@@ -29,10 +28,6 @@ from harbor.models.agent.name import AgentName
 from harbor.utils.env import validate_task_environment
 
 
-_CURRENT_PI_PACKAGE = "@earendil-works/pi-coding-agent"
-_NODE_VERSION = "22"
-_LEGACY_PI_PACKAGE = "@mariozechner/pi-coding-agent"
-_PI_PACKAGE_RENAME_VERSION = Version("0.74.0")
 _REMOTE_LOG_READ_BLOCK_SIZE = 1024 * 1024
 
 
@@ -404,15 +399,7 @@ export default function (pi) {
         return AgentName.PI.value
 
     def get_version_command(self) -> str | None:
-        return f"{self.nvm_shell_command()} && pi --version"
-
-    @staticmethod
-    def nvm_shell_command() -> str:
-        """Return the shell prelude that exposes the NVM-managed Pi executable."""
-        return (
-            'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" && '
-            f"nvm use {_NODE_VERSION} >/dev/null"
-        )
+        return "pi --version"
 
     def hosted_endpoint_env(self) -> dict[str, str]:
         """Return the secret environment required by a registered hosted provider."""
@@ -439,7 +426,6 @@ export default function (pi) {
             command=(
                 "set -euo pipefail; "
                 f"trap 'rm -f {endpoint_path}' EXIT; "
-                f"{self.nvm_shell_command()}; "
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}"
             ),
         )
@@ -447,38 +433,15 @@ export default function (pi) {
     def parse_version(self, stdout: str) -> str:
         return stdout.strip().splitlines()[-1].strip()
 
-    def _package_name(self) -> str:
-        if self._version:
-            try:
-                if Version(self._version) < _PI_PACKAGE_RENAME_VERSION:
-                    return _LEGACY_PI_PACKAGE
-            except InvalidVersion as exc:
-                raise ValueError(
-                    f"Pi version {self._version!r} is not a valid package version"
-                ) from exc
-        return _CURRENT_PI_PACKAGE
-
     async def install(self, environment: BaseEnvironment) -> None:
-        package_name = self._package_name()
-        version_spec = f"@{self._version}" if self._version else "@latest"
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && "
-                'export NVM_DIR="$HOME/.nvm" && '
-                '\\. "$NVM_DIR/nvm.sh" || true && '
-                "command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && "
-                f"nvm install {_NODE_VERSION} && npm -v && "
-                f"npm install -g --ignore-scripts {package_name}{version_spec} && "
-                "pi --version"
-            ),
-        )
+        """Check the Pi runtime supplied by the environment image."""
+        result = await self.exec_as_agent(environment, command="pi --version")
+        installed_version = self.parse_version(result.stdout)
+        if self._version is not None and installed_version != self._version:
+            raise RuntimeError(
+                f"Image provides Pi {installed_version}, but the agent requires {self._version}"
+            )
+        self._version = installed_version
 
     def _build_register_skills_command(self) -> str | None:
         """Return a shell command that copies skills to Pi's skills directory."""
@@ -666,7 +629,7 @@ export default function (pi) {
         if skills_command:
             await self.exec_as_agent(environment, command=skills_command)
 
-        runtime_prelude = f"set -e -o pipefail; {self.nvm_shell_command()}; "
+        runtime_prelude = "set -e -o pipefail; "
         if compaction_command is not None:
             runtime_prelude += f"{compaction_command}; "
         if self._api_base is not None:

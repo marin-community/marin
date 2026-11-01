@@ -35,16 +35,13 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
     monkeypatch.setattr(Pi, "_CONTEXT_BUDGET_EXTENSION_PATH", str(extension_path))
 
-    bootstrap_bin = temp_dir / "bootstrap-bin"
     fake_bin = temp_dir / "fake-bin"
-    nvm_dir = temp_dir / ".nvm"
     artifact_dir = temp_dir / "pi-artifacts"
-    for directory in (bootstrap_bin, fake_bin, nvm_dir, artifact_dir):
+    for directory in (fake_bin, artifact_dir):
         directory.mkdir()
 
     node = shutil.which("node")
     assert node is not None
-    (bootstrap_bin / "rm").symlink_to("/bin/rm")
     scripts = {
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
@@ -59,15 +56,6 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     for path, contents in scripts.items():
         path.write_text(contents)
         path.chmod(0o755)
-    # Sourcing NVM selects the task image's default Node, not Pi's install version.
-    (nvm_dir / "nvm.sh").write_text(
-        'export PATH="$HOME/bootstrap-bin:/usr/bin:/bin"\n'
-        "nvm() {\n"
-        '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-        '  export PATH="$HOME/fake-bin:/usr/bin:/bin"\n'
-        "}\n"
-    )
-
     class LocalShellEnvironment:
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
@@ -77,7 +65,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
                 ["/bin/bash", "-c", command],
                 capture_output=True,
                 text=True,
-                env={"HOME": str(temp_dir), "PATH": str(bootstrap_bin)},
+                env={"HOME": str(temp_dir), "PATH": f"{fake_bin}:/usr/bin:/bin"},
             )
             return SimpleNamespace(
                 return_code=completed.returncode,
@@ -94,9 +82,7 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
 
 
 @pytest.mark.asyncio
-async def test_version_check_uses_installed_node_with_different_nvm_default(
-    temp_dir, monkeypatch
-):
+async def test_version_check_uses_image_binary(temp_dir, monkeypatch):
     shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
     agent = Pi(logs_dir=temp_dir)
 
@@ -106,40 +92,21 @@ async def test_version_check_uses_installed_node_with_different_nvm_default(
     assert agent.parse_version(result.stdout) == "0.87.0"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_version", [None, "0.87.0", "0.80.5"])
+async def test_image_pi_preserves_requested_version(temp_dir, monkeypatch, requested_version):
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf "0.87.0\\n"\n')
+    agent = Pi(logs_dir=temp_dir, version=requested_version)
+
+    if requested_version == "0.80.5":
+        with pytest.raises(RuntimeError, match="Image provides Pi"):
+            await agent.install(shell.environment)
+    else:
+        await agent.install(shell.environment)
+        assert agent.version() == "0.87.0"
+
+
 class TestPiAgent:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("version", "expected_package"),
-        [
-            (None, "@earendil-works/pi-coding-agent@latest"),
-            ("0.73.1", "@mariozechner/pi-coding-agent@0.73.1"),
-            ("0.74.0", "@earendil-works/pi-coding-agent@0.74.0"),
-        ],
-    )
-    async def test_install_uses_version_compatible_package(
-        self, temp_dir, version, expected_package
-    ):
-        agent = Pi(logs_dir=temp_dir, version=version)
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-
-        await agent.install(mock_env)
-
-        install_command = next(
-            call.kwargs["command"]
-            for call in mock_env.exec.call_args_list
-            if "npm install -g" in call.kwargs["command"]
-        )
-        assert f"npm install -g --ignore-scripts {expected_package}" in install_command
-
-    @pytest.mark.asyncio
-    async def test_install_rejects_invalid_package_version(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, version="latest??")
-        mock_env = AsyncMock()
-
-        with pytest.raises(ValueError, match="not a valid package version"):
-            await agent.install(mock_env)
-
     @pytest.mark.asyncio
     async def test_run_command_structure(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")

@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -181,43 +182,41 @@ class TestAcpAgentDistributionSelection:
 
         assert "/opt/harbor-acp-venv/bin/uvx fast-agent-acp==0.6.10 serve" in launcher
 
-    def test_pi_acp_launcher_can_start_adapter_with_nvm_pi(self, temp_dir):
+    def test_pi_acp_launcher_uses_image_adapter(self, temp_dir):
         agent = AcpAgent(logs_dir=temp_dir, registry_entry=PI_ACP_REGISTRY_ENTRY)
-
         launcher = agent._build_launcher_script(
             "npx",
-            AcpPackageDistribution(package="pi-acp@0.0.33"),
+            AcpPackageDistribution(
+                package="pi-acp@0.0.33", args=["--stdio"], env={"ADAPTER_MODE": "test"}
+            ),
         )
-
-        nvm_dir = temp_dir / ".nvm"
-        fake_bin = temp_dir / "fake-bin"
-        nvm_dir.mkdir()
-        fake_bin.mkdir()
-        output = temp_dir / "npx-args.json"
-        (nvm_dir / "nvm.sh").write_text(
-            "nvm() {\n"
-            '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-            f'  export PATH={shlex.quote(str(fake_bin))}:"$PATH"\n'
-            "}\n"
-        )
-        npx = fake_bin / "npx"
-        npx.write_text(
+        image_bin = temp_dir / "bin"
+        image_bin.mkdir()
+        output = temp_dir / "adapter-args.json"
+        adapter = image_bin / "pi-acp"
+        adapter.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
-            "pathlib.Path(os.environ['NPX_ARGS']).write_text(json.dumps(sys.argv[1:]))\n"
+            "pathlib.Path(os.environ['ADAPTER_ARGS']).write_text("
+            "json.dumps([sys.argv[1:], os.environ['ADAPTER_MODE']]))\n"
         )
-        npx.chmod(0o755)
+        adapter.chmod(0o755)
         launcher_path = temp_dir / "acp-launch.sh"
         launcher_path.write_text(launcher)
         launcher_path.chmod(0o755)
 
         subprocess.run(
-            [launcher_path, "--stdio"],
+            [launcher_path, "--extra"],
             check=True,
-            env={**os.environ, "HOME": str(temp_dir), "NPX_ARGS": str(output)},
+            env={
+                **os.environ,
+                "HOME": str(temp_dir),
+                "PATH": f"{image_bin}:/usr/bin:/bin",
+                "ADAPTER_ARGS": str(output),
+            },
         )
 
-        assert json.loads(output.read_text()) == ["-y", "pi-acp@0.0.33", "--stdio"]
+        assert json.loads(output.read_text()) == [["--stdio", "--extra"], "test"]
 
     def test_rejects_non_https_binary_archive(self):
         with pytest.raises(ValueError, match="Binary archive URL must use HTTPS"):
@@ -753,16 +752,8 @@ class TestAcpAgentRun:
             model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
             thinking_format="qwen-chat-template",
         )
-        nvm_dir = temp_dir / ".nvm"
-        nvm_dir.mkdir()
         node = shutil.which("node")
         assert node is not None
-        (nvm_dir / "nvm.sh").write_text(
-            "nvm() {\n"
-            '  [ "$1" = use ] && [ "$2" = 22 ] || return 1\n'
-            f"  export PATH={shlex.quote(str(node.rsplit('/', 1)[0]))}:/usr/bin:/bin\n"
-            "}\n"
-        )
 
         class LocalEnvironment:
             async def upload_file(self, source_path, target_path):
@@ -773,7 +764,7 @@ class TestAcpAgentRun:
                     ["/bin/bash", "-c", command],
                     capture_output=True,
                     text=True,
-                    env={"HOME": str(temp_dir), "PATH": "/usr/bin:/bin"},
+                    env={"HOME": str(temp_dir), "PATH": f"{Path(node).parent}:/usr/bin:/bin"},
                 )
                 return SimpleNamespace(
                     return_code=completed.returncode,

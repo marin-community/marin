@@ -519,8 +519,20 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
 For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
 versions supplied by the policy or model configuration. Preflight includes this pin in the saved
-policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
-version `0.87.0` without resolving npm's `latest` tag.
+policy and the saved policy's digest; execution applies the same pin. The task image must
+provide Pi `0.87.0` on `PATH`; setup verifies the installed version. Pi setup does not install
+Node or npm packages. Historical task images that relied on runtime installation need a
+prepared harness image before they can run again.
+
+ACP Pi uses its own companion pin, `@earendil-works/pi-coding-agent@0.80.5`, with
+`pi-acp@0.0.33`. Its image must expose `node`, `pi`, and `pi-acp` on `PATH` and provide
+`/opt/harbor-acp-venv/bin/python` with `agent-client-protocol`. Every ACP bridge target,
+including Claude Code and Gemini, also requires image-provided `acpx@0.12.0` on `PATH`.
+The Tau3 simulated-user relay requires `python3` with `mcp==1.25.0`. Setup stages launchers,
+endpoint credentials, provider configuration, and ACP session configuration; it does not
+install these dependencies. The Tau3 ACP Pi image does not satisfy the standalone Pi
+`0.87.0` pin.
+
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
 The runtime uses `vendor/harbor/uv.lock`. Reproduce runs from their recorded Marin checkout

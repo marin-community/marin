@@ -13,7 +13,7 @@ from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import BASE_ENVIRONMENT_ARGUMENTS, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
 from harbor.environments.execution import execute_shellbox_command
-from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
+from harbor.environments.model_relay import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT, ModelRelay
 from harbor.environments.prepared_compose import import_prepared_task, validate_prepared_task
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
@@ -43,6 +43,8 @@ class LocalEnvironment(BaseEnvironment):
         model_endpoint: str | None = None,
         model_name: str | None = None,
         verifier_model_endpoint: str | None = None,
+        candidate_model_endpoint: str | None = None,
+        candidate_model_name: str | None = None,
         **kwargs,
     ):
         self.cgroup_parent = Path(cgroup_parent) if cgroup_parent is not None else None
@@ -59,6 +61,8 @@ class LocalEnvironment(BaseEnvironment):
         self.model_endpoint = model_endpoint
         self.model_name = model_name
         self.verifier_model_endpoint = verifier_model_endpoint
+        self.candidate_model_endpoint = candidate_model_endpoint
+        self.candidate_model_name = candidate_model_name
         super().__init__(*args, **kwargs)
         self.factory = LocalMachineFactory(
             bwrap=Path(bwrap) if bwrap is not None else None,
@@ -142,6 +146,8 @@ class LocalEnvironment(BaseEnvironment):
             )
         if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
             raise ValueError("Prepared sandbox supports a single host model endpoint for runtime and verifier calls")
+        if (self.candidate_model_endpoint is None) != (self.candidate_model_name is None):
+            raise ValueError("Prepared sandbox candidate capability requires a host endpoint and model")
         self._stopping = None
         execution = await acquire_owned(asyncio.create_task(self.factory.create_task(task_spec)))
         self.execution = execution
@@ -153,6 +159,15 @@ class LocalEnvironment(BaseEnvironment):
                         self.machine,
                         ModelRelay(self.model_endpoint, self.model_name).handle,
                         port=MODEL_RELAY_PORT,
+                    )
+                )
+            if self.candidate_model_endpoint is not None:
+                assert self.candidate_model_name is not None
+                await self._relay.enter_async_context(
+                    serve_http(
+                        self.machine,
+                        ModelRelay(self.candidate_model_endpoint, self.candidate_model_name).handle,
+                        port=CANDIDATE_MODEL_RELAY_PORT,
                     )
                 )
             await execution.wait_ready()

@@ -6,8 +6,10 @@
 import json
 import shutil
 import textwrap
+from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.evaluation.harbor_runtime import external_python as _external_python
 from tests.evaluation.harbor_runtime import preflight as _preflight
@@ -70,6 +72,76 @@ def test_prepared_compose_preflight_accepts_pinned_peers_without_building(tmp_pa
     assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
 
 
+def test_prepared_tau3_campaign_policy_uses_separate_host_candidate_and_judge_capabilities(tmp_path, prepared_policy):
+    campaign = (
+        Path(__file__).parents[2]
+        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/tau3-pi.yaml"
+    )
+    document = yaml.safe_load(campaign.read_text())
+    document["environment"] = {"type": "local"}
+    document["datasets"] = [{"path": "dataset"}]
+    prepared_policy.write_text(json.dumps(document))
+    preflight = json.loads(_preflight(tmp_path, [(prepared_policy, {})], judge_model="judge").stdout)[0]
+    policy = tmp_path / "stable-policy.json"
+    policy.write_text(preflight["stable_policy_json"])
+    overlay = tmp_path / "overlay.json"
+    write_runtime_overlay(
+        overlay,
+        tmp_path,
+        endpoint_url="https://candidate.test/proxy/t/private-capability/v1",
+        verifier_env={
+            "OPENAI_API_KEY": "judge-private",
+            "OPENAI_BASE_URL": "https://judge.test/v1",
+            "MODEL_NAME": "judge",
+        },
+    )
+    completed = _external_python(
+        "-c",
+        textwrap.dedent(
+            f"""
+            import json
+            from pathlib import Path
+            from harbor_config import JobConfig
+            from marin.evaluation.harbor.trial_driver import (
+                effective_job_config, RuntimeOverlay, _model_authentication,
+            )
+            policy, overlay_path = Path({str(policy)!r}), Path({str(overlay)!r})
+            config = effective_job_config(policy, overlay_path)
+            original = JobConfig.model_validate_json(policy.read_text())
+            overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
+            authentication = _model_authentication(original, overlay, candidate_api_key='candidate-private')
+            assert authentication == {{
+                'https://candidate.test/proxy/t/private-capability/v1': 'candidate-private',
+                'https://judge.test/v1': 'judge-private',
+            }}
+            conflicting = overlay.model_copy(update={{'endpoint_url': 'https://judge.test/v1'}})
+            try:
+                _model_authentication(original, conflicting, candidate_api_key='candidate-private')
+            except ValueError as error:
+                assert 'candidate-private' not in str(error) and 'judge-private' not in str(error)
+            else:
+                raise AssertionError('conflicting candidate and judge credentials accepted')
+            print(json.dumps({{
+                'agent': config.agents[0].model_dump(mode='python'),
+                'user_agent': config.user_agent.model_dump(mode='python'),
+                'verifier': config.verifier.env,
+                'capabilities': config.environment.kwargs,
+            }}))
+            """
+        ),
+    )
+    result = json.loads(completed.stdout)
+    assert result["agent"]["kwargs"]["registry_entry"]["id"] == "pi-acp"
+    assert result["agent"]["kwargs"]["api_base"] == "http://127.0.0.1:8788/v1"
+    assert result["agent"]["kwargs"]["api_key"] == "EMPTY"
+    assert result["user_agent"]["bridge"]["kind"] == "acp"
+    assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert result["capabilities"]["candidate_model_endpoint"].endswith("private-capability/v1")
+    assert "private-capability" not in json.dumps(result["agent"])
+    assert "candidate-private" not in completed.stdout
+    assert "judge-private" not in completed.stdout
+
+
 def test_local_preflight_applies_resource_overrides_before_admission(tmp_path, prepared_policy):
     document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "local", "override_cpus": 2}
@@ -112,11 +184,25 @@ def test_preflight_rejects_docker_execution_before_task_launch(tmp_path, prepare
     ("section", "replacement"),
     [
         ("agents", [{"name": "mini-swe-agent"}]),
+        ("agents", [{"name": "pi", "env": {"STOLEN": "${HF_TOKEN}"}}]),
+        ("agents", [{"name": "acp", "kwargs": {"registry_entry": {"id": "another-agent"}}}]),
         ("agents", [{"name": "terminus-2", "env": {"STOLEN": "${AWS_SECRET_ACCESS_KEY}"}}]),
         ("agents", [{"name": "terminus-2", "kwargs": {"extra_env": {"STOLEN": "${HF_TOKEN}"}}}]),
         ("agents", [{"name": "terminus-2", "mcp_servers": [{"name": "host", "url": "http://host"}]}]),
         ("verifier", {"env": {"OPENAI_API_KEY": "${AWS_SECRET_ACCESS_KEY}"}}),
         ("verifier", {"import_path": "host.verifier:Verifier"}),
+        (
+            "user_agent",
+            {"import_path": "harbor.agents.terminus_2:Terminus2", "bridge": {"kind": "acp"}},
+        ),
+        (
+            "user_agent",
+            {
+                "import_path": "harbor.agents.tau3_acp_relay.harbor_agent:Tau3HarborACPRelay",
+                "bridge": {"kind": "acp"},
+                "mcp_servers": [{"name": "tau3-runtime", "transport": "streamable-http", "url": "http://host/mcp"}],
+            },
+        ),
     ],
 )
 def test_prepared_preflight_rejects_agent_and_verifier_escape_routes(tmp_path, prepared_policy, section, replacement):
