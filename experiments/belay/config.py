@@ -61,8 +61,8 @@ PRODUCTION = BelayConfig(
     wandb_project="marin-community/marin_moe",
     repository="marin-community/marin",
     intake_issue=9514,
-    # Marina's authenticated applet URL; calls carry the caller's IAP identity (page.call).
-    page_url="https://applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/",
+    # This week's sessions use the local Marina until the app is released on Marina (the recipe has the applet URL).
+    page_url="http://127.0.0.1:8091/belay/",
     default_author="ClassicLarry",
 )
 
