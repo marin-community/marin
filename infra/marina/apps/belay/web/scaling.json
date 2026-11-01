@@ -185,11 +185,6 @@
     "gpus": 32
    }
   ],
-  "eight_minute": {
-   "label": "d512, 8 min",
-   "value": null,
-   "note": "not run yet"
-  },
   "note": "Measured Paloma macro BPB, byte-weighted (the Vanilla and Basic MoE cards are token-weighted, so BPB is not directly comparable across cards); wall clock includes compile and eval."
  }
 }

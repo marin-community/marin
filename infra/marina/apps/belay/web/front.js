@@ -254,8 +254,7 @@ function startFront(RD, SC, SP) {
     });
     const srcUrl = t.src_url ?? "https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_tracks.py";
     const rows = rowsData.map((x) =>
-      `<tr><td class="mono"><a class="wb" href="${WB(x.run)}" target="_blank" rel="noopener" title="${x.run} in W&amp;B">${x.label}</a>${x.note ? `<small>${x.note}</small>` : ""}</td><td class="r">${human(x.active)}</td><td class="r">${human(x.tokens)}</td><td class="r">${sci(x.flops)}</td><td class="r">${mins(x.minutes)}</td><td class="r"><b>${x.bpb.toFixed(4)}</b></td></tr>`).join("")
-      + (t.eight_minute ? `<tr><td class="mono">${t.eight_minute.label}</td><td class="r">–</td><td class="r">–</td><td class="r">–</td><td class="r">–</td><td class="r"><span class="open">${t.eight_minute.note}</span></td></tr>` : "");
+      `<tr><td class="mono"><a class="wb" href="${WB(x.run)}" target="_blank" rel="noopener" title="${x.run} in W&amp;B">${x.label}</a>${x.note ? `<small>${x.note}</small>` : ""}</td><td class="r">${human(x.active)}</td><td class="r">${human(x.tokens)}</td><td class="r">${sci(x.flops)}</td><td class="r">${mins(x.minutes)}</td><td class="r"><b>${x.bpb.toFixed(4)}</b></td></tr>`).join("");
     const card = document.createElement("article"); card.className = `track${t.id === "comp" ? " comp" : ""}`;
     card.innerHTML = `<header><div><div class="tag">${t.tag}</div><h3>${t.name}</h3></div></header>
       <p>${t.desc}</p>
