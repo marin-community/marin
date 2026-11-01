@@ -13,8 +13,7 @@ from statistics import median
 
 import wandb
 
-from experiments.belay.config import CONFIG, TRACKS, Baseline, Rule
-from experiments.belay.submit import ExperimentSpec, run_id
+from experiments.belay.config import CONFIG, Baseline, Rule
 
 
 class Verdict(StrEnum):
@@ -136,36 +135,3 @@ def after_equal_data(time_change: float, stage_1: Verdict, tolerance: float) -> 
     if time_change > 0:
         return AfterData(True, None, f"Variant {percent} slower and won at equal data → equal-time run.")
     return AfterData(True, None, f"Variant {percent} faster → equal-time run (more steps at equal time).")
-
-
-def experiment_results(spec: ExperimentSpec) -> list[RunResult]:
-    """Final loss of every run in ``spec`` from W&B, with deltas and verdicts; refuses if any run lacks one."""
-    baseline = TRACKS[spec.track]
-    api = wandb.Api()
-    finals = {}
-    for run in spec.runs.values():
-        name = run_id(spec, run)
-        matches = list(api.runs(CONFIG.wandb_project, filters={"display_name": name}, order="-created_at"))
-        if not matches or matches[0].state != "finished" or matches[0].summary.get(baseline.metric) is None:
-            raise SystemExit(f"refusing: {name} has no finished W&B run with {baseline.metric}")
-        finals[run.name] = (int(matches[0].summary["_step"]), float(matches[0].summary[baseline.metric]))
-    controls = {r.seed: finals[r.name][1] for r in spec.runs.values() if r.control}
-    results = []
-    for run in spec.runs.values():
-        step, loss = finals[run.name]
-        if run.seed not in controls:
-            raise SystemExit(f"refusing: {spec.experiment} has no control at seed {run.seed}")
-        delta = None if run.control else round(change(loss, controls[run.seed], baseline), 4)
-        results.append(
-            RunResult(
-                name=run_id(spec, run),
-                variant=run.variant,
-                seed=run.seed,
-                control=run.control,
-                step=step,
-                loss=loss,
-                delta=delta,
-                verdict=None if delta is None else verdict(delta, baseline),
-            )
-        )
-    return results

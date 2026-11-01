@@ -117,9 +117,6 @@ class PageState:
             raise SystemExit(f"{len(ideas)} ideas on the Belay page have registry id {registry_id}")
         return ideas[0] if ideas else None
 
-    def runs_of(self, registry_id: str) -> list[PageRun]:
-        return [r for r in self.runs if r.registry_id == registry_id]
-
 
 class PageRequestError(RuntimeError):
     def __init__(self, status_code: int, detail: str) -> None:
