@@ -287,6 +287,8 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
+MUONH_MOMENTUM_WARMUP_START = 0.85
+"""MuonH momentum at step 0 under ``muonh_momentum_warmup`` (modded-nanogpt's warmup start)."""
 _ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
 
 
@@ -335,6 +337,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     embed_weight_decay: float = 0.0
     """Fixed (not annealed) decoupled decay of ``token_embed``, ``p <- p (1 - adam_lr_t wd) - adam_lr_t u``; needs
     ``embed_optimizer`` ``ademamix`` or ``adam``."""
+    muonh_momentum_warmup: int | float = 0.0
+    """Steps (or fraction of the run) over which the MuonH momentum rises linearly from
+    ``MUONH_MOMENTUM_WARMUP_START`` to ``momentum`` (modded-nanogpt's momentum warmup). 0: constant ``momentum``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -348,10 +353,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
-        def muonh_at(lr):
+        def muonh_at(lr, momentum):
             return optax.chain(
                 scale_with_grug_muonh(
-                    momentum=self.momentum,
+                    momentum=momentum,
                     nesterov=self.nesterov,
                     steps=self.backend_steps,
                     muon_eps=self.muon_epsilon,
@@ -396,13 +401,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             decay = (_fixed_decoupled_decay(self.embed_weight_decay),) if self.embed_weight_decay else ()
             return optax.chain(moments, *decay, optax.scale(-lr))
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, muonh_momentum=self.momentum):
             transforms = {
-                "muonh": muonh_at(learning_rate),
+                "muonh": muonh_at(learning_rate, muonh_momentum),
                 "adamh": optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)),
                 "adam": adam_at(adam_lr, decay=True),
                 "attn_res_query": adam_at(adam_lr * ATTN_RES_QUERY_LR_SCALE),
-                "kda_beta": muonh_at(learning_rate * KDA_BETA_LR_MULT),
+                "kda_beta": muonh_at(learning_rate * KDA_BETA_LR_MULT, muonh_momentum),
                 "kda_beta_adam": adam_at(adam_lr, decay=True),
                 "kda_decay": adam_at(adam_lr),
                 # The entropy head and the skip router: no decay pull. (Group names stay as the checkpoints
@@ -416,7 +421,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
             )
 
-        return optax.inject_hyperparams(optimizer)(learning_rate=learning_rate_schedule, adam_lr=adam_lr_schedule)
+        hyperparams = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
+        if self.muonh_momentum_warmup:
+            # Injected only when on, so the flag-off optimizer state keeps its structure.
+            hyperparams["muonh_momentum"] = optax.linear_schedule(
+                MUONH_MOMENTUM_WARMUP_START,
+                self.momentum,
+                _convert_frac_or_steps(self.muonh_momentum_warmup, num_train_steps),
+            )
+        return optax.inject_hyperparams(optimizer)(**hyperparams)
 
     def __post_init__(self):
         if self.kda_beta_group not in ("kda_beta", "adam"):
