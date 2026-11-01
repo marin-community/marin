@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, write_spec
+from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, score_value, write_spec
 from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
@@ -38,6 +38,7 @@ from experiments.belay.submit import (
     launch_command,
     new_spec_text,
     parse_spec,
+    run_id,
     run_suffix,
     track_of_comment,
     with_launched,
@@ -130,6 +131,25 @@ def test_launch_held_at_the_node_cap() -> None:
     with pytest.raises(SystemExit, match="held"):
         check_launch(parse_spec(SPEC), jobs)
     check_launch(parse_spec(SPEC), jobs[:-1])  # two runs fit once one more node is free
+
+
+def test_a_shared_control_is_not_launched_again_and_takes_no_node() -> None:
+    text = new_spec_text(
+        "X0002", Track.COMPETITIVE_D512, "v", [("--opt-set", "muonh_decay_power=0.5")], "", "belay-X0001-control"
+    )
+    spec = parse_spec(text)
+    control = spec.runs["control"]
+    assert run_id(spec, control) == "belay-X0001-control"
+    assert run_id(spec, spec.runs["seed0"]) == "belay-X0002-seed0"
+    # The owner's control is running and the cap has room for exactly one more node: the variant alone fits.
+    jobs = [IrisJob("/u/belay-X0001-control-coord", "running", "")]
+    jobs += [IrisJob(f"/u/belay-X9{i:03d}-seed0-coord", "running", "") for i in range(CONFIG.node_cap - 2)]
+    check_launch(spec, jobs)
+
+
+def test_score_na_marks_an_entry_with_no_potential_score() -> None:
+    assert score_value("na") is None
+    assert score_value("7") == 7
 
 
 def test_comment_track_defaults_to_speedrun_and_unknown_is_refused() -> None:
