@@ -290,6 +290,7 @@ KDA_BETA_LR_MULT = 2.0
 MUONH_MOMENTUM_WARMUP_START = 0.85
 """MuonH momentum at step 0 under ``muonh_momentum_warmup`` (modded-nanogpt's warmup start)."""
 _ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
+_VALUE_EMBED_TABLE = re.compile(r"(?:^|\.)value_embed$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -340,6 +341,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_momentum_warmup: int | float = 0.0
     """Steps (or fraction of the run) over which the MuonH momentum rises linearly from
     ``MUONH_MOMENTUM_WARMUP_START`` to ``momentum`` (modded-nanogpt's momentum warmup). 0: constant ``momentum``."""
+    value_embed_lr_mult: float = 0.0
+    """Adam LR multiplier of the value-embedding tables alone (``value_embed``), in their own ``value_embed`` group
+    with the ``adam`` group's decay. 0: off (the tables stay in ``adam`` at ``adam_lr``)."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -417,6 +421,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
             }
+            if self.value_embed_lr_mult:
+                # Added only when on, so the flag-off optimizer state keeps its structure.
+                transforms["value_embed"] = adam_at(adam_lr * self.value_embed_lr_mult, decay=True)
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
             )
@@ -452,6 +459,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
+            if self.value_embed_lr_mult and _VALUE_EMBED_TABLE.search(path_lower):
+                return "value_embed"
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates.
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
