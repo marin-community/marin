@@ -37,3 +37,9 @@ trials:
   settings:
     sublayer_out_norm: 'true'
   note: throws away magnitude signal AttnRes uses
+potential:
+  score: 1
+  rationale: Peri-LN output norm +0.0073/+0.0124 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d65f36dd79e1

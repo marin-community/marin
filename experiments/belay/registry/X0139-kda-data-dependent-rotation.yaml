@@ -45,3 +45,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863282772
   note: neutral for loss
+potential:
+  score: 3
+  rationale: KDA data-dependent rotation +0.0005/-0.0002 at +3% step; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 47660cab3802

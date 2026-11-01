@@ -47,3 +47,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'In the Belay Ckpt Oct 20 2026 config: train.py XLA_GPU_COMMAND_BUFFER_FLAG in the default XLA flags'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 10
+  rationale: 'in belay-ckpt-2026-10-20: XLA command buffers'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 2b0f3e64077a

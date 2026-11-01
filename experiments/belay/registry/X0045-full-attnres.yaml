@@ -77,3 +77,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
   note: neutral and 3% slower; block AttnRes stays
+potential:
+  score: 3
+  rationale: full AttnRes mean +0.001 at fair fixed time, 3% slower; earlier -0.0149 was luck
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 8626167678d0

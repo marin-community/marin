@@ -37,3 +37,9 @@ trials:
   settings:
     adam_cautious: 'true'
   note: slows bigram table's rare rows
+potential:
+  score: 2
+  rationale: cautious Adam +0.0031/+0.0023 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: fbf16ec29b7f

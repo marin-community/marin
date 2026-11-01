@@ -271,3 +271,9 @@ events:
   as_adopted:
   - num_shared_experts=1
   - shared width 768 (1 x 1.5d)
+potential:
+  score: 10
+  rationale: 'adopted: shared expert config part of candidate 8'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 0416043ff8c6

@@ -17,3 +17,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: 'GB200 one rack: 16.83 → 14.59 s/step (−13%), 28.9% MFU'
   candidate: Belay Ckpt 1
+potential:
+  score: 10
+  rationale: 'adopted: MXFP8 on GB200, 16.83->14.59 s/step (-13%)'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: fdf53766f002

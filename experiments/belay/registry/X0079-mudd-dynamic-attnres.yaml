@@ -35,3 +35,9 @@ trials:
     attn_res_dynamic_rank: '64'
     W2 init: '0'
   step_time_change: -7% ex/s (741)
+potential:
+  score: 3
+  rationale: dynamic AttnRes logits -0.0007 d512 at -7% ex/s; neutral and slower
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: ad09a9413d92

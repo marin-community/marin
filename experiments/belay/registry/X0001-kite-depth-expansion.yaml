@@ -19,3 +19,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874512320
   note: 'read but skipped at d512: gain is inference cost at fixed KV; pieces already lost here'
+potential:
+  score: 3
+  rationale: 'closed unrun: read but skipped at d512; gain is inference KV cost, component pieces already lost here'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 023ac0185358

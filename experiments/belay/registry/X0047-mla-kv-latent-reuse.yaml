@@ -37,3 +37,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
   note: +0.0056, stays out of recipe
+potential:
+  score: 2
+  rationale: cross-layer KV reuse +0.0056 d512 (halves MLA KV cache); closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 8e22e5c36d68

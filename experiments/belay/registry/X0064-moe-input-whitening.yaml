@@ -50,3 +50,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5844763941
   note: batch statistics a clear negative; not pursued
+potential:
+  score: 0
+  rationale: batch centering +0.35 (train/eval mismatch); whitening cancelled 18% slower
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 3d493b39bdb6

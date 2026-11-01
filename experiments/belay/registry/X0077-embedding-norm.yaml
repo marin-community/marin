@@ -90,3 +90,9 @@ trials:
   settings:
     embed_scale: '2'
   tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
+potential:
+  score: 3
+  rationale: embedding scale +-0.002 noise; removing RMS norm +0.027
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 97c9f25af7ad

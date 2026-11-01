@@ -210,3 +210,9 @@ events:
   date: '2026-10-05'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5986874164
   note: gain/scale/combine family closed; no renorm is loss-neutral
+potential:
+  score: 3
+  rationale: renorm sum variants within noise (+0.003 to -0.001); family closed loss-neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: e414586874c8

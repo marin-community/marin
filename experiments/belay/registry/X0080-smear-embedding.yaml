@@ -32,3 +32,9 @@ trials:
   settings:
     lambda init: '0'
     gate width: 12 dims
+potential:
+  score: 4
+  rationale: embedding smear -0.0012 d512, single run; noise, cheap
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: fbea88f2ccea

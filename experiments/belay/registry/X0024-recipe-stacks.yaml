@@ -808,3 +808,10 @@ trials:
     shared_expert_intermediate_dim: '768'
   step_time_change: same as cand 7
   note: stacks at ~half the standalone sum; k 2.43x vs clean KMA
+potential:
+  score: 9
+  rationale: 'bundle entry: candidate 1 fixed-time -0.0177 d512, -0.0178 d768, -0.0129 d1024; candidates 7/8 k 2.4x; pieces
+    scored separately'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 069e07cb9fa8

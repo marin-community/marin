@@ -253,3 +253,9 @@ events:
   date: '2026-10-03'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5963942524
   note: lower Inkling r_proj Adam LR does not help
+potential:
+  score: 2
+  rationale: per-family LR multipliers all lose (+0.001 to +0.015) d512; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a11db61ad6d0

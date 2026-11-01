@@ -54,3 +54,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
   note: Momentum warmup closed; overshoot unchanged
+potential:
+  score: 3
+  rationale: Muon momentum warmup +0.0012, +0.0004/+0.0019; overshoot unchanged
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d5695e122d7e

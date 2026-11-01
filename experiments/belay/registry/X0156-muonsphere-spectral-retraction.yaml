@@ -94,3 +94,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5868298823
   note: closed in batch 102 round
+potential:
+  score: 1
+  rationale: MuonSphere spectral retraction +0.013 to +0.06; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: ccfa1ba59e8e

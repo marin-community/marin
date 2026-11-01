@@ -87,3 +87,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: router_combine=sigmoid_renorm (not sqrt_softplus_renorm)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 8
+  rationale: 'prior (Ckpt 1); retest pending: sqrt-softplus combine won in candidate 9 and held at d768'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 6c71a090af9b

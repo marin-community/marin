@@ -55,3 +55,9 @@ trials:
   settings:
     coefficient_type: polar_express
   note: neutral; 5 steps far from converged
+potential:
+  score: 3
+  rationale: Polar Express NS coefficients +0.0007, +0.0003/+0.0021; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 0b322564ef62

@@ -50,3 +50,9 @@ trials:
     params: dt_bias, A_log, W_a
     Adam betas: (0.95, 0.999)
   tuned: 0.3x LR vs beta (0.95, 0.999)
+potential:
+  score: 3
+  rationale: KDA decay-param LR/betas +0.0015/-0.0003 d512; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 79c92388dce2

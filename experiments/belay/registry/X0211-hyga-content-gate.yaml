@@ -106,3 +106,9 @@ trials:
   step_time_change: 192.2 ms
   tuned: H-gate / C-gate / both; MLA vs KDA
   note: mean delta
+potential:
+  score: 4
+  rationale: MLA H-gate -0.0027 2-seed mean at +0.9% step, nets ~-0.001 fixed time
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 2ddfc097dc0b

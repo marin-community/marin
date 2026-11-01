@@ -58,3 +58,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5843750617
   note: push AttnRes stays
+potential:
+  score: 1
+  rationale: pull-style AttnRes +0.0093 / +0.0071 d512 and 4% slower; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: e0357bf529e6

@@ -92,3 +92,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5917952812
   note: Narrower KV latent loses; full 512 kept
+potential:
+  score: 1
+  rationale: narrower MLA KV latent loses (+0.016, +0.019, +0.005-0.009) d512; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 7ae47ca689ac

@@ -58,3 +58,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905408208
   note: Diverges with GDN-2 gates; would need Complex-KDA kernel handling
+potential:
+  score: 1
+  rationale: beta (0,2) +0.0024, [0,2] diverged NaN on both seeds; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 794f7e225d1f

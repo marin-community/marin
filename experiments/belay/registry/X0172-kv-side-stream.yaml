@@ -65,3 +65,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5874871612
   note: no signs of life; transport bottleneck
+potential:
+  score: 1
+  rationale: KV side stream +0.065 to +0.079 and 8-12% slower; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: cdaf31e07ff4

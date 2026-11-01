@@ -89,3 +89,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
   note: bimodal; good mode only matches base
+potential:
+  score: 1
+  rationale: PLE bimodal, good mode matches base, bad mode +0.059; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 5e3039153beb

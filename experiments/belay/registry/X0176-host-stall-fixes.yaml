@@ -49,3 +49,9 @@ trials:
   step_time_change: median 184.9 ms, mean 201.7 ms
   note: delta computed from reported losses; stalls remain
   derived: true
+potential:
+  score: 5
+  rationale: 'host-stall fixes: mean step 204.3->199.8 ms single-process, loss unchanged; 8-process runs still lose ~8%'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 9a86441c8442

@@ -33,3 +33,9 @@ trials:
   settings:
     moe_hash_layers: '0'
   note: 'neutral: L0 routing can be free'
+potential:
+  score: 3
+  rationale: hash routing on layer 0 +0.0004 d512; neutral, no speed measured
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f51f7e9542b7

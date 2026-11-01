@@ -48,3 +48,9 @@ trials:
   settings:
     router_on_embed: 'true'
   note: context-free routing
+potential:
+  score: 3
+  rationale: router on MoE latent +0.0007 at same step; embedding-only router +0.042
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 0d8bae3815a6

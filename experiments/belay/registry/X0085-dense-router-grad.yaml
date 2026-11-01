@@ -65,3 +65,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
   note: +0.065/+0.034
+potential:
+  score: 1
+  rationale: dense router gradient -0.0005/-0.0058 then +0.065/+0.034 on current recipe; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 866d47fb2bb4

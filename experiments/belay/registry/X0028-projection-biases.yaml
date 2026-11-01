@@ -34,3 +34,9 @@ trials:
     init: zero
     optimizer: Adam
   step_time_change: -1% ex/s
+potential:
+  score: 3
+  rationale: projection biases +0.0003 d512 at -1% ex/s; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 4ac9c1b4c358

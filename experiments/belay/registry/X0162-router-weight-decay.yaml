@@ -40,3 +40,9 @@ trials:
     router WD: '0.1'
   tuned: 0 / 0.02 / 0.1
   note: seed mean
+potential:
+  score: 3
+  rationale: router WD 0.1 -0.0015, WD 0 +0.0002 seed means; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d5ba51640669

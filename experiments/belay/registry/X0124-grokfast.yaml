@@ -65,3 +65,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5861075194
   note: Adam-only lambda 1 still +0.0071
+potential:
+  score: 1
+  rationale: Grokfast +0.04 / +0.007 d512; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 7161bc7b8995

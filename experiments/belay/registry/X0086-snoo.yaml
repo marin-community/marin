@@ -171,3 +171,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
   note: +0.034/+0.038 on current recipe
+potential:
+  score: 1
+  rationale: SNOO mid-run gain lost by end; +0.0003 to +0.038; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 2ec21cd28de2

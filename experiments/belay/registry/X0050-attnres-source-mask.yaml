@@ -32,3 +32,9 @@ trials:
     attn_res_full: 'true'
     attn_res_mask_attn_for: '4'
   note: -0.0011 vs base
+potential:
+  score: 3
+  rationale: AttnRes source masking -0.0011 vs base; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 4b208f3d4f54

@@ -371,3 +371,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: value_embeds=none'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 9
+  rationale: 'prior (Ckpt 1); retest pending: gated value embeddings -0.0086/-0.0123 nearly free, two seeds'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: bfba6dea5bff

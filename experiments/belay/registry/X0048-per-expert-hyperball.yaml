@@ -74,3 +74,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5918588189
   note: shared per-layer sphere stays
+potential:
+  score: 3
+  rationale: per-expert hyperball +0.0034/+0.0018, -0.0008 retest; noise, closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: de690405283a

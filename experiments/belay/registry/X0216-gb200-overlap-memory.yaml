@@ -19,3 +19,9 @@ events:
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: fits the no-bigram recipe on one rack (166.6 GiB peak at slop 90 vs 183.6 at 105)
   candidate: Belay Ckpt 1
+potential:
+  score: 10
+  rationale: 'adopted: GB200 memory/overlap schedule fits recipe on one rack'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 1077a54afdaf

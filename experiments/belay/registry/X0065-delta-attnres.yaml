@@ -94,3 +94,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5850337517
   note: additive routing and output deltas both lose
+potential:
+  score: 1
+  rationale: delta AttnRes variants lose (+0.0015 to +0.07); closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f994ddddf992

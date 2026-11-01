@@ -102,3 +102,9 @@ events:
   date: '2026-10-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927535181
   note: within noise; DC-style follow-up not worth building
+potential:
+  score: 3
+  rationale: sliding-window branch in MLA -0.0013 to +0.001; within noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 44e4cbc67962

@@ -725,3 +725,10 @@ events:
   date: '2026-10-14'
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: bigram table dropped for Belay Ckpt 1
+potential:
+  score: 7
+  rationale: 'removed: 1M LR x10 -0.022 d512 (-9% ex/s, est -0.007 fixed time), -0.014 d768; rule-A d768 +0.006/+0.009; dropped
+    for Ckpt 1'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 39ba938906de

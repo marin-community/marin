@@ -75,3 +75,9 @@ events:
   date: '2026-10-02'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5943888764
   note: worse at lambda 1 and 0.25
+potential:
+  score: 2
+  rationale: cautious WD +0.0007 to +0.0038; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: eb7c75ef09ad

@@ -25,3 +25,9 @@ trials:
   settings:
     alpha: '0.25'
   note: 'probe at step 1408: +57 KDA, +240 MLA, +102 shared (1e-4 nats held-out); within noise at 2600'
+potential:
+  score: 4
+  rationale: 'momentum-agreement boost: only a held-out probe (mid-run positive, noise at 2600); no training run'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 456106bf4884

@@ -37,3 +37,9 @@ events:
   date: '2026-10-05'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5990285128
   note: per-token output temperature neutral
+potential:
+  score: 3
+  rationale: per-token logit temperature +0.0011/-0.0007; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 64b12b8a317e

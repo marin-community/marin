@@ -71,8 +71,8 @@ trials:
   note: Seed-1 confirmation under a protocol step since dropped (2026-11-01); not part of the verdict.
   step_time_change: 0%
 potential:
-  score: 7
-  rationale: Equal-time win Δ -0.0148 at 480 s (equal data -0.058); 31% slower step and a large port; one protocol seed
+  score: 8
+  rationale: CPLM Plus speedrun fixed time -0.0148 at 0% step; -0.0578 eq steps at +31%; seed-1 -0.0087 under dropped protocol
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 4ec127c37b49

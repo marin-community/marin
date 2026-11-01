@@ -177,3 +177,9 @@ trials:
   - lc1-b23-sum-router
   settings:
     straight-sum input: router
+potential:
+  score: 1
+  rationale: 'ablation: every straight-sum reader loses (+0.001 to +0.028); AttnRes components needed'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 9995296eaabe

@@ -40,10 +40,17 @@ trials:
     ce_collapse_stats_stride: '32'
   commit: d24346c484
   step_time_change: +0.0% (0.1752/0.1762 vs 0.1758/0.1756 s/step)
-  note: both arms ran with ce_collapse_stats_stride=32; fp32 collapse on 0 tokens, max margin 9.4 (cap bound 10.3), 19% of tokens past the bf16 cliff by the end
+  note: both arms ran with ce_collapse_stats_stride=32; fp32 collapse on 0 tokens, max margin 9.4 (cap bound 10.3), 19% of
+    tokens past the bf16 cliff by the end
 events:
 - type: closed
   batch: X0219
   date: '2026-10-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6409482331
   note: noise (-0.0008 mean Paloma); fp32 CE + logit_soft_cap=10 make softmax collapse impossible (margin <= 10.3 < 16.6)
+potential:
+  score: 3
+  rationale: stable softplus CE -0.0021/+0.0005 fixed time; collapse already impossible with cap 10
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 6c0f8327a329

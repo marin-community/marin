@@ -111,3 +111,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: muon_pre_norm=none (Ckpt 1: in)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 7
+  rationale: 'prior (Ckpt 1); retest pending: MuonEq pre-NS norm; ablating it cost +0.006'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 1e6a5dedabdd

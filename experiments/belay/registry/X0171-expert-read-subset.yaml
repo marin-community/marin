@@ -339,3 +339,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5875304252
   note: 'fair gather version: +0.005 at 2 groups, +0.033 at 4; closed with clean numbers'
+potential:
+  score: 1
+  rationale: per-expert fixed read slices lose +0.004 to +0.12; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a9b9c471a45a

@@ -49,3 +49,9 @@ events:
   date: '2026-10-05'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5989031075
   note: FP8 dropped (batch 189 stopped)
+potential:
+  score: 2
+  rationale: FP8 MoE dispatch saves no time; eval crash; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: e0c01c9d8342

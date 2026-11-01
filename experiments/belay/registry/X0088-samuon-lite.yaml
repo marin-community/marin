@@ -77,3 +77,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853950746
   note: neutral to worse, -4.5% ex/s; not adopted
+potential:
+  score: 2
+  rationale: SAMuon-lite neutral to worse (-0.0016 to +0.0055) at -4.5% ex/s
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 0de02969f7a8

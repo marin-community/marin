@@ -130,3 +130,9 @@ events:
   date: '2026-10-02'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5960243376
   note: per-channel attention gates neutral
+potential:
+  score: 3
+  rationale: elementwise attention gate +0.0008 to +0.0017 mean; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 13e092726e28

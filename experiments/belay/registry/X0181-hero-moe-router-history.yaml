@@ -37,3 +37,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5905920449
   note: Loses +0.0126; closed
+potential:
+  score: 1
+  rationale: HERO-MoE router history +0.0119/+0.0132; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f939ae11e1b9

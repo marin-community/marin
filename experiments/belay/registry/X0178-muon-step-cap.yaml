@@ -16,3 +16,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5902307136
   note: Per-matrix step cap follow-up from the OKLS deep dive closed without a run after warmup tests
+potential:
+  score: 2
+  rationale: per-matrix step cap closed without a run after warmup tests showed overshoot is productive
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: fd8d30b7bd75

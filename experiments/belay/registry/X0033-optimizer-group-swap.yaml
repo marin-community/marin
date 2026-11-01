@@ -49,3 +49,9 @@ trials:
   - lc1-b07-embah
   settings:
     embed_group: adamh
+potential:
+  score: 1
+  rationale: lm_head on MuonH +0.0186, embedding on AdamH +0.0098 d512; loses
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 5cc43b4f4979

@@ -53,3 +53,9 @@ trials:
     decay per sub-step: full log-decay
   step_time_change: 172.7 vs 171.6 ms
   tuned: half vs full decay
+potential:
+  score: 2
+  rationale: paired-head KDA +0.005 to +0.011; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 33c0153de276

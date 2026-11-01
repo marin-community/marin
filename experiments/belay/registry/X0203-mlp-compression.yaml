@@ -265,3 +265,9 @@ events:
   date: '2026-10-04'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5984981491
   note: closed at d512 at 1x and 100x
+potential:
+  score: 1
+  rationale: shared-expert compression losses all lose (+0.0002 to +0.045), worse at 100x
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 36d4e2b5802f

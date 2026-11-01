@@ -31,3 +31,9 @@ trials:
   settings:
     bias: per (gate, source), zero-init
     optimizer: Adam at 0.1x Adam LR
+potential:
+  score: 3
+  rationale: AttnRes per-source bias +0.0011 d512; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 8d56b33721bd

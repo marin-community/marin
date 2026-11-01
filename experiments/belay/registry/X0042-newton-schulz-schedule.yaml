@@ -145,3 +145,9 @@ events:
   date: '2026-10-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927322746
   note: 3 steps lose; 4 steps and coefficient schedules within noise
+potential:
+  score: 3
+  rationale: NS step counts/schedules within noise; 3 steps lose +0.006; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 1d4bf75f6c6e

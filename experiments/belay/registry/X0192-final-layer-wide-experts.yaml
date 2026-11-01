@@ -54,3 +54,9 @@ trials:
   step_time_change: +8% (about 198 ms)
   tuned: layer 5 vs layers 4+5
   note: fixed-time cost cancels most
+potential:
+  score: 5
+  rationale: wider final-layer experts -0.007/-0.0089 at +8% step; fixed-time cost cancels most
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 1e3404863555

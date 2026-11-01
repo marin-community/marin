@@ -130,9 +130,8 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184043489
   note: warmup at 0.95 is noise (-0.0027 mean); 0.98 is ~0.02 worse with or without warmup
 potential:
-  score: 1
-  rationale: 'Clear loss: 0.85->0.98 warmup +0.022 at speedrun equal data (Nov 1) and +0.016/+0.022 on Ckpt 1; the 0.95 variant
-    was noise'
+  score: 2
+  rationale: momentum warmup to 0.95 is noise (-0.0027 mean); 0.98 is ~+0.02 with or without warmup
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: b7a7c7753c76
+  inputs_digest: 0c97be6c1412

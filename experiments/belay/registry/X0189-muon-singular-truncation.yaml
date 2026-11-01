@@ -440,3 +440,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920827076
   note: 'closed: bottom 20% harmless, not a recipe change'
+potential:
+  score: 3
+  rationale: zeroing bottom 20% singular directions harmless (+-0.002); 80% loses; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: dd36eb8124b7

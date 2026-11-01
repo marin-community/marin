@@ -43,3 +43,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5853982326
   note: neutral over 2 seeds; not stacked
+potential:
+  score: 3
+  rationale: SSMax on MLA +0.0043/-0.0021; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: c59072468588

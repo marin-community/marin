@@ -111,3 +111,9 @@ events:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5934720837
   note: 'ML runs launch without PGLE: it caused CUDA launch-failure crash loops (about +3% step)'
   candidate: runtime
+potential:
+  score: 6
+  rationale: 'removed: PGLE -2 to -3% step (~-0.0036 fixed time) but CUDA launch-failure crash loops'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a210bfbe5fc7

@@ -27,3 +27,9 @@ trials:
   - lc1-b07-wu5
   settings:
     warmup: 5%
+potential:
+  score: 2
+  rationale: warmup 5% +0.0044 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 7c4190c265d3

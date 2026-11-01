@@ -40,3 +40,9 @@ events:
   date: '2026-09-29'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5884208355
   note: No gain at our 524k-row table size; retry only with a much larger table
+potential:
+  score: 3
+  rationale: count-sketch signs +0.0006/+0.0065 at 524k rows; retry only with bigger table
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 37d2aa52a095

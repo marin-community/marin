@@ -72,3 +72,9 @@ trials:
     xsa_mode: tanh
     alpha init: '0'
   tuned: xsa_mode learned/gated/tanh
+potential:
+  score: 3
+  rationale: learnable XSA -0.0002/+0.0012/+0.0078 d512; neutral to loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 5909f6dc23e5

@@ -32,3 +32,9 @@ trials:
     NorMuon beta2: '0.95'
   step_time_change: -1.8% ex/s
   note: neutral after fair-step correction
+potential:
+  score: 4
+  rationale: NorMuon -0.0025 d512 at -1.8% ex/s; neutral after fair-step correction
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f977a5eb66af

@@ -59,3 +59,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5857738032
   note: not adopted
+potential:
+  score: 2
+  rationale: PathMoE shared router +0.0027/+0.003 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 0bfad17049d3

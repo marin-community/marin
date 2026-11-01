@@ -338,3 +338,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: num_experts_per_token=8 (Ckpt 1 adopted top-10)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 7
+  rationale: 'prior (Ckpt 1); retest pending: top-10 of 384 won but adds active compute; house rule favors top-8'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f149ecd3a23b

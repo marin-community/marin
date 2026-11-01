@@ -137,3 +137,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
   note: 'closed at d512: same data +0.0023, 2x prefill +0.0030, 8x +0.0039'
+potential:
+  score: 2
+  rationale: n-gram stat memory +0.0023 to +0.016 at same data, prefill no better; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 7f18565f2e29

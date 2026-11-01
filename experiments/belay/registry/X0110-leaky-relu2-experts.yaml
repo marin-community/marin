@@ -77,3 +77,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5858739832
   note: Parameter Golf batch closed with no adoptions
+potential:
+  score: 3
+  rationale: LeakyReLU2 -0.0019/+0.0006, slope 0.3 +0.0001; seed-0 gain was noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a0db17c6203e

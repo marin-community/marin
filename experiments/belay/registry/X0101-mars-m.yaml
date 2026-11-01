@@ -36,3 +36,9 @@ trials:
   settings:
     muon_mars_gamma: '0.025'
   note: neutral, -1% ex/s; not adopted
+potential:
+  score: 3
+  rationale: MARS-M -0.0003 d512 at -1% ex/s; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 8af84fe14aab

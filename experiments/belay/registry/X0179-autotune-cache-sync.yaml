@@ -55,3 +55,9 @@ events:
   candidate: candidate 9 runtime
   as_adopted:
   - sync every 30 min (b25ed70f4a)
+potential:
+  score: 10
+  rationale: 'adopted: autotune cache sync every 30 min, ~4-5% step back (~-0.008 fixed time)'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 9240be8fc48d

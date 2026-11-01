@@ -34,3 +34,9 @@ trials:
     dual_attn_prev: 'true'
   step_time_change: +8% (193.0 vs 178.1 ms)
   note: neutral; loss at fixed time
+potential:
+  score: 2
+  rationale: previous-step MLA weights -0.0014 at +8% step; loses at fixed time
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 3d6d520356aa

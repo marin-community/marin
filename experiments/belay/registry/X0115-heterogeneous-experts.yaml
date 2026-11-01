@@ -146,3 +146,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859115401
   note: no bank mix beats uniform ReLU2 1.5x; code stays for hero scale
+potential:
+  score: 3
+  rationale: heterogeneous expert banks neutral to worse (0.0 to +0.009); closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 4a1df83aaedc

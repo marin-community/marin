@@ -90,3 +90,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: router_lr_mult=1.0 (Ckpt 1: 0.5)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 5
+  rationale: 'prior (Ckpt 1); retest pending: router Adam LR x0.5 -0.0014/-0.0035, inside noise'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 559faa9dfb79

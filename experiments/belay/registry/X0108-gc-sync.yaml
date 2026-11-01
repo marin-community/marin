@@ -57,3 +57,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'In the Belay Ckpt Oct 20 2026 config: train.py gc.freeze/gc.disable with synchronized collection'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 10
+  rationale: 'in belay-ckpt-2026-10-20: synchronized GC'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 5fdeb24fd77a

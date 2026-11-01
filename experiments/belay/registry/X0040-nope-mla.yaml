@@ -164,3 +164,9 @@ events:
   date: '2026-09-28'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5863252069
   note: +0.0017 at equal steps
+potential:
+  score: 4
+  rationale: NoPE +0.0015/+0.0019 equal steps, ~neutral fixed time with +2% speed; maybe revisit at d1280
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 07fb9ca1f9dd

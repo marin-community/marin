@@ -228,3 +228,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: kda_beta_group=kda_beta, init_std_mult_beta unset (Ckpt 1: adam, 1)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 5
+  rationale: 'prior (Ckpt 1); retest pending: w_beta init x1 and Adam group (base14/15); no separate delta recorded'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 48b07e9b8eb4

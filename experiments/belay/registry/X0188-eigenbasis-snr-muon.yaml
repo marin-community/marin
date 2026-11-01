@@ -184,3 +184,9 @@ trials:
   step_time_change: 198 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: best equal-step, within noise
+potential:
+  score: 2
+  rationale: eigenbasis SNR Muon best +0.0011/-0.0025 at +7-10% step; within noise, slower
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 89f01b41d388

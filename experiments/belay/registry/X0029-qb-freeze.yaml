@@ -30,3 +30,9 @@ trials:
   - lc1-b05-qbfrz
   settings:
     qb_freeze_step: '1408'
+potential:
+  score: 2
+  rationale: freezing QB bias mid-run +0.0069 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a07beec25b6c

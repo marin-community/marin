@@ -148,3 +148,9 @@ events:
   date: '2026-10-14'
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 sets MLA heads equal to attention heads
+potential:
+  score: 3
+  rationale: 'removed: 6 MLA heads -0.007 eq steps but 0.0 at fixed time (+4.2% step); narrower heads neutral'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 180b91fbb5db

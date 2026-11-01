@@ -510,3 +510,10 @@ events:
   date: '2026-10-14'
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: no weight EMA in Belay Ckpt 1
+potential:
+  score: 6
+  rationale: 'removed: EMA blend -0.0059/-0.0078 2 seeds, EMA adds -0.0044 d768; later retests -0.0006/+0.0002; not in Ckpt
+    1'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d247ae2c6a08

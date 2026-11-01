@@ -127,3 +127,9 @@ events:
   date: '2026-10-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5938044710
   note: neutral at every LR where it doesn't hurt, 3-9% slower
+potential:
+  score: 2
+  rationale: token-embedding AttnRes queries neutral at best (-0.0028/-0.0012) and 3-9% slower
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: eeffe3af6f40

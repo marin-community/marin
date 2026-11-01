@@ -56,3 +56,9 @@ trials:
     rel_dim: '32'
   tuned: extent 512 / 2048, rel_dim 32
   note: seed mean
+potential:
+  score: 3
+  rationale: Inkling extent/rank sweeps -0.0013 to 0.0; noise
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 36aff281f91f

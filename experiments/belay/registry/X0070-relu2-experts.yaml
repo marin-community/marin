@@ -392,3 +392,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'In the Belay Ckpt Oct 20 2026 config: moe_ungated_relu2=true, shared_ungated_relu2=true'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 10
+  rationale: 'adopted: ungated ReLU2 1.5x experts, -0.005/-0.006 at same step time'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 540b32e8f8a9

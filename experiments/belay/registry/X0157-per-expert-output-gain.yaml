@@ -23,3 +23,9 @@ trials:
   delta:
   - -0.0022
   - -0.0007
+potential:
+  score: 4
+  rationale: per-expert output gain -0.0022/-0.0007; noise, cheap
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: bc49b6a6c620

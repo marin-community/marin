@@ -146,3 +146,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'In the Belay Ckpt Oct 20 2026 config: norms adopted; learnable qk_mult not (fixed 1.3)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 10
+  rationale: 'adopted into belay-ckpt-2026-10-20: MLA q/k norms (qk_mult fixed 1.3, not learnable)'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 6bb7f23179d2

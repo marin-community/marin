@@ -46,3 +46,9 @@ trials:
     router optimizer: MuonH
     router LR: x0.5
   tuned: router LR x1 / x0.5
+potential:
+  score: 3
+  rationale: router on MuonH + temperature +0.0005/-0.0005, LR x0.5 worse; neutral
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 7754955ffe17

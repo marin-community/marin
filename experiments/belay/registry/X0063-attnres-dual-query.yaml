@@ -50,3 +50,9 @@ trials:
     attn_res_dual_query: 'true'
     q_b init sigma: '0.02'
   tuned: sigma 0.005/0.02
+potential:
+  score: 2
+  rationale: two-query AttnRes +0.0042/+0.0067 d512; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 555edf13a088

@@ -72,3 +72,9 @@ trials:
     table LR mult: '70'
   tuned: table LR x10 / x20 / x70
   note: LR-insensitive cost about +0.003
+potential:
+  score: 2
+  rationale: row-sparse Adam on bigram table LR-insensitive +0.003 cost
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 23873fb070f4

@@ -198,3 +198,10 @@ events:
   date: '2026-10-14'
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 uses beta1 0.9
+potential:
+  score: 4
+  rationale: beta1 0.8 -0.0047 4 seeds but bundled with z-loss 0 (house rule); per-category beta1 noise; removed for Ckpt
+    1
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d17afc111175

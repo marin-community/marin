@@ -59,3 +59,9 @@ events:
   date: '2026-10-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5927887848
   note: neither variant helps
+potential:
+  score: 2
+  rationale: expert visit bias rows +0.0067/+0.0032, +0.002/-0.0016; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: f4631e53b078

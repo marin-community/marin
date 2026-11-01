@@ -29,3 +29,9 @@ trials:
   settings:
     MLA q ShortConv: 'on'
   step_time_change: -1.5% ex/s
+potential:
+  score: 2
+  rationale: ShortConv on MLA q +0.0023 d512 at -1.5% ex/s; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: c46a7502cca7

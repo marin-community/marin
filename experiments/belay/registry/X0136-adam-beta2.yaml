@@ -130,3 +130,9 @@ events:
   date: '2026-10-14'
   comment_url: https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_ckpt1.py
   note: Belay Ckpt 1 uses the starter-kit beta2
+potential:
+  score: 7
+  rationale: 'removed: beta2 0.98 -0.0064/-0.0039 free; transfers neutral at d768 horizon test; Ckpt 1 uses starter beta2'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: c1ac36a6c2a1

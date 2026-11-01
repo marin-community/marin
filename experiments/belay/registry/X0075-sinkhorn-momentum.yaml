@@ -300,3 +300,9 @@ events:
   date: '2026-09-30'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5903520846
   note: Sinkhorn on the bigram table clearly worse; closed
+potential:
+  score: 3
+  rationale: 'Sinkhorn momentum: best embed-only -0.0049 but seed 1 -0.0019, d768 -0.0019; table variant +0.013; closed'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: fc1a196396e4

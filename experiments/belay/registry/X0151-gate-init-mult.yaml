@@ -75,3 +75,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'Not in the Belay Ckpt Oct 20 2026 config: init_std_mult_gates=1.0 (Ckpt 1: 2)'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 5
+  rationale: 'prior (Ckpt 1); retest pending: gate init x2 -0.0022 two-seed mean, inside noise'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 2a7a9bb5d2ae

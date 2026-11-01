@@ -110,3 +110,9 @@ events:
   comment_url: https://github.com/marin-community/marin/tree/belay-ckpt-2026-10-20
   note: 'In the Belay Ckpt Oct 20 2026 config: sconv=true, sconv_sites=[k, attn, mlp]'
   checkpoint: belay-ckpt-2026-10-20
+potential:
+  score: 10
+  rationale: 'in belay-ckpt-2026-10-20: ShortConv'
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: dfeab26aaffd

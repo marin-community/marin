@@ -133,3 +133,9 @@ events:
   date: '2026-09-27'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5859782677
   note: n-gram memory branch saturated at candidate 4 at d512 fixed time
+potential:
+  score: 2
+  rationale: trigram source +0.0008 at -7% ex/s (~+0.012 fixed time); gated -0.0023/-0.0008; closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 35f7e1775048

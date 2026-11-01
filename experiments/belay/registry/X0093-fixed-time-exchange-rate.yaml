@@ -29,3 +29,9 @@ trials:
   wandb:
   - lc1-b51-base-90pct
   note: 'calibration: 1% of steps ~ 0.0017 loss at d512'
+potential:
+  score: 3
+  rationale: calibration run (1% steps ~ 0.0017 loss), not a recipe idea
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: a5bcda737cef

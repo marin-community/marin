@@ -46,3 +46,9 @@ trials:
   settings:
     sublayer_dropout: '0.15'
   tuned: 0.05 / 0.15
+potential:
+  score: 1
+  rationale: sublayer dropout +0.0145 / +0.0369; loss
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: d8e65ba7f2a7

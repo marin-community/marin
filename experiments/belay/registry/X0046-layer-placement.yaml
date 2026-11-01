@@ -58,3 +58,9 @@ events:
   date: '2026-09-26'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5842638290
   note: neutral; placement at 4 and 6 stays
+potential:
+  score: 3
+  rationale: global layer placement neutral (+0.0005, -0.0006); closed
+  model: claude-opus-5-5
+  date: '2026-11-01'
+  inputs_digest: 72169d018d9f
