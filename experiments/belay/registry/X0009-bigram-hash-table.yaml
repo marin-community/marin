@@ -715,7 +715,8 @@ trials:
   batch: X0009
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561731252
-  wandb: []
+  wandb:
+  - belay-X0009-seed0-t
   settings:
     attn_res_bigram_rows: '2097152'
   commit: 8f361a1129
