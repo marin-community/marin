@@ -175,7 +175,7 @@
    {
     "rung": "d1280L16",
     "label": "d1280L16",
-    "note": "16 layers · batch 1,024 · 32 GPUs",
+    "note": "16 layers · batch 1,024",
     "run": "s7n-d1280L16",
     "active": 405700000.0,
     "tokens": 83982548992,
