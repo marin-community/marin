@@ -14,3 +14,7 @@ runs:
     variant: speedrun control
     control: true
     shared: belay-X0151-control
+launched:
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --opt-set kda_beta_group=adam
+    --model-set init_std_mult_beta=1 --seed 0 --run-id belay-X0209-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0209-seed0
+    --submit --target-cluster cw-us-east-02a --priority batch
