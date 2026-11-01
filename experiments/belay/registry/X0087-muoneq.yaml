@@ -4,7 +4,7 @@ name: MuonEq pre-NS normalization
 category: Optimizers
 summary: Normalize momentum rows or columns before Newton-Schulz.
 source: agent
-status: running
+status: done
 first_batch: 46
 tags:
 - muon
@@ -108,6 +108,13 @@ trials:
   settings:
     muon_pre_norm: in
   commit: e305cef52a
+  loss:
+  - 3.0439
+  delta:
+  - -0.0012
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '51'
