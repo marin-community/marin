@@ -7,12 +7,14 @@ a default-off flag that leaves the default model unchanged; results follow each 
 
 import datetime
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
-from experiments.belay.__main__ import prior_trials_hold, track_rows, write_spec
+from experiments.belay.__main__ import launch, prior_trials_hold, reproduce, track_rows, write_spec
 from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
@@ -39,6 +41,7 @@ from experiments.belay.submit import (
     parse_spec,
     run_suffix,
     track_of_comment,
+    with_launched,
 )
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
@@ -367,3 +370,36 @@ def test_run_names_never_repeat_an_earlier_run() -> None:
     assert suffix == "-c"
     spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
     check_launch(spec, used)  # no reused name
+
+
+@pytest.mark.parametrize("track", [t for t in Track if TRACKS[t].code == WEEKLY_BRANCH and TRACKS[t].launch])
+def test_launch_print_shows_the_full_command(track: Track, tmp_path: Path, monkeypatch, capsys) -> None:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    runs = tmp_path / "experiments/belay/runs"
+    runs.mkdir(parents=True)
+    (runs / "X0001.yaml").write_text(SPEC.replace("competitive-d512", track.value))
+    monkeypatch.chdir(tmp_path)
+    launch("X0001", "seed0", print_only=True, dry_run=False)
+    printed = shlex.split(capsys.readouterr().out.strip())
+    spec = parse_spec(SPEC.replace("competitive-d512", track.value))
+    assert printed == launch_command(spec, spec.runs["seed0"])
+    assert printed[printed.index("--run-id") + 1] == "belay-X0001-seed0"
+    assert printed[printed.index("--target-cluster") + 1] == TRACKS[track].cluster
+    assert printed[printed.index("--priority") + 1] == TRACKS[track].band
+
+
+def test_recorded_launch_is_the_submitted_command() -> None:
+    spec = parse_spec(SPEC)
+    submitted = {key: launch_command(spec, run) for key, run in spec.runs.items()}
+    recorded = yaml.safe_load(with_launched(SPEC, submitted))["launched"]
+    assert {key: shlex.split(line) for key, line in recorded.items()} == submitted
+    assert parse_spec(with_launched(SPEC, submitted)).runs == spec.runs  # the launcher ignores the record
+
+
+def test_reproduce_line() -> None:
+    line = reproduce("X0221", "9db6be9125abcdef", "seed0-b")
+    assert line == (
+        "Reproduce: [spec](https://github.com/marin-community/marin/blob/9db6be9125abcdef/experiments/belay/runs/"
+        "X0221.yaml) · `git checkout 9db6be9125 && uv run python -m experiments.belay launch X0221 --run seed0-b`"
+    )
+    assert stage_section(1, "equal data", [], line).endswith(line)

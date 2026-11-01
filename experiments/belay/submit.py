@@ -12,6 +12,7 @@ import dataclasses
 import getpass
 import itertools
 import re
+import shlex
 import subprocess
 import sys
 import typing
@@ -238,6 +239,14 @@ def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: 
 def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
     """The run's command; it runs with this interpreter from the checkout of the Track's code branch."""
     return track_command(spec.track, run_name(spec.experiment, run.name), run.flags)
+
+
+def with_launched(text: str, launched: dict[str, list[str]]) -> str:
+    """The spec ``text`` with each run's submitted command recorded under ``launched`` (a record for readers; the
+    launcher never reads it back)."""
+    data = yaml.safe_load(text)
+    data.setdefault("launched", {}).update({key: shlex.join(command) for key, command in launched.items()})
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
 
 def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
