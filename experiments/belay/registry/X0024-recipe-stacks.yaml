@@ -809,9 +809,8 @@ trials:
   step_time_change: same as cand 7
   note: stacks at ~half the standalone sum; k 2.43x vs clean KMA
 potential:
-  score: 8
-  rationale: 'bundle: cand 1 -0.0177 at d512 fixed time; ladder holds d768 -0.0178, d1024 -0.0129, d1280 -0.0073; MFU not
-    run -> 8'
+  score: null
+  rationale: 'n/a: a bundle of other entries (recipe stacks and candidates), scored through its pieces'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 069e07cb9fa8

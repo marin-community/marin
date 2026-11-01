@@ -272,8 +272,9 @@ events:
   - num_shared_experts=1
   - shared width 768 (1 x 1.5d)
 potential:
-  score: 10
-  rationale: 'adopted: shared expert config part of candidate 8'
+  score: 4
+  rationale: 'mixed: dropping shared costs +0.011 equal data; 1 shared + top-10 +0.0148 fixed time; top-4 + shared 768 -0.006
+    is ~0 at fixed time -> 4'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 0416043ff8c6

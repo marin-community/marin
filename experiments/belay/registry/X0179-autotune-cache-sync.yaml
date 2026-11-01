@@ -56,8 +56,8 @@ events:
   as_adopted:
   - sync every 30 min (b25ed70f4a)
 potential:
-  score: 10
-  rationale: 'adopted: autotune cache sync every 30 min, ~4-5% step back (~-0.008 fixed time)'
+  score: 6
+  rationale: 'speed only: ~4-5% step back, est -0.007 to -0.009 at equal time (not measured); ladder and MFU not run -> 6'
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: 9240be8fc48d
