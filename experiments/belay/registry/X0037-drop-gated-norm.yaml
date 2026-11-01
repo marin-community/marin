@@ -77,7 +77,8 @@ trials:
   batch: X0037
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562765958
-  wandb: []
+  wandb:
+  - belay-X0037-seed0
   settings:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
