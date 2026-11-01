@@ -13,6 +13,17 @@ runs:
     seed: 0
     variant: speedrun control
     control: true
+  probe:
+    seed: 0
+    variant: depth-1 MTP head, weight 0.1 decayed to 0 by 50% (timing probe)
+    flags:
+    - --model-set
+    - mtp_weight=0.1
+    - --model-set
+    - mtp_decay_frac=0.5
+    - --num-steps
+    - '150'
+    stage: probe
 launched:
   control: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
     belay-X0223-control --output-path tmp/ttl=30d/belay/runs/belay-X0223-control --submit --target-cluster cw-us-east-02a
