@@ -3,8 +3,10 @@
 
 """Client for the Belay page's API: read its state, update an idea, post to the activity feed."""
 
+import datetime
 import json
 import os
+import re
 import subprocess
 import urllib.request
 from dataclasses import asdict, dataclass, fields
@@ -29,6 +31,7 @@ class Idea:
     state: str
     registry_id: str | None
     decided_by: str | None
+    decided_at: str | None
     note: str | None
 
     @property
@@ -141,3 +144,47 @@ def post_activity(post: Post, *, github_posting: bool, dry_run: bool) -> None:
         ).stdout.strip()
     call("agent/activity", {**asdict(post), "github_url": github_url}, token=service_token())
     print(f"posted {post.kind}: {post.title}")
+
+
+HTML_COMMENT = re.compile(r"<!--.*?(-->|$)", re.DOTALL)
+DETAILS = re.compile(r"<details\b[^>]*>(.*?)</details>", re.DOTALL | re.IGNORECASE)
+# Zero-width characters and bidirectional controls, which render as nothing but can hide or reorder text.
+INVISIBLE = re.compile("[\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+
+
+def visible_text(body: str) -> tuple[str, list[str]]:
+    """``body`` as a reviewer sees it rendered, and what was removed or marked: HTML comments and invisible
+    characters are dropped; ``<details>`` bodies are kept between markers."""
+    notes = []
+    if HTML_COMMENT.search(body):
+        notes.append("removed HTML comments")
+        body = HTML_COMMENT.sub("", body)
+    if INVISIBLE.search(body):
+        notes.append("removed zero-width or bidi control characters")
+        body = INVISIBLE.sub("", body)
+    if DETAILS.search(body):
+        notes.append("marked collapsed <details> text")
+        body = DETAILS.sub(lambda m: f"[collapsed on GitHub:]{m.group(1)}[end collapsed]", body)
+    return body, notes
+
+
+def require_unedited(updated_at: datetime.datetime, approved_at: datetime.datetime) -> None:
+    """Refuse an intake comment edited after it was approved: the approval covered the earlier text."""
+    if updated_at > approved_at:
+        raise SystemExit(
+            f"refusing: the intake comment was edited after approval ({updated_at:%Y-%m-%d %H:%M} > "
+            f"{approved_at:%Y-%m-%d %H:%M} UTC); it needs re-approval."
+        )
+
+
+def comment_times(url: str) -> tuple[datetime.datetime, datetime.datetime | None]:
+    """A GitHub issue comment's last edit and the time the intake bot marked it transferred (its 🚀), if any."""
+    comment_id = url.rsplit("issuecomment-", 1)[1]
+    api = f"repos/{CONFIG.repository}/issues/comments/{comment_id}"
+    comment = json.loads(subprocess.run(["gh", "api", api], check=True, capture_output=True, text=True).stdout)
+    reactions = json.loads(
+        subprocess.run(["gh", "api", f"{api}/reactions"], check=True, capture_output=True, text=True).stdout
+    )
+    rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
+    parse = datetime.datetime.fromisoformat
+    return parse(comment["updated_at"]), parse(rockets[0]) if rockets else None

@@ -673,13 +673,15 @@ def create_api(services: Any) -> FastAPI:
     def sync_intake(sync: IntakeSync) -> dict[str, int]:
         added = 0
         with engine.begin() as conn:
+            # An idea's text freezes once it leaves `pending`: sessions work from the text that was approved.
             for c in sync.comments:
                 state = IdeaState.UPSTREAM if c.approved_upstream else IdeaState.PENDING
                 inserted = conn.execute(
                     text(
                         "INSERT INTO ideas (origin, comment_id, author, body, url, posted_at, state) "
                         "VALUES ('intake', :cid, :author, :body, :url, :posted_at, :state) "
-                        "ON CONFLICT (comment_id) DO UPDATE SET body = EXCLUDED.body RETURNING (xmax = 0)"
+                        "ON CONFLICT (comment_id) DO UPDATE SET body = CASE WHEN ideas.state = 'pending' "
+                        "THEN EXCLUDED.body ELSE ideas.body END RETURNING (xmax = 0)"
                     ),
                     {
                         "cid": c.comment_id,
