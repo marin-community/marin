@@ -147,6 +147,9 @@ class Experiment:
     trials: tuple[Trial, ...] = ()
     events: tuple[Event, ...] = ()
     potential: dict[str, object] | None = None
+    code_commits: tuple[str, ...] = ()
+    """The idea's code-change commits (``X####: <flag> (default off)``), so a weekly rollover or a retest can
+    cherry-pick them onto a new base. Empty for a settings-only idea."""
     """A session's 0-10 estimate of how promising the idea is (``score``, ``rationale``, ``model``, ``date``,
     ``inputs_digest``), written only by ``python -m experiments.belay score``."""
 
