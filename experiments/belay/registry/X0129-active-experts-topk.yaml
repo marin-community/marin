@@ -4,7 +4,7 @@ name: Number of active routed experts (top-k)
 category: MoE and routing
 summary: Routes each token to fewer (or more) experts than top-8.
 source: agent
-status: running
+status: done
 first_batch: 78
 tags:
 - top-k
@@ -337,6 +337,13 @@ trials:
   settings:
     num_experts_per_token: '10'
   commit: 79198a6fd1
+  loss:
+  - 3.0547
+  delta:
+  - 0.0096
+  steps: 2813
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '80'
