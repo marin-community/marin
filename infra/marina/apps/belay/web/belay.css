@@ -196,6 +196,7 @@ section { padding-block: 52px 4px; }
 .rungs th, .rungs td { padding: 6px 0; border-bottom: 1px solid var(--line); text-align: left; }
 .rungs th { font-weight: 500; font-family: var(--mono); font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
 .rungs .r { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.rungs td small { display: block; font-size: 10.5px; color: var(--faint); font-family: var(--body); }
 .rungs .open { color: var(--faint); font-style: italic; font-family: var(--body); }
 
 /* results */
