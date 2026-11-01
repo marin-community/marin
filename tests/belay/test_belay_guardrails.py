@@ -148,7 +148,7 @@ def test_only_ideas_in_play_are_carried() -> None:
         entry("X0005", -0.012, "+8%"),  # stage 2 pending, and running on the page: carried
         {"id": "X0006", "trials": [], "events": []},  # settings only: nothing to carry
     ]
-    running = Idea(5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None, [], None)
+    running = Idea(5, "intake", "a", None, "b", None, "running", "X0005", None, None, None, None, [], None, None)
     state = PageState([running], [], False, 8, [], [])
     assert carried_ideas(entries, state) == ["X0001", "X0005"]
 
@@ -512,7 +512,7 @@ def test_a_local_page_takes_the_service_token(monkeypatch: pytest.MonkeyPatch) -
 
 def intake_idea(url: str | None, reply_url: str | None = None) -> Idea:
     origin = "intake" if url else "proposal"
-    return Idea(3, origin, "someone", None, "b", url, "approved", "X0001", None, None, None, None, [], reply_url)
+    return Idea(3, origin, "someone", None, "b", url, "approved", "X0001", None, None, None, None, [], reply_url, None)
 
 
 def test_the_intake_reply_is_posted_once_then_edited() -> None:

@@ -129,6 +129,8 @@ class Rule(StrEnum):
 
 
 H100_CLUSTER = "cw-us-east-02a"
+# CoreWeave object storage; a cluster cw-<region> keeps its run data in bucket marin-<region>.
+COREWEAVE_S3_ENDPOINT = "https://cwobject.com"
 GB200_CLUSTER = "cw-us-east-08a"
 # The weekly experiment branch holds the code for every H100 track.
 WEEKLY_BRANCH = "weekly"

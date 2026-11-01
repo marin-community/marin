@@ -51,7 +51,7 @@ import s3fs
 import sqlalchemy
 import wandb
 
-from experiments.belay.config import CONFIG
+from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
 from experiments.belay.page import SESSION_ENV as SESSION_ID_ENV
 from experiments.belay.page import SESSION_SECRET_ENV, TOKEN_ENV, SessionCredentials, call
 from experiments.belay.submit import iris_jobs
@@ -78,7 +78,6 @@ DISPATCH_INTERVAL = 5
 STORAGE_INTERVAL = 3600
 WANDB_PATH = CONFIG.wandb_project
 STORAGE_BUCKET = "marin-us-east-02a"
-CW_ENDPOINT = "https://cwobject.com"
 SESSION_MAX_TURNS = 400
 APP_SCHEMA = "belay"
 PUBLIC_FILES = (
@@ -375,7 +374,7 @@ class Watcher:
         fs = s3fs.S3FileSystem(
             key=os.environ["CW_KEY_ID"],
             secret=os.environ["CW_KEY_SECRET"],
-            endpoint_url=CW_ENDPOINT,
+            endpoint_url=COREWEAVE_S3_ENDPOINT,
             config_kwargs={"s3": {"addressing_style": "virtual"}},
         )
         prefix = f"{STORAGE_BUCKET}/{CONFIG.output_root.rsplit('/', 1)[0]}/"
@@ -452,7 +451,8 @@ def session_prompt(session_id: str, events_file: Path) -> str:
     return f"""You are Belay session {session_id}, started {datetime.datetime.now().astimezone():%Y-%m-%d %H:%M %Z}.
 Read RUNBOOK.md (in your system prompt). Identify the event type. Run its steps exactly. If anything doesn't match,
 post to the issue and stop: `uv run python -m experiments.belay escalate --title "..." --body "..."`.
-Edit files only in section 1b, and only under experiments/grug/fast_track/ and tests/grug/test_fast_track_*.py.
+Edit files only in sections 1b and 1c: under experiments/grug/fast_track/ and tests/grug/test_fast_track_*.py,
+or a study's experiments/belay/studies/X####.py.
 
 Your events file: {events_file}
 Your first command: `uv run python -m experiments.belay start --events {events_file}`
