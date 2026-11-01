@@ -212,9 +212,7 @@ def release_app(stack: Stack) -> int:
         raise SystemExit(f"refusing to release: uncommitted changes under {APP_DIR}:\n{dirty}")
     url = f"http://127.0.0.1:{stack.marina_port}"
     try:
-        current = json.loads(stack.marina("apps", "versions", APP_ID, "--url", url, "--allow-dirty", "--json"))[
-            "current_version"
-        ]
+        current = json.loads(stack.marina("apps", "versions", APP_ID, "--url", url, "--json"))["current_version"]
     except subprocess.CalledProcessError:
         current = 0
     out = stack.marina("release", str(APP_DIR), "--base-version", str(current), "--url", url, "--allow-dirty", "--json")
