@@ -282,6 +282,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
     monkeypatch.setattr("finestore.commit.conditional_object", MemoryConditionalObject)
+    monkeypatch.setattr("rigging.filesystem.distributed_lock.conditional_object", MemoryConditionalObject)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])

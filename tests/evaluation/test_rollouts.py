@@ -212,6 +212,37 @@ def test_rollouts_replace_same_count_source_shards_and_remove_old_conversations(
     assert ReadView(root).token == completed
 
 
+def test_rollout_completion_survives_source_compaction(tmp_path):
+    root = str(tmp_path / "archive")
+    # Closing each writer leaves a compacted source shard plus a new level-zero
+    # shard. Normalization's seal then really rewrites these immutable files.
+    for index in range(3):
+        with EvaluationStore.open(root, writer_id=f"source-{index}") as store:
+            store.add_sample(
+                EvalSample(
+                    task="qa",
+                    doc_id=str(index),
+                    kind=SampleKind.GENERATION,
+                    prompt_text="Question?",
+                    output=f"answer-{index}",
+                )
+            )
+    before = ReadView(root)
+    source_paths = {shard.path for shard in before.list_shards(ARCHIVE_SAMPLES_TABLE)}
+    assert len(source_paths) > 1
+
+    normalize_rollouts(root, writer_id="rollouts")
+
+    completed = ReadView(root)
+    assert source_paths != {shard.path for shard in completed.list_shards(ARCHIVE_SAMPLES_TABLE)}
+    assert [row["content"] for row in completed.iter_rows(ARCHIVE_ROLLOUTS_TABLE)] == [
+        content for index in range(3) for content in ("Question?", f"answer-{index}")
+    ]
+    normalize_rollouts(root, writer_id="unchanged")
+    assert ReadView(root).token == completed.token
+    assert ReadView(root).is_sealed()
+
+
 @pytest.fixture
 def agent_step():
     return StepRecord(
