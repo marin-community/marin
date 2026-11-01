@@ -29,8 +29,11 @@ A human then decides what happens. Never work around a refusal.
 
 1. **Run:** `B new-idea --idea-id <N>`
    - **Expect:** the idea's text, its Track and baseline, three checks, the settable fields, and a `next:` line.
-   - **If it refuses because of the Track** (missing, unknown, `custom` or `hero-mfu`): run the escalate command
-     it prints, then stop working on this idea.
+   - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials and
+     goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
+     "retest on current recipe".
+   - **If it refuses because of the Track** (unknown, `custom` or `hero-mfu`): run the escalate command it prints,
+     then stop working on this idea. A missing Track is `speedrun`.
 2. **Check 1, house rules.** Does the idea ask for anything in section 8?
    - **If yes, or you cannot tell:** run section 6 with `--idea-id <N>` and the title
      `"Idea #<N> may break house rule: <rule>"`. Stop working on this idea.
@@ -39,10 +42,15 @@ A human then decides what happens. Never work around a refusal.
 4. **Check 3, settings.** Find the listed field or fields that make the change the idea asks for.
    - **If the idea names exact settings** (for example `--opt-set adam_ademamix_alpha=0`), use them as written.
    - **If no listed field makes the change:** the idea needs code. Run
-     `B new-idea --idea-id <N> --category "<category>"`, which registers `X####` and prints
+     `B new-idea --idea-id <N> --name "<short name>" --category "<category>"`, which registers `X####` and prints
      `next: B code-change X#### --start`. Do section 1b.
-5. **Run:** `B new-idea --idea-id <N> --category "<category>" --variant "<what changes>" --opt-set <name>=<value>`.
-   Give one `--opt-set` or `--model-set` per setting.
+   - **If the idea leaves a setting open** (a value, a range, a schedule length), choose a sensible value and list it
+     in `--defaults`, for example `--defaults "final momentum 0.98; warmup over the first 10% (idea suggests 10-20%;
+     chose 10%)"`. Escalate only when no sensible value exists. With nothing left open, pass `--defaults none`.
+5. **Run:** `B new-idea --idea-id <N> --name "<short name>" --category "<category>" --variant "<what changes>"
+   --defaults "<chosen values, or none>" --opt-set <name>=<value>`. Give one `--opt-set` or `--model-set` per
+   setting. `--name` is the registry title, at most 50 characters, such as "MuonH momentum warmup"; an idea that
+   already has an `X####` keeps its name.
    - **Expect**, in this order:
      1. the registry entry `X####` written and pushed (skipped if it already exists);
      2. the run spec written, committed and pushed;
@@ -59,12 +67,22 @@ The change goes straight onto this week's branch. No human reviews it: passing `
 
 1. **Run:** `B code-change X#### --start`
    - **Expect:** the rules below and `next: B code-change X#### --finish --model-set <flag>=<on value>`.
-2. **Edit** only `experiments/grug/fast_track/` and `tests/grug/test_fast_track_*.py`:
+2. **If the idea points at a pull request** (`#NNNN`), read it with `gh pr view NNNN --json title,body,files` and
+   `gh pr diff NNNN`, and the PRs it builds on the same way. Port the change, and everything it depends on, into
+   `experiments/grug/fast_track/`:
+   - all of it behind the idea's one default-off flag;
+   - the GPU path only (skip TPU-specific code);
+   - data the change needs (for example a table built from the current tokenizer's vocabulary) as files in
+     `experiments/grug/fast_track/`.
+   Size is not a reason to stop: the six gates are the only test. Run section 6 only if the code cannot run on the
+   H100 fast_track model at all.
+3. **Edit** only `experiments/grug/fast_track/` and `tests/grug/test_fast_track_*.py`:
    - add one new field to `GrugModelConfig` (`model.py`) or `GrugMoeMuonHConfig` (`optimizer.py`) whose default
      is off (`False`, `None`, `0` or `0.0`);
    - put every behavior change behind that field;
    - add `tests/grug/test_fast_track_<flag>.py`, a test that turns the flag on.
-3. **Run:** `B code-change X#### --finish --model-set <flag>=<on value>` (use `--opt-set` for an optimizer flag).
+   Do not run the test yourself; `--finish` runs it (gate 5).
+4. **Run:** `B code-change X#### --finish --model-set <flag>=<on value>` (use `--opt-set` for an optimizer flag).
    These are the tests that gate the change, in order. All must pass:
    1. **Paths:** only the two allowed paths changed, including a test file.
    2. **Default off:** at least one new config field; every new field defaults to off; no existing default changed.
@@ -86,9 +104,16 @@ The change goes straight onto this week's branch. No human reviews it: passing `
    - **If it prints `still running: [...]`:** stop. The last run to finish starts a new session.
    - **If it prints `next: B run-failed X#### --run <run>`:** do section 3.
    - **Otherwise, expect** these, then `next: stop`:
-     1. the registry entry written with the results and pushed;
+     1. the registry entry written with the results, and the trial's analysis report
+        (`experiments/belay/analysis/X####/tNNN.md` and its plots), pushed together in one registry commit
+        (`pushed ... as <sha> to origin/<registry branch>`);
      2. the result posted with a table and one verdict, by the track's rule in section 9: `win`, `noise` or `loss`;
      3. for a `win`, an escalation as well.
+
+## 2b. analyze (rewrite a trial's analysis report)
+
+`run-finished` writes the report itself. Run this only when asked to backfill or redo one:
+`B analyze X####`. It writes, commits and pushes the report and prints the result post it belongs in.
 
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 
@@ -124,6 +149,10 @@ section 6 and stops.
 
 ## 6. escalate (any mismatch, refusal or judgment call)
 
+Escalations go to the admin page, never to #9451: only plans and results are public. The admin page shows the idea
+as "needs maintainer" with this session's transcript. No session takes the idea up again until a maintainer
+re-queues it (with a note) or declines it.
+
 1. **Run:** `B escalate --title "<one line>" --body "<what you ran, what it printed, what you expected>"`
    - Add `--idea-id <N>` when it concerns an idea. Later sessions then skip the idea until a maintainer acts.
    - Add `--registry-id X####` when there is one.
@@ -142,7 +171,9 @@ End with two to five plain lines:
 ## 8. House rules (an idea that asks for any of these goes to section 6)
 
 - Removing the final-logit (lm_head) z-loss, or keeping Muon momentum in less than float32.
-- Tokenizer changes, or changes that only affect evaluation.
+- A new or modified tokenizer, or any change to tokenization. Reading the current 16k vocabulary (for example
+  grouping tokens by their decoded bytes) is allowed.
+- Changes that only affect evaluation.
 - Fewer than 8 active routed experts, larger shared experts, or more than 64x as many experts as active experts.
 - Changing the MoE latent (0.5x hidden) or the MLA KV latent.
 - Expert or shared widths that are not multiples of hidden.
