@@ -41,7 +41,7 @@ from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from loguru import logger
 from skyrl_gym.metrics import aggregate_for_task
 from skyrl_gym.verification import VerificationResult, VerificationStatus, normalized_verifier_score
-
+from skyrl_train.trajectory_runners.types import BatchFields
 
 BATCH_ERROR_METRIC_PREFIX = "generate/errors/"
 _NUM_TRIALS_METRIC = "generate/num_trials"
@@ -194,12 +194,18 @@ def scalar_reward_token_credit(reward: float, response_ids: Sequence[int]) -> Li
     return token_rewards
 
 
-def _concatenate_rewards(trajectory_batches: List[TrajectoryBatch]) -> Union[List[float], List[List[float]]]:
+def token_reward_rows(rewards: List[float] | List[List[float]], response_ids: List[List[int]]) -> List[List[float]]:
+    """Retain token rewards or credit each scalar on its final response token."""
+    if rewards and isinstance(rewards[0], list):
+        return rewards
+    return [scalar_reward_token_credit(reward, response) for reward, response in zip(rewards, response_ids)]
+
+
+def _concatenate_rewards(
+    trajectory_batches: Sequence[TrajectoryBatch], *, token_rewards: bool
+) -> Union[List[float], List[List[float]]]:
     """Concatenate rewards while preserving token-level credit from any child batch."""
-    has_token_level_rewards = any(
-        isinstance(reward, list) for output in trajectory_batches for reward in output["rewards"]
-    )
-    if not has_token_level_rewards:
+    if not token_rewards:
         return [float(reward) for output in trajectory_batches for reward in output["rewards"]]
 
     rewards: List[List[float]] = []
@@ -216,8 +222,10 @@ def _reward_sign_successes(rewards: Sequence[float | List[float]]) -> List[bool]
     return [float(np.sum(reward)) > 0.0 for reward in rewards]
 
 
-def _concatenate_environment_metrics(result: TrajectoryBatch, batches: List[TrajectoryBatch]) -> None:
-    if any("env_metrics" in batch for batch in batches):
+def _concatenate_environment_metrics(
+    result: TrajectoryBatch, batches: Sequence[TrajectoryBatch], *, fields: BatchFields
+) -> None:
+    if "env_metrics" in fields.present:
         for batch in batches:
             if ("env_metrics" in batch) != ("env_classes" in batch):
                 raise ValueError("environment metrics and classes must be carried together")
@@ -235,14 +243,11 @@ def concatenate_trajectory_batches(
     require_rollout_logprobs: bool = False,
     tis_lcs_alert_threshold: float,
 ) -> TrajectoryBatch:
-    """
-    Concatenate multiple trajectory batches into one batch.
-
-    Preserve episode-level environment observations for metrics across repeated concatenation.
-    """
-    assert len(trajectory_batches) > 0
-    has_rollout_logprobs = _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
-    any_has_logprobs = any(has_rollout_logprobs)
+    """Concatenate and validate rollout rows using whole-batch channel presence."""
+    assert trajectory_batches
+    _rollout_logprob_presence(trajectory_batches, required=require_rollout_logprobs)
+    fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
+    any_has_logprobs = "rollout_logprobs" in fields.present
 
     # Handle mixed rollout_logprobs: if some batches have logprobs and others don't,
     # fill in placeholder [0.0] values for the batches that don't have them.
@@ -261,7 +266,7 @@ def concatenate_trajectory_batches(
 
     selected_topk_concat = None
     behavior_topk_concat = None
-    if any(output.get("student_topk_indices") is not None for output in trajectory_batches):
+    if "student_topk_indices" in fields.present:
         if any(
             output.get("student_topk_indices") is None or output.get("behavior_topk_logprobs") is None
             for output in trajectory_batches
@@ -269,11 +274,11 @@ def concatenate_trajectory_batches(
             raise ValueError("student-selected top-K evidence cannot be concatenated with missing rollout scores")
         selected_topk_concat = [row for output in trajectory_batches for row in output["student_topk_indices"]]
         behavior_topk_concat = [row for output in trajectory_batches for row in output["behavior_topk_logprobs"]]
-    elif any(output.get("behavior_topk_logprobs") is not None for output in trajectory_batches):
+    elif "behavior_topk_logprobs" in fields.present:
         raise ValueError("student-selected behavior scores require selected token IDs")
 
     data_sources_concat = None
-    if any(output.get("data_sources") is not None for output in trajectory_batches):
+    if "data_sources" in fields.present:
         data_sources_concat = [
             source
             for output in trajectory_batches
@@ -282,12 +287,9 @@ def concatenate_trajectory_batches(
 
     unshaped_rewards_concat = None
     unshaped_reward_available_concat = None
-    if any(output.get("unshaped_rewards") is not None for output in trajectory_batches):
+    if "unshaped_rewards" in fields.present:
         unshaped_rewards_concat = [reward for output in trajectory_batches for reward in get_outcome_rewards(output)]
-        if any(
-            output.get("unshaped_reward_available") is not None or output.get("unshaped_rewards") is None
-            for output in trajectory_batches
-        ):
+        if "unshaped_reward_available" in fields.present:
             unshaped_reward_available_concat = [
                 available
                 for output in trajectory_batches
@@ -299,7 +301,7 @@ def concatenate_trajectory_batches(
 
     disposition_channels: dict[str, list[Any]] = {}
     for key in ("exception_types", "error_treatments", "server_errors"):
-        if any(output.get(key) is not None for output in trajectory_batches):
+        if key in fields.present:
             disposition_channels[key] = [
                 value
                 for output in trajectory_batches
@@ -307,7 +309,7 @@ def concatenate_trajectory_batches(
             ]
 
     baseline_exclusions_concat = None
-    if any(output.get("exclude_from_baseline") is not None for output in trajectory_batches):
+    if "exclude_from_baseline" in fields.present:
         baseline_exclusions_concat = [
             excluded
             for output in trajectory_batches
@@ -315,22 +317,12 @@ def concatenate_trajectory_batches(
         ]
 
     # Missing batches keep the geometry learned from the first captured sample.
-    has_routed_experts = [
-        "rollout_routed_experts" in output and output.get("rollout_routed_experts") is not None
-        for output in trajectory_batches
-    ]
     rollout_routed_experts_concat = None
-    if any(has_routed_experts):
+    if "rollout_routed_experts" in fields.present:
         _concat_sentinel_row = None
-        for output in trajectory_batches:
-            re_out = output.get("rollout_routed_experts")
-            if re_out is not None and len(re_out) > 0:
-                for sample_re in re_out:
-                    if sample_re is not None:
-                        _concat_sentinel_row = np.zeros(sample_re.shape[1:], dtype=sample_re.dtype)
-                        break
-            if _concat_sentinel_row is not None:
-                break
+        if fields.route_geometry is not None:
+            layers, top_k, dtype = fields.route_geometry
+            _concat_sentinel_row = np.zeros((layers, top_k), dtype=dtype)
         rollout_routed_experts_concat = []
         for output in trajectory_batches:
             if "rollout_routed_experts" in output and output.get("rollout_routed_experts") is not None:
@@ -344,12 +336,8 @@ def concatenate_trajectory_batches(
     # any batch that lacks them so the concatenated list stays 1:1 with
     # response_ids. When the channel is off NO batch carries the keys (the
     # runner omits them), so these stay None and the result is byte-identical.
-    has_token_shaping = [
-        "token_level_shaping" in output and output.get("token_level_shaping") is not None
-        for output in trajectory_batches
-    ]
     token_level_shaping_concat = None
-    if any(has_token_shaping):
+    if "token_level_shaping" in fields.present:
         token_level_shaping_concat = []
         for output in trajectory_batches:
             if "token_level_shaping" in output and output.get("token_level_shaping") is not None:
@@ -358,11 +346,8 @@ def concatenate_trajectory_batches(
                 for response_ids in output["response_ids"]:
                     token_level_shaping_concat.append([0.0] * len(response_ids))
 
-    has_span_tags = [
-        "response_span_tags" in output and output.get("response_span_tags") is not None for output in trajectory_batches
-    ]
     response_span_tags_concat = None
-    if any(has_span_tags):
+    if "response_span_tags" in fields.present:
         response_span_tags_concat = []
         for output in trajectory_batches:
             if "response_span_tags" in output and output.get("response_span_tags") is not None:
@@ -374,18 +359,18 @@ def concatenate_trajectory_batches(
     result: TrajectoryBatch = {
         "prompt_token_ids": sum([output["prompt_token_ids"] for output in trajectory_batches], []),
         "response_ids": sum([output["response_ids"] for output in trajectory_batches], []),
-        "rewards": _concatenate_rewards(trajectory_batches),
+        "rewards": _concatenate_rewards(trajectory_batches, token_rewards=fields.token_rewards),
         "loss_masks": sum([output["loss_masks"] for output in trajectory_batches], []),
         "stop_reasons": (
             sum([output["stop_reasons"] for output in trajectory_batches], [])
-            if "stop_reasons" in trajectory_batches[0] and trajectory_batches[0]["stop_reasons"] is not None
+            if "stop_reasons" in fields.first_group_list_fields
             else None
         ),
         "rollout_logprobs": rollout_logprobs_concat,
     }
     if rollout_routed_experts_concat is not None:
         result["rollout_routed_experts"] = rollout_routed_experts_concat
-    if any(output.get("rollout_policy_steps") is not None for output in trajectory_batches):
+    if "rollout_policy_steps" in fields.present:
         result["rollout_policy_steps"] = [
             row
             for output in trajectory_batches
@@ -412,9 +397,9 @@ def concatenate_trajectory_batches(
     if baseline_exclusions_concat is not None:
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
-    _concatenate_environment_metrics(result, trajectory_batches)
+    _concatenate_environment_metrics(result, trajectory_batches, fields=fields)
     for key in ("verification_results", "evidence_messages"):
-        if any(batch.get(key) is not None for batch in trajectory_batches):
+        if key in fields.present:
             result[key] = [
                 value
                 for batch in trajectory_batches
@@ -422,9 +407,7 @@ def concatenate_trajectory_batches(
             ]
 
     # propagate additional keys with list values as-is
-    additional_keys = [
-        key for key in trajectory_batches[0] if key not in result and isinstance(trajectory_batches[0][key], list)
-    ]
+    additional_keys = [key for key in fields.first_group_list_fields if key not in result]
     if len(additional_keys):
         logger.info(f"Attempting to concatenate values for additional keys {additional_keys}")
     for key in additional_keys:
