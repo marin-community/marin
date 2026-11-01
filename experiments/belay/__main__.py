@@ -1052,6 +1052,8 @@ def tracks(as_json: bool) -> None:
 
 
 def main(argv: list[str]) -> None:
+    # Line-buffered, so this command's lines and its launch subprocesses' output interleave in true order.
+    sys.stdout.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
