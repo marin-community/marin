@@ -1,0 +1,7 @@
+applet_id = "33801d46-e280-46f9-b994-2c78603cdf15"
+
+python_entrypoint = "app:create_api"
+title = "Marin Belay"
+description = "Marin Belay: the project page, live experiment status, and the approvers' admin view."
+build_command = "uv run --no-project python build.py"
+connect_src = []
