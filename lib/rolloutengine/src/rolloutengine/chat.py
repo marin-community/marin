@@ -10,7 +10,7 @@ from typing import Any
 import openai
 from openai.types.chat import ChatCompletion
 
-from rolloutengine.models import ModelRequest, ModelTurn, TokenUsage
+from rolloutengine.models import ModelRequest, ModelResponseError, ModelTurn, TokenUsage
 
 RESERVED_OPTIONS = frozenset({"model", "messages", "stream", "n"})
 """Request fields that the adapter sets itself. A prompt option or ``extra_body`` key with one of these names fails."""
@@ -51,8 +51,14 @@ class ChatModel:
         assert isinstance(response, ChatCompletion)  # The adapter rejects `stream`, so the response is one completion.
         usage = response.usage
         if usage is None:
-            raise ValueError("The chat endpoint reported no token usage")
-        choice = response.choices[0]
+            raise ModelResponseError(
+                "The chat endpoint reported no token usage", response=response.model_dump(mode="json")
+            )
+        if len(response.choices) != 1:
+            raise ModelResponseError(
+                "The chat endpoint must return one choice", response=response.model_dump(mode="json")
+            )
+        (choice,) = response.choices
         served = choice.message.model_dump(exclude_none=True)
         # The next request sends the message back, so it keeps only the fields that a chat server accepts.
         message: dict[str, Any] = {"role": "assistant", "content": served.get("content") or ""}

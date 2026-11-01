@@ -8,6 +8,7 @@ import io
 import json
 import re
 import shlex
+import subprocess
 import tarfile
 from dataclasses import replace
 
@@ -15,6 +16,7 @@ import pytest
 from click.testing import CliRunner
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.runtime.local import local_runtime
 
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images import __main__ as images
@@ -105,6 +107,34 @@ def test_an_unchanged_environment_resolves_without_building(docker_log, monkeypa
     (second,) = run(environment_artifact(environment, REPOSITORY))
     assert second.image == first.image
     assert docker_log.read_text() == calls
+
+
+def test_changed_runtime_dependencies_rebuild_the_cached_lock(docker_log, monkeypatch):
+    environment = Environment(requirements=REQUIREMENTS)
+    (first,) = run(environment_artifact(environment, REPOSITORY))
+    first_lock = StoragePath(first.lock_url).read_text()
+    original = build.requires("marin-verifyit") or []
+    monkeypatch.setattr(build, "requires", lambda _name: [*original, "attrs==25.3.0", 'unused-extra; extra == "math"'])
+    (second,) = run(environment_artifact(environment, REPOSITORY))
+    assert first.lock_url != second.lock_url
+    assert StoragePath(first.lock_url).read_text() == first_lock
+    second_lock = StoragePath(second.lock_url).read_text()
+    assert "attrs==25.3.0" in second_lock
+    assert "unused-extra" not in second_lock
+
+
+@pytest.mark.integration
+def test_resolved_base_lock_imports_verifyit_in_an_isolated_python(tmp_path):
+    environment = Environment()
+    built = build_environment(
+        environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "environment"))
+    )
+    runtime = local_runtime(built.lock_url)
+    runtime.ensure_built()
+    result = subprocess.run(
+        [str(runtime.environment.python), "-I", "-c", "from verifyit.grade import main"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

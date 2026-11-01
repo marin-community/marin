@@ -13,27 +13,15 @@ from fractions import Fraction
 
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import Aggregation, InvalidTask, Reward, aggregate_rewards, scored
-from verifyit.modes.grade_exact import grade_exact_candidate
+from verifyit.modes.grade_exact import grade_exact_candidate, grade_literal_candidate
 from verifyit.modes.grade_json_schema import grade_json_schema_candidate
 from verifyit.modes.grade_math import MathMemberPolicy, canonical_math_members
-from verifyit.spec import EmptyOutputPolicy, ExactSpec
+from verifyit.spec import ExactSpec
 
 RATIO = re.compile(r"(-?\d+):(-?\d+)")
 GSM8K_FINAL = re.compile(r"#### (-?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?)")
 GSM8K_STRICT = re.compile(r"#### (\-?[0-9\.\,]+)")
 ANSWER_TAG = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
-
-
-def grade_literal_candidate(expected: str, candidate: str) -> Reward:
-    """Compare literal strings through the existing exact mode's strict options."""
-    spec = ExactSpec(
-        expected=(expected,),
-        ignore_case=False,
-        ignore_whitespace=False,
-        strip_outer_whitespace=False,
-        empty_output=EmptyOutputPolicy.GRADE,
-    )
-    return grade_exact_candidate(spec, candidate)
 
 
 def grade_gsm8k_strict(expected: str, response: str, *, format_score: float = 0.0) -> Reward:

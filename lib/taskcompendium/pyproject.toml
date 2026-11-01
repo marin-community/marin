@@ -17,6 +17,8 @@ dependencies = [
 
 [project.optional-dependencies]
 pipeline = [
+    "ijson>=3.3",
+    "tiktoken>=0.8",
     "datasets>=5.0.1,<6",
     "marin-zephyr",
     "marin-finestore",
@@ -54,5 +56,10 @@ known-first-party = ["taskcompendium"]
 disable-project-excludes-heuristics = true
 use-ignore-files = false
 project-includes = ["src/**/*.py"]
+project-excludes = [
+    # Canonical upstream instruction checkers; wrappers remain checked.
+    "src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
+    "src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
+]
 search-path = ["src", "../verifyit/src", "../rigging/src"]
 python-interpreter = "../../.venv/bin/python"

@@ -1,6 +1,6 @@
 # Task curation
 
-Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
+Task curation turns pinned training and evaluation datasets into TaskSpec parquet files. Each dataset
 is declared once as an `RlDataSource` under
 [`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
 and the catalog
@@ -14,6 +14,10 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
 
 Building the catalog performs no downloads, inference or job submission.
+
+[Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
+carry execution protocols beside canonical tasks. Name them explicitly with
+`--source`; the default curation selection contains training sources.
 
 ## Pipeline overview
 
@@ -653,7 +657,8 @@ Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
-`/tmp/task-curation-env-<identity>`, with `verifyit` and the placed files from
+`~/.cache/marin/task-runtime/task-curation-env-<identity>` on workstations, or
+`/cache/task-curation/task-curation-env-<identity>` when `/cache` is mounted, with `verifyit` and the placed files from
 `files.tar`; the sandbox mounts that directory, the system directories and each
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.

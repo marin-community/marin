@@ -4,6 +4,8 @@
 `GradedRollout`: the `Rollout`, which records what happened, and the `grade`.
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
+The [evaluation driver](evaluation-tasks.md) supplies that caller for published
+evaluation corpora and writes raw FineStore attempts.
 TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
 Shellbox supplies machine backends. RolloutEngine supplies the harness contract, the model session that records each model turn, and the built-in harnesses.
 
@@ -577,6 +579,11 @@ A malformed first file is a grading failure. Grading does not try a lower-priori
 The optional `pass_above` threshold supplies a separate pass/fail result.
 Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
+`RewardFileFormat.VERDICT_JSON` requires a zero exit code and reads Verifyit's
+structured verdict, retaining scored, invalid-task and infrastructure-error
+outcomes with their details. A scripted judge declares `ScriptGrader.judge`;
+the runtime stages `/tests/judge.toml` and supplies its connection credentials
+only in the verifier machine's environment.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A grading failure has no reward.

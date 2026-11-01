@@ -220,9 +220,21 @@ A `ScriptGrader` declares:
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
+| `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
+| `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+
+`RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
+and `detail` fields. It preserves unscored infrastructure failures and invalid
+tasks, including their diagnostic details. The command must exit successfully.
+This format retains named metrics and reduction inputs in `detail`.
+
+A scripted judge receives its declared specification at `/tests/judge.toml`.
+The caller supplies `JudgeConnection` separately; the runtime puts credentials
+only in the verifier machine's environment. Task serialization and staged
+archives exclude those credentials. The machine must permit network access.
 
 TaskSpec validation ties the grader to the answer:
 
