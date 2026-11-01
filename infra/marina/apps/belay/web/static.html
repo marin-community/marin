@@ -304,6 +304,50 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
   </div>
 </footer>
 </template>
+<template id="tpl-mfu">
+<main class="wrap page mfu">
+  <div class="page-head"><h1>Hero Scale MFU</h1></div>
+  <div class="kpis-mfu">
+    <div class="kpi-card main"><div class="k">Belay arch · 1 rack</div><div class="v" id="kpi-mfu"></div><div class="s mono" id="kpi-sub"></div></div>
+    <div class="kpi-card"><div class="k">Production hero · 11 racks</div><div class="v ink" id="kpi-hero"></div><div class="s mono" id="kpi-hero-sub"></div></div>
+  </div>
+  <p class="flopnote" id="flop-note"></p>
+  <section class="block">
+    <h2>Hero → Belay, one rack</h2>
+    <div class="muted small mono" id="ladder-setup"></div>
+    <div class="card chart-card"><div id="ladder-chart"></div>
+      <div class="legend"><span><i class="lg-solid"></i>latest</span><span><i class="lg-dash"></i>first tuned (Oct 18)</span><span><i class="lg-open"></i>at S4 FLOPs</span></div>
+    </div>
+    <div class="table-card"><table class="rungs">
+      <thead><tr><th>Stage</th><th>Change</th><th class="run">Run</th><th class="r">s/step</th><th class="r hide-sm">tok/s</th><th class="r">MFU</th><th class="r hide-sm">First tuned</th></tr></thead>
+      <tbody id="ladder-rows"></tbody></table></div>
+  </section>
+  <section class="block">
+    <h2>S7 push</h2>
+    <div class="wins" id="push-wins"></div>
+    <div class="table-card"><table class="rungs">
+      <thead><tr><th>Date</th><th>Change</th><th class="run">Run</th><th class="r">s/step</th><th class="r">MFU</th></tr></thead>
+      <tbody id="push-rows"></tbody></table></div>
+    <div class="muted small" id="push-note"></div>
+  </section>
+  <section class="block">
+    <h2>Production hero, 11 racks</h2>
+    <div class="muted small mono" id="prod-setup"></div>
+    <div class="card chart-card"><div id="prod-chart"></div></div>
+    <div class="table-card"><table class="rungs">
+      <thead><tr><th class="hide-sm">From</th><th>Change</th><th class="run">Run</th><th class="r">s/step</th><th class="r hide-sm">tok/s</th><th class="r">MFU</th></tr></thead>
+      <tbody id="prod-rows"></tbody></table></div>
+    <div class="muted small">* 46.1M tokens/step ÷ s/step</div>
+  </section>
+  <section class="block">
+    <h2>Other one-rack measurements</h2>
+    <div class="table-card"><table class="rungs">
+      <thead><tr><th>Change</th><th class="r">Before</th><th class="r">After</th><th></th></tr></thead>
+      <tbody id="other-rows"></tbody></table></div>
+  </section>
+  <details class="fold block"><summary>Not in the sources</summary><ul class="unsourced" id="unsourced"></ul></details>
+</main>
+</template>
 <template id="tpl-status">
 <main class="wrap page">
   <div class="page-head"><h1>Status</h1><span class="muted mono" id="updated"></span></div>
