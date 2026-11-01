@@ -16,7 +16,7 @@ def hf_export_destination_configured(cfg: DictConfig) -> bool:
 def validate_hf_export_config(cfg: DictConfig) -> None:
     """Require every requested HF export to have a saved checkpoint to convert.
 
-    An HF model-save callback always requests the terminal export. A positive
+    An HF model-save callback requests the terminal export by default. A positive
     interval also requests exports at intermediate checkpoints, which pruning keeps
     until each export completes.
     """

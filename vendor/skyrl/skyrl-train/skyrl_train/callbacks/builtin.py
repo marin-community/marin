@@ -418,7 +418,7 @@ class EvaluationCallback(TrainerCallback):
 @register_callback(HF_MODEL_SAVE_CALLBACK_TYPE)
 class HFModelSaveCallback(TrainerCallback):
     """
-    Callback for requesting Hugging Face exports at regular intervals.
+    Callback for requesting Hugging Face exports at the end of training and, optionally, at intervals.
 
     Normal training records a request beside the immutable sharded checkpoint;
     a dedicated export job later converts and optionally publishes that checkpoint.
