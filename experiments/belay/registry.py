@@ -52,6 +52,8 @@ class Status(StrEnum):
     """Was adopted, later taken out."""
     CLOSED = "closed"
     """Decided against (lost, neutral, or not worth its cost)."""
+    REPORT = "report"
+    """A study (track custom): its runs finished and its report is at analysis/<id>/report.md. No verdict."""
 
 
 class Source(StrEnum):

@@ -23,6 +23,7 @@ uv run python -m experiments.belay.registry new --slug ... --name ... --category
 | `adopted` | **in the current recipe** (today Belay Ckpt Oct 20 2026, `marin_belay_v1_recipe`; see below) |
 | `removed` | adopted at some point, not in the current checkpoint |
 | `closed` | decided against |
+| `report` | a study (track `custom`): its report is `analysis/<id>/report.md`; a study has no verdict |
 
 `adopted` always means "in the current recipe": when a new checkpoint drops a feature, its entry gets a `removed`
 event naming the checkpoint, and a feature added by the checkpoint gets an `adopted` event. The `adopted` entries
