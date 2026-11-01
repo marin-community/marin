@@ -46,8 +46,8 @@ trials:
   commit: 98061ac6fe
 potential:
   score: 6
-  rationale: −0.0055 at equal data (small win under ±0.005 rule; tool used ±0.006, escalated); 8% slower, equal time/ladder/MFU
-    not run → 6
+  rationale: −0.0055 at equal data (small win, one validation); 8% slower, probe 0.1716 s/step; equal-time run (2,797 steps)
+    running; ladder and MFU not run → 6
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: de2f5ba0968b
+  inputs_digest: 61e52c83db0d
