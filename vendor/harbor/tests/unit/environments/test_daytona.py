@@ -249,6 +249,157 @@ def test_daytona_rejects_legacy_dind_and_unknown_runtime_options(tmp_path):
         DaytonaEnvironment(**arguments)
 
 
+async def test_installed_candidate_relay_buffers_sdk_events_and_keeps_judge_separate(tmp_path, monkeypatch):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    candidate_port, judge_port = available_port(), available_port()
+    monkeypatch.setattr(daytona, "CANDIDATE_MODEL_RELAY_PORT", candidate_port)
+    monkeypatch.setattr(daytona, "MODEL_RELAY_PORT", judge_port)
+    original_client = httpx.AsyncClient
+    completion = {
+        "id": "completion-one",
+        "created": 1,
+        "model": "candidate-model",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "answer",
+                    "reasoning_content": "reason",
+                    "tool_calls": [
+                        {
+                            "id": "call-one",
+                            "type": "function",
+                            "function": {"name": "shell", "arguments": '{"cmd":"pwd"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    }
+
+    def provider(request):
+        payload = json.loads(request.content)
+        if request.url.host == "judge.example":
+            assert request.headers["authorization"] == "Bearer judge-private"
+            assert payload["model"] == "judge-model"
+            return httpx.Response(200, json={"judge": True})
+        assert str(request.url) in {
+            "https://candidate.example/proxy/t/host-capability/serve/v1/chat/completions",
+            "https://candidate.example/proxy/t/host-capability/serve/tokenize",
+        }
+        assert request.headers["authorization"] == "Bearer candidate-private"
+        assert payload["model"] == "candidate-model"
+        if request.url.path.endswith("/tokenize"):
+            assert payload["tools"][0]["type"] == "function"
+            return httpx.Response(
+                200, json={"tokens": [1, 2], "count": 2, "max_model_len": 32}
+            )
+        assert payload["stream"] is False
+        assert "stream_options" not in payload
+        if payload.get("messages") == ["redirect"]:
+            return httpx.Response(
+                302,
+                headers={"Location": "https://unauthorized.example/candidate-private"},
+            )
+        if payload.get("messages") == ["oversized"]:
+            return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
+        if payload.get("messages") == ["provider-failure"]:
+            return httpx.Response(401, text="candidate-private host-capability")
+        return httpx.Response(200, json=completion)
+
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs
+        ),
+    )
+    factory = ProcessFactory(tmp_path / "guest")
+    with (
+        host_model_authentication(
+            {
+                "https://candidate.example/proxy/t/host-capability/serve/v1": (
+                    "candidate-private"
+                ),
+                "https://judge.example/v1": "judge-private",
+            }
+        ),
+        task_environment({}),
+    ):
+        adapter = DaytonaEnvironment(
+            environment_dir=environment_dir,
+            environment_name="task",
+            session_id="trial",
+            trial_paths=TrialPaths(tmp_path / "trial"),
+            task_env_config=EnvironmentConfig(
+                docker_image="test/image", workdir="/workspace"
+            ),
+            client_factory=lambda: pytest.fail("Unexpected provider access"),
+            candidate_model_endpoint="https://candidate.example/proxy/t/host-capability/serve/v1",
+            candidate_model_name="candidate-model",
+            model_endpoint="https://judge.example/v1",
+            model_name="judge-model",
+        )
+        adapter.factory = factory
+        await adapter.start(False)
+        try:
+            script = f"""
+import json, os, urllib.request, urllib.error
+assert os.environ['OPENAI_API_KEY'] == 'EMPTY'
+assert os.environ['OPENAI_BASE_URL'] == 'http://127.0.0.1:{candidate_port}/v1'
+assert not any('private' in value or 'host-capability' in value for value in os.environ.values())
+def post(path, payload, port={candidate_port}):
+    request = urllib.request.Request('http://127.0.0.1:'+str(port)+path, data=json.dumps(payload).encode(), headers={{'Authorization':'Bearer EMPTY'}})
+    with urllib.request.urlopen(request) as response:
+        return response.headers.get_content_type(), response.read().decode()
+_, tokenized = post('/tokenize', {{'model':'guest-choice', 'messages':[], 'tools':[{{'type':'function'}}]}})
+assert json.loads(tokenized)['tokens'] == [1, 2]
+_, ordinary = post('/v1/chat/completions', {{'model':'guest-choice','messages':[]}})
+assert json.loads(ordinary)['choices'][0]['message']['content'] == 'answer'
+content_type, streamed = post('/v1/chat/completions', {{'model':'guest-choice','messages':[], 'stream':True, 'stream_options':{{'include_usage':True}}}})
+assert content_type == 'text/event-stream'
+events = [json.loads(event[6:]) for event in streamed.strip().split('\\n\\n')[:-1]]
+assert streamed.endswith('data: [DONE]\\n\\n')
+delta = events[0]['choices'][0]['delta']
+assert delta['reasoning_content'] == 'reason' and delta['content'] == 'answer'
+assert delta['tool_calls'][0]['index'] == 0 and delta['tool_calls'][0]['function']['arguments'] == '{{"cmd":"pwd"}}'
+assert events[1]['choices'][0]['finish_reason'] == 'tool_calls'
+assert events[2]['usage']['total_tokens'] == 8
+assert json.loads(post('/v1/chat/completions', {{'model':'guest-choice','messages':[]}}, {judge_port})[1]) == {{'judge':True}}
+try:
+    post('/v1/responses', {{}})
+    raise AssertionError('unsupported route accepted')
+except urllib.error.HTTPError as error:
+    assert error.code == 404
+for failure in ('redirect', 'oversized', 'provider-failure'):
+    try:
+        post('/v1/chat/completions', {{'messages':[failure]}})
+        raise AssertionError('upstream failure accepted')
+    except urllib.error.HTTPError as error:
+        assert error.code == 502
+        body = error.read().decode()
+        assert 'candidate-private' not in body and 'host-capability' not in body
+print('ok')
+"""
+            result = await adapter.exec(
+                "python3 - <<'PY'\n" + script + "\nPY",
+                env={
+                    "OPENAI_API_KEY": "EMPTY",
+                    "OPENAI_BASE_URL": f"http://127.0.0.1:{candidate_port}/v1",
+                },
+            )
+            assert result.return_code == 0, result.stderr
+            assert result.stdout.strip() == "ok"
+        finally:
+            await adapter.stop(True)
+    assert factory.machine.closed
+
+
 def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
     tmp_path, monkeypatch
 ):

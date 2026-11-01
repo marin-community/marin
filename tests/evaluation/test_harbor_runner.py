@@ -525,7 +525,10 @@ def test_harbor_driver_classifies_fast_exit_from_unavailable_dependency(tmp_path
 
 
 @pytest.mark.parametrize("dataset_kind", [HarborDatasetKind.HARBOR_REGISTRY, HarborDatasetKind.HUGGING_FACE])
-def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch, dataset_kind):
+@pytest.mark.parametrize("api_key", [None, "candidate-private-key"])
+def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(
+    tmp_path, monkeypatch, dataset_kind, api_key
+):
     captured: dict = {}
 
     def run_driver(config, overlay, driver_env, _backend_state) -> None:
@@ -547,6 +550,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
     session = _inference_session()
+    session = replace(session, model=replace(session.model, endpoint=replace(session.model.endpoint, api_key=api_key)))
     judge = _inference_session("https://iris.example/proxy/t/judge/serve.judge/v1", "qwen-judge")
     model = session.model
 
@@ -596,7 +600,9 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
-    assert "OPENAI_API_KEY" not in captured["env"]
+    assert captured["env"]["OPENAI_API_KEY"] == (model.endpoint.api_key or "EMPTY")
+    if api_key:
+        assert api_key not in json.dumps(asdict(captured["overlay"]))
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
     assert json.loads((tmp_path / "harbor_resume_identity.json").read_text())["model"]["location"] == "org/checkpoint"
 

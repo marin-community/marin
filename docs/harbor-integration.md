@@ -279,7 +279,7 @@ between sidecars fail explicitly.
 
 Containers share only the group's loopback network. External egress remains denied. Tau3's user model
 and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
-non-streaming chat completions to the selected model, fixes its model name, and rejects redirects;
+chat completions and tokenization to the selected model, fixes its model name, and rejects redirects;
 the upstream endpoint capability and provider authentication stay in the host process.
 Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
@@ -290,6 +290,23 @@ Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint 
 The relay starts one Python HTTP helper and exchanges bounded request/response
 frames over a persistent process session. The session uses owned local process
 pipes or Daytona's SDK transport; provider credentials remain on the host.
+
+Installed candidate agents on Daytona use a separate loopback relay on port 8788;
+the simulated-user and verifier relay uses port 8787. Marin resolves installed
+agents through Harbor's agent classes, including Pi, OpenCode, Mini-SWE, and ACP Pi.
+Their provider configuration and environment contain a loopback URL and an `EMPTY`
+key. The candidate endpoint and its authentication remain in the trusted driver;
+the executor supplies the served endpoint's API key only through the driver environment.
+Host-side agents such as Terminus and the AIME agent call their candidate endpoint directly.
+Persisted job and trial JSON redacts Iris bearer URLs; live configurations retain their routes.
+
+Both relays authorize only `POST /v1/chat/completions` and `POST /tokenize`, fix
+the upstream model, reject redirects, and bound request and response bodies.
+The tokenization route uses the configured upstream's server root. For installed
+SDKs requesting streaming chat, the host obtains one non-streaming completion and
+returns bounded SSE frames containing its text, reasoning, tool calls, finish reason,
+and usage. This adds no streaming transport: the guest receives the complete buffered
+response after generation finishes. Tasks using either relay need Python 3.
 
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
 `agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs

@@ -24,7 +24,7 @@ from harbor.environments.prepared_compose import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.runtime import daytona_connection
-from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
+from harbor.environments.model_relay import CANDIDATE_MODEL_RELAY_PORT, MODEL_RELAY_PORT, ModelRelay
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
@@ -53,6 +53,8 @@ class DaytonaEnvironment(BaseEnvironment):
         model_endpoint: str | None = None,
         model_name: str | None = None,
         verifier_model_endpoint: str | None = None,
+        candidate_model_endpoint: str | None = None,
+        candidate_model_name: str | None = None,
         **kwargs,
     ):
         unknown = kwargs.keys() - BASE_ENVIRONMENT_ARGUMENTS
@@ -85,6 +87,7 @@ class DaytonaEnvironment(BaseEnvironment):
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.verifier_model_endpoint = verifier_model_endpoint
+        self.candidate_model_endpoint, self.candidate_model_name = candidate_model_endpoint, candidate_model_name
         self.machine: DaytonaMachine | None = None
         self._relay = AsyncExitStack()
         self._stopping: asyncio.Task[None] | None = None
@@ -160,6 +163,8 @@ class DaytonaEnvironment(BaseEnvironment):
             )
         if self.verifier_model_endpoint is not None and self.verifier_model_endpoint != self.model_endpoint:
             raise ValueError("Daytona supports a single host model endpoint for runtime and verifier calls")
+        if (self.candidate_model_endpoint is None) != (self.candidate_model_name is None):
+            raise ValueError("Daytona candidate capability requires a host endpoint and model")
         self._stopping = None
         self.machine = await acquire_owned(asyncio.create_task(self.factory.create(spec)))
         try:
@@ -170,6 +175,15 @@ class DaytonaEnvironment(BaseEnvironment):
                         self.machine,
                         ModelRelay(self.model_endpoint, self.model_name).handle,
                         port=MODEL_RELAY_PORT,
+                    )
+                )
+            if self.candidate_model_endpoint is not None:
+                assert self.candidate_model_name is not None
+                await self._relay.enter_async_context(
+                    serve_http(
+                        self.machine,
+                        ModelRelay(self.candidate_model_endpoint, self.candidate_model_name).handle,
+                        port=CANDIDATE_MODEL_RELAY_PORT,
                     )
                 )
             targets = self._mount_targets(writable_only=True)

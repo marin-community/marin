@@ -1,3 +1,4 @@
+import json
 import warnings
 from enum import Enum
 from pathlib import Path
@@ -9,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializationInfo,
     field_serializer,
     field_validator,
     model_validator,
@@ -16,7 +18,7 @@ from pydantic import (
 from shortuuid import ShortUUID
 from upath import UPath
 
-from harbor_config.env import templatize_sensitive_env
+from harbor_config.env import redact_capability_urls, templatize_sensitive_env
 from harbor_config.model_name import split_provider_model_name
 from harbor_config.models.agent.name import AgentName
 from harbor_config.models.bridge import BridgeConfig
@@ -123,8 +125,9 @@ class AgentConfig(BaseModel):
 
     @field_serializer("env")
     @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
+    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
+        serialized = templatize_sensitive_env(env)
+        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     @model_validator(mode="after")
     def require_model_name_for_alias(self):
@@ -142,7 +145,7 @@ class AgentConfig(BaseModel):
 
     @field_serializer("kwargs")
     @classmethod
-    def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _serialize_kwargs(cls, kwargs: dict[str, Any], info: SerializationInfo) -> dict[str, Any]:
         """Replace non-serializable kwargs on dump.
 
         Some callers (e.g. SkyRL's terminal_bench generator with PRM
@@ -156,8 +159,6 @@ class AgentConfig(BaseModel):
         ``model_dump()`` and JSON dumps succeed. Original values remain on the
         live in-memory instance for the agent factory.
         """
-        import json
-
         def _safe(v: Any) -> Any:
             try:
                 json.dumps(v)
@@ -165,7 +166,8 @@ class AgentConfig(BaseModel):
             except (TypeError, ValueError):
                 return f"<non-serializable {type(v).__name__}>"
 
-        return {k: _safe(v) for k, v in kwargs.items()}
+        serialized = {k: _safe(v) for k, v in kwargs.items()}
+        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     @model_validator(mode="after")
     def set_default_name(self):
@@ -258,8 +260,14 @@ class EnvironmentConfig(BaseModel):
 
     @field_serializer("env")
     @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
+    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
+        serialized = templatize_sensitive_env(env)
+        return redact_capability_urls(serialized) if info.mode == "json" else serialized
+
+    @field_serializer("kwargs", when_used="json")
+    @classmethod
+    def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return redact_capability_urls(kwargs)
 
     @field_validator("env", mode="before")
     @classmethod
@@ -302,8 +310,9 @@ class VerifierConfig(BaseModel):
 
     @field_serializer("env")
     @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
+    def _serialize_env(cls, env: dict[str, str], info: SerializationInfo) -> dict[str, str]:
+        serialized = templatize_sensitive_env(env)
+        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
     def identity_fingerprint(self) -> dict[str, Any]:
         """Compare judge hosting service and settings without runtime URL routing."""

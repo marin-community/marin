@@ -24,8 +24,10 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     is_acp_registry_shorthand,
     parse_registry_spec,
 )
+from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
+    CANDIDATE_MODEL_RELAY_PORT,
     MODEL_RELAY_PORT,
     host_model_authentication,
 )
@@ -343,7 +345,7 @@ def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
                 **hosted_vllm,
                 "npm": _OPENAI_COMPATIBLE_PACKAGE,
                 "name": _HOSTED_VLLM_DISPLAY_NAME,
-                "options": {**options, "baseURL": endpoint_url},
+                "options": {**options, "baseURL": endpoint_url, "apiKey": "EMPTY"},
             },
         },
     }
@@ -407,6 +409,19 @@ def _agent_config(
     return _pinned_pi_agent(configured)
 
 
+def _installed_agent(agent: AgentConfig) -> bool:
+    if agent.mode != "container":
+        return False
+    if agent.name is not None and is_acp_registry_shorthand(agent.name):
+        agent_class = AgentFactory.get_agent_class(AgentName.ACP)
+    elif agent.name is not None and agent.name in AgentName.values():
+        agent_class = AgentFactory.get_agent_class(AgentName(agent.name))
+    else:
+        assert agent.import_path is not None
+        agent_class = _resolve_import_path(agent.import_path, "agent")
+    return isinstance(agent_class, type) and issubclass(agent_class, BaseInstalledAgent)
+
+
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
     model_info = reconciled_model_info(
@@ -419,13 +434,28 @@ def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig
             kwargs.get(_LLM_CALL_KWARGS_KEY),
             model_info[MAX_OUTPUT_TOKENS_KEY],
         )
-    return _agent_config(
+    installed = _installed_agent(agent)
+    if installed:
+        kwargs["api_key"] = "EMPTY"
+    configured = _agent_config(
         agent,
-        endpoint_url=overlay.endpoint_url,
+        endpoint_url=(f"http://127.0.0.1:{CANDIDATE_MODEL_RELAY_PORT}/v1" if installed else overlay.endpoint_url),
         served_model=overlay.served_model,
         model_identity=overlay.model_identity,
         kwargs=kwargs,
     )
+    if installed:
+        configured = configured.model_copy(
+            update={
+                "env": {
+                    **_dummy_model_keys(configured.env),
+                    "OPENAI_BASE_URL": configured.kwargs["api_base"],
+                    "OPENAI_API_BASE": configured.kwargs["api_base"],
+                    "OPENAI_API_KEY": "EMPTY",
+                }
+            }
+        )
+    return configured
 
 
 def _stable_agent(agent: AgentConfig) -> AgentConfig:
@@ -471,6 +501,18 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         task_limit=overlay.task_limit,
     )
     environment = config.environment
+    if _installed_agent(config.agents[0]):
+        if environment.type != EnvironmentType.DAYTONA:
+            raise ValueError("Installed candidate model relays require the Daytona Shellbox backend")
+        environment = environment.model_copy(
+            update={
+                "kwargs": {
+                    **environment.kwargs,
+                    "candidate_model_endpoint": overlay.endpoint_url,
+                    "candidate_model_name": overlay.served_model,
+                }
+            }
+        )
     judge = _judge_settings(config, overlay)
     verifier_env = {**config.verifier.env, **overlay.verifier_env}
     if judge is not None:
@@ -603,6 +645,16 @@ def _judge_authentication(config: JobConfig, overlay: RuntimeOverlay) -> dict[st
     return {judge[0]: key}
 
 
+def _model_authentication(config: JobConfig, overlay: RuntimeOverlay) -> dict[str, str]:
+    authentication = _judge_authentication(config, overlay)
+    if _installed_agent(config.agents[0]):
+        key = os.environ.get("OPENAI_API_KEY", "EMPTY")
+        if overlay.endpoint_url in authentication and authentication[overlay.endpoint_url] != key:
+            raise ValueError("Candidate and judge credentials conflict for the same host endpoint")
+        authentication[overlay.endpoint_url] = key
+    return authentication
+
+
 def _model_environment(config: JobConfig) -> dict[str, str]:
     if config.environment.type not in _MODEL_RELAY_ENVIRONMENTS or not config.environment.kwargs.get("model_endpoint"):
         return {}
@@ -626,7 +678,7 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
         }
     )
-    return JobConfig.model_validate(stable.model_dump(mode="json"), extra="forbid")
+    return JobConfig.model_validate(stable.model_dump(mode="python"), extra="forbid")
 
 
 def _normalized(value: object) -> object:
@@ -816,7 +868,7 @@ def main() -> None:
             daytona_api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
             daytona_target=os.environ.get("DAYTONA_TARGET"),
         ),
-        host_model_authentication(_judge_authentication(policy, overlay)),
+        host_model_authentication(_model_authentication(policy, overlay)),
     ):
         asyncio.run(_run(config))
 

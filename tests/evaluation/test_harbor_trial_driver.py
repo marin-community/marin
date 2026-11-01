@@ -437,7 +437,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     agent = effective["agents"][0]
     assert agent["model_name"] == "hosted_vllm/org/original-model"
     assert agent["model_alias"] == "hosted_vllm/served-grug"
-    assert agent["kwargs"]["api_base"] == "https://iris.example/capability/v1"
+    assert agent["kwargs"]["api_base"] == "http://127.0.0.1:8788/v1"
     assert agent["kwargs"]["extra_body"] == '{"chat_template_kwargs":{"enable_thinking":true}}'
     assert agent["kwargs"]["trajectory_config"] == {"raw_content": False, "linear_history": True}
     assert agent["kwargs"]["model_info"] == {
@@ -447,11 +447,12 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
         "output_cost_per_token": 0.0,
     }
     assert agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"] == {
-        "baseURL": "https://iris.example/capability/v1"
+        "baseURL": "http://127.0.0.1:8788/v1",
+        "apiKey": "EMPTY",
     }
     assert effective["verifier"]["env"] == {
         "OPENAI_API_KEY": "EMPTY",
-        "OPENAI_BASE_URL": "https://judge.example/capability/v1",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
         "MODEL_NAME": "judge-model",
     }
 
@@ -505,7 +506,8 @@ def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
     assert effective["agents"][0]["name"] == "acp:pi-acp@0.0.33"
     assert effective["agents"][0]["env"] == {
         "OPENAI_API_KEY": "****",
-        "OPENAI_BASE_URL": "https://iris.example/capability/v1",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1",
+        "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
     }
 
 
@@ -793,6 +795,117 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
     serialized_json = json.dumps(serialized)
     assert capability_token not in serialized_json
     assert "<redacted>" in serialized_json
+
+
+@pytest.mark.parametrize("agent_name", ["pi", "opencode", "mini-swe-agent", "acp:pi-acp", "sotopia", "terminus-2"])
+def test_effective_candidate_endpoint_stays_on_host_for_installed_agents(tmp_path, agent_name):
+    endpoint = "https://iris.example/proxy/t/private-capability/serve.candidate/v1"
+    policy_path = tmp_path / "policy.json"
+    policy_agent = (
+        {"import_path": "harbor.agents.installed.sotopia:SotopiaAgent"}
+        if agent_name == "sotopia"
+        else {"name": agent_name}
+    )
+    policy_agent["env"] = {"OPENAI_API_KEY": "${OPENAI_API_KEY}", "OPENAI_API_BASE": endpoint}
+    if agent_name == "opencode":
+        policy_agent["kwargs"] = {
+            "opencode_config": {
+                "provider": {
+                    "hosted_vllm": {
+                        "options": {
+                            "baseURL": endpoint,
+                            "apiKey": "private-provider-key",
+                        }
+                    }
+                }
+            }
+        }
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [policy_agent],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    write_runtime_overlay(
+        overlay_path, tmp_path, endpoint_url=endpoint, model_agent_kwargs={"thinking_format": "qwen-chat-template"}
+    )
+    script = textwrap.dedent(
+        """
+        import json, sys
+        from pathlib import Path
+        from marin.evaluation.harbor.trial_driver import effective_job_config
+        config = effective_job_config(Path(sys.argv[1]), Path(sys.argv[2]))
+        agent = config.agents[0].model_dump(mode='python')
+        agent['env'] = dict(config.agents[0].env)
+        print(json.dumps({
+            'agent': agent,
+            'live_endpoint': config.agents[0].kwargs['api_base'],
+            'candidate_endpoint': config.environment.kwargs.get('candidate_model_endpoint'),
+            'candidate_model': config.environment.kwargs.get('candidate_model_name'),
+        }))
+    """
+    )
+    result = json.loads(external_python("-c", script, str(policy_path), str(overlay_path)).stdout)
+    agent = result["agent"]
+    if agent_name == "terminus-2":
+        assert result["live_endpoint"] == endpoint
+        assert result["candidate_endpoint"] is None
+        return
+    assert agent["kwargs"]["api_base"] == "http://127.0.0.1:8788/v1"
+    assert agent["kwargs"]["api_key"] == "EMPTY"
+    assert agent["env"]["OPENAI_API_KEY"] == "EMPTY"
+    assert agent["env"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8788/v1"
+    assert "private-capability" not in json.dumps(agent)
+    assert "private-provider-key" not in json.dumps(agent)
+    assert result["candidate_endpoint"] == endpoint
+    assert result["candidate_model"] == "served-model"
+    if agent_name == "opencode":
+        options = agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"]
+        assert options == {"baseURL": "http://127.0.0.1:8788/v1", "apiKey": "EMPTY"}
+
+
+@pytest.mark.parametrize(
+    ("name", "import_path", "selected_class", "expected_endpoint"),
+    [
+        ("terminus-2", "harbor.agents.installed.pi:Pi", "Terminus2", "https://iris.example/capability/v1"),
+        ("pi", "harbor.agents.terminus_2:Terminus2", "Pi", "http://127.0.0.1:8788/v1"),
+        ("acp:pi-acp", "harbor.agents.terminus_2:Terminus2", "AcpAgent", "http://127.0.0.1:8788/v1"),
+    ],
+)
+def test_candidate_routing_matches_factory_when_name_and_import_path_are_both_set(
+    tmp_path, name, import_path, selected_class, expected_endpoint
+):
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": name, "import_path": import_path}],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    write_runtime_overlay(overlay_path, tmp_path, model_agent_kwargs={"thinking_format": "qwen-chat-template"})
+    script = textwrap.dedent(
+        """
+        import json, sys
+        from pathlib import Path
+        from harbor.agents.factory import AgentFactory
+        from marin.evaluation.harbor.trial_driver import effective_job_config
+        config = effective_job_config(Path(sys.argv[1]), Path(sys.argv[2]))
+        agent = AgentFactory.create_agent_from_config(config.agents[0], logs_dir=Path(sys.argv[3]))
+        print(json.dumps({'selected_class': type(agent).__name__, 'endpoint': config.agents[0].kwargs['api_base']}))
+    """
+    )
+    result = json.loads(
+        external_python("-c", script, str(policy_path), str(overlay_path), str(tmp_path / "logs")).stdout
+    )
+    assert result == {"selected_class": selected_class, "endpoint": expected_endpoint}
 
 
 @pytest.mark.parametrize(

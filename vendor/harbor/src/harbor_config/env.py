@@ -1,6 +1,7 @@
 import os
 import re
 from collections.abc import Mapping
+from typing import Any
 
 _TEMPLATE_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*))?\}")
 _SENSITIVE_KEY_RE = re.compile(
@@ -8,6 +9,18 @@ _SENSITIVE_KEY_RE = re.compile(
 )
 _TRUE_BOOL_VALUES = frozenset({"true", "1", "yes"})
 _FALSE_BOOL_VALUES = frozenset({"false", "0", "no"})
+_CAPABILITY_URL_RE = re.compile(r"(/proxy/t/(?:cluster=[^/?#]+/)?)[^/?#]+")
+
+
+def redact_capability_urls(value: Any) -> Any:
+    """Remove Iris bearer tokens from values persisted in job and trial configs."""
+    if isinstance(value, str):
+        return _CAPABILITY_URL_RE.sub(r"\1<redacted>", value)
+    if isinstance(value, dict):
+        return {key: redact_capability_urls(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_capability_urls(item) for item in value]
+    return value
 
 
 def parse_bool_env_value(
