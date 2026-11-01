@@ -110,6 +110,8 @@ class Trial:
     note: str | None = None
     derived: bool | None = None
     """The delta is derived from other trials rather than measured against its own control."""
+    node_grant: int | None = None
+    """A maintainer's node grant the trial ran under (its launches could pass the global node cap up to this)."""
 
 
 @dataclass(frozen=True)
