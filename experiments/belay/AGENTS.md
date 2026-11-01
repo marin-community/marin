@@ -21,14 +21,13 @@ them.
     lineages.
 - **How ideas arrive.**
   1. Anyone comments on marin#9514, one idea per comment, with a required `Track:` line (RUNBOOK.md section 9).
-  2. A maintainer approves it, by either path; whichever comes first queues it, and an idea approved on both runs
-     once:
-     - a 👍 on GitHub: the intake bot (every 5 minutes) copies the comment into #9451 and adds 🚀, and the watcher
-       queues it (for approvals after `config.github_approval_cutover`; older ones need the page);
-     - Approve (or Queue, for one approved on GitHub before the cutover) on the Belay admin page.
-  3. The session gets the text as it was at the first approval, gives the idea its registry id, and quotes the
-     idea with a link to its #9514 comment in the plan it posts on #9451.
-  - There is one running issue, #9451.
+  2. A maintainer approves it on the Belay admin page, which reads #9514 live and shows the visible text it will
+     store (hidden HTML and invisible characters stripped, and flagged). GitHub reactions approve nothing.
+  3. The session reads only that stored text (an edit on GitHub after approval is refused), gives the idea its
+     registry id, and posts one reply on the #9514 comment: "Running as X#### → <its Status row>". At the verdict it
+     edits that reply to "X#### · <track> · <verdict> → <its Status row>". Internal proposals get no reply.
+  - Plans, stage tables and verdicts go to the page's agent log, one thread per idea at `status#X####`, updated in
+    place. Nothing new is posted on #9451; its existing comments stay as they are.
 - **How edits are made.**
   - A session changes nothing by hand. Each command writes, commits and pushes its own files:
     - the registry entry (on the registry branch);
