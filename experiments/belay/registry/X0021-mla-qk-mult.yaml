@@ -4,7 +4,7 @@ name: MLA logit scale (qk_mult)
 category: Attention variants
 summary: Multiply MLA attention logits by a fixed or learnable per-layer scalar.
 source: maintainer
-status: adopted
+status: running
 first_batch: 3
 tags:
 - mla
@@ -387,6 +387,18 @@ trials:
     per-head qk_mult: 'true'
     init: '4'
   note: heads end close together; per-layer scalar enough
+- id: t019
+  variant: qk_mult=4.0, learnable_qk_mult=true
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0021
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562734604
+  wandb: []
+  settings:
+    qk_mult: '4.0'
+    learnable_qk_mult: 'true'
+  commit: 7c9ee8fcaf
 events:
 - type: adopted
   batch: '17'
