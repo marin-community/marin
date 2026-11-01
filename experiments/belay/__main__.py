@@ -95,6 +95,7 @@ from experiments.belay.submit import (
     parse_spec,
     parse_track,
     run_name,
+    run_suffix,
     setting_fields,
     settings_of,
     spec_path,
@@ -386,7 +387,11 @@ def new_idea(
     if TRACKS[track].needs_go_ahead:
         request_go_ahead(idea, registry_id, track, [x for setting in settings for x in setting], dry_run=dry_run)
         return
-    spec = write_spec(repo, branch, new_spec_text(registry_id, track, variant, settings), dry_run=dry_run)
+    if spec_path(registry_id, repo / SPECS).exists():
+        text = spec_path(registry_id, repo / SPECS).read_text()  # resuming: the committed spec decides
+    else:
+        text = new_spec_text(registry_id, track, variant, settings, run_suffix(registry_id, iris_jobs()))
+    spec = write_spec(repo, branch, text, dry_run=dry_run)
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
@@ -593,7 +598,8 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     spec = load_spec(registry_id)
     require_registry_checkout()
     state = page_state()
-    runs = state.runs_of(registry_id)
+    names = {run_name(registry_id, r) for r in spec.runs}
+    runs = [r for r in state.runs_of(registry_id) if r.name in names]
     live = [r.name for r in runs if not r.terminal]
     if live:
         print(f"still running: {live}; the last one to finish starts a new session")
