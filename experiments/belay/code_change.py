@@ -72,15 +72,23 @@ def new_flags(week: dict[str, dict[str, str]], idea: dict[str, dict[str, str]]) 
         idea_fields = idea[cls]
         changed = [k for k, v in week_fields.items() if idea_fields.get(k) != v]
         if changed:
-            raise SystemExit(f"refusing: {cls} changes or removes existing fields {changed}; add a new flag instead")
+            raise SystemExit(
+                f"refusing: {cls} changes or removes existing fields {changed}.\n"
+                "next: restore them and add a new default-off field instead, then run code-change --finish again"
+            )
         for name, default in idea_fields.items():
             if name in week_fields:
                 continue
             if default not in OFF_DEFAULTS:
-                raise SystemExit(f"refusing: new flag {cls}.{name} defaults to {default}; its default must be off")
+                raise SystemExit(
+                    f"refusing: new flag {cls}.{name} defaults to {default}; its default must be off.\n"
+                    "next: make it default off (False, None, 0 or 0.0), then run code-change --finish again"
+                )
             added.append(f"{cls}.{name}")
     if not added:
-        raise SystemExit("refusing: no new config flag; put the change behind a new default-off field")
+        raise SystemExit(
+            "refusing: no new config flag.\nnext: put the change behind a new default-off field, then --finish again"
+        )
     return added
 
 
@@ -96,7 +104,9 @@ def refuse_leak(flag_on: Probe) -> None:
     if not flag_on.leak <= LEAK_TOLERANCE:
         raise SystemExit(
             f"refusing: with the flag on, changing future tokens moves past hidden states by {flag_on.leak:.3g} "
-            f"(limit {LEAK_TOLERANCE}); the change leaks future information"
+            f"(limit {LEAK_TOLERANCE}); the change leaks future information.\n"
+            "next: make the flag-on path causal and run code-change --finish again, or give up: git checkout -- . "
+            "&& git clean -fd experiments/grug/fast_track tests/grug, then escalate"
         )
 
 
