@@ -112,7 +112,7 @@
   "to": "aughero",
   "from": "s7n"
  },
- "caveat": "* Extrapolated ~4,000× past the largest rung's compute, so expect large error: ±0.002 in α moves loss ±0.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
+ "caveat": "* Extrapolation of ~4,000× past the largest rung, beyond the ~300× expected for a reliable forecast: ±0.002 in α moves loss ±0.009 at the budget. BPB points: byte-weighted for Belay Ckpt Oct 20 2026, token-weighted for Aug Hero.",
  "sources": {
   "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic × batch × steps",
   "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
@@ -128,5 +128,68 @@
    "aughero": "Marin 535B-A23B",
    "s7n": "Belay Ckpt Oct 20 2026"
   }
+ },
+ "competitive_track": {
+  "name": "Competitive Track",
+  "tag": "MoE · 207 tokens / active param",
+  "desc": "For building on the best active scaling recipe.",
+  "src": "Belay Ckpt Oct 20 2026 · belay_s7.py --ladder s7n",
+  "src_url": "https://github.com/marin-community/marin/blob/marin_belay_v1_clean_s7/experiments/grug/fast_track/belay_s7.py",
+  "rows": [
+   {
+    "rung": "d512",
+    "label": "d512",
+    "note": null,
+    "run": "s7n-d512",
+    "active": 27300000.0,
+    "tokens": 5645008896,
+    "flops": 1.3854098248748237e+18,
+    "bpb": 1.1873,
+    "minutes": 37.8,
+    "gpus": 8
+   },
+   {
+    "rung": "d768",
+    "label": "d768",
+    "note": null,
+    "run": "s7n-d768",
+    "active": 77000000.0,
+    "tokens": 15932588032,
+    "flops": 9.387976435672547e+18,
+    "bpb": 1.0839,
+    "minutes": 216.6,
+    "gpus": 8
+   },
+   {
+    "rung": "d1024",
+    "label": "d1024",
+    "note": null,
+    "run": "s7n-d1024",
+    "active": 198600000.0,
+    "tokens": 41114664960,
+    "flops": 5.74045241436065e+19,
+    "bpb": 1.0024,
+    "minutes": 1010.6,
+    "gpus": 8
+   },
+   {
+    "rung": "d1280L16",
+    "label": "d1280L16",
+    "note": "16 layers · batch 1,024 · 32 GPUs",
+    "run": "s7n-d1280L16",
+    "active": 405700000.0,
+    "tokens": 83982548992,
+    "flops": 2.2954122115236338e+20,
+    "bpb": 0.9459,
+    "minutes": 1003.2,
+    "gpus": 32
+   }
+  ],
+  "eight_minute": {
+   "label": "d512, 8 min",
+   "value": null,
+   "note": "not run yet"
+  },
+  "note": "Measured Paloma macro BPB, byte-weighted (the Vanilla and Basic MoE cards are token-weighted, so BPB is not directly comparable across cards); wall clock includes compile and eval."
  }
 }

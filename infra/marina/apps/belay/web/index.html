@@ -151,7 +151,7 @@
     <div class="tpanel" id="tl-p3" role="region" aria-label="Belay Ckpt Oct 20 2026 specification" hidden>
       <header><h3>Belay Ckpt Oct 20 2026</h3><a class="src" href="https://github.com/marin-community/marin/blob/marin_belay_v1_clean_s7/experiments/grug/fast_track/belay_s7.py" target="_blank" rel="noopener">marin_belay_v1_clean_s7 · experiments/grug/fast_track/belay_s7.py --ladder s7n</a></header>
       <p class="tstatus">One GB200 rack (64 GPUs): 11.465 s/step, 36.8% MFU (34.2% at 11 racks).</p>
-      <div class="tspec"><div><h4>Architecture</h4><ul><li>MoE transformer, head dim 128, max sequence 4096</li><li>every 4th layer global, the rest local</li><li>Block AttnRes over 8 blocks (attention-weighted residual mix)</li><li>SConv (kernel 4) on keys, attention output and MLP output</li></ul></div><div><h4>Attention</h4><ul><li>local layers: KDA (Kimi Delta Attention), chunk size 32</li><li>global layers: MLA with a 512-dim KV latent, d/128 heads, Q and K norms, no key offset</li><li>Inkling relative-position bias, extent 512</li><li>attention output gate, XSA</li><li>fixed qk_mult 1.3; no QK-norm</li></ul></div><div><h4>MoE and router</h4><ul><li>384 routed experts, top-8, ungated ReLU², width 0.75·d</li><li>2 shared experts, ungated ReLU², width 0.75·d</li><li>latent MoE at 0.5·d</li><li>sigmoid combine weights, renormalized to 2.5</li><li>capacity factor 1.05, ragged all-to-all EP</li></ul></div><div><h4>Norms</h4><ul><li>gated norm on every sublayer, the embedding and the final output</li><li>RMS norm epsilon 1e-5</li></ul></div><div><h4>Loss</h4><ul><li>logit z-loss 1e-4</li><li>no logit soft-cap</li></ul></div><div><h4>Data</h4><ul><li>16k BPE (hero-bpe-v16384)</li><li>sequence-shuffled v16384 training cache</li></ul></div><div><h4>Optimizer and schedule</h4><ul><li>MuonH (quintic Newton–Schulz, 5 steps; momentum 0.95, Nesterov), Adam for embeddings</li><li>cosine schedule, 1% warmup, decay to 5% of peak; MuonH decay power 0.7</li><li>β₁ 0.9; LRs, β₂ and ε from the starter-kit heuristic</li><li>weight decay 0.1; gate/router weight decay 0.02; no AdEMAMix</li></ul></div><div><h4>Training (hero scale)</h4><ul><li>26.3B active params</li><li>5.73T tokens in 300k GB200-hours at 34.2% 11-rack MFU (ladder sized at 207 tokens per active param)</li></ul></div></div>
+      <div class="tspec"><div><h4>Architecture</h4><ul><li>MoE transformer, head dim 128, max sequence 4096</li><li>every 4th layer global, the rest local</li><li>Block AttnRes over 8 blocks (attention-weighted residual mix)</li><li>SConv (kernel 4) on keys, attention output and MLP output</li></ul></div><div><h4>Attention</h4><ul><li>local layers: KDA (Kimi Delta Attention), chunk size 32</li><li>global layers: MLA with a 512-dim KV latent, d/128 heads</li><li>Inkling relative-position bias, extent 512</li><li>attention output gate, XSA</li><li>QK-norm (weightless per-head RMS norm on Q and K) with fixed qk_mult 1.3, as on the hero</li></ul></div><div><h4>MoE and router</h4><ul><li>384 routed experts, top-8, ungated ReLU², width 0.75·d</li><li>2 shared experts, ungated ReLU², width 0.75·d</li><li>latent MoE at 0.5·d</li><li>sigmoid combine weights, renormalized to 2.5</li><li>capacity factor 1.05, ragged all-to-all EP</li></ul></div><div><h4>Norms</h4><ul><li>gated norm on every sublayer, the embedding and the final output</li><li>RMS norm epsilon 1e-5</li></ul></div><div><h4>Loss</h4><ul><li>logit z-loss 1e-4</li><li>no logit soft-cap</li></ul></div><div><h4>Data</h4><ul><li>16k BPE (hero-bpe-v16384)</li><li>sequence-shuffled v16384 training cache</li></ul></div><div><h4>Optimizer and schedule</h4><ul><li>MuonH (quintic Newton–Schulz, 5 steps; momentum 0.95, Nesterov), Adam for embeddings</li><li>cosine schedule, 1% warmup, decay to 5% of peak; MuonH decay power 0.7</li><li>β₁ 0.9; LRs, β₂ and ε from the starter-kit heuristic</li><li>weight decay 0.1; gate/router weight decay 0.02; no AdEMAMix</li></ul></div><div><h4>Training (hero scale)</h4><ul><li>26.3B active params</li><li>5.73T tokens in 300k GB200-hours at 34.2% 11-rack MFU (ladder sized at 207 tokens per active param)</li></ul></div></div>
     </div>
     <div class="kit-table xlate">
       <table class="rungs">
@@ -225,7 +225,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
         <h3>beta2 scaling with batch size</h3>
 <pre class="formula">beta2 = clip(0.999^(B / 131072), 0.95, 0.9999)</pre>
         <p>A constant per-token half-life. Worked values: d512/d768 (524k tokens per batch) → 0.996; d1024/d1280 (1.05M) → 0.992; hero (46.1M) → 0.95 (clipped). beta1 = 0.9 by default.</p>
-        <p>The current competitive d512 stack overrides beta2 to 0.98 and beta1 to 0.8, so tuned recipe values can differ from the default formula.</p>
+        <p>The current recipe, Belay Ckpt Oct 20 2026, uses these defaults (beta1 0.9, beta2 from the formula).</p>
       </div>
       <div class="kit-card">
         <h3>Adam epsilon</h3>
@@ -263,10 +263,11 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
       <h2>Logging</h2>
     </div>
     <ul class="logs">
-      <li><b>Runs</b>: public W&amp;B project <a href="https://wandb.ai/marin-community/marin_moe" target="_blank" rel="noopener"><code>marin_moe</code></a>, with each run's full config.</li>
-      <li><b>Code</b>: the current recipe on <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_clean_s7" target="_blank" rel="noopener"><code>marin_belay_v1_clean_s7</code></a> (<code>belay_s7.py --ladder s7n</code>); batch experiments on <code>marin_belay_v1_b&lt;batch&gt;</code> (earlier batches: <a href="https://github.com/marin-community/marin/tree/ladderclimb_v1_batch14" target="_blank" rel="noopener"><code>ladderclimb_v1_batch14</code></a>).</li>
-      <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one entry per experiment.</li>
-      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; batch plans in <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a>.</li>
+      <li><b>Runs</b>: W&amp;B project <a href="https://wandb.ai/marin-community/marin_moe" target="_blank" rel="noopener"><code>marin_moe</code></a>, with each run's full config; live runs, queue and storage on the <a href="status">Status</a> page.</li>
+      <li><b>Recipe</b>: Belay Ckpt Oct 20 2026 on <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_clean_s7" target="_blank" rel="noopener"><code>marin_belay_v1_clean_s7</code></a> (<code>belay_s7.py --ladder s7n</code>). Experiments branch from it, never from the GB200 lineages.</li>
+      <li><b>Experiment code</b>: one branch per week, <code>marin_belay_v1_w&lt;monday&gt;</code> (latest: <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_w2026-10-19" target="_blank" rel="noopener"><code>marin_belay_v1_w2026-10-19</code></a>); every run pins a commit SHA.</li>
+      <li><b>Results</b>: the <a href="https://github.com/marin-community/marin/tree/marin_belay_v1_registry/experiments/belay" target="_blank" rel="noopener">experiment registry</a>, one <code>X####</code> entry per idea; hero-scale throughput on the <a href="mfu">Hero MFU</a> page.</li>
+      <li><b>Discussion</b>: intake <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>; batch plans and results in <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a>.</li>
     </ul>
   </section>
 
@@ -317,7 +318,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
     <h2>Hero → Belay, one rack</h2>
     <div class="muted small mono" id="ladder-setup"></div>
     <div class="card chart-card"><div id="ladder-chart"></div>
-      <div class="legend"><span><i class="lg-solid"></i>latest</span><span><i class="lg-open"></i>at S4 FLOPs</span></div>
+      
     </div>
     <div class="table-card"><table class="rungs">
       <thead><tr><th>Stage</th><th>Change</th><th class="run">Run</th><th class="r">s/step</th><th class="r hide-sm">tok/s</th><th class="r">MFU</th></tr></thead>

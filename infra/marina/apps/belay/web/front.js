@@ -123,11 +123,7 @@ function startFront(RD, SC, SP) {
   }
 
   // ---------- Scaling laws (log y) ----------
-  const SEQ = 4096, RUNGS = ["d512", "d768", "d1024", "d1280"];
-  const MOE = { d512: [20840448, 1133066059776], d768: [60555264, 2575067774976], d1024: [162004992, 5929672114176], d1280: [291307520, 9975229317120] };
-  const DENSE = { d512: [18087936, 1065420324864], d768: [53477376, 2401121599488], d1024: [144703488, 5504470351872], d1280: [261488640, 9242400522240] };
-  const rungC = (t, tpp) => Object.fromEntries(RUNGS.map((r) => [r, (t[r][1] / SEQ) * tpp * t[r][0]]));
-  const C_MOE = rungC(MOE, 60);
+  const RUNGS = ["d512", "d768", "d1024", "d1280"];
   // Stage 4 comes from scaling.json: Paloma macro loss L(C) = floor + A·C^−α on analytic training FLOPs, converted to
   // BPB with each ladder's loss/BPB ratio (linear in log10 C). The x axis is hardware FLOPs = model FLOPs ÷ 11-rack MFU.
   const CURVES = SC.recipes.map((r) => ({ ...r, pts: r.points.map((q) => [q.rung, q.bpb, q.C, q.run]) }));
@@ -229,7 +225,7 @@ function startFront(RD, SC, SP) {
     el("circle", { cx: ex, cy: ey, r: 4.2, fill: css("--rope"), stroke: css("--surface"), "stroke-width": 1.6 }, svg);
     txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute*`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
     const eh = el("circle", { cx: ex, cy: ey, r: 11, fill: "transparent", tabindex: 0 }, svg);
-    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU<br>*extrapolated ~4,000× past the largest rung, so expect large error</span>`;
+    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU<br>*~4,000× extrapolation, beyond the ~300× expected for a reliable forecast</span>`;
     tipper("box-scaling", "tip-scaling", svg);
   }
 
@@ -246,36 +242,25 @@ function startFront(RD, SC, SP) {
     // runs: [active params, tokens, model FLOPs, Paloma macro BPB (measured), wall-clock minutes on 8×H100]
     { id: "vanilla", name: "Vanilla Track", tag: "dense · 20 tokens / param", desc: "A barebones Qwen3-style dense transformer (full causal GQA, RoPE, QK-norm, SwiGLU) trained with AdamW at a compute-scaled LR. For testing ideas with minimal confounders.", tpp: 20, runs: {"d512": [18881536, 377487360, 9.025e+16, 1.6205, 2.0], "d768": [56636928, 1132986368, 6.416e+17, 1.4146, 6.5], "d1024": [151021568, 3020947456, 3.954e+18, 1.3016, 28.3], "d1280": [275289600, 5506072576, 1.221e+19, 1.2326, 80.4]}, src: "belay_tracks.py --track vanilla", runPrefix: "belay-vanilla-" },
     { id: "moe", name: "Basic MoE", tag: "MoE · 60 tokens / active param", desc: "QB routing, top 4 of 128, 2 shared experts, MuonH. For testing MoE ideas with minimal confounders.", tpp: 60, runs: {"d512": [17219840, 1033371648, 2.237e+17, 1.3514, 6.9], "d768": [48473600, 2908225536, 1.422e+18, 1.2323, 26.1], "d1024": [128169472, 7690256384, 8.574e+18, 1.1336, 112.5], "d1280": [228123648, 13687062528, 2.54e+19, 1.0772, 294.8]}, src: "belay_tracks.py --track moe", runPrefix: "belay-moe-" },
-    { id: "comp", name: "Competitive Track", tag: "MoE · 60 tokens / active param", desc: "For building on the best active recipe.", table: MOE, tpp: 60,
-      best: { d512: [1.2322, "8-minute record"], d768: [1.1289, "candidate 10"], d1024: [1.0428, "candidate 9"], d1280: [0.9939, "candidate 9"] } },
+    { id: "comp", ...SC.competitive_track },
   ];
   const tc = $("track-cards");
   const mins = (m) => (m < 90 ? `${m.toFixed(0)} min` : `${(m / 60).toFixed(1)} h`);
   TRACKS.forEach((t) => {
-    if (t.runs) {
-      const rows = RUNGS.map((r) => {
-        const [p, tok, f, bpb, m] = t.runs[r];
-        return `<tr><td class="mono"><a class="wb" href="${WB(t.runPrefix + r)}" target="_blank" rel="noopener" title="${t.runPrefix + r} in W&amp;B">${r}</a></td><td class="r">${human(p)}</td><td class="r">${human(tok)}</td><td class="r">${sci(f)}</td><td class="r">${mins(m)}</td><td class="r"><b>${bpb.toFixed(4)}</b></td></tr>`;
-      }).join("");
-      const card = document.createElement("article"); card.className = "track";
-      card.innerHTML = `<header><div><div class="tag">${t.tag}</div><h3>${t.name}</h3></div></header>
-      <p>${t.desc}</p>
-      <div style="overflow-x:auto"><table class="rungs"><thead><tr><th>Rung</th><th class="r">Active</th><th class="r">Tokens</th><th class="r">FLOPs</th><th class="r">8×H100</th><th class="r">Baseline</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="note" style="margin:0">Measured Paloma macro BPB; wall clock includes compile and eval. <a href="https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_tracks.py" target="_blank" rel="noopener">${t.src}</a></p>`;
-      tc.appendChild(card);
-      return;
-    }
-    const C = rungC(t.table, t.tpp);
-    const rows = RUNGS.map((r) => {
-      const b = t.best[r], p = t.table[r][0];
-      return `<tr><td class="mono">${r}</td><td class="r">${human(p)}</td><td class="r">${human(t.tpp * p)}</td><td class="r">${sci(C[r])}</td>
-        <td class="r">${b ? `<b>${b[0].toFixed(4)}</b><br><span style="color:var(--faint);font-size:11px;font-family:var(--body)">${b[1]}</span>` : '<span class="open">open</span>'}</td></tr>`;
-    }).join("");
+    // Measured tracks: vanilla and basic MoE keep their rows here; the competitive track's come from scaling.json.
+    const rowsData = t.rows ?? RUNGS.map((r) => {
+      const [active, tokens, flops, bpb, minutes] = t.runs[r];
+      return { rung: r, label: r, run: t.runPrefix + r, active, tokens, flops, bpb, minutes, gpus: 8 };
+    });
+    const srcUrl = t.src_url ?? "https://github.com/marin-community/marin/blob/marin_belay_v1_ckpt1/experiments/grug/fast_track/belay_tracks.py";
+    const rows = rowsData.map((x) =>
+      `<tr><td class="mono"><a class="wb" href="${WB(x.run)}" target="_blank" rel="noopener" title="${x.run} in W&amp;B">${x.label}</a>${x.note ? `<small>${x.note}</small>` : ""}</td><td class="r">${human(x.active)}</td><td class="r">${human(x.tokens)}</td><td class="r">${sci(x.flops)}</td><td class="r">${mins(x.minutes)}</td><td class="r"><b>${x.bpb.toFixed(4)}</b></td></tr>`).join("")
+      + (t.eight_minute ? `<tr><td class="mono">${t.eight_minute.label}</td><td class="r">–</td><td class="r">–</td><td class="r">–</td><td class="r">–</td><td class="r"><span class="open">${t.eight_minute.note}</span></td></tr>` : "");
     const card = document.createElement("article"); card.className = `track${t.id === "comp" ? " comp" : ""}`;
-    card.innerHTML = `<header><div><div class="tag">${t.tag}</div><h3>${t.name}</h3></div>${t.id === "vanilla" ? '<span class="pill est">no runs yet</span>' : ""}</header>
+    card.innerHTML = `<header><div><div class="tag">${t.tag}</div><h3>${t.name}</h3></div></header>
       <p>${t.desc}</p>
-      <div style="overflow-x:auto"><table class="rungs"><thead><tr><th>Rung</th><th class="r">Params</th><th class="r">Tokens</th><th class="r">FLOPs</th><th class="r">${t.id === "comp" ? "Record" : "Baseline"}</th></tr></thead><tbody>${rows}</tbody></table></div>
-`;
+      <div style="overflow-x:auto"><table class="rungs"><thead><tr><th>Rung</th><th class="r">Active</th><th class="r">Tokens</th><th class="r">FLOPs</th><th class="r">${t.rows ? "Time" : "8×H100"}</th><th class="r">${t.rows ? "BPB" : "Baseline"}</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="note" style="margin:0">${t.note ?? "Measured Paloma macro BPB; wall clock includes compile and eval."} <a href="${srcUrl}" target="_blank" rel="noopener">${t.src}</a></p>`;
     tc.appendChild(card);
   });
 

@@ -42,11 +42,7 @@ function num(v, d) {
   return v === null || v === undefined ? el('span', { class: 'muted' }, '—') : v.toFixed(d)
 }
 
-function atS4(stage, s4Flops) {
-  return stage.own_flops_per_step ? (stage.mfu * s4Flops) / stage.own_flops_per_step : null
-}
-
-// Step chart over the ladder stages: latest tuned MFU, and S6/S7 at S4 FLOPs (open dots).
+// Step chart over the ladder stages: latest tuned MFU.
 function ladderChart(ladder) {
   const box = document.getElementById('ladder-chart')
   // viewBox width follows the box, so labels stay readable at phone width.
@@ -69,11 +65,6 @@ function ladderChart(ladder) {
   stages.forEach((s, i) => {
     svg('circle', { cx: X(i), cy: Y(s.mfu), r: 4.5, fill: 'var(--rope)' }, root)
     label(root, X(i), Y(s.mfu) - 9, pct(s.mfu), { 'text-anchor': 'middle', fill: 'var(--ink)', 'font-weight': 600 })
-    const at4 = atS4(s, ladder.s4_flops_per_step)
-    if (at4 !== null) {
-      svg('circle', { cx: X(i), cy: Y(at4), r: 4, fill: 'var(--surface)', stroke: 'var(--rope)', 'stroke-width': 1.5 }, root)
-      label(root, X(i) + 8, Y(at4) + 4, pct(at4), { fill: 'var(--slate)' })
-    }
     label(root, X(i), H - M.b + 18, s.stage, { 'text-anchor': 'middle', fill: 'var(--ink)', 'font-weight': 600 })
   })
   box.replaceChildren(root)
@@ -120,7 +111,6 @@ function ladderTable(ladder) {
   setChildren(
     'ladder-rows',
     ladder.stages.map((s) => {
-      const at4 = atS4(s, ladder.s4_flops_per_step)
       return el(
         'tr',
         {},
@@ -129,12 +119,7 @@ function ladderTable(ladder) {
         runCell(s.run, s.links),
         el('td', { class: 'r mono' }, num(s.step, 2)),
         el('td', { class: 'r mono hide-sm' }, num(s.tps_k, 1), 'k'),
-        el(
-          'td',
-          { class: 'r mono strong' },
-          pct(s.mfu),
-          at4 !== null ? el('small', { class: 'muted' }, ` (${pct(at4)} at S4)`) : null,
-        ),
+        el('td', { class: 'r mono strong' }, pct(s.mfu)),
       )
     }),
   )
