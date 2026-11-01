@@ -92,6 +92,7 @@ from experiments.belay.posts import (
     stage_section,
     title,
     updated,
+    with_reproduce,
 )
 from experiments.belay.registry_entry import (
     ENTRIES,
@@ -732,6 +733,11 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     analysis = (f"{registry_id} {trial['id']}", report_url(registry_id, trial["id"]))
     new_title = title(registry_id, entry["name"], spec.track, status)
     body = updated(read_comment(url), new_title, number, section, analysis)
+    prefix = f"{RUN_PREFIX}{registry_id}-"
+    earlier = {
+        i + 1: reproduce(registry_id, t["commit"], t["wandb"][0].removeprefix(prefix)) for i, t in enumerate(trials)
+    }
+    body = with_reproduce(body, earlier)  # sections written before posts carried a Reproduce line
     publish_comment(url, body, github_posting=state.github_posting, dry_run=dry_run)
     if idea is not None:
         result = {"rows": [asdict(r) for r in results], "verdict": overall, "kind": PAGE_RESULT_KIND[overall]}

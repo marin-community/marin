@@ -14,7 +14,6 @@ import itertools
 import re
 import shlex
 import subprocess
-import sys
 import typing
 from dataclasses import dataclass
 from enum import StrEnum
@@ -223,12 +222,12 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob]) -> None:
         )
 
 
-def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: str = sys.executable) -> list[str]:
+def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: str = "uv run python") -> list[str]:
     """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``."""
     baseline = TRACKS[track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
-    command = [python, "-m", *baseline.launch, *flags]
+    command = [*python.split(), "-m", *baseline.launch, *flags]
     command += ["--seed", str(CONFIG.seed), "--run-id", name]
     if baseline.output_path:
         command += ["--output-path", f"{CONFIG.output_root}/{name}"]
@@ -237,7 +236,8 @@ def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: 
 
 
 def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
-    """The run's command; it runs with this interpreter from the checkout of the Track's code branch."""
+    """The run's command, run from the checkout of the Track's code branch (``uv run`` uses that checkout's
+    environment)."""
     return track_command(spec.track, run_name(spec.experiment, run.name), run.flags)
 
 
