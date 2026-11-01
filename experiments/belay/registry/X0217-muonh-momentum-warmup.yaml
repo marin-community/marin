@@ -121,7 +121,7 @@ trials:
   - 3.0678
   delta:
   - 0.0223
-  steps: 3029
+  steps: 3030
   baseline: belay-X0217-control 3.0455 (same commit, seed 0)
 events:
 - type: closed
