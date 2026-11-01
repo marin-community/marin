@@ -339,7 +339,8 @@ trials:
   batch: X0014
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6561674569
-  wandb: []
+  wandb:
+  - belay-X0014-seed0
   settings:
     value_embed_lr_mult: '0.3'
     value_embeds: gated
