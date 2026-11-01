@@ -130,6 +130,9 @@ def summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, 
         "train/router/margin_max": jnp.max(margin_max),
         "qb_beta_per_layer": qb_beta,
     }
+    if "mod_score_quantile_per_layer" in router_metrics:  # model.MOD_SCORE_QUANTILE_KEY
+        # The trainer folds it into the next step's mod_routed_frac thresholds.
+        out["mod_score_quantile_per_layer"] = router_metrics["mod_score_quantile_per_layer"]
     if qb_beta is not None:
         # Router bias applied to the logits is -qb_beta; log the extent of the per-expert bias.
         out["train/router/bias_min"] = -jnp.max(qb_beta)

@@ -292,7 +292,7 @@ MUONH_MOMENTUM_WARMUP_START = 0.85
 BIGRAM_TABLE_LR_MULT = 10.0
 """Adam LR multiple of the hashed bigram table (``attn_res_bigram_rows``), in the ``embed2`` group."""
 _BIGRAM_TABLE = re.compile(r"(?:^|\.)bigram_embed$")
-_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
+_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult|mod_score)$")
 _VALUE_EMBED_TABLE = re.compile(r"(?:^|\.)value_embed$")
 
 

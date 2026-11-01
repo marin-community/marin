@@ -65,6 +65,9 @@ from experiments.grug.moe.kda_state_pallas import StateGrads
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
+# EMA decay of the ``mod_routed_frac`` threshold over steps, and the metric carrying each layer's score quantile.
+MOD_THRESHOLD_EMA = 0.99
+MOD_SCORE_QUANTILE_KEY = "mod_score_quantile_per_layer"
 _CE_TOKENS_PER_RANK = 65_536
 # A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512 on H100.
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192)
@@ -476,6 +479,19 @@ class GrugModelConfig:
     """A hashed bigram table with this many full-width rows (0: off): each token reads the row of its (previous
     token, token) hash, RMS-normed, as an extra AttnRes source ahead of the embedding. Needs ``attn_res``. The
     optimizer trains the table at ``BIGRAM_TABLE_LR_MULT`` x the Adam LR."""
+    mod_routed_frac: float = 0.0
+    """Causal token-level capacity routing in front of each MoE (0: off). A zero-init linear score of the MoE
+    input decides per token: tokens scoring at or above the layer's threshold take the routed experts at
+    top-``round(num_experts_per_token / mod_routed_frac)`` (same QB ranking and combine), the rest take the
+    shared experts and residual only, so the mean active experts stays ``num_experts_per_token``. The
+    threshold is an EMA (``MOD_THRESHOLD_EMA``) of the earlier steps' ``1 - mod_routed_frac`` score quantile,
+    set by the trainer, the same rule in training and eval. The routed output is scaled by
+    ``2 sigmoid(score - threshold)``, which trains the score. Expert capacity scales by ``mod_routed_frac``."""
+
+    @property
+    def mod_routed_k(self) -> int:
+        """Experts per routed token under ``mod_routed_frac``."""
+        return round(self.num_experts_per_token / self.mod_routed_frac)
 
     def __post_init__(self) -> None:
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -494,6 +510,11 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
+        if self.mod_routed_frac:
+            if self.dense_mlp or not 0.0 < self.mod_routed_frac < 1.0:
+                raise ValueError("mod_routed_frac needs the MoE and 0 < mod_routed_frac < 1")
+            if self.mod_routed_k >= self.num_experts:
+                raise ValueError("mod_routed_frac's routed top-k must be < num_experts (QB selects top-(k+1))")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
@@ -1148,6 +1169,9 @@ class MoEMLP(eqx.Module):
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
+    # ``mod_routed_frac``: the per-token routing score and its threshold (a trainer-set stop-gradient EMA).
+    mod_score: jax.Array | None
+    mod_threshold: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1176,6 +1200,8 @@ class MoEMLP(eqx.Module):
                 else reshard(_init_weight(k_up, (width, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             expert_mlp=_expert_mlp_init(cfg, width, k_expert),
+            mod_score=reshard(jnp.zeros((d,), jnp.float32), P(None)) if cfg.mod_routed_frac else None,
+            mod_threshold=jnp.zeros((), jnp.float32) if cfg.mod_routed_frac else None,
             cfg=cfg,
         )
 
@@ -1218,7 +1244,7 @@ class MoEMLP(eqx.Module):
             projected = [jnp.einsum("td,de->te", x_flat, w) for w in self.input_projection_weights(x_flat.dtype)]
         router_logits = projected[0].astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
-        k = self.cfg.num_experts_per_token
+        k = self.cfg.mod_routed_k if self.cfg.mod_routed_frac else self.cfg.num_experts_per_token
         num_experts = self.cfg.num_experts
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         topk_logits, selected_experts = _small_top_k(biased_logits, k + 1)
@@ -1256,8 +1282,21 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+        token_routed = None
+        if self.mod_score is not None and self.mod_threshold is not None:
+            score = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), self.mod_score)
+            margin = score - jax.lax.stop_gradient(self.mod_threshold)
+            token_routed = margin >= 0
+            # 1.0 at init (zero score, zero threshold); unrouted tokens get no routed output.
+            gate = jnp.where(token_routed, 2.0 * jax.nn.sigmoid(margin), 0.0)
+            combine_weights = (combine_weights_f * gate[:, None]).astype(x.dtype)
+            score_all = reshard(jax.lax.stop_gradient(score), P(None))
+            router_stats["mod_score_quantile"] = jnp.quantile(score_all, 1.0 - self.cfg.mod_routed_frac)
+            routed_share = jnp.mean(token_routed.astype(jnp.float32))
+            router_stats[f"{_OUTSTAT_PREFIX}mod_routed_share"] = routed_share
+            router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = k * routed_share
         routed_flat, overflow = _run_expert_bank(
-            self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights
+            self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights, token_routed
         )
         router_stats["capacity_overflow"] = overflow.dropped
         router_stats["sender_capacity_overflow"] = overflow.sender_dropped
@@ -1450,7 +1489,12 @@ class Block(eqx.Module):
 
 def _expert_mlp_init(cfg: GrugModelConfig, width: int, key: PRNGKeyArray) -> MoEExpertMlp:
     """The routed expert bank on ``width``-wide inputs and outputs; ``moe_ungated_relu2`` drops the gate
-    (``w_gate=None``) and uses ReLU."""
+    (``w_gate=None``) and uses ReLU. Under ``mod_routed_frac`` only that share of tokens dispatches, at the
+    larger routed top-k, so the capacity factors scale by it."""
+    capacity_factor, transport_factor = cfg.capacity_factor, cfg.pooled_transport_capacity_factor
+    if cfg.mod_routed_frac:
+        capacity_factor *= cfg.mod_routed_frac
+        transport_factor = None if transport_factor is None else transport_factor * cfg.mod_routed_frac
     mlp = MoEExpertMlp.init(
         num_experts=cfg.num_experts,
         hidden_dim=width,
@@ -1462,8 +1506,8 @@ def _expert_mlp_init(cfg: GrugModelConfig, width: int, key: PRNGKeyArray) -> MoE
         activation=(
             ActivationFunctionEnum.relu if cfg.moe_ungated_relu2 else ActivationFunctionEnum(cfg.expert_activation)
         ),
-        capacity_factor=cfg.capacity_factor,
-        pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
+        capacity_factor=capacity_factor,
+        pooled_transport_capacity_factor=transport_factor,
     )
     if cfg.moe_ungated_relu2:
         mlp = eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None)
@@ -1476,9 +1520,13 @@ def _run_expert_bank(
     routed_input: jax.Array,
     selected: jax.Array,
     combine_weights: jax.Array,
+    token_valid: jax.Array | None = None,
 ):
     """Dispatch the expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
-    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``."""
+    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``.
+    ``token_valid`` (``mod_routed_frac``) keeps the unrouted tokens out of dispatch."""
+    if token_valid is not None:
+        token_valid = reshard(token_valid, P(_BATCH_AXES))
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -1496,8 +1544,16 @@ def _run_expert_bank(
             report_capacity_overflow=True,
             expert_chunks=em.expert_chunks,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
+            token_valid=token_valid,
         )
-    return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
+    return em(
+        routed_input,
+        selected,
+        combine_weights,
+        token_valid=token_valid,
+        mesh=get_abstract_mesh(),
+        report_capacity_overflow=True,
+    )
 
 
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
@@ -2074,6 +2130,8 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
             router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
+            if cfg.mod_routed_frac:
+                router_metrics[MOD_SCORE_QUANTILE_KEY] = stacked_router_stats["mod_score_quantile"]
         router_metrics.update(final_gate_stats)
         if pre_norm_grad_probe is not None:
             rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))

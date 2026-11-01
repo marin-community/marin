@@ -70,6 +70,8 @@ from experiments.grug.fast_track.cplm import bind_case_tables, case_class_tables
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    MOD_SCORE_QUANTILE_KEY,
+    MOD_THRESHOLD_EMA,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
@@ -640,6 +642,17 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: [stack.stacked.mlp.router_bias for stack in t.layer_stacks()], model, per_stack)
 
 
+def _apply_mod_thresholds(model: Transformer, previous: Transformer, score_quantiles: jax.Array) -> Transformer:
+    """``mod_routed_frac``: each layer's threshold becomes the EMA of ``previous``'s threshold and this step's
+    score quantile (``score_quantiles``, layer order); the optimizer's update of the leaf is discarded."""
+    per_stack = [
+        MOD_THRESHOLD_EMA * stack.stacked.mlp.mod_threshold
+        + (1.0 - MOD_THRESHOLD_EMA) * score_quantiles[np.asarray(indices)]
+        for stack, indices in zip(previous.layer_stacks(), previous.stack_layer_indices(), strict=True)
+    ]
+    return eqx.tree_at(lambda t: [stack.stacked.mlp.mod_threshold for stack in t.layer_stacks()], model, per_stack)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -997,6 +1010,8 @@ def _make_train_step(
             updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         with jax.named_scope("apply_updates"):
             params = optax.apply_updates(qb_params, updates)
+        if MOD_SCORE_QUANTILE_KEY in metrics:
+            params = _apply_mod_thresholds(params, qb_params, metrics[MOD_SCORE_QUANTILE_KEY])
         if token_embed_stats:
             metrics.update(_token_embed_stats(qb_params.token_embed, params.token_embed))
 
