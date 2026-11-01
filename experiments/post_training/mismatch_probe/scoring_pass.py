@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,8 +49,28 @@ from experiments.post_training.mismatch_probe.sequence_kl import (
 
 TOP_K = 256
 
+
 # The bucket an unscored token carries (WP8's fixed context); it produces no row.
 CONTEXT_TAG = "context"
+
+
+def run_score(
+    policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1, support_width: int | None = None
+) -> tuple[dict, float]:
+    """One ``probe_score_forward`` call over the whole batch, CPU tensors back."""
+    from skyrl_train.training_batch import TrainingInputBatch  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
+
+    data = TrainingInputBatch({key: torch.from_numpy(value) for key, value in batch.items() if value is not None})
+    data.metadata = {
+        "response_length": batch["sequences"].shape[1],
+        "probe_micro_batch_size": micro_batch_size,
+        "probe_score_top_k": top_k,
+        "probe_score_support_width": support_width,
+    }
+    started = time.monotonic()
+    output = policy.run_method("mesh", "probe_score_forward", data=data)  # DP shards concatenated in order
+    duration = time.monotonic() - started
+    return {key: value.numpy() for key, value in output.items()}, duration
 
 
 def sequence_probe_hash(token_ids: list[int]) -> str:
@@ -257,12 +278,15 @@ def exact_rows_from_passes(
     candidate_positions: list[tuple[int, int]],
     *,
     padded_len: int,
+    real_rows: int,
 ) -> list[tuple[str, int, str, float]]:
     """(sample_id, token position, probe_hash, exact KL) per subsampled position.
 
     ``reference_exact``/``candidate_exact`` are the full-vocabulary log-softmax
     rows of the two passes, each in its own compacted order beside the
     ``(batch row, padded logits position)`` coordinates of every returned row.
+    Only the first ``real_rows`` sequences contribute; repeated data-parallel
+    padding rows are excluded by coordinate, even when they share a sample id.
     The reported position is the scored token's, as in the binned rows.
     """
     if len(reference_exact) != len(reference_positions) or len(candidate_exact) != len(candidate_positions):
@@ -270,6 +294,8 @@ def exact_rows_from_passes(
     reference_by_key = {tuple(key): value for key, value in zip(reference_positions, reference_exact, strict=True)}
     rows = []
     for (row, logits_position), logprobs in zip(candidate_positions, candidate_exact, strict=True):
+        if row >= real_rows:
+            continue
         if (row, logits_position) not in reference_by_key:
             raise ValueError(
                 f"the candidate pass scored logits position {logits_position} of row {row}; the reference pass did not"

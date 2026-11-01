@@ -15,9 +15,8 @@ import ray
 
 from experiments.post_training.mismatch_probe.long_context import scoring_worker
 from experiments.post_training.mismatch_probe.routing_worker import RoutingWorker
-from experiments.post_training.mismatch_probe.run_score_pass import run_score
 from experiments.post_training.mismatch_probe.score_probe_sets import DP_SIZE, forward_groups, parse_sets, unique_rows
-from experiments.post_training.mismatch_probe.scoring_pass import build_score_batch, load_probe_sequences
+from experiments.post_training.mismatch_probe.scoring_pass import build_score_batch, load_probe_sequences, run_score
 
 logger = logging.getLogger(__name__)
 

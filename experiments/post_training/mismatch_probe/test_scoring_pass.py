@@ -10,12 +10,18 @@ Run from ``vendor/skyrl`` (the root environment has no torch on macOS)::
 """
 
 import hashlib
+import json
 import math
+import sys
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
+from experiments.post_training.mismatch_probe import score_probe_sets as probe
 from experiments.post_training.mismatch_probe.scoring_pass import (
     CONTEXT_TAG,
     ProbeSequence,
@@ -156,6 +162,7 @@ def test_rows_parquet_round_trip(tmp_path):
         candidate_id="B",
         candidate_step=1,
     )
+    rows = [replace(row, exact_kl=12.5) for row in rows]
     path = tmp_path / "rows" / "kl.parquet"
     count = write_rows_parquet(rows, path)
     assert count == 1
@@ -172,7 +179,9 @@ def test_exact_rows_pair_the_two_passes_by_coordinate():
     candidate_rows = torch.log_softmax(torch.stack([vocabulary, vocabulary]), dim=-1).numpy()
     # Row 0 is left-padded by one: logits positions 1 and 2 score tokens 1 and 2.
     coordinates = [(0, 1), (0, 2)]
-    rows = exact_rows_from_passes([sequence_row], reference_rows, coordinates, candidate_rows, coordinates, padded_len=4)
+    rows = exact_rows_from_passes(
+        [sequence_row], reference_rows, coordinates, candidate_rows, coordinates, padded_len=4, real_rows=1
+    )
     assert [sample_id for sample_id, _position, _hash, _kl in rows] == ["s", "s"]
     for index, ((_sample_id, position, probe_hash, kl), reference_row, candidate_row) in enumerate(
         zip(rows, reference_rows, candidate_rows, strict=True)
@@ -197,8 +206,117 @@ def test_exact_rows_report_the_binned_rows_token_positions():
     coordinates = [(int(tags[row, column]) - 1, column) for row, column in zip(*np.nonzero(tags), strict=True)]
     rows_of_vocab = np.log(np.full((len(coordinates), 2), 0.5))
     rows = exact_rows_from_passes(
-        sequences, rows_of_vocab, coordinates, rows_of_vocab, coordinates, padded_len=batch["sequences"].shape[1]
+        sequences,
+        rows_of_vocab,
+        coordinates,
+        rows_of_vocab,
+        coordinates,
+        padded_len=batch["sequences"].shape[1],
+        real_rows=len(sequences),
     )
     reported = sorted((sample_id, position) for sample_id, position, _hash, _kl in rows)
     expected = sorted((s.sample_id, position) for s in sequences for position in s.scored_positions())
     assert reported == expected
+
+
+def test_refined_reference_width_round_trips_through_candidate_cli(tmp_path, monkeypatch):
+    # This CPU integration test uses the optional SkyRL dispatch API with a numerical model fake.
+    pytest.importorskip("skyrl_train.training_batch")
+    score_math = pytest.importorskip("skyrl_train.mismatch_probe.score_math")
+
+    probabilities = {
+        "reference": torch.tensor([0.4, 0.3, 0.2, 0.1]),
+        "candidate": torch.tensor([0.1, 0.2, 0.3, 0.4]),
+    }
+
+    @contextmanager
+    def cpu_worker(model):
+        class CpuPolicy:
+            def run_method(self, _dispatch, _method, *, data):
+                logits = probabilities[model].log().expand(*data["sequences"].shape, -1)
+                return score_math.score_compacted_hidden(
+                    score_math.CompactHiddenStates(logits, lambda hidden: hidden),
+                    data["attention_mask"],
+                    top_k=data.metadata["probe_score_top_k"],
+                    gather_ids=data.get("probe_score_gather_ids"),
+                    probe_score_positions=data.get("probe_score_positions"),
+                    vocabulary_size=logits.shape[-1],
+                    chunk_size=2,
+                    support_width=data.metadata["probe_score_support_width"],
+                )
+
+        yield CpuPolicy()
+
+    monkeypatch.setattr(probe, "_worker", cpu_worker)
+    path = tmp_path / "probe.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "sample_id": "s",
+                "token_ids": [0, 2],
+                "token_type_tags": ["context", "reasoning"],
+                "position_tags": [-1, 0],
+                "bucket_group": "P_X",
+            }
+        )
+        + "\n"
+    )
+    sets = {"P_X": str(path)}
+    reference = str(tmp_path / "reference")
+    out = str(tmp_path / "candidate")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "score_probe_sets",
+            "reference",
+            "--model-path",
+            "reference",
+            "--set",
+            f"P_X={path}",
+            "--out",
+            reference,
+            "--top-k",
+            "2",
+        ],
+    )
+    probe.main()
+    refined = str(tmp_path / "refined")
+    legacy = Path(out) / "P_X" / "kl-theta.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"top_k":256,"legacy":true}')
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "score_probe_sets",
+            "candidate",
+            "--model-path",
+            "candidate",
+            "--label",
+            "theta",
+            "--step",
+            "1",
+            "--set",
+            f"P_X={path}",
+            "--reference-out",
+            reference,
+            "--out",
+            out,
+            "--output-root",
+            f"P_X={refined}",
+        ],
+    )
+    probe.main()
+    assert json.loads(legacy.read_text()) == {"top_k": 256, "legacy": True}
+    assert json.loads((Path(refined) / "P_X" / "kl-theta.json").read_text())["top_k"] == 2
+    rows = read_rows_parquet(Path(refined) / "P_X" / "kl-theta-0000.parquet")
+    # The realized token (id 2) is outside the two-token support, and must stay in the tail.
+    expected = 0.4 * math.log(0.4 / 0.1) + 0.3 * math.log(0.3 / 0.2) + 0.3 * math.log(0.3 / 0.7)
+    assert len(rows) == 1 and rows[0].top_k == 2
+    assert rows[0].kl == pytest.approx(expected, rel=1e-6)
+    meta_path = Path(reference) / "P_X" / "reference.json"
+    previous = json.loads(meta_path.read_text())
+    with pytest.raises(ValueError, match="support width"):
+        probe.reference_pass("reference", sets, reference, None, top_k=3)
+    assert json.loads(meta_path.read_text()) == previous

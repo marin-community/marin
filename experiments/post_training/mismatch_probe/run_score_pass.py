@@ -27,11 +27,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 
 import numpy as np
 import ray
-import torch
 
 from experiments.post_training.mismatch_probe.long_context import scoring_worker
 from experiments.post_training.mismatch_probe.scoring_pass import (
@@ -41,31 +39,13 @@ from experiments.post_training.mismatch_probe.scoring_pass import (
     exact_rows_from_passes,
     kl_rows_from_passes,
     load_probe_sequences,
+    run_score,
     write_rows_parquet,
 )
 
 PAD_TOKEN_ID = 0
 EXACT_RATE = 0.01
 MASTER_SEED = 20261023
-
-
-def run_score(
-    policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1, support_width: int | None = None
-) -> tuple[dict, float]:
-    """One ``probe_score_forward`` call over the whole batch, CPU tensors back."""
-    from skyrl_train.training_batch import TrainingInputBatch  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
-
-    data = TrainingInputBatch({key: torch.from_numpy(value) for key, value in batch.items() if value is not None})
-    data.metadata = {
-        "response_length": batch["sequences"].shape[1],
-        "probe_micro_batch_size": micro_batch_size,
-        "probe_score_top_k": top_k,
-        "probe_score_support_width": support_width,
-    }
-    started = time.monotonic()
-    output = policy.run_method("mesh", "probe_score_forward", data=data)  # DP shards concatenated in order
-    duration = time.monotonic() - started
-    return {key: value.numpy() for key, value in output.items()}, duration
 
 
 def shuffled_batch(batch: dict, order: np.ndarray) -> dict:
@@ -172,7 +152,11 @@ def exact_pass(args) -> None:
         passes[label] = (results["exact_logprobs"], results["exact_positions"].tolist())
         print(f"{label} exact pass ({model_path}): {len(results['exact_positions'])} positions in {duration:.0f} s")
     rows = exact_rows_from_passes(
-        sequences, *passes["reference"], *passes["candidate"], padded_len=batch["sequences"].shape[1]
+        sequences,
+        *passes["reference"],
+        *passes["candidate"],
+        padded_len=batch["sequences"].shape[1],
+        real_rows=len(sequences),
     )
     kls = np.asarray([row[3] for row in rows])
     print(

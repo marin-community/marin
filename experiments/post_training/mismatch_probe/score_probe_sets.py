@@ -60,6 +60,7 @@ from experiments.post_training.mismatch_probe.scoring_pass import (
     load_probe_sequences,
     read_flip_rows_parquet,
     read_rows_parquet,
+    run_score,
     write_flip_rows_parquet,
     write_rows_parquet,
 )
@@ -247,9 +248,6 @@ def write_json(path: str, value: Any) -> None:
 
 
 def _score(policy, batch: dict, *, top_k: int | None, support_width: int | None = None) -> dict[str, np.ndarray]:
-    # skyrl_train exists only inside a SkyRL runtime.
-    from experiments.post_training.mismatch_probe.run_score_pass import run_score  # noqa: PLC0415
-
     results, _seconds = run_score(
         policy, batch, top_k=top_k, micro_batch_size=MICRO_BATCH_SIZE, support_width=support_width
     )
@@ -286,22 +284,34 @@ def _gather_ids(sequences: list[ProbeSequence], reference: dict[str, np.ndarray]
 
 
 def reference_pass(
-    model_path: str, sets: dict[str, str], out: str, limit: int | None, *, max_long: int = MAX_LONG_PER_FORWARD
+    model_path: str,
+    sets: dict[str, str],
+    out: str,
+    limit: int | None,
+    *,
+    max_long: int = MAX_LONG_PER_FORWARD,
+    top_k: int = TOP_K,
 ) -> None:
+    """Freeze reference supports at top_k; a different K requires a fresh cache root."""
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
             for index, group, _real in group_sequences(stage_set(uri, limit), max_long=max_long):
                 path = shard_path(out, set_name, "reference", index, "npz")
                 if exists(path):
+                    stored = load_npz(path)
+                    if stored["topk_ids"].shape[-1] != top_k:
+                        raise ValueError(f"{path} has another support width; use a fresh reference root")
+                    if list(stored["sample_ids"]) != [sequence.sample_id for sequence in group]:
+                        raise ValueError(f"{path} holds another sequence group")
                     continue
-                save_reference_shard(path, group, _score(policy, _batch(group), top_k=TOP_K))
+                save_reference_shard(path, group, _score(policy, _batch(group), top_k=top_k))
             write_json(
                 f"{out.rstrip('/')}/{set_name}/reference.json",
                 {
                     "model": model_path,
                     "sequences": uri,
                     "limit": limit,
-                    "top_k": TOP_K,
+                    "top_k": top_k,
                     "max_long_per_forward": max_long,
                 },
             )
@@ -322,7 +332,7 @@ def candidate_rows(
     order = np.arange(len(group))[::-1] if reverse else np.arange(len(group))
     gather = _gather_ids(group, reference)
     batch = _batch([group[row] for row in order], gather=gather[order])
-    results = _score(policy, batch, top_k=None, support_width=TOP_K)
+    results = _score(policy, batch, top_k=None, support_width=reference["topk_ids"].shape[-1])
     restored = np.empty_like(order)
     restored[order] = np.arange(len(order))
     rows = kl_rows_from_passes(
@@ -345,13 +355,14 @@ def candidate_pass(
     step: int,
     sets: dict[str, str],
     reference_roots: dict[str, str],
-    out: str,
+    output_roots: dict[str, str],
     limit: int | None,
     *,
     max_long: int = MAX_LONG_PER_FORWARD,
 ) -> None:
     with _worker(model_path) as policy:
         for set_name, uri in sets.items():
+            out = output_roots[set_name]
             reference_out = reference_roots[set_name]
             with fsspec.open(f"{reference_out.rstrip('/')}/{set_name}/reference.json", "rt") as handle:
                 reference_meta = json.load(handle)
@@ -439,15 +450,18 @@ def exact_pass(
                 candidate["rows"],
                 candidate["positions"].tolist(),
                 padded_len=max(len(sequence.token_ids) for sequence in group),
+                real_rows=real,
             )
-            real_ids = {sequence.sample_id for sequence in group[:real]}
-            exact_rows += [row for row in rows if row[0] in real_ids]
+            exact_rows += rows
         binned = {
             (row.sequence_id, row.position): row
             for path in _shards(out, set_name, f"kl-{label}")
             for row in read_rows_parquet(_local_copy(path))
         }
         paired = [(binned[(sample_id, position)], kl) for sample_id, position, _hash, kl in exact_rows]
+        write_rows_shard(
+            shard_path(out, set_name, f"exact-{label}", 0, "parquet"), [replace(row, exact_kl=kl) for row, kl in paired]
+        )
         write_json(f"{out.rstrip('/')}/{set_name}/exact-{label}.json", exact_summary(paired))
 
 
@@ -455,10 +469,14 @@ def exact_summary(paired: list[tuple[Any, float]]) -> dict[str, Any]:
     """Binned against exact KL on the same positions, overall and per bucket."""
 
     def summary(pairs):
+        widths = {row.top_k for row, _ in pairs}
+        if len(widths) != 1:
+            raise ValueError("Exact comparisons must use one reference support width")
         binned = np.asarray([row.kl for row, _ in pairs])
         exact = np.asarray([kl for _, kl in pairs])
         return {
             "positions": len(pairs),
+            "top_k": next(iter(widths)),
             "mean_binned_kl": float(binned.mean()),
             "mean_exact_kl": float(exact.mean()),
             "relative_error_of_mean": float((binned.mean() - exact.mean()) / exact.mean()) if exact.mean() else None,
@@ -507,14 +525,19 @@ def _shards(out: str, set_name: str, kind: str) -> Iterator[str]:
 def summarize_kl(out: str, set_name: str, kind: str) -> dict[str, Any]:
     """Token-mean and sequence-mean KL of a set's shards, overall and per bucket."""
     kls: list[float] = []
+    widths: set[int] = set()
     per_sequence: dict[str, list[float]] = {}
     per_bucket: dict[str, list[float]] = {}
     for path in _shards(out, set_name, kind):
         for row in read_rows_parquet(_local_copy(path)):
             kls.append(row.kl)
+            widths.add(row.top_k)
             per_sequence.setdefault(row.sequence_id, []).append(row.kl)
             per_bucket.setdefault(row.token_type_tag.value, []).append(row.kl)
+    if len(widths) != 1:
+        raise ValueError("KL summaries must use one reference support width")
     return {
+        "top_k": next(iter(widths)),
         "positions": len(kls),
         "sequences": len(per_sequence),
         "token_mean_kl": float(np.mean(kls)),
@@ -644,13 +667,13 @@ def summarize_flips(out: str, set_name: str, kind: str) -> dict[str, Any]:
     }
 
 
-def resolve_reference_roots(sets: dict[str, str], default: str, overrides: list[str] | None) -> dict[str, str]:
-    """One reference root per set: the ``--reference-out`` default, with ``SET=DIR`` overrides."""
+def resolve_set_roots(sets: dict[str, str], default: str, overrides: list[str] | None) -> dict[str, str]:
+    """One root per set, using the default plus explicit SET=DIR overrides."""
     roots = {set_name: default for set_name in sets}
     for spec in overrides or []:
         set_name, separator, directory = spec.partition("=")
         if not separator or set_name not in sets:
-            raise ValueError(f"--reference-root {spec!r} must be SET=DIR for a scored set ({', '.join(sorted(sets))})")
+            raise ValueError(f"root override {spec!r} must be SET=DIR for a scored set ({', '.join(sorted(sets))})")
         roots[set_name] = directory
     return roots
 
@@ -672,6 +695,18 @@ def main() -> None:
         command.add_argument("--limit", type=int, default=None, help="score only each set's first N sequences")
         if name in ("reference", "candidate", "noise", "flips"):
             command.add_argument("--model-path", required=True)
+        if name == "reference":
+            command.add_argument(
+                "--top-k", type=int, default=TOP_K, help="Reference support width; use a fresh root when refining K"
+            )
+        if name == "candidate":
+            command.add_argument(
+                "--output-root",
+                dest="output_roots",
+                action="append",
+                default=None,
+                help="SET=DIR: override a set's output root when refining a subset",
+            )
         if name in ("candidate", "noise", "flips"):
             command.add_argument("--reference-out", required=True)
             command.add_argument(
@@ -691,17 +726,18 @@ def main() -> None:
     args = parser.parse_args()
     sets = parse_sets(args.sets)
     if args.command == "reference":
-        reference_pass(args.model_path, sets, args.out, args.limit, max_long=args.max_long_per_forward)
+        reference_pass(args.model_path, sets, args.out, args.limit, max_long=args.max_long_per_forward, top_k=args.top_k)
     elif args.command == "candidate":
-        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        roots = resolve_set_roots(sets, args.reference_out, args.reference_roots)
+        outputs = resolve_set_roots(sets, args.out, args.output_roots)
         candidate_pass(
-            args.model_path, args.label, args.step, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward
+            args.model_path, args.label, args.step, sets, roots, outputs, args.limit, max_long=args.max_long_per_forward
         )
     elif args.command == "noise":
-        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        roots = resolve_set_roots(sets, args.reference_out, args.reference_roots)
         noise_pass(args.model_path, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward)
     elif args.command == "flips":
-        roots = resolve_reference_roots(sets, args.reference_out, args.reference_roots)
+        roots = resolve_set_roots(sets, args.reference_out, args.reference_roots)
         flips_pass(
             args.model_path, args.label, args.step, sets, roots, args.out, args.limit, max_long=args.max_long_per_forward
         )

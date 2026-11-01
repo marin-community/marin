@@ -12,7 +12,7 @@ from experiments.post_training.mismatch_probe.score_probe_sets import (
     group_sequences,
     load_reference_shard,
     padded_rows,
-    resolve_reference_roots,
+    resolve_set_roots,
     save_reference_shard,
     shard_path,
     summarize_flips,
@@ -21,7 +21,11 @@ from experiments.post_training.mismatch_probe.score_probe_sets import (
     write_flip_rows_shard,
     write_rows_shard,
 )
-from experiments.post_training.mismatch_probe.scoring_pass import ProbeSequence
+from experiments.post_training.mismatch_probe.scoring_pass import (
+    ProbeSequence,
+    build_score_batch,
+    exact_rows_from_passes,
+)
 from experiments.post_training.mismatch_probe.sequence_kl import KLForm, ProbeBucket, SequenceFlipRow, SequenceKLRow
 
 
@@ -175,15 +179,15 @@ def test_flip_rows_compare_top1_at_the_reference_logits_positions():
     assert flips[0].reference_top1 == 8 and flips[0].candidate_top1 == 99
 
 
-def test_reference_roots_default_to_reference_out_and_override_per_set():
+def test_set_roots_use_the_default_and_override_per_set():
     sets = {"P_X": "s3://px.jsonl", "P_chat": "s3://chat.jsonl"}
-    roots = resolve_reference_roots(sets, "s3://refs", ["P_X=s3://refs-e-x"])
+    roots = resolve_set_roots(sets, "s3://refs", ["P_X=s3://refs-e-x"])
     assert roots == {"P_X": "s3://refs-e-x", "P_chat": "s3://refs"}
-    assert resolve_reference_roots(sets, "s3://refs", None) == {name: "s3://refs" for name in sets}
+    assert resolve_set_roots(sets, "s3://refs", None) == {name: "s3://refs" for name in sets}
     with pytest.raises(ValueError, match="must be SET=DIR"):
-        resolve_reference_roots(sets, "s3://refs", ["P_R=s3://refs-e-r"])
+        resolve_set_roots(sets, "s3://refs", ["P_R=s3://refs-e-r"])
     with pytest.raises(ValueError, match="must be SET=DIR"):
-        resolve_reference_roots(sets, "s3://refs", ["unknown-set=s3://refs"])
+        resolve_set_roots(sets, "s3://refs", ["unknown-set=s3://refs"])
 
 
 def test_flip_summaries_report_overall_bucket_and_margin_quartile_rates(tmp_path):
@@ -210,3 +214,28 @@ def test_flip_summaries_report_overall_bucket_and_margin_quartile_rates(tmp_path
     assert (quartiles["q1"]["positions"], quartiles["q1"]["flip_rate"]) == (1, pytest.approx(1.0))
     assert (quartiles["q2"]["positions"], quartiles["q2"]["flip_rate"]) == (1, pytest.approx(1.0))
     assert (quartiles["q4"]["positions"], quartiles["q4"]["flip_rate"]) == (1, pytest.approx(0.0))
+
+
+def test_exact_scoring_counts_short_final_batch_padding_only_once():
+    sequences = [
+        ProbeSequence(str(row), list(range(10)), ["context"] + ["reasoning"] * 9, [-1] * 10, "P_chat")
+        for row in range(5)
+    ]
+    groups = group_sequences(sequences)
+    assert len(groups) == 1
+    _index, group, real = groups[0]
+    assert len(group) == 8 and real == 5
+    batch = build_score_batch(
+        group, pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=1.0, master_seed=7
+    )
+    tags = batch["probe_score_positions"]
+    coordinates = [(int(tags[row, col]) - 1, col) for row, col in zip(*np.nonzero(tags), strict=True)]
+    reference = np.tile(np.log([0.25, 0.75]), (len(coordinates), 1))
+    candidate = np.tile(np.log([0.5, 0.5]), (len(coordinates), 1))
+    rows = exact_rows_from_passes(
+        group, reference, coordinates, candidate[::-1], coordinates[::-1], padded_len=10, real_rows=real
+    )
+    expected = sorted((s.sample_id, position) for s in sequences for position in s.scored_positions())
+    assert sorted((sample_id, position) for sample_id, position, _hash, _kl in rows) == expected
+    expected_kl = 0.25 * np.log(0.25 / 0.5) + 0.75 * np.log(0.75 / 0.5)
+    assert all(kl == pytest.approx(expected_kl, rel=1e-12) for _id, _position, _hash, kl in rows)

@@ -113,7 +113,7 @@ def test_exact_rows_are_the_full_log_softmax_of_the_selected_positions():
         vocabulary_size=VOCAB,
         chunk_size=4,
     )
-    reference = reference_log_softmax(logits)
+    reference = torch.log_softmax(logits[..., :VOCAB].double(), dim=-1)
     # Values and coordinates are produced in the chunk sweep's order; the contract
     # is their pairing, not the order.
     assert sorted(scores["exact_positions"].tolist()) == sorted(
@@ -127,6 +127,28 @@ def test_exact_rows_are_the_full_log_softmax_of_the_selected_positions():
     for value, (row, position) in zip(scores["exact_logprobs"], scores["exact_positions"].tolist(), strict=True):
         local = row - first_row
         torch.testing.assert_close(value, reference[local, padded_to_compact[local][position]])
+
+
+def test_exact_rows_normalize_large_vocabulary_distributions():
+    # The production exact-KL pass rejected float32 rows whose mass error was >1e-6.
+    vocabulary_size = 65536
+    generator = torch.Generator().manual_seed(7)
+    logits = 4 * torch.randn(1, 16, vocabulary_size + 8, generator=generator)
+    logits[..., vocabulary_size:] = 10000  # padded columns must not enter the distribution
+    mask = torch.ones(1, 16, dtype=torch.bool)
+    scores = score_compacted_hidden(
+        identity(logits),
+        mask,
+        top_k=None,
+        gather_ids=None,
+        probe_score_positions=mask.long(),
+        vocabulary_size=vocabulary_size,
+        chunk_size=3,
+    )
+    probabilities = logits[0, :, :vocabulary_size].double().softmax(-1)
+    for logprobs, (_, position) in zip(scores["exact_logprobs"], scores["exact_positions"], strict=True):
+        torch.testing.assert_close(logprobs.exp(), probabilities[position], rtol=1e-12, atol=1e-15)
+    assert float(torch.logsumexp(scores["exact_logprobs"], -1).abs().max()) < 1e-12
 
 
 def test_exactly_one_mode_must_be_set():
@@ -193,6 +215,9 @@ def test_chunked_projection_of_hidden_states_matches_full_logits(mode):
     _logits, mask = batch(seed=7)
     hidden = torch.randn(BATCH, COMPACT_LEN, 16, generator=generator)
     weight = torch.randn(VOCAB + 8, 16, generator=generator)
+    if mode == "exact":
+        # Compare chunk layout without float32 GEMM rounding dominating float64 scores.
+        hidden, weight = hidden.double(), weight.double()
     widths: list[int] = []
 
     def project(chunk: torch.Tensor) -> torch.Tensor:

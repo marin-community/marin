@@ -6,8 +6,9 @@
 The Megatron policy runs on left-unpadded sequences, so its outputs sit in
 compact space. This module holds the pure computation both score passes share:
 the reference pass's top-K support, the candidate pass's gather at stored ids,
-and the exact pass's full-vocabulary rows — each computed from the float32
-log-softmax in sequence chunks and scattered back to the batch's padded layout.
+and the exact pass's full-vocabulary rows. Top-K and gathered rows use float32;
+selected exact rows use float64 normalization. Computation runs in sequence
+chunks and scatters back to the batch's padded layout.
 Position t's distribution predicts the token at t+1.
 
 The passes start from the final hidden states, not the logits: the output
@@ -62,8 +63,10 @@ def score_compacted_hidden(
     ``outputs`` holds the model's final hidden states for its left-unpadded
     sequences. Each sequence chunk of ``chunk_size`` positions is projected to
     logits and reduced before the next, so peak memory holds one chunk's logits.
-    Every output is computed from the float32 log-softmax over the true
-    vocabulary (padded columns dropped), and scattered
+    Top-K and gathered outputs use float32 log-softmax over the true
+    vocabulary (padded columns dropped). Selected exact rows use float64 to
+    meet the full-distribution normalization check at large vocabulary sizes.
+    Outputs are scattered
     back to the batch's padded layout, aligned with the model's logits positions —
     position t predicts the token at t+1.
 
@@ -118,6 +121,15 @@ def score_compacted_hidden(
     for start in range(0, compact_len, width):
         stop = min(start + width, compact_len)
         logits = outputs.project(outputs.hidden[:, start:stop])
+        if probe_score_positions is not None:
+            for row, compact_index, padded_position, sequence_row in selected_rows_meta:
+                if start <= compact_index < stop:
+                    # Normalize only selected rows in float64; a full chunk is unnecessary.
+                    selected_logits = logits[row, compact_index - start, :vocabulary_size].double()
+                    selected_rows.append(torch.log_softmax(selected_logits, dim=-1))
+                    selected_coordinates.append((sequence_row, padded_position))
+            del logits
+            continue
         logprobs = torch.log_softmax(logits[..., :vocabulary_size].float(), dim=-1)
         del logits
         if top_k is not None:
@@ -131,19 +143,13 @@ def score_compacted_hidden(
             collected.setdefault("gathered_tail_logmass", []).append(
                 complement_log_mass(logprobs, chunk_ids[..., :support_width])
             )
-        else:
-            for row, compact_index, padded_position, sequence_row in selected_rows_meta:
-                if start <= compact_index < stop:
-                    # A clone, so the stored row does not keep the chunk's logprobs alive.
-                    selected_rows.append(logprobs[row, compact_index - start].clone())
-                    selected_coordinates.append((sequence_row, padded_position))
     scores = {key: torch.cat(chunks, dim=1) for key, chunks in collected.items()}
 
     if probe_score_positions is not None:
         scores["exact_logprobs"] = (
             torch.stack(selected_rows, dim=0)
             if selected_rows
-            else torch.zeros((0, vocabulary_size), dtype=torch.float32, device=device)
+            else torch.zeros((0, vocabulary_size), dtype=torch.float64, device=device)
         )
         scores["exact_positions"] = torch.tensor(selected_coordinates, dtype=torch.long, device=device).reshape(-1, 2)
         return scores
