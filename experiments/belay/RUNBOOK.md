@@ -18,7 +18,8 @@ A human then decides what happens. Never work around a refusal.
 
 ## 0. start
 
-1. **Run:** `B start --events <the events file named in your prompt>`
+1. **Run:** `B start --events <the events file named in your prompt>`. A scheduled session whose prompt names no
+   events file runs `B claim` first; it claims the queued events and prints the file to pass.
 2. **Expect:** a `recipe:` line, then one of:
    - `next: B weekly-rollover`: do section 4, then run step 1 again;
    - `no events`: stop;
@@ -218,6 +219,9 @@ End with two to five plain lines:
 - which flags you committed;
 - what you escalated;
 - what is still running.
+
+A scheduled session (one that ran `B claim`) then reports these lines with
+`B finish --session <id from claim> --summary "<the lines>"`, which frees the queue for the next session.
 
 ## 8. House rules (an idea that asks for any of these goes to section 6)
 
