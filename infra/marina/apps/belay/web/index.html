@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Marin Belay</title>
 <meta name="belay-version" content="__BELAY_VERSION__">
-<link rel="stylesheet" href="__BELAY_ROOT__fonts.css?v=__BELAY_VERSION__">
-<link rel="stylesheet" href="__BELAY_ROOT__belay.css?v=__BELAY_VERSION__">
+<link rel="stylesheet" href="fonts.css?v=__BELAY_VERSION__">
+<link rel="stylesheet" href="belay.css?v=__BELAY_VERSION__">
 </head>
 <body>
 <header class="topbar">
@@ -99,10 +99,10 @@
     <h3 class="howto-h">How to contribute</h3>
     <ol class="logs howto">
       <li><b>Suggest</b>: post one idea per comment on <a href="https://github.com/marin-community/marin/issues/9514" target="_blank" rel="noopener">marin#9514</a>. Specify a <code>Track:</code> (the baseline it builds on and is compared to); default <code>speedrun</code>.
-        <div class="chips"><code>speedrun</code> <code>competitive-d512…d1280L16</code> <code>moe-d512…d1280</code> <code>vanilla-d512…d1280</code> <code>hero-mfu</code> <code>custom</code></div>
+        <div class="chips"><code>speedrun</code> <code>competitive-d512…d1280</code> <code>moe-d512…d1280</code> <code>vanilla-d512…d1280</code> <code>hero-mfu</code> <code>custom</code></div>
         <div class="muted">Example: <code>Track: moe-d512</code>, &ldquo;Replace the sigmoid router scoring with sqrt-softplus.&rdquo;</div></li>
       <li><b>Approval</b>: a maintainer's 👍 makes the bot copy it into <a href="https://github.com/marin-community/marin/issues/9451" target="_blank" rel="noopener">marin#9451</a> and mark your comment 🚀.</li>
-      <li><b>Run</b>: the agent gives it an <code>X####</code> id and commits its run spec on this week's branch, <code>marin_belay_v1_w&lt;monday&gt;</code>. A change that needs code lands there too, behind a new default-off flag that must pass fixed checks. It then runs against a same-commit control of the track's baseline. <code>hero-mfu</code> and <code>custom</code> go to maintainers.</li>
+      <li><b>Run</b>: an agent runs it against the track's baseline.</li>
       <li><b>Result</b>: win, noise or loss, by the track's fixed rule: Paloma macro Δ beyond ±0.005, or for <code>hero-mfu</code> step time beyond ±0.5%. It goes to the registry and this page. A win goes to maintainers, who decide whether it joins the recipe.</li>
     </ol>
     <div class="involve">
@@ -365,16 +365,22 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
       <span class="sw-track" aria-hidden="true"><span class="knob"></span></span>
       <span><b>Dispatch</b> <span class="muted" id="dispatch-word"></span></span>
     </label>
+    <form class="capctl" id="node-cap-form">
+      <label for="node-cap"><b>Node cap</b></label>
+      <input type="number" id="node-cap" min="1" max="64" required>
+      <button type="submit" class="btn">Set</button>
+    </form>
     <div class="meter"><div class="meter-k">Nodes</div><div class="meter-v mono" id="nodes-v"></div><div class="bar"><span id="nodes-bar"></span></div></div>
     <div class="meter"><div class="meter-k">Storage</div><div class="meter-v mono" id="storage-v"></div><div class="bar"><span id="storage-bar"></span></div></div>
     <div class="meter"><div class="meter-k">Watcher</div><div class="meter-v" id="watcher-v"></div><div class="muted small" id="queued-v"></div></div>
   </div>
   <section class="block"><h2>Pending <span class="count" id="pending-n"></span></h2><div class="list" id="pending"></div></section>
+  <section class="block"><h2>#9514, newest <span class="muted small">live from GitHub</span>
+    <button type="button" class="btn small" id="intake-reload">Reload</button></h2><div class="list" id="intake-live"></div></section>
   <section class="block"><h2>Sessions</h2><div class="list" id="sessions"></div></section>
   <details class="block fold">
     <summary>Settings</summary>
     <form id="settings-form" class="settings">
-      <label>Node cap <input type="number" id="set-node-cap" min="0" max="64"></label>
       <label class="check"><input type="checkbox" id="set-github"> Post plans and results to GitHub</label>
       <label class="wide">Approvers <span class="muted small">one per line: github-login marina-identity</span>
         <textarea id="set-approvers" rows="6" spellcheck="false"></textarea></label>
@@ -401,7 +407,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
 </template>
 <div id="view-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="__BELAY_ROOT__common.js?v=__BELAY_VERSION__"></script>
-<script src="__BELAY_ROOT__boot.js?v=__BELAY_VERSION__"></script>
+<script src="common.js?v=__BELAY_VERSION__"></script>
+<script src="boot.js?v=__BELAY_VERSION__"></script>
 </body>
 </html>

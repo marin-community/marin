@@ -180,10 +180,10 @@
    "baseline_steps": 39210
   },
   {
-   "track": "competitive-d1280L16",
-   "baseline": "Belay Ckpt Oct 20 2026 (s7n) at d1280L16",
+   "track": "competitive-d1280",
+   "baseline": "Belay Ckpt Oct 20 2026 (s7n) at d1280 (16 layers · batch 1,024 · 4 nodes)",
    "code": "marin_belay_v1_w<monday>",
-   "command": "uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280L16 <flags> --seed 0 --run-id belay-<X####>-<run> --output-path tmp/ttl=30d/belay/runs/belay-<X####>-<run> --submit --target-cluster cw-us-east-02a --priority batch",
+   "command": "uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280 <flags> --seed 0 --run-id belay-<X####>-<run> --output-path tmp/ttl=30d/belay/runs/belay-<X####>-<run> --submit --target-cluster cw-us-east-02a --priority batch",
    "seed_run": null,
    "hardware": "4 node(s) of 8xH100 on cw-us-east-02a",
    "priority": "batch",
