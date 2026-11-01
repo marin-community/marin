@@ -183,6 +183,7 @@ section { padding-block: 52px 4px; }
 .logs a { color: var(--rope); text-decoration: none; }
 .logs a:hover { text-decoration: underline; }
 .logs code { font-family: var(--mono); font-size: 12.5px; }
+.howto { margin-bottom: 16px; }
 
 /* tracks */
 .tracks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
