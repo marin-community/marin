@@ -290,6 +290,8 @@ def _placeholder_bpb(idea: dict, ratio: float) -> None:
     """Rescale an idea's macro-loss numbers to placeholder BPB in place: trial ``delta`` / ``loss`` and the losses and
     signed deltas written in trial and event text."""
     for trial in idea["trials"]:
+        if "delta" in trial:
+            trial["loss_delta"] = list(trial["delta"])  # the recorded macro-loss deltas, for verdicts
         for key in ("delta", "loss"):
             if key in trial:
                 trial[key] = [round(v * ratio, 4) for v in trial[key]]
@@ -316,7 +318,7 @@ def page_data(experiments: list[Experiment], generated_from: str, placeholder_bp
         if placeholder_bpb_ratio is not None:
             _placeholder_bpb(idea, placeholder_bpb_ratio)
         ideas.append(idea)
-    # Consumers that need macro loss (the Status checklist) divide trial deltas and losses by this ratio.
+    # With a ratio, trial ``delta`` and ``loss`` are placeholder BPB; ``loss_delta`` keeps the recorded macro loss.
     return {
         "generated_from": generated_from,
         "categories": list(CATEGORIES),
