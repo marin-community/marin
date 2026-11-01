@@ -1,21 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from iac.buckets.coreweave import BELAY_PRINCIPAL, BELAY_RUN_PREFIXES, belay_policy_statements
+from fnmatch import fnmatch
 
-WRITE_ACTIONS = {"s3:PutObject", "s3:DeleteObject"}
-
-
-def test_belay_writes_only_its_own_run_prefixes() -> None:
-    writes = [s for s in belay_policy_statements() if WRITE_ACTIONS & set(s.actions)]
-    assert writes
-    assert all(set(s.resources) <= set(BELAY_RUN_PREFIXES) for s in writes)
-    assert all("/belay/" in prefix for prefix in BELAY_RUN_PREFIXES)
+from iac.buckets.coreweave import BELAY_BUCKET, HERO_CHECKPOINT_PREFIX, belay_policy_statements
 
 
-def test_belay_object_access_is_prefix_scoped() -> None:
-    for statement in belay_policy_statements():
-        assert statement.principals == [BELAY_PRINCIPAL]
-        assert "s3:*" not in statement.actions
-        if statement.actions != ["s3:ListBucket"]:
-            assert all(resource.count("/") >= 2 for resource in statement.resources)
+def allowed(action: str, path: str) -> bool:
+    return any(action in s.actions and any(fnmatch(path, r) for r in s.resources) for s in belay_policy_statements())
+
+
+def test_belay_can_write_its_runs_and_temp_checkpoints() -> None:
+    run = f"{BELAY_BUCKET}/marin/tmp/ttl=30d/belay/runs/belay-X0001-control"
+    assert allowed("s3:PutObject", f"{run}/final_eval_done.json")
+    assert allowed("s3:PutObject", f"{BELAY_BUCKET}/tmp/ttl=14d/checkpoints-temp/{run}/checkpoints/step-100/x")
+    assert allowed("s3:GetObject", f"{BELAY_BUCKET}/marin/paloma/c4_en-hero-bpe-v16384/validation/shard")
+
+
+def test_belay_cannot_touch_hero_checkpoints_or_other_runs() -> None:
+    hero = f"{BELAY_BUCKET}/{HERO_CHECKPOINT_PREFIX}gradclip-step356k/checkpoints/step-366000/metadata.json"
+    other_run = f"{BELAY_BUCKET}/marin/tmp/ttl=30d/someone-else/run/x"
+    for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
+        assert not allowed(action, hero)
+        assert not allowed(action, other_run)
+    assert not allowed("s3:PutObject", f"{BELAY_BUCKET}/marin/paloma/c4_en-hero-bpe-v16384/validation/shard")

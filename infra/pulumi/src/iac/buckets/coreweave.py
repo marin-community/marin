@@ -19,20 +19,24 @@ COREWEAVE_MULTIPART_ABORT_RULE_ID = "marin-abort-incomplete-mpu"
 COREWEAVE_MULTIPART_EXPIRATION = 7
 
 # Marin Belay's dedicated CoreWeave user. Iris attaches the submitter's keys to every CoreWeave job, so this
-# principal's grants bound what Belay runs (including agent-written code) can read and write. It is in no groups,
-# so the policy below is its only access.
+# principal's grants bound what Belay runs (including agent-written code) can read and write. A request needs both
+# the bucket policy (which admits every principal in the organization) and an organization access policy; the user is
+# in no groups, so the organization access policy below is its only grant.
 BELAY_PRINCIPAL = "coreweave/unAfPLe6TaiRmJsewaUog"
+BELAY_BUCKET = "marin-us-east-02a"
+BELAY_RUN_ROOT = "marin/tmp/ttl=30d/belay"
+# Levanter writes temporary checkpoints under a bucket-root temp prefix that embeds the run's full output path.
 BELAY_RUN_PREFIXES = (
-    "marin-us-east-02a/marin/tmp/ttl=30d/belay/*",
-    "marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/tmp/ttl=30d/belay/*",
+    f"{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*",
+    f"{BELAY_BUCKET}/tmp/ttl=14d/checkpoints-temp/{BELAY_BUCKET}/{BELAY_RUN_ROOT}/*",
 )
 BELAY_READ_PREFIXES = (
-    "marin-us-east-02a/marin/datakit/hero_tok/*",
-    "marin-us-east-02a/marin/paloma/*",
-    "marin-us-east-02a/marin/uncheatable_eval/*",
+    f"{BELAY_BUCKET}/marin/datakit/hero_tok/*",
+    f"{BELAY_BUCKET}/marin/paloma/*",
+    f"{BELAY_BUCKET}/marin/uncheatable_eval/*",
     "marin-us-east-08a/tmp/ttl=30d/xprof/*",
 )
-BELAY_LIST_BUCKETS = ("marin-us-east-02a", "marin-us-east-08a")
+BELAY_LIST_BUCKETS = (BELAY_BUCKET, "marin-us-east-08a")
 
 
 def coreweave_bucket_policy(bucket_name: str) -> str:
