@@ -32,7 +32,7 @@ from experiments.belay.posts import (
     title,
     updated,
 )
-from experiments.belay.registry_entry import potential_of, with_step_time
+from experiments.belay.registry_entry import comment_url_of, potential_of, with_step_time
 from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict
 from experiments.belay.submit import (
     IrisJob,
@@ -436,3 +436,12 @@ def test_potential_is_tied_to_the_results_it_saw() -> None:
     assert potential_of(entry, 8, "equal-time win", "m")["inputs_digest"] != first["inputs_digest"]
     text = yaml.safe_dump({"id": "X1", "trials": [{"id": "t001"}]})
     assert yaml.safe_load(with_step_time(text, "t001", 0.31))["trials"][0]["step_time_change"] == "+31%"
+
+
+def test_old_batch_report_comments_are_never_the_ideas_comment() -> None:
+    batch = "https://github.com/marin-community/marin/issues/9451#issuecomment-1"
+    ours = "https://github.com/marin-community/marin/issues/9451#issuecomment-2"
+    old = {"trials": [{"id": "t001", "rung": "d512", "comment_url": batch}]}
+    assert comment_url_of(old) is None
+    old["trials"].append({"id": "t002", "rung": "speedrun", "comment_url": ours})
+    assert comment_url_of(old) == ours

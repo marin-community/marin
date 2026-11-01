@@ -137,10 +137,12 @@ def add_trial_run(registry_id: str, trial_id: str, run_name: str) -> Path:
 
 
 def comment_url_of(entry: dict) -> str | None:
-    """The idea's one #9451 comment, recorded on its trials."""
+    """The idea's one #9451 comment, recorded on its Track trials. Trials from before Tracks (rung ``d512`` and so
+    on) link the batch reports they were posted in, which are not the idea's comment and are never edited."""
+    tracks = {t.value for t in Track}
     for trial in entry.get("trials") or []:
         url = trial.get("comment_url") or ""
-        if "issuecomment-" in url:
+        if trial.get("rung") in tracks and "issuecomment-" in url:
             return url
     return None
 
