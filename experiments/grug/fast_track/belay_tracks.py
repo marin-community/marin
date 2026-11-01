@@ -54,7 +54,9 @@ def track_args(track: Track, size: str) -> list[str]:
     if size not in RUNGS:
         raise ValueError(f"size must be one of {list(RUNGS)}, got {size!r}")
     heads, vanilla_steps, moe_steps = RUNGS[size]
+    # The track baselines were measured on the document-shuffled cache, so the tracks pin it.
     args = ["--size", size, "--recipe", "baseline", "--version", VERSION, "--save-checkpoints"]
+    args += ["--train-cache", launch.V16384_CACHE_DIR]
     if track is Track.VANILLA:
         kv = heads // 2
         settings = (*VANILLA_MODEL_SETTINGS, f"num_kv_heads={kv}", f"local_kv_heads={kv}", f"global_kv_heads={kv}")
