@@ -12,5 +12,5 @@ DIST = ROOT / "dist"
 if DIST.exists():
     shutil.rmtree(DIST)
 DIST.mkdir()
-for name in ("index.html", "boot.js", "common.js", "front.js", "status.js", "admin.js", "belay.css"):
+for name in ("index.html", "boot.js", "common.js", "front.js", "status.js", "admin.js", "fonts.css", "belay.css"):
     shutil.copyfile(ROOT / "web" / name, DIST / name)

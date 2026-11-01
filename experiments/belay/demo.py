@@ -85,7 +85,7 @@ TOKEN_HEADER = "X-Belay-Token"
 # How a session's `demo api` calls receive the service token (Loom would inject it as a profile secret).
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 APP_SCHEMA = "belay"
-PUBLIC_FILES = ("boot.js", "common.js", "front.js", "status.js", "belay.css")
+PUBLIC_FILES = ("boot.js", "common.js", "front.js", "status.js", "fonts.css", "belay.css")
 # The public page's speedrun chart and results show macro loss as placeholder BPB until BPB evals land in the registry.
 PLACEHOLDER_BPB_RATIO = "0.4147"
 

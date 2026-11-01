@@ -462,6 +462,10 @@ function renderLatest(status) {
 
 async function front() {
   showView('front')
+  // The section links sit in the top bar, as on the original page, before the page links.
+  const sections = document.querySelector('.secnav')
+  sections.className = 'nav'
+  document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
   const [results, status] = await Promise.all([loadJson('results'), loadJson('state').catch(() => null)])
   startFront(results)
   if (status) {
