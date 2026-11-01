@@ -55,6 +55,15 @@ def first_paragraph(text: str) -> str:
     return paragraph if len(paragraph) <= MAX_SUMMARY else paragraph[: MAX_SUMMARY - 1].rsplit(" ", 1)[0] + "…"
 
 
+def entry_for_intake(url: str) -> str | None:
+    """The id of the entry already made from the intake comment at ``url``, if any."""
+    for path in sorted((CONFIG.registry_checkout / ENTRIES).glob("X*.yaml")):
+        entry = yaml.safe_load(path.read_text())
+        if (entry.get("intake") or {}).get("url") == url:
+            return entry["id"]
+    return None
+
+
 def create_entry(idea: Idea, category: str, track: Track, *, dry_run: bool) -> tuple[str, Path]:
     """Allocate the next ``X####`` id for ``idea`` and write its ``approved`` entry; returns the id and path."""
     command = [

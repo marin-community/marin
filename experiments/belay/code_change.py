@@ -10,31 +10,20 @@ and pass pre-commit. Losing ideas' flags stay as dead default-off code until a m
 """
 
 import dataclasses
-import hashlib
 import json
-import math
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-import equinox as eqx
-import jax
-import jax.numpy as jnp
-import numpy as np
-from jax.sharding import AxisType, Mesh
-
 from experiments.belay.branch import git
-from experiments.grug.fast_track.launch import _apply_settings, _parse_settings
-from experiments.grug.fast_track.model import GrugModelConfig, LocalMixer, Transformer
-from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
 
 ALLOWED_PREFIXES = ("experiments/grug/fast_track/", "tests/grug/test_fast_track_")
 TESTS_PREFIX = "tests/grug/test_fast_track_"
 OFF_DEFAULTS = ("False", "None", "0", "0.0", "''", "'none'", "'off'")
 # Past positions' hidden states may move by at most this much when future tokens change (float32 noise).
 LEAK_TOLERANCE = 1e-6
-_SEQ = 128  # the banded Inkling bias needs a multiple of 128
+PROBE_SCRIPT = Path(__file__).parent / "model_probe.py"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,87 +99,17 @@ def refuse_leak(flag_on: Probe) -> None:
         )
 
 
-def _defaults() -> dict[str, dict[str, str]]:
-    out = {}
-    for cls in (GrugModelConfig, GrugMoeMuonHConfig):
-        fields = {}
-        for f in dataclasses.fields(cls):
-            if f.default is not dataclasses.MISSING:
-                fields[f.name] = repr(f.default)
-            elif f.default_factory is not dataclasses.MISSING:
-                fields[f.name] = repr(f.default_factory())
-        out[cls.__name__] = fields
-    return out
+def checkout_python(checkout: Path) -> str:
+    """The checkout's own environment when it has one (a Track branch with other library code), else this one."""
+    own = checkout / ".venv/bin/python"
+    return str(own) if own.exists() else sys.executable
 
 
-def probe_here(model_settings: list[str]) -> Probe:
-    """Probe the checkout this process imported ``experiments`` from, with ``model_settings`` applied."""
-    hidden = 64
-    config = GrugModelConfig(
-        vocab_size=128,
-        hidden_dim=hidden,
-        intermediate_dim=hidden // 2,
-        shared_expert_intermediate_dim=hidden // 2,
-        num_shared_experts=1,
-        num_experts=4,
-        num_experts_per_token=2,
-        latent_dim=hidden // 2,
-        num_layers=4,
-        num_heads=2,
-        num_kv_heads=2,
-        local_kv_heads=None,
-        global_kv_heads=None,
-        head_dim=16,
-        max_seq_len=_SEQ,
-        sliding_window=_SEQ,
-        global_every=2,
-        capacity_factor=8.0,
-        pooled_transport_capacity_factor=8.0,
-        initializer_std=0.5 / math.sqrt(hidden),
-        qk_norm=False,
-        sconv_sites=("attn", "mlp"),
-        mla=True,
-        mla_kv_latent_dim=32,
-        inkling_relpos=True,
-        rel_dim=4,
-        rel_extent=8,
-        attn_res=True,
-        attn_res_num_blocks=2,
-        local_mixer=LocalMixer.KDA,
-    )
-    config = _apply_settings(config, _parse_settings(tuple(model_settings)))
-    mesh = Mesh(
-        np.array(jax.devices()[:1], dtype=object).reshape((1, 1, 1, 1)),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
-    with jax.set_mesh(mesh):
-        model = Transformer.init(config, key=jax.random.key(0))
-        tokens = jax.random.randint(jax.random.key(1), (2, _SEQ), 0, config.vocab_size)
-        cotangent = jax.random.normal(jax.random.key(2), (2, _SEQ, hidden), jnp.float32)
-
-        def loss_fn(m):
-            return jnp.sum(m(tokens)[0].astype(jnp.float32) * cotangent)
-
-        loss, grads = eqx.filter_jit(eqx.filter_value_and_grad(loss_fn))(model)
-        future = tokens.at[:, _SEQ // 2 :].set(jax.random.randint(jax.random.key(3), (2, _SEQ // 2), 0, 128))
-        forward = eqx.filter_jit(lambda m, t: m(t)[0].astype(jnp.float32))
-        leak = float(jnp.max(jnp.abs(forward(model, tokens)[:, : _SEQ // 2] - forward(model, future)[:, : _SEQ // 2])))
-    digest = hashlib.sha256(np.asarray(loss).tobytes())
-    for path, leaf in jax.tree_util.tree_flatten_with_path(eqx.filter(grads, eqx.is_array))[0]:
-        digest.update(jax.tree_util.keystr(path).encode())
-        digest.update(np.asarray(leaf).tobytes())
-    return Probe(_defaults(), digest.hexdigest(), leak)
-
-
-def probe(checkout: Path, model_settings: list[str]) -> Probe:
-    """Run ``probe_here`` on CPU in a subprocess that imports ``experiments`` from ``checkout``."""
-    code = (
-        "import dataclasses, json, sys; from experiments.belay.code_change import probe_here; "
-        "print(json.dumps(dataclasses.asdict(probe_here(sys.argv[1:]))))"
-    )
+def probe(checkout: Path, model_settings: list[str], python: str) -> Probe:
+    """Run ``model_probe.py`` on CPU against the model code in ``checkout`` (any branch, with or without this
+    directory): its source runs with ``python -c``, so ``experiments`` imports from ``checkout``."""
     out = subprocess.run(
-        [sys.executable, "-c", code, *model_settings],
+        [python, "-c", PROBE_SCRIPT.read_text(), *model_settings],
         cwd=checkout,
         env={**os.environ, "JAX_PLATFORMS": "cpu"},
         check=True,
@@ -203,7 +122,7 @@ def probe(checkout: Path, model_settings: list[str]) -> Probe:
 def run_tests(repo: Path, paths: list[str]) -> None:
     """The change's own tests, on CPU."""
     tests = [p for p in paths if p.startswith(TESTS_PREFIX) and p.endswith(".py")]
-    command = [sys.executable, "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", *tests]
+    command = [checkout_python(repo), "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", *tests]
     result = subprocess.run(
         command, cwd=repo, env={**os.environ, "JAX_PLATFORMS": "cpu"}, capture_output=True, text=True
     )

@@ -22,6 +22,7 @@ for name in (
     "mfu.json",
     "scaling.json",
     "speedrun.json",
+    "tracks.json",
     "admin.js",
     "fonts.css",
     "belay.css",

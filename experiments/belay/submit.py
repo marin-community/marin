@@ -5,7 +5,7 @@
 
 A spec names its Track (``config.TRACKS``) and has one variant run and one same-commit control at ``CONFIG.seed``,
 both launched with the Track's baseline command. Runs are named ``belay-<id>-<run>``, write under
-``CONFIG.output_root``, and run on ``CONFIG.cluster`` at ``CONFIG.band``.
+``CONFIG.output_root``, and run on the Track's cluster at its priority.
 """
 
 import dataclasses
@@ -77,6 +77,18 @@ def parse_spec(text: str) -> ExperimentSpec:
         for name, run in data["runs"].items()
     }
     return ExperimentSpec(data["experiment"], parse_track(str(data.get("track"))), runs)
+
+
+TRACK_LINE = re.compile(r"^\W*track\W*:\W*([A-Za-z0-9-]+)", re.IGNORECASE | re.MULTILINE)
+DEFAULT_TRACK = Track.SPEEDRUN
+
+
+def track_of_comment(text: str) -> tuple[Track, bool]:
+    """The Track on a comment's ``Track:`` line, and whether it was defaulted (no such line: ``speedrun``)."""
+    match = TRACK_LINE.search(text)
+    if match is None:
+        return DEFAULT_TRACK, True
+    return parse_track(match.group(1)), False
 
 
 def parse_track(text: str) -> Track:
@@ -176,16 +188,22 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob]) -> None:
         )
 
 
-def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
-    """The Track's baseline command plus the run's flags; it runs with this interpreter from the run's checkout."""
-    launch = TRACKS[spec.track].launch
-    if launch is None:
-        raise SystemExit(f"refusing: track {spec.track} has no launch recipe; a maintainer runs it")
-    name = run_name(spec.experiment, run.name)
-    command = [sys.executable, "-m", *launch, *run.flags]
-    command += ["--seed", str(run.seed), "--run-id", name, "--output-path", f"{CONFIG.output_root}/{name}"]
-    command += ["--submit", "--target-cluster", CONFIG.cluster, "--priority", CONFIG.band]
+def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: str = sys.executable) -> list[str]:
+    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``."""
+    baseline = TRACKS[track]
+    if baseline.launch is None:
+        raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
+    command = [python, "-m", *baseline.launch, *flags]
+    command += ["--seed", str(CONFIG.seed), "--run-id", name]
+    if baseline.output_path:
+        command += ["--output-path", f"{CONFIG.output_root}/{name}"]
+    command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
     return command
+
+
+def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
+    """The run's command; it runs with this interpreter from the checkout of the Track's code branch."""
+    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags)
 
 
 def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
