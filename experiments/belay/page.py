@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import urllib.request
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, replace
 
 from experiments.belay.config import CONFIG
@@ -195,3 +196,39 @@ def comment_times(url: str) -> tuple[datetime.datetime, datetime.datetime | None
     rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
     parse = datetime.datetime.fromisoformat
     return parse(comment["updated_at"]), parse(rockets[0]) if rockets else None
+
+
+def gh_api(args: list[str]) -> str:
+    return subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
+
+
+def read_comment(url: str, gh: Callable[[list[str]], str] = gh_api) -> str:
+    comment_id = url.rsplit("issuecomment-", 1)[1]
+    return json.loads(gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}"]))["body"]
+
+
+def publish_comment(
+    url: str | None, body: str, *, github_posting: bool, dry_run: bool, gh: Callable[[list[str]], str] = gh_api
+) -> str | None:
+    """Post the idea's #9451 comment (no ``url`` yet) or edit it in place; returns its URL. Nothing is sent when
+    GitHub posting is off or on a dry run."""
+    if dry_run or not github_posting:
+        print(f"would {'edit ' + url if url else 'post'} the #{CONFIG.batch_issue} comment:\n{body}")
+        return url
+    if url is None:
+        api = f"repos/{CONFIG.repository}/issues/{CONFIG.batch_issue}/comments"
+        url = json.loads(gh([api, "-X", "POST", "-f", f"body={body}"]))["html_url"]
+        print(f"posted {url}")
+        return url
+    comment_id = url.rsplit("issuecomment-", 1)[1]
+    gh([f"repos/{CONFIG.repository}/issues/comments/{comment_id}", "-X", "PATCH", "-f", f"body={body}"])
+    print(f"edited {url}")
+    return url
+
+
+def record_activity(post: Post, github_url: str | None, *, dry_run: bool) -> None:
+    """The page's activity feed entry for a comment posted or edited on #9451."""
+    if dry_run:
+        return
+    item = {**asdict(replace(post, session_id=os.environ.get(SESSION_ENV))), "github_url": github_url}
+    call("agent/activity", item, token=service_token())

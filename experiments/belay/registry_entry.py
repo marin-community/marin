@@ -8,6 +8,8 @@ calls it there and edits ``experiments/belay/registry/X####-<slug>.yaml`` files,
 """
 
 import datetime
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -99,32 +101,50 @@ def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run:
 
 
 def add_trial(
-    registry_id: str, track: Track, variant: str, run_name: str, commit: str, settings: dict[str, str]
-) -> Path:
-    """Add ``run_name`` as a new trial of the entry (or to its existing trial for the same variant and commit)."""
+    registry_id: str, track: Track, protocol: str, variant: str, commit: str, settings: dict[str, str], comment_url: str
+) -> tuple[str, Path]:
+    """A new trial of the entry (``protocol`` is ``equal_steps`` or ``fixed_time``); returns its id and the path."""
     path = entry_path(registry_id)
     entry = yaml.safe_load(path.read_text())
     trials = entry.setdefault("trials", [])
-    trial = next((t for t in trials if t["variant"] == variant and t.get("commit") == commit[:10]), None)
-    if trial is None:
-        trial = {
-            "id": f"t{len(trials) + 1:03d}",
-            "variant": variant,
-            "rung": track.value,
-            "protocol": "equal_steps",
-            "batch": registry_id,
-            "date": datetime.date.today().isoformat(),
-            "comment_url": CONFIG.page_url,
-            "wandb": [],
-            "settings": settings,
-            "commit": commit[:10],
-        }
-        trials.append(trial)
-    if run_name not in trial["wandb"]:
-        trial["wandb"].append(run_name)
+    trial_id = f"t{len(trials) + 1:03d}"
+    trial = {
+        "id": trial_id,
+        "variant": variant,
+        "rung": track.value,
+        "protocol": protocol,
+        "batch": registry_id,
+        "date": datetime.date.today().isoformat(),
+        "comment_url": comment_url,
+        "wandb": [],
+        "settings": settings,
+        "commit": commit[:10],
+    }
+    trials.append(trial)
     entry["status"] = "running"
     path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
+    return trial_id, path
+
+
+def add_trial_run(registry_id: str, trial_id: str, run_name: str) -> Path:
+    path = entry_path(registry_id)
+    entry = yaml.safe_load(path.read_text())
+    trial = next(t for t in entry["trials"] if t["id"] == trial_id)
+    if run_name not in trial["wandb"]:
+        trial["wandb"].append(run_name)
+    path.write_text(yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120))
     return path
+
+
+def comment_url_of(entry: dict) -> str | None:
+    """The idea's one #9451 comment, recorded on its Track trials. Trials from before Tracks (rung ``d512`` and so
+    on) link the batch reports they were posted in, which are not the idea's comment and are never edited."""
+    tracks = {t.value for t in Track}
+    for trial in entry.get("trials") or []:
+        url = trial.get("comment_url") or ""
+        if trial.get("rung") in tracks and "issuecomment-" in url:
+            return url
+    return None
 
 
 def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path, str]:
@@ -147,6 +167,27 @@ def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path
     return path, yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
 
 
+def with_step_time(text: str, trial_id: str, time_change: float) -> str:
+    """The entry YAML ``text`` with the trial's variant train time relative to its control (``+31%``)."""
+    entry = yaml.safe_load(text)
+    trial = next(t for t in entry["trials"] if t["id"] == trial_id)
+    trial["step_time_change"] = f"{time_change:+.0%}" if round(time_change * 100) else "0%"
+    return yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
+
+
+def potential_of(entry: dict, score: int, rationale: str, model: str) -> dict:
+    """The entry's ``potential``: a session's 0-10 score, tied by digest to the results it was given."""
+    inputs = {k: entry.get(k) for k in ("status", "trials", "events")}
+    digest = hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return {
+        "score": score,
+        "rationale": rationale,
+        "model": model,
+        "date": datetime.date.today().isoformat(),
+        "inputs_digest": digest,
+    }
+
+
 def commit_and_push(paths: list[Path], message: str, *, dry_run: bool) -> None:
     """Validate the registry, then commit ``paths`` together and push them on the registry branch; refuses if the
     push did not land."""
@@ -156,6 +197,9 @@ def commit_and_push(paths: list[Path], message: str, *, dry_run: bool) -> None:
     validate = [sys.executable, "experiments/belay/registry.py", "validate"]
     subprocess.run(validate, cwd=CONFIG.registry_checkout, check=True)
     git(CONFIG.registry_checkout, "add", *(str(p) for p in paths))
+    if not git(CONFIG.registry_checkout, "status", "--porcelain", *(str(p) for p in paths)):
+        print(f"{', '.join(p.name for p in paths)} unchanged; nothing to push")
+        return
     git(CONFIG.registry_checkout, "commit", "--quiet", "-m", message)
     git(CONFIG.registry_checkout, "push", "--quiet", "origin", CONFIG.registry_branch)
     head = git(CONFIG.registry_checkout, "rev-parse", "HEAD")

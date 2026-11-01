@@ -10,11 +10,13 @@ both launched with the Track's baseline command. Runs are named ``belay-<id>-<ru
 
 import dataclasses
 import getpass
+import itertools
 import re
+import shlex
 import subprocess
-import sys
 import typing
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
@@ -33,6 +35,22 @@ ACTIVE_JOB_STATES = ("pending", "running")
 _JOB_LINE = re.compile(r"^(/\S+)\s+(\w+)\s+(\S+)")
 
 
+class Stage(StrEnum):
+    """A run's place in its Track's comparison, in order. Only ``EQUAL_DATA_THEN_TIME`` tracks go past ``DATA``."""
+
+    DATA = "data"
+    """The variant and its control at the baseline's steps (equal data)."""
+    PROBE = "probe"
+    """A short variant run that measures its s/step."""
+    TIME = "time"
+    """The variant at train_seconds / its s/step steps, against the stage-1 control (equal time)."""
+
+
+STAGE_ORDER = (Stage.DATA, Stage.PROBE, Stage.TIME)
+PROBE_STEPS = 150
+PROBE_SKIP = 20  # compile and warm-up steps left out of the probe's s/step
+
+
 @dataclass(frozen=True)
 class RunSpec:
     name: str
@@ -40,6 +58,7 @@ class RunSpec:
     variant: str
     flags: tuple[str, ...] = ()
     control: bool = False
+    stage: Stage = Stage.DATA
 
 
 @dataclass(frozen=True)
@@ -73,6 +92,7 @@ def parse_spec(text: str) -> ExperimentSpec:
             variant=run["variant"],
             flags=tuple(str(f) for f in run.get("flags", ())),
             control=bool(run.get("control", False)),
+            stage=Stage(run.get("stage", Stage.DATA)),
         )
         for name, run in data["runs"].items()
     }
@@ -135,8 +155,21 @@ def check_variant(variant: str, settings: list[tuple[str, str]]) -> None:
         check_setting(option, setting)
 
 
-def new_spec_text(experiment_id: str, track: Track, variant: str, settings: list[tuple[str, str]]) -> str:
-    """The run spec for one variant and its same-commit control on ``track``, after checking every setting."""
+def run_suffix(experiment_id: str, jobs: list[IrisJob], keys: tuple[str, ...] = ()) -> str:
+    """A suffix for run keys (default: the stage-1 pair) so no run name repeats one that already ran on Iris."""
+    keys = keys or (f"seed{CONFIG.seed}", "control")
+    for suffix in ("", *(f"-{c}" for c in "bcdefgh")):
+        names = [run_name(experiment_id, f"{key}{suffix}") for key in keys]
+        if not any(j.job_id.endswith(f"/{n}-coord") for j in jobs for n in names):
+            return suffix
+    raise SystemExit(f"refusing: {experiment_id} has run too many times; a maintainer decides")
+
+
+def new_spec_text(
+    experiment_id: str, track: Track, variant: str, settings: list[tuple[str, str]], suffix: str = ""
+) -> str:
+    """The run spec for one variant and its same-commit control on ``track``, after checking every setting.
+    ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before."""
     check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
     variant_run = {"seed": CONFIG.seed, "variant": variant, "flags": flags}
@@ -144,7 +177,7 @@ def new_spec_text(experiment_id: str, track: Track, variant: str, settings: list
     data = {
         "experiment": experiment_id,
         "track": track.value,
-        "runs": {f"seed{CONFIG.seed}": variant_run, "control": control_run},
+        "runs": {f"seed{CONFIG.seed}{suffix}": variant_run, f"control{suffix}": control_run},
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
@@ -188,13 +221,15 @@ def refuse_over_cap(needed: int, jobs: list[IrisJob]) -> None:
         )
 
 
-def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: str = sys.executable) -> list[str]:
-    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``."""
+def track_command(
+    track: Track, name: str, flags: tuple[str, ...] = (), python: str = "uv run python", seed: int = CONFIG.seed
+) -> list[str]:
+    """The exact launch of one run on ``track``: its baseline command plus ``flags``, named ``name``, at ``seed``."""
     baseline = TRACKS[track]
     if baseline.launch is None:
         raise SystemExit(f"refusing: track {track} has no launch recipe; a maintainer runs it")
-    command = [python, "-m", *baseline.launch, *flags]
-    command += ["--seed", str(CONFIG.seed), "--run-id", name]
+    command = [*python.split(), "-m", *baseline.launch, *flags]
+    command += ["--seed", str(seed), "--run-id", name]
     if baseline.output_path:
         command += ["--output-path", f"{CONFIG.output_root}/{name}"]
     command += ["--submit", "--target-cluster", baseline.cluster, "--priority", baseline.band]
@@ -202,8 +237,17 @@ def track_command(track: Track, name: str, flags: tuple[str, ...] = (), python: 
 
 
 def launch_command(spec: ExperimentSpec, run: RunSpec) -> list[str]:
-    """The run's command; it runs with this interpreter from the checkout of the Track's code branch."""
-    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags)
+    """The run's command, run from the checkout of the Track's code branch (``uv run`` uses that checkout's
+    environment)."""
+    return track_command(spec.track, run_name(spec.experiment, run.name), run.flags, seed=run.seed)
+
+
+def with_launched(text: str, launched: dict[str, list[str]]) -> str:
+    """The spec ``text`` with each run's submitted command recorded under ``launched`` (a record for readers; the
+    launcher never reads it back)."""
+    data = yaml.safe_load(text)
+    data.setdefault("launched", {}).update({key: shlex.join(command) for key, command in launched.items()})
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 
 
 def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
@@ -216,11 +260,49 @@ def check_launch(spec: ExperimentSpec, jobs: list[IrisJob]) -> None:
 
 
 def settings_of(flags: tuple[str, ...]) -> dict[str, str]:
-    """The ``name=value`` settings in a run's flags, as ``{name: value}``."""
+    """The ``--model-set`` / ``--opt-set`` settings in a run's flags, as ``{name: value}``."""
     settings = {}
-    for flag in flags:
-        if flag in SETTING_OPTIONS:
-            continue
-        name, _, value = flag.partition("=")
-        settings[name] = value
+    for option, value in itertools.pairwise(flags):
+        if option in SETTING_OPTIONS:
+            name, _, setting = value.partition("=")
+            settings[name] = setting
     return settings
+
+
+def variant_settings(spec: ExperimentSpec) -> tuple[str, ...]:
+    """The stage-1 variant's ``--model-set`` / ``--opt-set`` flags, which every later stage's variant repeats."""
+    variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
+    out: list[str] = []
+    for option, value in itertools.pairwise(variant.flags):
+        if option in SETTING_OPTIONS:
+            out += [option, value]
+    return tuple(out)
+
+
+def latest_stage(spec: ExperimentSpec) -> Stage:
+    return max((r.stage for r in spec.runs.values()), key=STAGE_ORDER.index)
+
+
+def stage_runs(spec: ExperimentSpec, stage: Stage) -> list[RunSpec]:
+    return [r for r in spec.runs.values() if r.stage is stage]
+
+
+def spec_with_runs(text: str, runs: dict[str, dict]) -> str:
+    """The spec ``text`` with ``runs`` (key -> run fields) added, for the next stage."""
+    data = yaml.safe_load(text)
+    data["runs"].update(runs)
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
+
+
+def next_stage_runs(spec: ExperimentSpec, stage: Stage, suffix: str, steps: int | None = None) -> dict[str, dict]:
+    """The runs that start ``stage`` (PROBE, or TIME at ``steps``), keyed like the spec."""
+    variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
+    flags = list(variant_settings(spec))
+    if stage is Stage.PROBE:
+        probe_flags = [*flags, "--num-steps", str(PROBE_STEPS)]
+        probe = {"seed": variant.seed, "variant": f"{variant.variant} (timing probe)", "flags": probe_flags}
+        return {f"probe{suffix}": {**probe, "stage": "probe"}}
+    assert steps is not None
+    timed_flags = [*flags, "--num-steps", str(steps)]
+    timed = {"seed": variant.seed, "variant": variant.variant, "flags": timed_flags, "stage": "time"}
+    return {f"seed{variant.seed}-t{suffix}": timed}

@@ -34,7 +34,11 @@ A human then decides what happens. Never work around a refusal.
      "retest on current recipe".
    - **If it refuses because of the Track** (unknown, `custom` or `hero-mfu`): run the escalate command it prints,
      then stop working on this idea. A missing Track is `speedrun`.
-2. **Check 1, house rules.** Does the idea ask for anything in section 8?
+   - **If it prints a `MAINTAINER NOTE`:** a maintainer re-queued the idea with instructions. Follow them; they
+     settle any check they address (for example, how a port keeps a house rule), and list each choice they fix in
+     `--defaults`.
+2. **Check 1, house rules.** Does the idea ask for anything in section 8? A maintainer note that says how to meet
+   the rule settles it.
    - **If yes, or you cannot tell:** run section 6 with `--idea-id <N>` and the title
      `"Idea #<N> may break house rule: <rule>"`. Stop working on this idea.
 3. **Check 2, category.** Pick the listed category whose name best matches the idea. If none clearly matches,
@@ -55,7 +59,7 @@ A human then decides what happens. Never work around a refusal.
      1. the registry entry `X####` written and pushed (skipped if it already exists);
      2. the run spec written, committed and pushed;
      3. `checks passed: ...`;
-     4. the plan reported and posted;
+     4. the idea's #9451 comment posted (status `plan`, the planned runs with their steps);
      5. one `launching belay-X####-<run>` per run;
      6. `next: stop (...)`.
    - **If it prints `held:`:** stop. The idea stays approved, and a later session reruns this step. Running it
@@ -100,20 +104,65 @@ The change goes straight onto this week's branch. No human reviews it: passing `
 
 ## 2. run-finished (event `run_finished`)
 
+Each idea has exactly one #9451 comment. `new-idea` posts it; every later step edits it in place (title status
+and one section per stage). Its link is stored on the idea's registry trials (`comment_url`).
+
 1. **Run:** `B run-finished X####`
    - **If it prints `still running: [...]`:** stop. The last run to finish starts a new session.
    - **If it prints `next: B run-failed X#### --run <run>`:** do section 3.
-   - **Otherwise, expect** these, then `next: stop`:
-     1. the registry entry written with the results, and the trial's analysis report
-        (`experiments/belay/analysis/X####/tNNN.md` and its plots), pushed together in one registry commit
-        (`pushed ... as <sha> to origin/<registry branch>`);
-     2. the result posted with a table and one verdict, by the track's rule in section 9: `win`, `noise` or `loss`;
-     3. for a `win`, an escalation as well.
+   - **Otherwise** it records the stage that finished and, for the `speedrun` track, starts the next stage by
+     itself. The stages are fixed:
+     1. **Equal data:** the variant and its control at the baseline's steps.
+     2. **The rule after equal data**, from Δt = variant s/step ÷ control s/step − 1 (the comment states which
+        branch applied under stage 1):
+        - |Δt| ≤ 1%: equal data already is equal time; stage 1 is final ("<verdict> at equal time (step time
+          within 1%)").
+        - Variant slower (Δt > +1%): stage 2 only after a stage-1 win, since fewer steps can't turn noise or a
+          loss into a win. Otherwise final: "<verdict> at equal data; slower, equal time not run".
+        - Variant faster (Δt < −1%): stage 2 always, since it gets more steps at equal time.
+     3. **Timing probe:** a 150-step variant run that measures its s/step.
+     4. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. This verdict is
+        final.
+   - Other Tracks have one stage: equal data.
+   - **Expect**, at each recorded stage:
+     - the registry entry and the trial's analysis report pushed together
+       (`pushed ... as <sha> to origin/<registry branch>`);
+     - `edited <comment url>`;
+     - then either the next stage's `launching ...` lines, or `next: stop`.
+   - A final win also escalates to the admin page for the adoption decision.
 
 ## 2b. analyze (rewrite a trial's analysis report)
 
 `run-finished` writes the report itself. Run this only when asked to backfill or redo one:
-`B analyze X####`. It writes, commits and pushes the report and prints the result post it belongs in.
+`B analyze X####`. It rewrites, commits and pushes the reports of every finished stage.
+
+## 2d. score (after every `run-finished` that records a stage, and after an escalation of a registered idea)
+
+1. **Run:** `B score X#### --score <0-10> --rationale "<one line>" --model <your model name>`. It stores
+   `potential` (score, rationale, model, date, and a digest of the results it saw) on the registry entry. The
+   Status page shows it; nothing else writes it.
+2. **Score with this rubric**, from the entry's trials and events. A win's validations are equal-time speedrun,
+   the competitive-ladder rungs (scaling), `hero-mfu` (MFU cost) and a vanilla-track (Dense) win; the noise band is ±0.005 Paloma macro loss.
+   | Score | When |
+   |---|---|
+   | 0–2 | Clear loss |
+   | 3 | Noise: no stage beyond ±0.005 |
+   | 4 | Noise with a consistent sign, or mixed results with a clear fix |
+   | 5 | No result yet |
+   | 6 | Small win (−0.005 to −0.010) with one validation (equal data only, or equal time only) |
+   | 7 | Larger win (≤ −0.010) with one validation, or a small win holding at equal time and on one more axis |
+   | 8 | Win holding at equal time **and** on the scaling ladder (or with an acceptable `hero-mfu` cost) |
+   | 9 | Large win holding at equal time, on the scaling ladder **and** on `hero-mfu` |
+   | 10 | Adopted into the live recipe |
+   The rationale names the win size and which validations it passed, e.g. "−0.0148 at equal time; ladder and MFU
+   not run → 7".
+
+## 2c. launch (reproduce or show one run)
+
+Every launch goes through one path and records the exact submitted command in the spec under `launched:`.
+`B launch X#### --run <run> --print` prints the full command a run would submit (module, flags, steps, cluster,
+priority, run id) and submits nothing. Without `--print` it submits that run with the same checks as `new-idea`;
+sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line with the commit and command.
 
 ## 3. run-failed (event `run_finished` for a run that did not succeed)
 
@@ -194,7 +243,7 @@ metric and rule. Nothing else spells out a launch.
 
 | Track | Baseline | Metric | Rule |
 |---|---|---|---|
-| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.006 win, ≥ +0.006 loss |
+| `vanilla-d512` … `vanilla-d1280` | Vanilla Track at that rung | Paloma macro loss | Δ = variant − control; ≤ −0.005 win, ≥ +0.005 loss |
 | `moe-d512` … `moe-d1280` | Basic MoE at that rung | Paloma macro loss | same |
 | `competitive-d512`, `-d768`, `-d1024`, `-d1280L16` | The current recipe (Belay Ckpt Oct 20 2026) at that rung | Paloma macro loss | same |
 | `speedrun` (the default) | The 8-minute d512 run of the current recipe (`belay-8min-ckpt-oct20`: 3,030 steps, Paloma macro 3.0441) | Paloma macro loss | same |
