@@ -202,6 +202,65 @@ def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment
     assert "hosted-judge-secret" not in completed.stdout
 
 
+def test_prepared_tau2_models_resolve_openai_provider_and_hosted_judge_in_task_containers(tmp_path, prepared_policy):
+    environment = tmp_path / "dataset" / "task" / "environment"
+    model_templates = {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
+        "TAU2_USER_MODEL": "${TAU2_USER_MODEL:-gpt-5.2}",
+    }
+    task_config = environment.parent / "task.toml"
+    task_config.write_text(
+        task_config.read_text() + '\n[verifier.env]\nTAU2_NL_ASSERTIONS_MODEL = "${TAU2_NL_ASSERTIONS_MODEL:-gpt-5.2}"\n'
+    )
+    (environment / "compose.yaml").write_text(
+        json.dumps({"services": {"main": {}, "runtime": {"environment": model_templates}}})
+    )
+    (environment / "shellbox-images.json").write_text(
+        json.dumps({"runtime": {"image": f"example.test/runtime@sha256:{'b' * 64}", "workdir": "/runtime"}})
+    )
+    overlay = tmp_path / "overlay.json"
+    write_runtime_overlay(
+        overlay,
+        tmp_path,
+        dataset_path=str(tmp_path / "dataset"),
+        verifier_env={
+            "OPENAI_API_KEY": "hosted-judge-secret",
+            "OPENAI_BASE_URL": "https://judge.test/v1",
+            "MODEL_NAME": "Qwen/Qwen3-8B",
+        },
+    )
+    completed = _external_python(
+        "-c",
+        textwrap.dedent(
+            f"""
+            import json
+            from pathlib import Path
+            from harbor.environments.prepared_compose import import_prepared_task
+            from harbor.models.task.task import Task
+            from harbor.utils.env import resolve_env_vars, task_environment
+            from marin.evaluation.harbor.trial_driver import effective_job_config, _model_environment
+
+            config = effective_job_config(Path({str(prepared_policy)!r}), Path({str(overlay)!r}))
+            task = Task(Path({str(environment.parent)!r}))
+            with task_environment(_model_environment(config)):
+                imported = import_prepared_task(task.config.environment, task.paths.environment_dir)
+                verifier = resolve_env_vars(task.config.verifier.env)
+            runtime = next(container.machine for container in imported.task.containers if container.name == 'runtime')
+            print(json.dumps({{'runtime': runtime.env, 'verifier': verifier}}))
+            """
+        ),
+    )
+
+    guest = json.loads(completed.stdout)
+    # Tau2 uses LiteLLM: the first segment selects its transport, even for namespaced model IDs.
+    assert guest["runtime"]["TAU2_USER_MODEL"].split("/", 1) == ["openai", "Qwen/Qwen3-8B"]
+    assert guest["verifier"]["TAU2_NL_ASSERTIONS_MODEL"].split("/", 1) == ["openai", "Qwen/Qwen3-8B"]
+    assert guest["runtime"]["OPENAI_API_KEY"] == "EMPTY"
+    assert guest["runtime"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert "hosted-judge-secret" not in completed.stdout
+
+
 def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, prepared_policy):
     document = json.loads(prepared_policy.read_text())
     document["environment"] = {"type": "daytona"}

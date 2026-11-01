@@ -12,15 +12,20 @@ import httpx
 import pytest
 from daytona._utils.env import DaytonaEnvReader
 
+from harbor.agents.terminus_2.tmux_session import TmuxCommandError, TmuxKeystrokeBatch, TmuxSession
 from harbor.environments import daytona, model_relay
 from harbor.environments.daytona import DaytonaEnvironment
+from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import host_model_authentication
+from harbor.environments.qemu import QemuEnvironment
 from harbor.environments.runtime import host_backend_credentials
+from harbor.environments.shellsim import ShellSimEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.utils.env import task_environment
 from harbor.verifier.verifier import Verifier
+from shellbox.machine import MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -32,6 +37,52 @@ class ProcessFactory:
     async def create(self, spec):
         self.machine = ProcessMachine(self.root, spec)
         return self.machine
+
+
+@pytest.mark.parametrize(
+    "environment_class",
+    [DaytonaEnvironment, LocalEnvironment, QemuEnvironment, ShellSimEnvironment],
+)
+@pytest.mark.parametrize("capture_exit_code", [0, 42])
+async def test_shellbox_environment_captures_terminus_scrollback_and_preserves_pipeline_failure(
+    tmp_path, environment_class, capture_exit_code
+):
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    tmux = binary_dir / "tmux"
+    tmux.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = capture-pane ]; then\n'
+        "  printf 'screen\\n'\n"
+        '  case " $* " in\n'
+        '    *" -S - "*) exit "$TMUX_CAPTURE_EXIT_CODE" ;;\n'
+        "  esac\n"
+        "fi\n"
+    )
+    tmux.chmod(0o755)
+    machine = ProcessMachine(tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace"))
+    # Substitute only the external transport; run the real adapter and Terminus scripts.
+    adapter = object.__new__(environment_class)
+    adapter.machine = machine
+    adapter.session_id = "capture-test"
+    adapter.default_user = None
+    adapter._persistent_env = {
+        "PATH": f"{binary_dir}:/usr/bin:/bin",
+        "TMUX_CAPTURE_EXIT_CODE": str(capture_exit_code),
+    }
+    if environment_class is LocalEnvironment:
+        adapter.execution = None
+    session = TmuxSession("capture-test", adapter)
+    try:
+        if capture_exit_code:
+            with pytest.raises(TmuxCommandError):
+                await session.send_keys_and_capture([TmuxKeystrokeBatch("echo hello\n", 0)])
+        else:
+            output, alive = await session.send_keys_and_capture([TmuxKeystrokeBatch("echo hello\n", 0)])
+            assert output == "Current Terminal Screen:\nscreen\n"
+            assert alive is True
+    finally:
+        await machine.close()
 
 
 @pytest.mark.parametrize("cleanup_failure", [False, True])

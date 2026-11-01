@@ -611,8 +611,8 @@ def _model_environment(config: JobConfig) -> dict[str, str]:
         **_TASK_MODEL_ENVIRONMENT,
         "TOGETHER_API_KEY": "EMPTY",
         "CUSTOM_API_KEY": "EMPTY",
-        "TAU2_USER_MODEL": model_name,
-        "TAU2_NL_ASSERTIONS_MODEL": model_name,
+        "TAU2_USER_MODEL": "openai/" + model_name,
+        "TAU2_NL_ASSERTIONS_MODEL": "openai/" + model_name,
     }
 
 

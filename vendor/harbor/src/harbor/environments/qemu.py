@@ -5,7 +5,6 @@
 
 import hashlib
 import json
-import shlex
 from enum import StrEnum
 from pathlib import Path
 
@@ -214,13 +213,9 @@ class QemuEnvironment(BaseEnvironment):
             raise ValueError("QEMU prototype supports only the root user")
         if self.machine is None:
             raise RuntimeError("QEMU environment is not running")
-        shell_command = (
-            f"if [ -x /bin/bash ]; then exec /bin/bash -c {shlex.quote(command)}; "
-            f"else exec /bin/sh -c {shlex.quote(command)}; fi"
-        )
         return await execute_shellbox_command(
             self.machine,
-            ("/bin/sh", "-c", shell_command),
+            command,
             cwd=cwd,
             env=self._merge_env(env) or {},
             timeout_sec=timeout_sec,

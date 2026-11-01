@@ -211,7 +211,7 @@ class LocalEnvironment(BaseEnvironment):
         await self._sync_service_logs()
         return await execute_shellbox_command(
             self.machine,
-            ("sh", "-c", command),
+            command,
             cwd=cwd,
             env=self._merge_env(env) or {},
             timeout_sec=timeout_sec,
