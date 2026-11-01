@@ -260,13 +260,16 @@ function renderLatest(status) {
 
 async function front() {
   showView('front')
-  // The section links sit in the top bar, as on the original page, before the page links.
+  // The section links sit in the top bar, before the page links.
   const sections = document.querySelector('.secnav')
   sections.className = 'nav'
   document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
   const [results, status, scaling, speedrun, tracks] = await Promise.all([
     loadJson('results'),
-    loadJson('state').catch(() => null),
+    loadJson('state').catch((error) => {
+      console.warn('Belay state unavailable; the latest-result strip stays hidden', error)
+      return null
+    }),
     fetch(asset('scaling.json')).then((r) => r.json()),
     fetch(asset('speedrun.json')).then((r) => r.json()),
     fetch(asset('tracks.json')).then((r) => r.json()),

@@ -1,4 +1,4 @@
-// Shared by the three Belay pages (front, status, admin): routing, data loading, the page nav, and small DOM and
+// Shared by the Belay pages (front, status, Hero MFU, admin): routing, data loading, the page nav, and small DOM and
 // formatting helpers. Nothing from the API is parsed as HTML here.
 
 const REFRESH_MS = 10000
