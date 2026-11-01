@@ -389,6 +389,7 @@ def build_h100_ladder_run(
     stop_after_steps: int | None = None,
     nodes: int | None = None,
     expert_axis_size: int | None = None,
+    output_path: str | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -592,6 +593,7 @@ def build_h100_ladder_run(
         build_config=build_config,
         deps=(*validation,),
         runtime_args={"train_resources": train_resources},
+        override_path=output_path,
     )
 
 
@@ -825,6 +827,11 @@ def _layer_skip_rule(
     help="Nodes for the run (default: the rung's; H100 rungs use one 8-GPU node).",
 )
 @click.option(
+    "--output-path",
+    default=None,
+    help="Write the run under this path (relative to the cluster prefix) instead of grug/<run-id>/<version>.",
+)
+@click.option(
     "--train-cache",
     default=V16384_SEQSHUF_CACHE_DIR,
     show_default=True,
@@ -914,6 +921,7 @@ def main(
     nodes: int | None,
     expert_axis_size: int | None,
     train_cache: str,
+    output_path: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -960,6 +968,7 @@ def main(
         nodes=nodes,
         expert_axis_size=expert_axis_size,
         train_cache_dir=train_cache,
+        output_path=output_path,
     )
 
 
