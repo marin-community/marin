@@ -4,7 +4,7 @@ name: Router Adam LR multiplier
 category: MoE and routing
 summary: Scale the router Adam learning rate relative to the Adam LR.
 source: agent
-status: running
+status: done
 first_batch: 98
 tags:
 - router
@@ -87,6 +87,13 @@ trials:
   settings:
     router_lr_mult: '0.5'
   commit: cd615f08ac
+  loss:
+  - 3.0446
+  delta:
+  - 0.0005
+  steps: 3030
+  baseline: belay-X0151-control 3.0441 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '102'
