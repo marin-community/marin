@@ -22,6 +22,7 @@ be written, committed, pushed, launched or posted, without doing it.
 import argparse
 import dataclasses
 import datetime
+import getpass
 import importlib.util
 import json
 import os
@@ -1089,6 +1090,85 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     say_next("stop (the watcher starts a new session when the runs finish)")
 
 
+# A CPU job next to a run's profile reads it with the submitter's own storage keys, which Iris passes to the task.
+PROFILE_JOB_RESOURCES = ("--cpu", "4", "--memory", "32GB", "--disk", "20GB", "--enable-extra-resources")
+PROFILE_JOB_TIMEOUT = 1800
+CLUSTER_STORAGE_KEYS = ("CW_KEY_ID", "CW_KEY_SECRET")
+# Iris job setup lines (dependency installs) that the summary leaves out.
+_JOB_SETUP_LINE = re.compile(
+    r"^(\+ |Installed |Resolved |Prepared |Download|Building |Built |Audited |Uninstalled |installing |"
+    r"warning|\[iris setup\]|syncing deps|Using CPython|Creating virtual)"
+)
+
+
+def iris_cli(*args: str) -> list[str]:
+    return ["uv", "run", "iris", "--cluster", "marin", *args]
+
+
+def remote_job_command(name: str, cluster: str, module: list[str]) -> list[str]:
+    """``iris job run`` for a small CPU job on ``cluster`` with the submitter's storage keys from the environment."""
+    keys = [arg for key in CLUSTER_STORAGE_KEYS if os.environ.get(key) for arg in ("-e", key, os.environ[key])]
+    if cluster.startswith("cw-") and len(keys) != 3 * len(CLUSTER_STORAGE_KEYS):
+        raise SystemExit(f"refusing: export {' and '.join(CLUSTER_STORAGE_KEYS)} (your CoreWeave storage keys) first")
+    return iris_cli(
+        "job",
+        "run",
+        "--no-wait",
+        "--target-cluster",
+        cluster,
+        "--priority",
+        "batch",
+        *PROFILE_JOB_RESOURCES,
+        "--timeout",
+        str(PROFILE_JOB_TIMEOUT),
+        "--job-name",
+        name,
+        *keys,
+        "--",
+        "python",
+        "-m",
+        *module,
+    )
+
+
+def wait_for_job(job: str) -> str:
+    """Poll the job until it ends; returns its final state."""
+    while True:
+        listing = subprocess.run(iris_cli("job", "list", "--prefix", job), capture_output=True, text=True).stdout
+        row = next((line.split() for line in listing.splitlines() if line.startswith(job + " ")), None)
+        if row is not None and row[1] in ("succeeded", "failed", "killed", "worker_failed", "unschedulable"):
+            return row[1]
+        time.sleep(WAIT_POLL_SECONDS // 4)
+
+
+def job_output(job: str) -> list[str]:
+    """The job's own output lines, without timestamps and setup noise."""
+    logs = subprocess.run(iris_cli("job", "logs", job), capture_output=True, text=True).stdout
+    lines = [line.split(" | ", 1)[1] for line in logs.splitlines() if " attempt=" in line and " | " in line]
+    return [line for line in lines if not _JOB_SETUP_LINE.match(line.lstrip())]
+
+
+def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: bool) -> None:
+    """Summarize a run's uploaded profile (and diff it against ``compare``) in a CPU job on the run's cluster, which
+    reads the full trace in place; waits for the job and prints the summary."""
+    # CoreWeave cluster cw-<region> keeps run data in bucket marin-<region>; XProf uploads go under its temp prefix.
+    root = f"s3://marin-{cluster.removeprefix('cw-')}/tmp/ttl=30d/xprof"
+    module = ["marin.profiling.step_profile", run, "--xprof-root", root, *(["--compare", compare] if compare else [])]
+    name = f"belay-profile-{run}-{datetime.datetime.now():%m%d-%H%M%S}"[:63]
+    command = remote_job_command(name, cluster, module)
+    shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
+    print(f"{'would run' if dry_run else 'running'}: {shlex.join(shown)}")
+    if dry_run:
+        return
+    subprocess.run(command, check=True, capture_output=True)
+    job = f"/{getpass.getuser()}/{name}"
+    print(f"waiting for {job} ...")
+    state = wait_for_job(job)
+    print("\n".join(job_output(job)))
+    if state != "succeeded":
+        raise SystemExit(f"{job} {state}; logs: {shlex.join(iris_cli('job', 'logs', job))}")
+
+
 def analyze(registry_id: str, *, dry_run: bool) -> None:
     """Rewrite the analysis report of every finished stage of the experiment, and commit and push them."""
     spec = load_spec(registry_id)
@@ -1465,6 +1545,10 @@ def main(argv: list[str]) -> None:
     p.add_argument("--model-set", action="append", default=[], help="with --finish: the new flag's on value")
     command("run-finished").add_argument("registry_id")
     command("analyze").add_argument("registry_id")
+    p = command("analyze-profile")
+    p.add_argument("run", help="a run that captured a profile (for example a hero-mfu run with --profile)")
+    p.add_argument("--compare", help="a second run: also print a per-kernel diff against it")
+    p.add_argument("--cluster", default=TRACKS[Track.HERO_MFU].cluster, help="where the run's profile lives")
     p = command("score")
     p.add_argument("registry_id", nargs="?")
     p.add_argument(
@@ -1527,6 +1611,8 @@ def main(argv: list[str]) -> None:
         if args.registry_id is None or args.value is None or args.rationale is None:
             raise SystemExit("refusing: give X####, --score and --rationale (or --batch FILE)")
         score(args.registry_id, score_value(args.value), args.rationale, args.model, dry_run=args.dry_run)
+    elif args.command == "analyze-profile":
+        analyze_profile(args.run, args.compare, args.cluster, dry_run=args.dry_run)
     elif args.command == "analyze":
         analyze(args.registry_id, dry_run=args.dry_run)
     elif args.command == "run-failed":
