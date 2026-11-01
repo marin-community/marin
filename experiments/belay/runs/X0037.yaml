@@ -1,0 +1,16 @@
+experiment: X0037
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: embed_gated_norm=false, final_gated_norm=false
+    flags:
+    - --model-set
+    - embed_gated_norm=false
+    - --model-set
+    - final_gated_norm=false
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
