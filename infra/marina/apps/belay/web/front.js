@@ -181,7 +181,6 @@ function startFront(RD, SC, SP, TK, RECIPE_TAG) {
       const hit = el("circle", { cx: hx, cy: Y(pl), r: 11, fill: "transparent", tabindex: 0 }, svg);
       hit.dataset.tip = `<b>${pl.toFixed(3)}</b> projected BPB at the hero budget (loss ${lossAt(c, C_HW_BUDGET * c.mfu).toFixed(4)})<br>${c.name}<br><span style="opacity:.75">loss = ${SC.floor} + ${c.A}·C^−${c.alpha} on model FLOPs; ${c.mfu_note}</span>`;
     });
-    // equal-loss compute multiplier in hardware FLOPs: where latest best reaches the Aug Hero Arch's projected BPB
     // Hardware FLOPs at which the new recipe reaches the reference's projected BPB (bisection on the monotone curve).
     const bc = curve(SC.compare.to), nc = curve(SC.compare.from), Lt = Lhw(bc, C_HW_BUDGET);
     let lo = 17, hi = Math.log10(C_HW_BUDGET);
