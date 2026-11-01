@@ -485,7 +485,7 @@ def new_idea(
 
 
 def post_footer(idea: Idea, registry_id: str, track: Track, defaults: str, commit: str) -> list[str]:
-    source = f"[#9514 comment]({idea.url}) by @{idea.author}" if idea.url else f"proposal by {idea.author}"
+    source = f"[#9514 comment]({idea.url}) by @{idea.author}" if idea.url else f"proposal by @{CONFIG.default_author}"
     approved = f" · approved by @{idea.decided_by}" if idea.decided_by else ""
     return footer(defaults, track, f"{source}{approved}", commit, entry_url(entry_path(registry_id)))
 
@@ -1053,8 +1053,14 @@ def track_rows() -> list[dict[str, object]]:
 
 
 def tracks_page_data() -> dict[str, object]:
-    """``web/tracks.json``: every Track, and the live recipe's tag (the Status page highlights its ideas)."""
-    return {"recipe_tag": CONFIG.recipe_tag, "recipe_name": CONFIG.recipe_name, "tracks": track_rows()}
+    """``web/tracks.json``: every Track, the live recipe's tag (the Status page highlights its ideas) and the login
+    credited for internal proposals."""
+    return {
+        "recipe_tag": CONFIG.recipe_tag,
+        "recipe_name": CONFIG.recipe_name,
+        "default_author": CONFIG.default_author,
+        "tracks": track_rows(),
+    }
 
 
 def tracks(as_json: bool) -> None:
@@ -1109,7 +1115,12 @@ def main(argv: list[str]) -> None:
     command("analyze").add_argument("registry_id")
     p = command("score")
     p.add_argument("registry_id", nargs="?")
-    p.add_argument("--score", type=int, dest="value")
+    p.add_argument(
+        "--score",
+        type=int,
+        dest="value",
+        help="0-10 by the RUNBOOK 2d rubric (3 noise, 5 no result, 6-9 by win size and validations, 10 adopted)",
+    )
     p.add_argument("--rationale")
     p.add_argument("--batch", type=Path, help="JSON list of {id, score, rationale}, committed together")
     p.add_argument("--model", required=True, help="the model that scored it, e.g. claude-opus-5-5")

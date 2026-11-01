@@ -28,7 +28,7 @@ them.
      - Approve (or Queue, for one approved on GitHub before the cutover) on the Belay admin page.
   3. The session gets the text as it was at the first approval, gives the idea its registry id, and quotes the
      idea with a link to its #9514 comment in the plan it posts on #9451.
-  - There is one running issue, #9451; there are no weekly issues.
+  - There is one running issue, #9451.
 - **How edits are made.**
   - A session changes nothing by hand. Each command writes, commits and pushes its own files:
     - the registry entry (on the registry branch);
@@ -54,7 +54,7 @@ them.
 | `submit.py` | Run specs, launch checks, the launch command |
 | `results.py` | W&B results and the win/noise/loss rule |
 | `page.py` | The Belay page API client |
-| `demo.py` (on `marin_belay_v1_loomdemo`) | The Belay page, watcher, dispatcher and sessions |
+| `demo.py` | Local demo only: Marina, watcher, dispatcher, sessions |
 | `runs/X####.yaml` | Run specs, on weekly branches |
 
 The registry itself is on the registry branch, at `experiments/belay/registry/X####-<slug>.yaml`; its format is

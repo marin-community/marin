@@ -160,7 +160,7 @@ def write_report(
     loss_png, delta_png = f"{header.trial}_loss.png", f"{header.trial}_delta.png"
     plot_loss(control, variant, out_dir / loss_png)
     plot_delta(control, variant, out_dir / delta_png)
-    idea = f"[#9514 comment]({header.idea_url})" if header.idea_url else "maintainer proposal"
+    idea = f"[#9514 comment]({header.idea_url})" if header.idea_url else f"proposal by @{CONFIG.default_author}"
     approver = f" · approved by @{header.approver}" if header.approver else ""
     eval_rows = "\n".join(
         f"| {name} | {loss:.4f} | {_signed(delta)} | {_fmt(bpb, 4)} |" for name, (loss, delta, bpb) in final.items()
