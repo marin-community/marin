@@ -1096,7 +1096,7 @@ PROFILE_JOB_TIMEOUT = 1800
 CLUSTER_STORAGE_KEYS = ("CW_KEY_ID", "CW_KEY_SECRET")
 # Iris job setup lines (dependency installs) that the summary leaves out.
 _JOB_SETUP_LINE = re.compile(
-    r"^( \+ |Installed |Resolved |Prepared |Download|Building |Built |Audited |Uninstalled |"
+    r"^(\+ |Installed |Resolved |Prepared |Download|Building |Built |Audited |Uninstalled |installing |"
     r"warning|\[iris setup\]|syncing deps|Using CPython|Creating virtual)"
 )
 
@@ -1145,7 +1145,7 @@ def job_output(job: str) -> list[str]:
     """The job's own output lines, without timestamps and setup noise."""
     logs = subprocess.run(iris_cli("job", "logs", job), capture_output=True, text=True).stdout
     lines = [line.split(" | ", 1)[1] for line in logs.splitlines() if " attempt=" in line and " | " in line]
-    return [line for line in lines if not _JOB_SETUP_LINE.match(line)]
+    return [line for line in lines if not _JOB_SETUP_LINE.match(line.lstrip())]
 
 
 def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: bool) -> None:
