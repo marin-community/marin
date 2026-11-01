@@ -18,7 +18,8 @@ A human then decides what happens. Never work around a refusal.
 
 ## 0. start
 
-1. **Run:** `B start --events <the events file named in your prompt>`
+1. **Run:** `B start --events <the events file named in your prompt>`. A scheduled session whose prompt names no
+   events file runs `B claim` first; it claims the queued events and prints the file to pass.
 2. **Expect:** a `recipe:` line, then one of:
    - `next: B weekly-rollover`: do section 4, then run step 1 again;
    - `no events`: stop;
@@ -57,7 +58,8 @@ A human then decides what happens. Never work around a refusal.
    already has an `X####` keeps its name.
    - **Expect**, in this order:
      1. the registry entry `X####` written and pushed (skipped if it already exists);
-     2. the run spec written, committed and pushed;
+     2. the run spec written, committed and pushed (with `reusing the running control <run>` when another
+        idea's control at the same code and seed is still running: the two share it);
      3. `checks passed: ...`;
      4. the idea's #9451 comment posted (status `plan`, the planned runs with their steps);
      5. one `launching belay-X####-<run>` per run;
@@ -154,6 +156,7 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
    | 8 | Win holding at equal time **and** on the scaling ladder (or with an acceptable `hero-mfu` cost) |
    | 9 | Large win holding at equal time, on the scaling ladder **and** on `hero-mfu` |
    | 10 | Adopted into the live recipe |
+   An entry that is not an idea (a bundle of other entries) gets `--score na`: no score, sorted last.
    The rationale names the win size and which validations it passed, e.g. "−0.0148 at equal time; ladder and MFU
    not run → 7".
 
@@ -216,6 +219,9 @@ End with two to five plain lines:
 - which flags you committed;
 - what you escalated;
 - what is still running.
+
+A scheduled session (one that ran `B claim`) then reports these lines with
+`B finish --session <id from claim> --summary "<the lines>"`, which frees the queue for the next session.
 
 ## 8. House rules (an idea that asks for any of these goes to section 6)
 
