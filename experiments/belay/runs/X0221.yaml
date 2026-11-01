@@ -1,0 +1,13 @@
+experiment: X0221
+track: speedrun
+runs:
+  seed0-b:
+    seed: 0
+    variant: CPLM Plus copy head (cplm_plus=true)
+    flags:
+    - --model-set
+    - cplm_plus=true
+  control-b:
+    seed: 0
+    variant: speedrun control
+    control: true
