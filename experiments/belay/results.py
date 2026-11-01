@@ -103,6 +103,41 @@ def compared(control: Measure, variant: Measure, baseline: Baseline) -> tuple[fl
     return delta, verdict(delta, baseline)
 
 
+@dataclass(frozen=True)
+class AfterData:
+    """What follows an equal-data stage: whether the equal-time stage runs, the final status if not, and the
+    line the comment shows under stage 1."""
+
+    run_equal_time: bool
+    final_status: str | None
+    line: str
+
+
+def after_equal_data(time_change: float, stage_1: Verdict, tolerance: float) -> AfterData:
+    """The fixed rule, from Δt = variant s/step / control s/step - 1.
+
+    Within ``tolerance``, equal data is already equal time, so stage 1 is final. A slower variant only gets fewer
+    steps at equal time, so it runs stage 2 only after a stage-1 win. A faster variant gets more steps, so it always
+    runs stage 2.
+    """
+    percent = f"{abs(time_change):.0%}"
+    if abs(time_change) <= tolerance:
+        return AfterData(
+            False,
+            f"{stage_1} at equal time (step time within {tolerance:.0%})",
+            f"Variant step time within {tolerance:.0%} of the control → equal data is equal time; final.",
+        )
+    if time_change > 0 and stage_1 is not Verdict.WIN:
+        return AfterData(
+            False,
+            f"{stage_1} at equal data; slower, equal time not run",
+            f"Variant {percent} slower and did not win at equal data → equal time not run.",
+        )
+    if time_change > 0:
+        return AfterData(True, None, f"Variant {percent} slower and won at equal data → equal-time run.")
+    return AfterData(True, None, f"Variant {percent} faster → equal-time run (more steps at equal time).")
+
+
 def experiment_results(spec: ExperimentSpec) -> list[RunResult]:
     """Final loss of every run in ``spec`` from W&B, with deltas and verdicts; refuses if any run lacks one."""
     baseline = TRACKS[spec.track]
