@@ -3,9 +3,10 @@
 // data the static export publishes). Loaded after common.js.
 
 let registry = null // the registry's results JSON (ideas with trials, events, potential)
-let trackTable = [] // tracks.json's tracks, generated from config.TRACKS
-let recipeTag = '' // the live recipe's checkpoint tag (config.recipe_tag), from tracks.json
-let defaultAuthor = '' // config.default_author: credited for internal proposals, from tracks.json
+let state = null // the public state last read from the API
+// tracks.json, generated from experiments/belay/config.py: { tracks, recipe_tag, default_author }. Read once per
+// refresh and passed explicitly to the gate and recipe helpers.
+let config = { tracks: [], recipe_tag: '', default_author: '' }
 
 const GATE = {
   win: { icon: '✓', cls: 'won' },
@@ -18,8 +19,8 @@ const GATE = {
 const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
 const OUTSIDE = /outside the verdict|not part of the verdict/
 
-function trackInfo(id) {
-  return trackTable.find((t) => t.track === id) ?? {}
+function trackInfo(cfg, id) {
+  return cfg.tracks.find((t) => t.track === id) ?? {}
 }
 
 function verdictOf(d, noise) {
@@ -35,18 +36,18 @@ function counted(trials) {
 }
 
 // Gate 1, beat a vanilla transformer: the latest vanilla-track trial (vanilla-d512 to vanilla-d1280).
-function denseGate(idea) {
+function denseGate(idea, cfg) {
   const t = counted(idea.trials.filter((x) => x.rung?.startsWith('vanilla-'))).at(-1)
   if (!t) return { kind: 'none', text: 'not run', title: '' }
   const d = t.delta[0]
-  const kind = verdictOf(d, trackInfo(t.rung).noise)
+  const kind = verdictOf(d, trackInfo(cfg, t.rung).noise)
   const where = t.protocol === 'fixed_time' ? 'equal time' : 'equal data'
   return { kind, short: SIGN(d), text: `${kind} at ${where}, Δ ${SIGN(d)} · ${t.rung.replace('vanilla-', '')}`, title: `${t.variant} (${t.rung}, ${t.date})` }
 }
 
 // Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
-function speedrunGate(idea, live) {
-  const sr = trackInfo('speedrun')
+function speedrunGate(idea, live, cfg) {
+  const sr = trackInfo(cfg, 'speedrun')
   const ours = counted(idea.trials.filter((t) => t.rung === 'speedrun'))
   const legacy = counted(idea.trials.filter((t) => t.rung === 'd512'))
   const data = ours.filter((t) => t.protocol === 'equal_steps').at(-1)
@@ -66,12 +67,12 @@ function speedrunGate(idea, live) {
 }
 
 // The idea's standing in the live recipe: its latest adopted/removed event for the recipe's checkpoint tag.
-function recipeEvent(idea) {
+function recipeEvent(idea, recipeTag) {
   return (idea.events ?? []).filter((e) => e.checkpoint === recipeTag && ['adopted', 'removed'].includes(e.type)).at(-1)
 }
 
-function inLiveRecipe(idea) {
-  return recipeEvent(idea)?.type === 'adopted'
+function inLiveRecipe(idea, recipeTag) {
+  return recipeEvent(idea, recipeTag)?.type === 'adopted'
 }
 
 // A gate cell: a compact chip (icon, and Δ for a win or loss) whose details show on hover or keyboard focus, and
@@ -120,11 +121,11 @@ function ideaRuns(idea) {
   return state.runs.filter((r) => idea.registry_id && r.registry_id === idea.registry_id)
 }
 
-function detail(idea) {
+function detail(idea, cfg) {
   const plan = idea.plan
   const runs = ideaRuns(idea)
   const facts = [
-    idea.url ? ['Source', link(idea.url, idea.author ? `#9514 · ${idea.author}` : 'GitHub')] : ['Source', link(`https://github.com/${defaultAuthor}`, `proposal by @${defaultAuthor}`)],
+    idea.url ? ['Source', link(idea.url, idea.author ? `#9514 · ${idea.author}` : 'GitHub')] : ['Source', link(`https://github.com/${cfg.default_author}`, `proposal by @${cfg.default_author}`)],
     plan?.cost ? ['Cost', plan.cost] : null,
     plan?.commit ? ['Code', link(`https://github.com/marin-community/marin/commit/${plan.commit}`, el('code', {}, plan.commit.slice(0, 10)))] : null,
     plan?.spec_url ? ['Spec', link(plan.spec_url, `runs/${idea.registry_id}.yaml`)] : null,
@@ -173,7 +174,7 @@ function ideaLine(idea, cells) {
     },
     ...cells,
   )
-  return el('div', { class: 'line-wrap' }, button, expanded ? detail(idea) : null)
+  return el('div', { class: 'line-wrap' }, button, expanded ? detail(idea, config) : null)
 }
 
 function idCell(idea) {
@@ -222,30 +223,30 @@ function renderRecent() {
 }
 
 // Gate 3, hero-scale MFU: the hero-mfu track's relative step-time Δ, else the speedrun step-time cost as a hint.
-function heroGate(idea) {
+function heroGate(idea, cfg) {
   const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
   if (hero) {
     const d = hero.delta[0]
-    return { kind: verdictOf(d, trackInfo('hero-mfu').noise), short: `${SIGN(d * 100, 1)}%`, text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
+    return { kind: verdictOf(d, trackInfo(cfg, 'hero-mfu').noise), short: `${SIGN(d * 100, 1)}%`, text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
   }
   const stc = idea.trials.find((t) => t.rung === 'speedrun' && t.protocol === 'equal_steps' && t.step_time_change)
   return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
 }
 
 // Gate 4, the hero-scale projection: the competitive ladder's Δ per rung (legacy wider rungs count too).
-function scalingGate(idea) {
+function scalingGate(idea, cfg) {
   const rungs = counted(idea.trials.filter((t) => t.rung?.startsWith('competitive-') || ['d768', 'd1024', 'd1280'].includes(t.rung)))
   if (!rungs.length) return { kind: 'none', text: 'not run', title: '' }
   const latest = new Map(rungs.map((t) => [t.rung.replace('competitive-', ''), t]))
   const parts = [...latest].map(([r, t]) => `${r} ${SIGN(t.delta[0])}`)
-  const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], trackInfo('competitive-d512').noise))
+  const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, 'competitive-d512').noise))
   const kind = worst.includes('loss') ? 'loss' : worst.every((v) => v === 'win') ? 'win' : 'noise'
   const last = [...latest.values()].at(-1)
   return { kind, short: SIGN(last.delta[0]), text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
 }
 
-function recipeCell(idea) {
-  const event = recipeEvent(idea)
+function recipeCell(idea, recipeTag) {
+  const event = recipeEvent(idea, recipeTag)
   const day = event ? new Date(`${event.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
   if (event?.type === 'adopted') return el('span', { class: 'gate-chip won', title: event.note ?? '' }, el('b', {}, '✓'), ` ${recipeTag}`)
   if (event?.type === 'removed') {
@@ -265,11 +266,11 @@ function retestStage(idea, event) {
 }
 
 function approvalDate(idea, pageIdea) {
-  const dates = [pageIdea?.decided_at?.slice(0, 10), ...(idea.trials ?? []).map((t) => t.date), ...(idea.events ?? []).map((e) => e.date)]
+  const dates = [pageIdea?.approved_at?.slice(0, 10), ...(idea.trials ?? []).map((t) => t.date), ...(idea.events ?? []).map((e) => e.date)]
   return dates.filter(Boolean).sort()[0] ?? ''
 }
 
-function checklistRows() {
+function checklistRows(cfg) {
   const live = new Set(state.runs.filter((r) => !TERMINAL.has(r.state)).map((r) => r.registry_id))
   return registry.ideas.map((idea) => {
     const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
@@ -279,12 +280,12 @@ function checklistRows() {
       comment,
       date: approvalDate(idea, pageIdea),
       author: idea.author,
-      accepted: inLiveRecipe(idea),
+      accepted: inLiveRecipe(idea, cfg.recipe_tag),
       score: idea.potential?.score ?? null,
-      dense: denseGate(idea),
-      speedrun: speedrunGate(idea, live.has(idea.xid)),
-      hero: heroGate(idea),
-      scaling: scalingGate(idea),
+      dense: denseGate(idea, cfg),
+      speedrun: speedrunGate(idea, live.has(idea.xid), cfg),
+      hero: heroGate(idea, cfg),
+      scaling: scalingGate(idea, cfg),
     }
   })
 }
@@ -298,8 +299,8 @@ const SORTS = {
 function renderChecklist() {
   if (!registry) return
   const q = checklistView.query.toLowerCase()
-  const rows = checklistRows()
-    .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
+  const rows = checklistRows(config)
+    .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category} ${recipeEvent(r.idea, config.recipe_tag)?.type === 'removed' ? 'retest' : ''}`.toLowerCase().includes(q))
     .sort(SORTS[checklistView.sort])
   document.getElementById('checklist-n').textContent = String(rows.length)
   const registryUrl = (x) => `https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/${x.xid}-${x.id}.yaml`
@@ -314,7 +315,7 @@ function renderChecklist() {
     rows.map((r) =>
       el(
         'div',
-        { class: `ck-row${r.accepted ? ' live' : ''}`, id: r.idea.xid, role: 'row', title: r.accepted ? `In the live recipe, ${recipeTag}` : '' },
+        { class: `ck-row${r.accepted ? ' live' : ''}`, id: r.idea.xid, role: 'row', title: r.accepted ? `In the live recipe, ${config.recipe_tag}` : '' },
         el(
           'span',
           { class: 'ck-idea', 'data-label': 'Idea' },
@@ -328,7 +329,7 @@ function renderChecklist() {
         el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun, r.comment ? link(r.comment, '#9451 comment') : null)),
         el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
         el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
-        el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea)),
+        el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea, config.recipe_tag)),
         el(
           'span',
           { 'data-label': 'Potential' },
@@ -392,14 +393,11 @@ function revealLinkedRow() {
 
 async function refresh() {
   try {
-    ;[state, registry, trackTable] = await Promise.all([
+    ;[state, registry, config] = await Promise.all([
       loadJson('state'),
       loadJson('results'),
       fetch(asset('tracks.json')).then((r) => r.json()),
     ])
-    recipeTag = trackTable.recipe_tag
-    defaultAuthor = trackTable.default_author
-    trackTable = trackTable.tracks
     render()
     revealLinkedRow()
   } catch (error) {

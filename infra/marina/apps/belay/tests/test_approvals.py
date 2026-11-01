@@ -10,12 +10,17 @@ import pytest
 from belay.app import (
     DEFAULT_SETTINGS,
     IntakeComment,
+    SessionFinish,
+    SessionState,
     agent_caller_ok,
     approve_idea,
+    decline_idea,
+    finish_session,
     migrate,
     offer_pending_work,
     sync_intake_comments,
 )
+from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
@@ -105,3 +110,32 @@ def test_agent_endpoints_take_the_session_identity_or_an_approver() -> None:
     assert agent_caller_ok(settings, "larry.dial@openathena.ai", None)
     assert not agent_caller_ok(settings, "someone@example.com", None)
     assert not agent_caller_ok(settings, None, "any token")
+
+
+def activity_rows(conn) -> int:
+    return conn.execute(text("SELECT count(*) FROM activity")).scalar_one()
+
+
+def test_decline_refuses_an_unknown_or_running_idea_and_writes_nothing(conn) -> None:
+    sync_intake_comments(conn, [comment(approved_upstream=False)])
+    before = activity_rows(conn)
+    with pytest.raises(HTTPException) as unknown:
+        decline_idea(conn, 999, "ClassicLarry", "no")
+    conn.execute(text("UPDATE ideas SET state = 'running'"))
+    with pytest.raises(HTTPException) as running:
+        decline_idea(conn, idea_id(conn), "ClassicLarry", "no")
+    assert (unknown.value.status_code, running.value.status_code) == (404, 409)
+    assert activity_rows(conn) == before
+    conn.execute(text("UPDATE ideas SET state = 'pending'"))
+    assert decline_idea(conn, idea_id(conn), "ClassicLarry", "diagnostics only") == {"state": "declined"}
+
+
+def test_a_retried_failed_session_report_requeues_once(conn) -> None:
+    sync_intake_comments(conn, [comment(approved_upstream=False)])
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("INSERT INTO sessions (id, state) VALUES ('s1', 'running')"))
+    conn.execute(text("UPDATE events SET session_id = 's1'"))
+    failed = SessionFinish(state=SessionState.FAILED, summary="crashed")
+    assert finish_session(conn, "s1", failed) == {"state": "failed"}
+    assert finish_session(conn, "s1", failed) == {"state": "failed"}
+    assert conn.execute(text("SELECT count(*) FROM events WHERE session_id IS NULL")).scalar_one() == 1

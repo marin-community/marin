@@ -26,8 +26,6 @@ const SOURCES = {
   state: STATIC ? 'public.json' : `${BELAY_BASE}api/public/state`,
 }
 
-// The last state read from the API; `now` anchors relative times.
-let state = null
 
 function pageName() {
   if (/\/admin\/?$/.test(location.pathname)) return 'admin'
@@ -158,7 +156,7 @@ function markdown(source) {
 
 function relative(iso) {
   if (!iso) return ''
-  const seconds = Math.round((Date.parse(state?.now ?? new Date().toISOString()) - Date.parse(iso)) / 1000)
+  const seconds = Math.round((Date.now() - Date.parse(iso)) / 1000)
   const future = seconds < 0
   const s = Math.abs(seconds)
   let text
@@ -184,7 +182,7 @@ function when(iso) {
 }
 
 function duration(start, end) {
-  const s = Math.max(0, Math.round((Date.parse(end ?? state.now) - Date.parse(start)) / 1000))
+  const s = Math.max(0, Math.round(((end ? Date.parse(end) : Date.now()) - Date.parse(start)) / 1000))
   if (s < 60) return `${s} s`
   if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} s`
   return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`

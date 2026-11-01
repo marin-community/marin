@@ -276,7 +276,6 @@ async function front() {
   ])
   startFront(results, scaling, speedrun, tracks.tracks, tracks.recipe_tag)
   if (status) {
-    state = status
     renderLatest(status)
   }
 }

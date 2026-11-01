@@ -265,7 +265,7 @@ def export_public(directory: Path) -> Path:
     web = APP_DIR / "web"
     version = BUILD.web_version()
     for page in ("index.html", "status.html", "mfu.html"):
-        BUILD.write_page(web / "static.html", directory / page, version)
+        BUILD.write_page(web / "static.html", directory / page, version, "")
     for name in PUBLIC_FILES:
         shutil.copyfile(web / name, directory / name)
     (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))
