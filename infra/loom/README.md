@@ -309,7 +309,7 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
-The startup script disables MPTCP in the host network namespace and persists
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
 the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
 Caddy's network namespace and sets `GODEBUG=multipathtcp=0`. These settings
 reduce exposure to CVE-2026-98432; the kernel still needs the security update.
