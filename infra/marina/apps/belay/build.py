@@ -20,6 +20,7 @@ for name in (
     "status.js",
     "mfu.js",
     "mfu.json",
+    "scaling.json",
     "admin.js",
     "fonts.css",
     "belay.css",
