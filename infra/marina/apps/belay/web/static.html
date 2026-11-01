@@ -225,7 +225,7 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
         <h3>beta2 scaling with batch size</h3>
 <pre class="formula">beta2 = clip(0.999^(B / 131072), 0.95, 0.9999)</pre>
         <p>A constant per-token half-life. Worked values: d512/d768 (524k tokens per batch) → 0.996; d1024/d1280 (1.05M) → 0.992; hero (46.1M) → 0.95 (clipped). beta1 = 0.9 by default.</p>
-        <p>The current competitive d512 stack overrides beta2 to 0.98 and beta1 to 0.8, so tuned recipe values can differ from the default formula.</p>
+        <p>The current recipe, Belay Ckpt Oct 20 2026, uses these defaults (beta1 0.9, beta2 from the formula).</p>
       </div>
       <div class="kit-card">
         <h3>Adam epsilon</h3>
