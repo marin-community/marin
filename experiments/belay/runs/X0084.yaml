@@ -1,0 +1,14 @@
+experiment: X0084
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: mla_key_offset=true
+    flags:
+    - --model-set
+    - mla_key_offset=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0017-control
