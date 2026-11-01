@@ -1,0 +1,12 @@
+id: X0223
+slug: mtp-low-weight-decaying-aux-loss
+name: MTP low-weight decaying aux loss
+category: Output head and loss
+summary: Revisit MTP as a low-weight, decaying auxiliary loss computed on a subset of positions, with a block-head variant.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-6498753293
+  author: TimS-ml
+  approved_by: ClassicLarry
