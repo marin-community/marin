@@ -368,7 +368,12 @@ def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_rout
     assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
     assert "host-provider-private" not in completed.stdout
     if agent_name == "sotopia":
-        assert result["agent"] == {"CUSTOM_API_KEY": "EMPTY", "OPENAI_API_KEY": "EMPTY"}
+        assert result["agent"] == {
+            "CUSTOM_API_KEY": "EMPTY",
+            "OPENAI_API_KEY": "EMPTY",
+            "OPENAI_BASE_URL": "http://127.0.0.1:8788/v1",
+            "OPENAI_API_BASE": "http://127.0.0.1:8788/v1",
+        }
         assert result["kwargs"]["partner_api_base"] == "http://127.0.0.1:8787/v1"
         assert result["kwargs"]["evaluator_api_base"] == "http://127.0.0.1:8787/v1"
     else:
