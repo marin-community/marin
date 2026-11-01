@@ -562,6 +562,13 @@ def main(argv: list[str]) -> None:
     p.add_argument("--variant")
     p.add_argument("--opt-set", action="append", default=[])
     p.add_argument("--model-set", action="append", default=[])
+    p = command("code-change")
+    p.add_argument("registry_id")
+    step = p.add_mutually_exclusive_group(required=True)
+    step.add_argument("--start", action="store_true")
+    step.add_argument("--finish", action="store_true")
+    p.add_argument("--opt-set", action="append", default=[], help="with --finish: the new flag's on value")
+    p.add_argument("--model-set", action="append", default=[], help="with --finish: the new flag's on value")
     command("run-finished").add_argument("registry_id")
     p = command("run-failed")
     p.add_argument("registry_id")
@@ -589,6 +596,11 @@ def main(argv: list[str]) -> None:
     elif args.command == "new-idea":
         settings = [("--opt-set", s) for s in args.opt_set] + [("--model-set", s) for s in args.model_set]
         new_idea(args.idea_id, args.category, args.variant, settings, dry_run=args.dry_run)
+    elif args.command == "code-change" and args.start:
+        code_change_start(args.registry_id)
+    elif args.command == "code-change":
+        settings = [("--opt-set", s) for s in args.opt_set] + [("--model-set", s) for s in args.model_set]
+        code_change_finish(args.registry_id, settings, dry_run=args.dry_run)
     elif args.command == "run-finished":
         run_finished(args.registry_id, dry_run=args.dry_run)
     elif args.command == "run-failed":
