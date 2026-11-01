@@ -56,3 +56,9 @@ launched:
   seed0-t-c: /Users/larry/marin_wt_belay_live/.venv/bin/python3 -m experiments.grug.fast_track.belay_s7 --ladder s7n --size
     d512 --num-steps 3030 --model-set cplm_plus=true --num-steps 2308 --seed 0 --run-id belay-X0221-seed0-t-c --output-path
     tmp/ttl=30d/belay/runs/belay-X0221-seed0-t-c --submit --target-cluster cw-us-east-02a --priority batch
+  control-s1-c: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
+    belay-X0221-control-s1-c --output-path tmp/ttl=30d/belay/runs/belay-X0221-control-s1-c --submit --target-cluster cw-us-east-02a
+    --priority batch
+  seed1-t-c: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --model-set cplm_plus=true
+    --num-steps 2308 --seed 0 --run-id belay-X0221-seed1-t-c --output-path tmp/ttl=30d/belay/runs/belay-X0221-seed1-t-c --submit
+    --target-cluster cw-us-east-02a --priority batch
