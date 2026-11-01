@@ -71,7 +71,7 @@ function renderPending() {
   const pending = state.ideas.filter((i) => i.state === 'pending' || i.state === 'upstream' || escalated(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
-    setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'))
+    setChildren('pending', el('div', { class: 'none' }, 'Nothing to review'), alreadyRun())
     return
   }
   setChildren(
