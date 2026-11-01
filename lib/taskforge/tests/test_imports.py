@@ -18,7 +18,7 @@ from pathlib import Path
 
 import taskforge
 
-SHARED = ("capability", "content_hash", "ledger", "llm")
+SHARED = ("capability", "content_hash", "ledger", "llm", "sandbox")
 TOP = ("agentic", "stage_coordinator")
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
 ROOT = Path(taskforge.__file__).parent
