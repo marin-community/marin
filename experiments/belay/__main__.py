@@ -42,6 +42,7 @@ from experiments.belay.branch import (
 )
 from experiments.belay.code_change import (
     changed_paths,
+    checkout_python,
     flag_commits,
     new_flags,
     probe,
@@ -404,9 +405,10 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
     revert = f"next: git -C {repo} checkout -- . && git -C {repo} clean -fd experiments/grug/fast_track tests/grug"
     refuse_outside_allowed(paths)
     print(f"1. paths ok: {paths}")
+    python = checkout_python(repo)  # the checkout's own environment, also for its pre-change copy
     with temporary_worktree(repo, "HEAD") as before_dir:
-        before = probe(before_dir, [])
-    after = probe(repo, [])
+        before = probe(before_dir, [], python)
+    after = probe(repo, [], python)
     flags = new_flags(before.defaults, after.defaults)
     print(f"2. new default-off flags: {flags}")
     refuse_flag_off_change(before, after)
@@ -419,7 +421,7 @@ def code_change_finish(registry_id: str, settings: list[tuple[str, str]], *, dry
         raise SystemExit(f"refusing: {unknown} set fields that are not this change's new flags {sorted(names)}")
     model_settings = [s for option, s in settings if option == "--model-set"]
     if model_settings:
-        refuse_leak(probe(repo, model_settings))
+        refuse_leak(probe(repo, model_settings, python))
         print(f"4. flag on ({', '.join(model_settings)}): no future leakage")
     else:
         print("4. optimizer flag only: the leakage check does not apply")

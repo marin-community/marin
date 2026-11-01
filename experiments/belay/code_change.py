@@ -99,11 +99,17 @@ def refuse_leak(flag_on: Probe) -> None:
         )
 
 
-def probe(checkout: Path, model_settings: list[str]) -> Probe:
+def checkout_python(checkout: Path) -> str:
+    """The checkout's own environment when it has one (a Track branch with other library code), else this one."""
+    own = checkout / ".venv/bin/python"
+    return str(own) if own.exists() else sys.executable
+
+
+def probe(checkout: Path, model_settings: list[str], python: str) -> Probe:
     """Run ``model_probe.py`` on CPU against the model code in ``checkout`` (any branch, with or without this
     directory): its source runs with ``python -c``, so ``experiments`` imports from ``checkout``."""
     out = subprocess.run(
-        [sys.executable, "-c", PROBE_SCRIPT.read_text(), *model_settings],
+        [python, "-c", PROBE_SCRIPT.read_text(), *model_settings],
         cwd=checkout,
         env={**os.environ, "JAX_PLATFORMS": "cpu"},
         check=True,
@@ -116,7 +122,7 @@ def probe(checkout: Path, model_settings: list[str]) -> Probe:
 def run_tests(repo: Path, paths: list[str]) -> None:
     """The change's own tests, on CPU."""
     tests = [p for p in paths if p.startswith(TESTS_PREFIX) and p.endswith(".py")]
-    command = [sys.executable, "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", *tests]
+    command = [checkout_python(repo), "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", *tests]
     result = subprocess.run(
         command, cwd=repo, env={**os.environ, "JAX_PLATFORMS": "cpu"}, capture_output=True, text=True
     )

@@ -124,6 +124,7 @@ def named_checkout(repo: Path, branch: str) -> Path:
     if not path.exists():
         git(repo, "fetch", "--quiet", "origin", branch)
         git(repo, "worktree", "add", "--quiet", "-B", branch, str(path), f"origin/{branch}")
+        subprocess.run(["uv", "sync", "--quiet"], cwd=path, check=True)  # its own environment: its library code
     if current_branch(path) != branch:
         raise SystemExit(f"refusing: {path} is on {current_branch(path)}, not {branch}")
     return path
