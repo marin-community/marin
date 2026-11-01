@@ -101,7 +101,7 @@ function renderPending() {
               'small',
               {},
               escalated(idea)
-                ? `${idea.note} · `
+                ? `needs maintainer: ${idea.note.replace('Escalated: ', '')} · `
                 : `${idea.state === 'upstream' ? 'approved on GitHub, not queued · ' : 'not approved · '}`,
               `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
               when(idea.posted_at),
@@ -109,7 +109,10 @@ function renderPending() {
           ),
           idea.url ? link(idea.url, '↗') : el('span'),
           escalated(idea)
-            ? el('button', { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/requeue`, {}, 'Re-queued') }, 'Re-queue')
+            ? el('button', { type: 'button', class: 'btn primary', onclick: () => {
+                const note = window.prompt('Note for the session (for example "retest on current recipe"), or leave empty', '')
+                if (note !== null) act(`ideas/${idea.id}/requeue`, { note }, 'Re-queued')
+              } }, 'Re-queue')
             : el(
                 'button',
                 { type: 'button', class: 'btn primary', onclick: () => act(`ideas/${idea.id}/approve`, {}, 'Approved and queued') },
@@ -117,7 +120,12 @@ function renderPending() {
               ),
           idea.state === 'pending'
             ? el('button', { type: 'button', class: 'btn', onclick: () => act(`ideas/${idea.id}/dismiss`, {}, 'Dismissed') }, 'Dismiss')
-            : el('span'),
+            : escalated(idea)
+              ? el('button', { type: 'button', class: 'btn', onclick: () => {
+                  const note = window.prompt('Why decline?', '')
+                  if (note !== null) act(`ideas/${idea.id}/decline`, { note }, 'Declined')
+                } }, 'Decline')
+              : el('span'),
         ),
         expanded ? el('div', { class: 'detail-c' }, markdown(idea.body)) : null,
       )

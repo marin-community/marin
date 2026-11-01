@@ -64,16 +64,17 @@ def entry_for_intake(url: str) -> str | None:
     return None
 
 
-def create_entry(idea: Idea, category: str, track: Track, *, dry_run: bool) -> tuple[str, Path]:
-    """Allocate the next ``X####`` id for ``idea`` and write its ``approved`` entry; returns the id and path."""
+def create_entry(idea: Idea, name: str, category: str, track: Track, *, dry_run: bool) -> tuple[str, Path]:
+    """Allocate the next ``X####`` id for ``idea`` and write its ``approved`` entry under the short ``name``;
+    returns the id and path."""
     command = [
         sys.executable,
         "experiments/belay/registry.py",
         "new",
         "--slug",
-        slugify(idea.name),
+        slugify(name),
         "--name",
-        idea.name,
+        name,
         "--category",
         category,
         "--summary",
@@ -93,7 +94,7 @@ def create_entry(idea: Idea, category: str, track: Track, *, dry_run: bool) -> t
     if match is None:
         raise SystemExit(f"registry.py new printed no entry path:\n{out}")
     path = CONFIG.registry_checkout / ENTRIES / match.group(0)
-    commit_and_push(path, f"Belay registry: {match.group(1)} {idea.name} (idea #{idea.id})", dry_run=dry_run)
+    commit_and_push([path], f"Belay registry: {match.group(1)} {name} (idea #{idea.id})", dry_run=dry_run)
     return match.group(1), path
 
 
@@ -146,13 +147,22 @@ def entry_with_results(registry_id: str, results: list[RunResult]) -> tuple[Path
     return path, yaml.safe_dump(entry, sort_keys=False, allow_unicode=True, width=120)
 
 
-def commit_and_push(path: Path, message: str, *, dry_run: bool) -> None:
-    """Validate the registry, then commit and push ``path`` on the registry branch."""
+def commit_and_push(paths: list[Path], message: str, *, dry_run: bool) -> None:
+    """Validate the registry, then commit ``paths`` together and push them on the registry branch; refuses if the
+    push did not land."""
     if dry_run:
-        print(f"would commit and push {path.name} on {CONFIG.registry_branch}")
+        print(f"would commit and push {', '.join(p.name for p in paths)} on {CONFIG.registry_branch}")
         return
     validate = [sys.executable, "experiments/belay/registry.py", "validate"]
     subprocess.run(validate, cwd=CONFIG.registry_checkout, check=True)
-    git(CONFIG.registry_checkout, "add", str(path))
+    git(CONFIG.registry_checkout, "add", *(str(p) for p in paths))
     git(CONFIG.registry_checkout, "commit", "--quiet", "-m", message)
     git(CONFIG.registry_checkout, "push", "--quiet", "origin", CONFIG.registry_branch)
+    head = git(CONFIG.registry_checkout, "rev-parse", "HEAD")
+    git(CONFIG.registry_checkout, "fetch", "--quiet", "origin", CONFIG.registry_branch)
+    remote = git(CONFIG.registry_checkout, "rev-parse", f"origin/{CONFIG.registry_branch}")
+    if remote != head:
+        raise SystemExit(
+            f"refusing: the registry commit {head[:10]} is not on origin/{CONFIG.registry_branch} ({remote[:10]})"
+        )
+    print(f"pushed {', '.join(p.name for p in paths)} as {head[:10]} to origin/{CONFIG.registry_branch}")

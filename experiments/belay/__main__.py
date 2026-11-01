@@ -7,6 +7,7 @@
     uv run python -m experiments.belay new-idea --idea-id N [--category ...]      # section 1
     uv run python -m experiments.belay code-change X#### --start | --finish       # section 1b
     uv run python -m experiments.belay run-finished X####                         # section 2
+    uv run python -m experiments.belay analyze X####                              # section 2b
     uv run python -m experiments.belay run-failed X#### --run <run>               # section 3
     uv run python -m experiments.belay weekly-rollover                            # section 4
     uv run python -m experiments.belay recipe-change                              # section 5
@@ -29,6 +30,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from experiments.belay.analysis import Header, fetch_series, report_dir, report_url, write_report
 from experiments.belay.branch import (
     current_branch,
     cut_week_branch,
@@ -55,6 +57,7 @@ from experiments.belay.code_change import (
 )
 from experiments.belay.config import CHECKPOINT_TAG_PREFIX, CONFIG, CONTROL_RUN, TRACKS, WEEKLY_BRANCH, Baseline, Track
 from experiments.belay.page import (
+    BOT_MARK,
     Idea,
     PageRun,
     Post,
@@ -65,6 +68,7 @@ from experiments.belay.page import (
     require_unedited,
     visible_text,
 )
+from experiments.belay.posts import IdeaRef, PlannedRun, ResultRow, plan_body, result_body, rule_line, title
 from experiments.belay.registry_entry import (
     ENTRIES,
     add_trial,
@@ -115,26 +119,6 @@ class Event:
     kind: EventKind
     idea_id: int | None
     experiment: str | None
-
-
-@dataclass(frozen=True)
-class PlanRun:
-    run: str
-    name: str
-    variant: str
-    seed: int
-    control: bool
-
-
-@dataclass(frozen=True)
-class Plan:
-    summary: str
-    protocol: str
-    cost: str
-    commit: str
-    branch: str
-    spec_url: str
-    runs: list[PlanRun]
 
 
 def say_next(command: str) -> None:
@@ -273,7 +257,7 @@ def print_idea_brief(idea: Idea, track: Track, defaulted: bool) -> None:
 def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool) -> ExperimentSpec:
     """Commit and push the run spec ``text`` on the week's branch; reuse it if the same spec is already there."""
     spec = parse_spec(text)
-    path = spec_path(spec.experiment)
+    path = spec_path(spec.experiment, repo / SPECS)
     if path.exists():
         if path.read_text() != text:
             raise SystemExit(f"refusing: {path.name} already exists with different runs; a maintainer decides")
@@ -289,32 +273,27 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool) -> Experime
     return spec
 
 
-def plan_of(spec: ExperimentSpec, summary: str, commit: str, branch: str, track: str) -> Plan:
-    runs = [PlanRun(r.name, run_name(spec.experiment, r.name), r.variant, r.seed, r.control) for r in spec.runs.values()]
-    baseline = TRACKS[spec.track]
-    return Plan(
-        summary=summary,
-        protocol=f"{track}: {baseline.description}; seed {CONFIG.seed}; {baseline.metric}, "
-        f"noise {baseline.noise} ({baseline.rule})",
-        cost=f"{len(runs)} runs x {baseline.nodes} node(s) (8xH100)",
-        commit=commit,
-        branch=branch,
-        spec_url=f"https://github.com/{CONFIG.repository}/blob/{commit}/experiments/belay/runs/{spec.experiment}.yaml",
-        runs=runs,
-    )
+MAX_NAME = 50
+RETEST = "retest on current recipe"
+SPECS = Path("experiments/belay/runs")
 
 
-def plan_markdown(registry_id: str, name: str, plan: Plan, idea: Idea) -> str:
-    """The plan post. It quotes the approved idea and links its #9514 comment, so the record on #9451 is complete
-    even when the idea was approved on the page before the intake bot copied it."""
-    rows = "\n".join(f"| `{r.name}` | {r.variant} | {r.seed} | {'yes' if r.control else ''} |" for r in plan.runs)
-    source = f"[#9514 comment by {idea.author}]({idea.url})" if idea.url else f"proposal by {idea.author}"
-    quoted = "\n".join(f"> {line}" for line in idea.body.strip().splitlines())
-    return (
-        f"**{registry_id} {name}**: {plan.summary}\n\nIdea ({source}, approved by {idea.decided_by}):\n\n{quoted}\n\n"
-        f"| Run | Variant | Seed | Control |\n|---|---|---|---|\n{rows}\n\n"
-        f"{plan.protocol}. Code `{plan.branch}` at `{plan.commit[:10]}`. Cost: {plan.cost}."
-    )
+def idea_ref(idea: Idea, registry_id: str) -> IdeaRef:
+    return IdeaRef(idea.url, idea.author, idea.decided_by, entry_url(entry_path(registry_id)))
+
+
+def prior_trials_hold(entry: dict, note: str | None) -> str | None:
+    """The prior results that hold an idea back (escalated to the admin page), unless a maintainer re-queued it with
+    a note asking for a retest on the current recipe. None when it may run."""
+    trials = entry.get("trials") or []
+    if not trials or RETEST in (note or "").lower():
+        return None
+    lines = [
+        f"{t.get('id')}: {t.get('variant')} at {t.get('rung')} ({t.get('date')}), Δ {t.get('delta', 'not recorded')}, "
+        f"baseline {t.get('baseline', '?')}"
+        for t in trials
+    ]
+    return "\n".join(lines)
 
 
 def request_go_ahead(idea: Idea, registry_id: str, track: Track, flags: list[str], *, dry_run: bool) -> None:
@@ -339,7 +318,14 @@ def request_go_ahead(idea: Idea, registry_id: str, track: Track, flags: list[str
 
 
 def new_idea(
-    idea_id: int, category: str | None, variant: str | None, settings: list[tuple[str, str]], *, dry_run: bool
+    idea_id: int,
+    name: str | None,
+    category: str | None,
+    variant: str | None,
+    settings: list[tuple[str, str]],
+    defaults: str | None,
+    *,
+    dry_run: bool,
 ) -> None:
     """Register an approved idea, commit its run spec, post the plan and launch it; resumes where it stopped."""
     repo = repo_root()
@@ -354,6 +340,18 @@ def new_idea(
         print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
     track, defaulted = idea_track(idea)
     runnable(idea, track)
+    registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None)
+    if registry_id is not None:
+        held = prior_trials_hold(load_entry(registry_id), idea.note)
+        if held is not None:
+            escalate(
+                f"Idea #{idea.id} was already tested as {registry_id}",
+                f"{registry_id} has trials:\n{held}\nRe-queue with the note '{RETEST}' to run it again.",
+                idea.id,
+                registry_id,
+                dry_run=dry_run,
+            )
+            return
     if category is None:
         print_idea_brief(idea, track, defaulted)
         return
@@ -361,21 +359,20 @@ def new_idea(
         raise SystemExit(f"refusing: category {category!r} is not in the list printed by new-idea --idea-id {idea_id}")
     if variant is not None or settings:
         check_variant(variant or "", settings)
+        if not defaults:
+            raise SystemExit(
+                "refusing: give --defaults: each setting the idea left open and the value chosen, or 'none'"
+            )
     require_clean_pushed_head(repo, branch)  # before any write
-    existing = entry_for_intake(idea.url) if idea.registry_id is None and idea.url else None
-    if existing is not None:
-        report_idea(idea.id, {"registry_id": existing, "registry_url": entry_url(entry_path(existing))}, dry_run=dry_run)
-        print(f"idea #{idea.id} was registered before as {existing}; its new trial goes there")
-        registry_id = existing
-        summary = load_entry(existing)["summary"]
-    elif idea.registry_id is None:
-        registry_id, path = create_entry(idea, category, track, dry_run=dry_run)
-        report_idea(idea.id, {"registry_id": registry_id, "registry_url": entry_url(path)}, dry_run=dry_run)
-        summary = idea.body
+    if registry_id is None:
+        if not name or len(name) > MAX_NAME:
+            raise SystemExit(f"refusing: give --name, the idea's short name (at most {MAX_NAME} characters)")
+        registry_id, _ = create_entry(idea, name, category, track, dry_run=dry_run)
     else:
-        registry_id = idea.registry_id
-        summary = load_entry(registry_id)["summary"]
-        print(f"idea #{idea.id} is already {registry_id}")
+        print(f"idea #{idea.id} is {registry_id}")
+    report_idea(
+        idea.id, {"registry_id": registry_id, "registry_url": entry_url(entry_path(registry_id))}, dry_run=dry_run
+    )
     if variant is None or not settings:
         print(f"{registry_id} is registered; its change needs code (section 1b)")
         say_next(f"{BELAY} code-change {registry_id} --start")
@@ -387,26 +384,32 @@ def new_idea(
     commit = require_clean_pushed_head(repo, branch)
     check_launch(spec, iris_jobs())
     print(f"checks passed: {branch} at {commit[:10]}, track {spec.track}, {len(spec.runs)} runs fit the cap")
-    summary = summary.strip().split("\n\n")[0]
-    if hidden:
-        summary += f" (Hidden text in the intake comment: {', '.join(hidden)}; this plan uses the visible text.)"
-    plan = plan_of(spec, summary, commit, branch, track_label(track, defaulted))
-    report_idea(idea.id, {"state": "planned", "plan": asdict(plan)}, dry_run=dry_run)
-    title = f"Plan: {registry_id} {idea.name}"
-    body = plan_markdown(registry_id, idea.name, plan, idea)
-    post = Post("plan", title, body, registry_id=registry_id, idea_id=idea.id)
+    short_name = load_entry(registry_id)["name"] if not dry_run or idea.registry_id else (name or registry_id)
+    runs = [
+        PlannedRun(run_name(registry_id, r.name), r.variant, r.seed, " ".join(r.flags) or "recipe")
+        for r in sorted(spec.runs.values(), key=lambda r: not r.control)
+    ]
+    defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
+    if defaulted:
+        defaults_text = f"track speedrun (no Track: line); {defaults_text}"
+    body = plan_body(spec.track, runs, defaults_text, idea_ref(idea, registry_id), commit)
+    plan = {"summary": short_name, "commit": commit, "branch": branch, "track": spec.track.value, "body": body}
+    report_idea(idea.id, {"state": "planned", "plan": plan}, dry_run=dry_run)
+    post = Post(
+        "plan", title(registry_id, short_name, spec.track, "plan"), body, registry_id=registry_id, idea_id=idea.id
+    )
     post_activity(post, github_posting=state.github_posting, dry_run=dry_run)
     for run in sorted(spec.runs.values(), key=lambda r: not r.control):  # the control first
-        name = run_name(registry_id, run.name)
+        run_id = run_name(registry_id, run.name)
         command = launch_command(spec, run)
-        print(f"{'would launch' if dry_run else 'launching'} {name}:\n  {' '.join(command)}")
+        print(f"{'would launch' if dry_run else 'launching'} {run_id}:\n  {' '.join(command)}")
         if dry_run:
             continue
         subprocess.run(command, cwd=repo, check=True)
         if run.control:
             continue  # results name the control as each trial's baseline
-        path = add_trial(registry_id, spec.track, run.variant, name, commit, settings_of(run.flags))
-        commit_and_push(path, f"Belay registry: {registry_id} {run.name} launched", dry_run=False)
+        path = add_trial(registry_id, spec.track, run.variant, run_id, commit, settings_of(run.flags))
+        commit_and_push([path], f"Belay registry: {registry_id} {run.name} launched", dry_run=False)
     say_next("stop (the watcher starts a new session when the runs finish)")
 
 
@@ -493,21 +496,90 @@ def report_flags(repo: Path) -> None:
 # ---------- 2. run finished ----------
 
 
-def result_markdown(
-    registry_id: str, name: str, track: Track, results: list[RunResult], overall: Verdict, url: str
-) -> str:
-    baseline = TRACKS[track]
-    rows = "\n".join(
-        f"| `{r.name}` | {r.variant} | {r.seed} | {r.loss:.4f} | {'' if r.delta is None else f'{r.delta:+.4f}'} "
-        f"| {r.verdict or 'control'} |"
+def trial_of(entry: dict, run: str) -> tuple[str, str]:
+    """The id and commit of the entry's trial that ran ``run``."""
+    for t in entry.get("trials") or []:
+        if run in (t.get("wandb") or []):
+            return t["id"], t.get("commit", "")
+    raise SystemExit(f"refusing: no trial of {entry['id']} lists the run {run}")
+
+
+def write_analysis(
+    registry_id: str,
+    track: Track,
+    results: list[RunResult],
+    overall: Verdict,
+    idea: Idea | None,
+    trial: str,
+    commit: str,
+    *,
+    dry_run: bool,
+) -> list[Path]:
+    """The trial's analysis report and plots in the registry checkout, for the results commit."""
+    out_dir = report_dir(CONFIG.registry_checkout, registry_id)
+    if dry_run:
+        print(f"would write the analysis {out_dir / trial}.md and its plots")
+        return []
+    control = next(r for r in results if r.control)
+    variant = next(r for r in results if not r.control)
+    header = Header(
+        registry_id=registry_id,
+        trial=trial,
+        title=load_entry(registry_id)["name"],
+        track=track.value,
+        verdict=str(overall),
+        commit=commit,
+        approver=None if idea is None else idea.decided_by,
+        idea_url=None if idea is None else idea.url,
+        rule=rule_line(track),
+    )
+    final = {r.name: (r.loss, r.delta) for r in sorted(results, key=lambda r: not r.control)}
+    report = write_report(out_dir, header, fetch_series(control.name), fetch_series(variant.name), final)
+    print(f"wrote the analysis {report} ({report_url(registry_id, trial)})")
+    return [report, report.with_name(f"{trial}_loss.png"), report.with_name(f"{trial}_delta.png")]
+
+
+def result_post(
+    registry_id: str,
+    track: Track,
+    results: list[RunResult],
+    overall: Verdict,
+    idea: Idea | None,
+    trial: str,
+    commit: str,
+) -> Post:
+    rows = [
+        ResultRow(r.name, "control" if r.control else r.variant, r.seed, r.loss, r.delta)
         for r in sorted(results, key=lambda r: not r.control)
+    ]
+    entry_link = entry_url(entry_path(registry_id))
+    ref = idea_ref(idea, registry_id) if idea is not None else IdeaRef(None, "maintainer", None, entry_link)
+    body = result_body(track, rows, ref, commit, (f"{registry_id} {trial}", report_url(registry_id, trial)))
+    name = load_entry(registry_id)["name"]
+    return Post(
+        "result",
+        title(registry_id, name, track, str(overall)),
+        body,
+        registry_id=registry_id,
+        idea_id=None if idea is None else idea.id,
     )
-    return (
-        f"**{registry_id} {name}**, track {track}: `{baseline.metric}`. Rule ({baseline.rule}): "
-        f"Δ ≤ -{baseline.noise} win, Δ ≥ +{baseline.noise} loss, otherwise noise.\n\n"
-        f"| Run | Variant | Seed | Loss | Δ | Verdict |\n|---|---|---|---|---|---|\n{rows}\n\n"
-        f"Verdict: **{overall}**. Registry: {url}"
-    )
+
+
+def analyze(registry_id: str, *, dry_run: bool) -> None:
+    """Write (or rewrite) the analysis of an experiment's recorded trial, commit and push it, and print the result
+    post it belongs in."""
+    spec = load_spec(registry_id)
+    require_registry_checkout()
+    results = experiment_results(spec)
+    variants = [r for r in results if not r.control]
+    overall = overall_verdict([r.verdict for r in variants])
+    idea = page_state().idea_for(registry_id)
+    trial, commit = trial_of(load_entry(registry_id), variants[0].name)
+    report = write_analysis(registry_id, spec.track, results, overall, idea, trial, commit, dry_run=dry_run)
+    commit_and_push(report, f"Belay registry: {registry_id} analysis {trial}", dry_run=dry_run)
+    post = result_post(registry_id, spec.track, results, overall, idea, trial, commit)
+    print(f"result post:\n{BOT_MARK} **{post.title}**\n\n{post.body}")
+    say_next("stop")
 
 
 def run_finished(registry_id: str, *, dry_run: bool) -> None:
@@ -527,22 +599,23 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         say_next(f"{BELAY} run-failed {registry_id} --run {failed[0].run}   (section 3)")
         return
     results = experiment_results(spec)
+    variants = [r for r in results if not r.control]
+    overall = overall_verdict([r.verdict for r in variants])
+    idea = state.idea_for(registry_id)
+    trial, commit = trial_of(load_entry(registry_id), variants[0].name)
     path, text = entry_with_results(registry_id, results)
     print(f"{'would write' if dry_run else 'writing'} {path.name}:\n{text}")
     if not dry_run:
         path.write_text(text)
-    commit_and_push(path, f"Belay registry: {registry_id} results recorded", dry_run=dry_run)
-    variants = [r for r in results if not r.control]
-    overall = overall_verdict([r.verdict for r in variants])
+    report = write_analysis(registry_id, spec.track, results, overall, idea, trial, commit, dry_run=dry_run)
+    commit_and_push(
+        [path, *report], f"Belay registry: {registry_id} results recorded, analysis {trial}", dry_run=dry_run
+    )
     summary = "; ".join(f"{r.variant}: Δ {r.delta:+.4f} = {r.verdict}" for r in variants)
-    idea = state.idea_for(registry_id)
     if idea is not None:
         result = {"rows": [asdict(r) for r in results], "verdict": overall, "kind": PAGE_RESULT_KIND[overall]}
         report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": summary}}, dry_run=dry_run)
-    name = load_entry(registry_id)["name"]
-    idea_id = None if idea is None else idea.id
-    body = result_markdown(registry_id, name, spec.track, results, overall, entry_url(path))
-    post = Post("result", f"Result: {registry_id} {name}: {overall}", body, registry_id=registry_id, idea_id=idea_id)
+    post = result_post(registry_id, spec.track, results, overall, idea, trial, commit)
     post_activity(post, github_posting=state.github_posting, dry_run=dry_run)
     if overall is not Verdict.WIN:
         say_next("stop")
@@ -550,7 +623,7 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     escalate(
         f"{registry_id} beat the control beyond noise",
         f"{summary}. A maintainer decides on a seed-1 confirmation or adoption into {CONFIG.recipe_name}.",
-        idea_id,
+        None if idea is None else idea.id,
         registry_id,
         dry_run=dry_run,
     )
@@ -622,12 +695,13 @@ def recipe_change(source: str, today: datetime.date, *, dry_run: bool) -> None:
 # ---------- 6. escalate ----------
 
 
-def escalate(title: str, body: str, idea_id: int | None, registry_id: str | None, *, dry_run: bool) -> None:
-    """Post for a maintainer, and mark the idea so later sessions skip it until a maintainer acts."""
-    post = Post("escalation", title, body, registry_id=registry_id, idea_id=idea_id)
-    post_activity(post, github_posting=page_state().github_posting, dry_run=dry_run)
+def escalate(headline: str, body: str, idea_id: int | None, registry_id: str | None, *, dry_run: bool) -> None:
+    """Record a question for a maintainer on the admin page (never #9451), with this session's transcript, and mark
+    the idea so no session takes it up again until a maintainer re-queues or declines it."""
+    post = Post("escalation", headline, body, registry_id=registry_id, idea_id=idea_id)
+    post_activity(post, github_posting=False, dry_run=dry_run)
     if idea_id is not None:
-        report_idea(idea_id, {"note": f"{ESCALATED} {title}"}, dry_run=dry_run)
+        report_idea(idea_id, {"note": f"{ESCALATED} {headline}"}, dry_run=dry_run)
     say_next("stop")
 
 
@@ -693,6 +767,8 @@ def main(argv: list[str]) -> None:
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     p = command("new-idea")
     p.add_argument("--idea-id", type=int, required=True)
+    p.add_argument("--name", help=f"short name for a new registry entry, at most {MAX_NAME} characters")
+    p.add_argument("--defaults", help="each setting the idea left open and the value chosen, or 'none'")
     p.add_argument("--category")
     p.add_argument("--variant")
     p.add_argument("--opt-set", action="append", default=[])
@@ -705,6 +781,7 @@ def main(argv: list[str]) -> None:
     p.add_argument("--opt-set", action="append", default=[], help="with --finish: the new flag's on value")
     p.add_argument("--model-set", action="append", default=[], help="with --finish: the new flag's on value")
     command("run-finished").add_argument("registry_id")
+    command("analyze").add_argument("registry_id")
     p = command("run-failed")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True)
@@ -731,7 +808,7 @@ def main(argv: list[str]) -> None:
         start(args.events, today)
     elif args.command == "new-idea":
         settings = [("--opt-set", s) for s in args.opt_set] + [("--model-set", s) for s in args.model_set]
-        new_idea(args.idea_id, args.category, args.variant, settings, dry_run=args.dry_run)
+        new_idea(args.idea_id, args.name, args.category, args.variant, settings, args.defaults, dry_run=args.dry_run)
     elif args.command == "code-change" and args.start:
         code_change_start(args.registry_id)
     elif args.command == "code-change":
@@ -739,6 +816,8 @@ def main(argv: list[str]) -> None:
         code_change_finish(args.registry_id, settings, dry_run=args.dry_run)
     elif args.command == "run-finished":
         run_finished(args.registry_id, dry_run=args.dry_run)
+    elif args.command == "analyze":
+        analyze(args.registry_id, dry_run=args.dry_run)
     elif args.command == "run-failed":
         run_failed(args.registry_id, args.run, dry_run=args.dry_run)
     elif args.command == "weekly-rollover":

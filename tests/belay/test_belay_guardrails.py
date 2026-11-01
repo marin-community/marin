@@ -12,12 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from experiments.belay.__main__ import track_rows
+from experiments.belay.__main__ import prior_trials_hold, track_rows, write_spec
+from experiments.belay.analysis import Header, series_from_rows, write_report
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
-from experiments.belay.demo import approval_time
+from experiments.belay.demo import GithubApproval, approval_time
 from experiments.belay.page import require_unedited, visible_text
+from experiments.belay.posts import IdeaRef, PlannedRun, ResultRow, plan_body, result_body, title
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
 from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
 from experiments.grug.fast_track import belay_s7, belay_tracks
@@ -214,6 +216,87 @@ def test_hidden_text_stripped_before_a_session_reads_it() -> None:
 def test_github_approval_queues_only_after_the_cutover() -> None:
     before = CONFIG.github_approval_cutover - datetime.timedelta(hours=1)
     after = CONFIG.github_approval_cutover + datetime.timedelta(hours=1)
-    assert approval_time({"id": 1}, {"1": after}) == after
-    assert approval_time({"id": 1}, {"1": before}) is None
+    assert approval_time({"id": 1}, {"1": GithubApproval(after, "ClassicLarry")}) == after
+    assert approval_time({"id": 1}, {"1": GithubApproval(before, "ClassicLarry")}) is None
     assert approval_time({"id": 1}, {}) is None
+
+
+def test_first_spec_on_a_fresh_weekly_branch(repo: Path) -> None:
+    """A weekly branch cut fresh from the recipe has no runs/ directory yet; the first spec creates it."""
+    assert cut_week_branch(repo, MONDAY, fresh=True, dry_run=False)
+    branch = CONFIG.week_branch(MONDAY)
+    spec = write_spec(repo, branch, SPEC, dry_run=False)
+    assert (repo / "experiments/belay/runs/X0001.yaml").read_text() == SPEC
+    assert spec.track is Track.COMPETITIVE_D512
+    assert git(repo, "rev-parse", "HEAD") == git(repo, "rev-parse", f"origin/{branch}")
+
+
+def test_idea_with_prior_trials_is_held_unless_retest_requested() -> None:
+    entry = {"trials": [{"id": "t002", "variant": "0.85->0.98 over 10%", "rung": "d512", "delta": [0.0216, 0.0162]}]}
+    held = prior_trials_hold(entry, None)
+    assert held is not None and "t002" in held and "0.0216" in held
+    assert prior_trials_hold(entry, "Maintainer ClassicLarry: retest on current recipe") is None
+    assert prior_trials_hold({}, None) is None
+
+
+REF = IdeaRef(
+    "https://github.com/marin-community/marin/issues/9514#issuecomment-1",
+    "RavnaBergsndot",
+    "ClassicLarry",
+    "https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/X0217.yaml",
+)
+WB = "https://wandb.ai/marin-community/marin_moe/runs"
+
+
+def test_plan_post_format() -> None:
+    runs = [
+        PlannedRun("belay-X0217-control", "speedrun control", 0, "recipe"),
+        PlannedRun("belay-X0217-seed0", "0.85→0.98 over 10%", 0, "--opt-set momentum=0.98"),
+    ]
+    assert title("X0217", "MuonH momentum warmup", Track.SPEEDRUN, "plan") == (
+        "X0217 · MuonH momentum warmup · speedrun · plan"
+    )
+    assert plan_body(Track.SPEEDRUN, runs, "warmup over 10% (idea suggests 10-20%)", REF, "6d1ef53450ab") == (
+        "| Run | Variant | Seed | Settings |\n|---|---|---|---|\n"
+        f"| [belay-X0217-control]({WB}/belay-X0217-control) | speedrun control | 0 | recipe |\n"
+        f"| [belay-X0217-seed0]({WB}/belay-X0217-seed0) | 0.85→0.98 over 10% | 0 | --opt-set momentum=0.98 |\n\n"
+        f"Baseline: {TRACKS[Track.SPEEDRUN].description}\n"
+        "Defaults chosen: warmup over 10% (idea suggests 10-20%)\n"
+        "Rule: Δ ≤ \u22120.006 win · ≥ +0.006 loss · otherwise noise\n"
+        f"Idea: [#9514 comment]({REF.url}) by @RavnaBergsndot · approved by @ClassicLarry · commit `6d1ef53450` · "
+        f"[registry]({REF.registry_url})"
+    )
+
+
+def test_result_post_format() -> None:
+    rows = [
+        ResultRow("belay-X0217-control", "control", 0, 3.045486, None),
+        ResultRow("belay-X0217-seed0", "0.85→0.98 over 10%", 0, 3.067813, 0.0223),
+    ]
+    analysis = ("X0217 t005", "https://example.com/X0217/t005.md")
+    assert result_body(Track.SPEEDRUN, rows, REF, "6d1ef53450ab", analysis) == (
+        "| Run | Variant | Seed | Paloma macro loss | Δ vs control |\n|---|---|---|---|---|\n"
+        f"| [belay-X0217-control]({WB}/belay-X0217-control) | control | 0 | 3.0455 |  |\n"
+        f"| [belay-X0217-seed0]({WB}/belay-X0217-seed0) | 0.85→0.98 over 10% | 0 | 3.0678 | +0.0223 |\n\n"
+        "Rule: Δ ≤ \u22120.006 win · ≥ +0.006 loss · otherwise noise\n"
+        f"Idea: [#9514 comment]({REF.url}) by @RavnaBergsndot · approved by @ClassicLarry · commit `6d1ef53450` · "
+        f"[registry]({REF.registry_url})\n"
+        "Analysis: [X0217 t005](https://example.com/X0217/t005.md)"
+    )
+
+
+def test_analysis_report_from_recorded_history(tmp_path: Path) -> None:
+    recorded = json.loads((Path(__file__).parent / "data/x0217_history.json").read_text())
+    control = series_from_rows("belay-X0217-control", recorded["control"])
+    variant = series_from_rows("belay-X0217-seed0", recorded["variant"])
+    header = Header(
+        "X0217", "t005", "MuonH momentum warmup", "speedrun", "loss", "6d1ef53450", "ClassicLarry", None, "Rule"
+    )
+    final = {"belay-X0217-control": (3.0455, None), "belay-X0217-seed0": (3.0678, 0.0223)}
+    report = write_report(tmp_path, header, control, variant, final)
+    text = report.read_text()
+    assert text.startswith("# X0217 · MuonH momentum warmup · speedrun · loss")
+    for section in ("## Final eval", "## Train loss", "## Δ train loss", "## Speed", "## Gradient norm"):
+        assert section in text
+    assert "| belay-X0217-seed0 | 3.0678 | +0.0223 |" in text
+    assert (tmp_path / "t005_loss.png").stat().st_size > 0 and (tmp_path / "t005_delta.png").stat().st_size > 0

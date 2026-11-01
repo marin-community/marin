@@ -167,6 +167,8 @@ class IntakeComment(BaseModel):
     """The intake bot transferred it (🚀): it was approved on GitHub."""
     approved_at: datetime.datetime | None = None
     """When the bot transferred it, sent only for approvals after the watcher's cutover; such an approval queues it."""
+    approved_by: str | None = None
+    """The GitHub login whose 👍 approved it."""
 
 
 class IntakeSync(BaseModel):
@@ -215,6 +217,10 @@ class SettingsUpdate(BaseModel):
     github_posting: bool | None = None
     node_cap: int | None = None
     approvers: list[Approver] | None = None
+
+
+class Requeue(BaseModel):
+    note: str = ""
 
 
 class Claim(BaseModel):
@@ -314,6 +320,46 @@ def _enqueue(conn: Connection, kind: EventKind, ref: str, summary: str, payload:
 
 
 GITHUB_APPROVER = "GitHub 👍 (intake bot)"
+ESCALATED = "Escalated:"
+# Approved ideas a session may take up: not one a session escalated, until a maintainer re-queues or declines it.
+OFFERABLE_IDEAS = (
+    "SELECT id, title, body FROM ideas WHERE state = 'approved' AND (note IS NULL OR note NOT LIKE 'Escalated:%')"
+)
+
+
+def approver_login(settings: dict[str, Any], identity: str) -> str:
+    """The GitHub login of the approver who signs in as ``identity`` (the name posts credit), else ``identity``."""
+    for a in settings["approvers"]:
+        if a.get("identity") == identity:
+            return a["github"]
+    return identity
+
+
+def offer_pending_work(conn: Connection) -> int:
+    """When nothing is running or queued, offer each approved idea no session has taken up (at most hourly);
+    an idea a session escalated waits for a maintainer instead."""
+    if _rows(conn, "SELECT id FROM sessions WHERE state = 'running'") or _rows(
+        conn, "SELECT ref FROM events WHERE session_id IS NULL"
+    ):
+        return 0
+    offered = 0
+    for idea in _rows(conn, OFFERABLE_IDEAS):
+        last = _rows(
+            conn,
+            "SELECT max(at) AS at FROM events WHERE ref = :ref AND kind IN ('approved', 'work_pending')",
+            ref=str(idea["id"]),
+        )[0]["at"]
+        if last is not None and _now() - last < WORK_PENDING_INTERVAL:
+            continue
+        offered += 1
+        _enqueue(
+            conn,
+            EventKind.WORK_PENDING,
+            str(idea["id"]),
+            f"idea #{idea['id']} is approved but has no plan yet",
+            {"idea_id": idea["id"], "title": idea["title"], "body": idea["body"]},
+        )
+    return offered
 
 
 def approve_idea(conn: Connection, idea_id: int, caller: str, at: datetime.datetime | None = None) -> bool:
@@ -384,7 +430,7 @@ def sync_intake_comments(conn: Connection, comments: list[IntakeComment]) -> int
             _activity(conn, ActivityPost(kind="intake", title=f"New intake suggestion from {c.author}"))
         if c.approved_at is not None:
             idea_id = _rows(conn, "SELECT id FROM ideas WHERE comment_id = :cid", cid=c.comment_id)[0]["id"]
-            approve_idea(conn, idea_id, GITHUB_APPROVER, c.approved_at)
+            approve_idea(conn, idea_id, c.approved_by or GITHUB_APPROVER, c.approved_at)
     return added
 
 
@@ -678,7 +724,7 @@ def create_api(services: Any) -> FastAPI:
     def _decide(idea_id: int, approve: bool, caller: str) -> dict[str, str]:
         with engine.begin() as conn:
             if approve:
-                if not approve_idea(conn, idea_id, caller):
+                if not approve_idea(conn, idea_id, approver_login(_settings(conn), caller)):
                     raise HTTPException(409, f"idea {idea_id} is already approved or further along")
                 return {"state": IdeaState.APPROVED.value}
             idea = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
@@ -702,23 +748,40 @@ def create_api(services: Any) -> FastAPI:
         return _decide(idea_id, approve=True, caller=caller)
 
     @admin.post("/ideas/{idea_id}/requeue")
-    def requeue(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
-        """Clear a session's escalation on an approved idea and offer it to the next session."""
+    def requeue(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
+        """A maintainer's answer to an escalation: clear it, keep the maintainer's note for the session, and offer
+        the idea to the next session."""
         with engine.begin() as conn:
             rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
             if not rows or rows[0]["state"] != IdeaState.APPROVED:
                 raise HTTPException(409, f"idea {idea_id} is not an approved idea waiting for a session")
-            conn.execute(text("UPDATE ideas SET note = NULL, updated_at = now() WHERE id = :id"), {"id": idea_id})
+            login = approver_login(_settings(conn), caller)
+            note = f"Maintainer {login}: {request.note}" if request.note else None
+            conn.execute(
+                text("UPDATE ideas SET note = :n, updated_at = now() WHERE id = :id"), {"n": note, "id": idea_id}
+            )
             label = rows[0]["title"] or rows[0]["body"].strip().splitlines()[0][:90]
-            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{caller} re-queued “{label}”"))
+            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} re-queued “{label}”"))
             _enqueue(
                 conn,
                 EventKind.WORK_PENDING,
                 str(idea_id),
-                f"idea #{idea_id} re-queued by {caller}",
+                f"idea #{idea_id} re-queued by {login}",
                 {"idea_id": idea_id, "title": rows[0]["title"], "body": rows[0]["body"]},
             )
         return {"state": IdeaState.APPROVED.value}
+
+    @admin.post("/ideas/{idea_id}/decline")
+    def decline(idea_id: int, request: Requeue, caller: str = Depends(approver)) -> dict[str, str]:
+        """A maintainer closes an escalated idea without running it."""
+        with engine.begin() as conn:
+            login = approver_login(_settings(conn), caller)
+            conn.execute(
+                text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
+                {"n": f"Declined by {login}: {request.note or 'no reason given'}", "id": idea_id},
+            )
+            _activity(conn, ActivityPost(kind="approval", idea_id=idea_id, title=f"{login} declined idea #{idea_id}"))
+        return {"state": IdeaState.DECLINED.value}
 
     @admin.post("/ideas/{idea_id}/dismiss")
     def dismiss(idea_id: int, caller: str = Depends(approver)) -> dict[str, str]:
@@ -792,7 +855,6 @@ def create_api(services: Any) -> FastAPI:
     @agent.post("/tick")
     def tick(update: Tick) -> dict[str, int]:
         """The watcher's heartbeat: node use, storage, and re-offering approved work no session has taken."""
-        offered = 0
         with engine.begin() as conn:
             conn.execute(
                 text(
@@ -809,25 +871,7 @@ def create_api(services: Any) -> FastAPI:
                     "objects": update.storage_objects,
                 },
             )
-            active = _rows(conn, "SELECT id FROM sessions WHERE state = 'running'")
-            queued = _rows(conn, "SELECT ref FROM events WHERE session_id IS NULL")
-            if not active and not queued:
-                for idea in _rows(conn, "SELECT id, title, body FROM ideas WHERE state = 'approved'"):
-                    last = _rows(
-                        conn,
-                        "SELECT max(at) AS at FROM events WHERE ref = :ref AND kind IN ('approved', 'work_pending')",
-                        ref=str(idea["id"]),
-                    )[0]["at"]
-                    if last is not None and _now() - last < WORK_PENDING_INTERVAL:
-                        continue
-                    offered += 1
-                    _enqueue(
-                        conn,
-                        EventKind.WORK_PENDING,
-                        str(idea["id"]),
-                        f"idea #{idea['id']} is approved but has no plan yet",
-                        {"idea_id": idea["id"], "title": idea["title"], "body": idea["body"]},
-                    )
+            offered = offer_pending_work(conn)
         return {"work_pending": offered}
 
     @agent.post("/dispatch/claim")

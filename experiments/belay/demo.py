@@ -52,6 +52,7 @@ import wandb
 
 from experiments.belay.config import CONFIG
 from experiments.belay.page import BOT_MARK, TOKEN_ENV, call
+from experiments.belay.page import SESSION_ENV as SESSION_ID_ENV
 from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.demo")
@@ -278,27 +279,40 @@ def github_json(path: str) -> list | dict:
     return [item for page in pages for item in page] if isinstance(pages[0], list) else pages[0]
 
 
-def approval_time(comment: dict, rocket_times: dict[str, datetime.datetime]) -> datetime.datetime | None:
-    """When the intake bot transferred ``comment`` (its first 🚀), if that was after the cutover; else None."""
-    at = rocket_times.get(str(comment["id"]))
-    return at if at is not None and at > CONFIG.github_approval_cutover else None
+@dataclass(frozen=True)
+class GithubApproval:
+    """The intake bot's first 🚀 on a #9514 comment, and the first 👍 (the maintainer who approved it)."""
+
+    transferred_at: datetime.datetime
+    approved_by: str | None
 
 
-def intake_comments(rocket_times: dict[str, datetime.datetime]) -> list[dict]:
+def approval_time(comment: dict, approvals: dict[str, GithubApproval]) -> datetime.datetime | None:
+    """When the intake bot transferred ``comment``, if that was after the cutover; else None."""
+    approval = approvals.get(str(comment["id"]))
+    if approval is None or approval.transferred_at <= CONFIG.github_approval_cutover:
+        return None
+    return approval.transferred_at
+
+
+def intake_comments(approvals: dict[str, GithubApproval]) -> list[dict]:
     """Comments on the intake issue. One the intake bot transferred is approved upstream; one it transferred after
-    the cutover also carries ``approved_at``, which queues it. ``rocket_times`` caches each comment's first 🚀."""
+    the cutover also carries ``approved_at`` and ``approved_by``, which queue it. ``approvals`` caches reactions."""
     comments = []
     for c in github_json(f"repos/{REPOSITORY}/issues/{INTAKE_ISSUE}/comments?per_page=100"):
         if c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK):
             continue  # bot and agent comments (tests, archived descriptions) are not suggestions
         handled = c["reactions"]["rocket"] > 0
         cid = str(c["id"])
-        if c["reactions"]["rocket"] > 0 and cid not in rocket_times:
+        if handled and cid not in approvals:
             reactions = github_json(f"repos/{REPOSITORY}/issues/comments/{cid}/reactions?per_page=100")
             rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
+            thumbs = sorted((r["created_at"], r["user"]["login"]) for r in reactions if r["content"] == "+1")
             if rockets:
-                rocket_times[cid] = datetime.datetime.fromisoformat(rockets[0])
-        at = approval_time(c, rocket_times)
+                approvals[cid] = GithubApproval(
+                    datetime.datetime.fromisoformat(rockets[0]), thumbs[0][1] if thumbs else None
+                )
+        at = approval_time(c, approvals)
         comments.append(
             {
                 "comment_id": cid,
@@ -308,6 +322,7 @@ def intake_comments(rocket_times: dict[str, datetime.datetime]) -> list[dict]:
                 "posted_at": c["created_at"],
                 "approved_upstream": handled,
                 "approved_at": at.isoformat() if at else None,
+                "approved_by": approvals[cid].approved_by if at else None,
             }
         )
     return comments
@@ -349,7 +364,7 @@ class Watcher:
         self.final: dict[str, dict] = {}
         self.storage_at = 0.0
         self.wandb = wandb.Api()
-        self.rocket_times: dict[str, datetime.datetime] = {}  # #9514 comment id -> the intake bot's first 🚀
+        self.approvals: dict[str, GithubApproval] = {}  # #9514 comment id -> its GitHub approval
 
     def _wandb(self, name: str) -> dict:
         try:
@@ -424,7 +439,7 @@ class Watcher:
     def tick(self) -> None:
         error = None
         try:
-            call("agent/sync/intake", {"comments": intake_comments(self.rocket_times)}, token=self.token)
+            call("agent/sync/intake", {"comments": intake_comments(self.approvals)}, token=self.token)
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"intake: {e}"
         try:
@@ -469,8 +484,10 @@ ALLOWED_TOOLS = (
     "Write(tests/grug/test_fast_track_*)",
     "Bash(git checkout -- .)",
     "Bash(git clean -fd experiments/grug/fast_track tests/grug)",
-    "Bash(gh pr view:*)",  # read-only: an idea may point at a PR whose change it asks to port
+    # Read-only GitHub, in every session: an idea may point at a PR or issue whose change it asks to port.
+    "Bash(gh pr view:*)",
     "Bash(gh pr diff:*)",
+    "Bash(gh issue view:*)",
     "Bash(uv run iris --cluster marin job list:*)",
     "Bash(uv run iris --cluster marin job logs:*)",
 )
@@ -534,7 +551,7 @@ def run_session(
         process = subprocess.run(
             command,
             cwd=agent_dir,
-            env={**session_env(), TOKEN_ENV: token},
+            env={**session_env(), TOKEN_ENV: token, SESSION_ID_ENV: session_id},
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

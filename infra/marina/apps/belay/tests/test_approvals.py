@@ -6,7 +6,7 @@
 import datetime
 
 import pytest
-from belay.app import IntakeComment, approve_idea, migrate, sync_intake_comments
+from belay.app import IntakeComment, approve_idea, migrate, offer_pending_work, sync_intake_comments
 from sqlalchemy import create_engine, text
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
@@ -64,3 +64,14 @@ def test_approval_before_cutover_waits_for_the_page(conn) -> None:
     assert approved_events(conn) == 0
     assert approve_idea(conn, idea_id(conn), "maintainer")
     assert approved_events(conn) == 1
+
+
+def test_escalated_idea_is_not_offered_again(conn) -> None:
+    sync_intake_comments(conn, [comment(approved_upstream=False)])
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE events SET session_id = 's1'"))  # a session took the approval
+    conn.execute(text("UPDATE events SET at = now() - interval '2 hours'"))
+    conn.execute(text("UPDATE ideas SET note = 'Escalated: needs a maintainer'"))
+    assert offer_pending_work(conn) == 0
+    conn.execute(text("UPDATE ideas SET note = 'Maintainer ClassicLarry: retest on current recipe'"))
+    assert offer_pending_work(conn) == 1
