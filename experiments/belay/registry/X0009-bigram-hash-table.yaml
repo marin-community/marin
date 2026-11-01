@@ -4,7 +4,7 @@ name: Hashed bigram table as AttnRes source
 category: Embeddings and inputs
 summary: A hashed (prev, cur) token-pair embedding table read as an AttnRes source.
 source: agent
-status: running
+status: done
 first_batch: 1
 tags:
 - bigram
@@ -720,6 +720,13 @@ trials:
   settings:
     attn_res_bigram_rows: '2097152'
   commit: 8f361a1129
+  loss:
+  - 3.0471
+  delta:
+  - 0.0034
+  steps: 2602
+  baseline: belay-X0009-control 3.0437 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '51'
