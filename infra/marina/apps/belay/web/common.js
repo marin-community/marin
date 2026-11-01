@@ -325,13 +325,24 @@ function renderIdea(idea, planWaiting) {
   const registryStep = step(
     idea.state === 'recorded' ? 'done' : idea.registry_id ? 'current' : 'todo',
     'Registry',
-    idea.registry_id ? (idea.state === 'recorded' ? 'trial recorded' : 'entry created, trial pending') : 'gets an id when planned',
+    idea.registry_id
+      ? idea.state === 'recorded'
+        ? 'trial recorded'
+        : 'entry created, trial pending'
+      : idea.state === 'declined'
+        ? 'no entry: declined'
+        : 'gets an id when planned',
     idea.registry_id
       ? idea.registry_url
         ? link(idea.registry_url, el('code', {}, idea.registry_id))
         : el('code', {}, idea.registry_id)
       : null,
   )
+
+  if (idea.state === 'declined') {
+    runStep = step('todo', 'Runs', 'none: declined')
+    resultStep = step('todo', 'Result', 'none: declined')
+  }
 
   const statePill = el('span', { class: 'pill', dataset: idea.state === 'recorded' ? { good: 'true' } : idea.state === 'declined' ? { warn: 'true' } : {} }, idea.state)
   return el(
