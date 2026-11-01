@@ -358,9 +358,8 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: num_experts_per_token=8 (Ckpt 1 adopted top-10)'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 3
-  rationale: 'prior (Ckpt 1); retest pending: top-10/12 of 384 -0.0011/-0.0008 and -0.0006/-0.0021 at +5-8% step; noise; top-4..6
-    wins densify (house rule) -> 3'
+  score: 6
+  rationale: 'top-10: -0.0051 at equal data (+7% step); equal-time probe running; ladder and MFU not run -> 6'
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: f149ecd3a23b
+  inputs_digest: 862a743dba0e
