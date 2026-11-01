@@ -193,6 +193,7 @@ async def _model_turn(
         logprobs=None if logprobs is None else tuple(logprobs[0]),
         stop_reason=output["stop_reasons"][0],
         text=output.get("responses", [message.get("content") or ""])[0],
+        evidence=(output.get("turn_evidence") or [None])[0],
         metadata={
             **{
                 name: output[name][0]

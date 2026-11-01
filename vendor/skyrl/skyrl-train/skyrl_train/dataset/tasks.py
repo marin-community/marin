@@ -25,6 +25,7 @@ from taskcompendium.models import (
     TaskSpec,
     VerifyitGrader,
     grades_with_judge,
+    reasoning_template_kwargs,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
@@ -123,8 +124,9 @@ def _restore_task_prompts(batch: dict) -> dict:
 def task_prompt_token_count(
     tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
 ) -> int:
-    """Include native task tools in the initial prompt's length budget."""
+    """Include native task tools and the task's reasoning mode in the initial prompt's length budget."""
     lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+    chat_template_kwargs = {**(chat_template_kwargs or {}), **reasoning_template_kwargs(lowered.task.reasoning)}
     if lowered.harness == ASSISTANT_PREFIX_HARNESS:
         prompt = assistant_prefix_prompt(lowered.task)
         options = {**prompt.options, "chat_template_kwargs": chat_template_kwargs or {}}
