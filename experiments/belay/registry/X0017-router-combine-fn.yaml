@@ -4,7 +4,7 @@ name: Router combine function
 category: MoE and routing
 summary: Change how routed combine weights are computed (sigmoid renorm, raw sigmoid, softmax, etc.).
 source: maintainer
-status: adopted
+status: running
 first_batch: 2
 tags:
 - router
@@ -72,6 +72,17 @@ trials:
   - -0.0031
   settings:
     router_combine: sqrt_softplus_renorm
+- id: t004
+  variant: router_combine=sqrt_softplus_renorm
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0017
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6562722470
+  wandb: []
+  settings:
+    router_combine: sqrt_softplus_renorm
+  commit: 7acddddf35
 events:
 - type: adopted
   batch: '102'
