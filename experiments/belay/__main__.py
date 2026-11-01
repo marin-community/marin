@@ -73,6 +73,7 @@ from experiments.belay.page import (
     PageRun,
     PageState,
     Post,
+    call,
     comment_times,
     page_state,
     post_activity,
@@ -207,6 +208,17 @@ def finished_run_step(experiment: str, runs: list[PageRun]) -> str:
     if failed:
         return f"section 3: {BELAY} run-failed {experiment} --run {keys[failed[0].name]}"
     return f"section 2: {BELAY} run-finished {experiment}"
+
+
+def check_only() -> None:
+    """Whether a session has work, from the page's public state: events waiting and no session running."""
+    work = call("public/state")["work"]
+    if work["session_active"]:
+        print("no work: a session is running")
+    elif work["queued_events"]:
+        print(f"work: {work['queued_events']} queued event(s)")
+    else:
+        print("no work: no queued events")
 
 
 def start(events_file: Path, today: datetime.date) -> None:
@@ -1142,7 +1154,13 @@ def main(argv: list[str]) -> None:
         return p
 
     p = command("start")
-    p.add_argument("--events", type=Path, required=True, help="the session's events file, named in its prompt")
+    events = p.add_mutually_exclusive_group(required=True)
+    events.add_argument("--events", type=Path, help="the session's events file, named in its prompt")
+    events.add_argument(
+        "--check-only",
+        action="store_true",
+        help="a scheduled trigger's cheap check: print whether events wait for a session, change nothing",
+    )
     p.add_argument("--today", type=datetime.date.fromisoformat, help="pretend date (with --dry-run only)")
     p = command("new-idea")
     p.add_argument("--idea-id", type=int, required=True)
@@ -1198,7 +1216,9 @@ def main(argv: list[str]) -> None:
             raise SystemExit("refusing: --today is for dry runs only")
         today = args.today
 
-    if args.command == "start":
+    if args.command == "start" and args.check_only:
+        check_only()
+    elif args.command == "start":
         start(args.events, today)
     elif args.command == "new-idea":
         settings = [("--opt-set", s) for s in args.opt_set] + [("--model-set", s) for s in args.model_set]

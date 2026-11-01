@@ -712,6 +712,8 @@ def create_api(services: Services) -> RegisteredApi:
             "now": _now().isoformat(),
             "pipeline": _pipeline(ideas),
             "next": _public_next(active, queued, live, pending),
+            # For a scheduled trigger's cheap check: start a session only when events wait and none is running.
+            "work": {"queued_events": queued, "session_active": active},
             "ideas": [_public_idea(i) for i in ideas],
             "runs": [_public_run(r) for r in runs],
             "activity": _public_activity(ideas, runs, posts),
