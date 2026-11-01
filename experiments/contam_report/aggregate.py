@@ -41,7 +41,10 @@ def main() -> None:
         for d in args.hits_dirs
     )
     con = duckdb.connect()
-    con.execute("SET threads TO 4; SET memory_limit = '12GB'; SET preserve_insertion_order = false")
+    con.execute(
+        f"SET threads TO 4; SET memory_limit = '12GB'; SET preserve_insertion_order = false;"
+        f" SET temp_directory = '{out_dir}/duckdb_tmp'"
+    )
     con.execute(
         f"""
         CREATE TABLE idx AS
@@ -53,21 +56,17 @@ def main() -> None:
         "UPDATE idx SET eval = regexp_extract(eval_id, '^(uncheatable-[a-z0-9_]+)-\\d+$', 1) WHERE eval_id LIKE 'uncheatable-%'"
     )
     con.execute("CREATE TABLE item_n AS SELECT eval, eval_id, count(DISTINCT hash) AS n FROM idx GROUP BY ALL")
-    con.execute(
-        f"CREATE TABLE doc_hash AS {hits}"
-    )
-    con.execute(
-        f"""
-        CREATE TABLE common AS
-        SELECT hash FROM doc_hash GROUP BY hash HAVING count(*) > {args.common_doc_limit}
-        """
-    )
+    # Each hit list holds distinct features, so a feature's row count is its document count.
+    # Counting first keeps only the rare features' rows; common ones hold most of the hits.
+    con.execute(f"CREATE TABLE hash_docs AS SELECT hash, count(*) AS docs FROM ({hits}) GROUP BY hash")
+    con.execute(f"COPY hash_docs TO '{out_dir}/hash_docs.parquet'")
+    con.execute(f"CREATE TABLE common AS SELECT hash FROM hash_docs WHERE docs > {args.common_doc_limit}")
+    con.execute(f"CREATE TABLE doc_hash AS SELECT * FROM ({hits}) WHERE hash NOT IN (SELECT hash FROM common)")
     con.execute(
         """
         CREATE TABLE doc_item AS
         SELECT d.source, d.file, d.id, d.marked, i.eval, i.eval_id, count(DISTINCT d.hash) AS k
         FROM doc_hash d JOIN idx i USING (hash)
-        WHERE d.hash NOT IN (SELECT hash FROM common)
         GROUP BY ALL
         """
     )
@@ -89,7 +88,6 @@ def main() -> None:
         CREATE TABLE corpus AS
         SELECT i.eval_id, count(DISTINCT d.hash) AS found
         FROM idx i JOIN doc_hash d USING (hash)
-        WHERE d.hash NOT IN (SELECT hash FROM common)
         GROUP BY ALL
         """
     )
