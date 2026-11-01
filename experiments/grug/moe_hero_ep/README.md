@@ -9,7 +9,7 @@ lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 - Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
   two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 65536
-  (4096 through step 257553, 16384 through step 360000), query/key multiplier 1.66 (1.3 at 4K, 1.48 at
+  (4096 through step 257553, 16384 through step 372000), query/key multiplier 1.66 (1.3 at 4K, 1.48 at
   16K), sliding window 2048, and every
   fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use

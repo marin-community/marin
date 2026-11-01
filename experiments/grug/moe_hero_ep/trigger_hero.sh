@@ -11,11 +11,11 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Permanent checkpoint 360000 was written on hero-gradclip-step356k; it resumes at global_step 360000.
-# Parent W&B _step 359999 records global_step 359999.
+# Permanent checkpoint 372000 was written on hero-gradclip-step356k; it resumes at global_step 372000.
+# Parent W&B _step 371999 records global_step 371999.
 RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
-HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints/step-360000
-WANDB_FORK_FROM='hero-gradclip-step356k?_step=359999'
+HANDOFF_CHECKPOINT=s3://marin-us-east-02a/marin/grug/hero-gradclip-step356k/2026.08.19.2/checkpoints/step-372000
+WANDB_FORK_FROM='hero-gradclip-step356k?_step=371999'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506

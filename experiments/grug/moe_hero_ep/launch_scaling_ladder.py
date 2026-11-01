@@ -17,7 +17,7 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d6144   11      704   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trained at 4K with batch 11264 until step 257553 and at 16K with batch 2816 until step 360000).
+hero trained at 4K with batch 11264 until step 257553 and at 16K with batch 2816 until step 372000).
 Eval batch is 64 x racks (one sequence per device). Tokens/steps hold 791 tokens per active parameter
 (18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including attention and the
 latent-MoE correction), with the d6144 run counted at 4K throughout.
@@ -37,7 +37,7 @@ Changelog:
     2026-10-30 (#10677, PR #10783): the hero clips the global gradient norm at 1.0 in the train step.
         hero-gradclip-step356k forks hero-ctx16k-step257k at permanent step 356531 (see ``trigger_hero.sh``).
     2026-11-02 (#8435): the hero trains at 65K context with qk_mult 1.66 and receiver capacity factor 1.5
-        from step 360000. hero-ctx65k-step360k forks hero-gradclip-step356k at permanent step 360000
+        from step 372000. hero-ctx65k-step372k forks hero-gradclip-step356k at permanent step 372000
         (see ``trigger_hero.sh``).
 """
 
@@ -124,7 +124,7 @@ HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 # step at which it ended. A context-switch deploy PR appends one entry and sets the baseline below.
 HERO_CONTEXT_PHASES: tuple[HarrierContextPhase, ...] = (
     HarrierContextPhase(end_step=257_553, seq_len=4096),
-    HarrierContextPhase(end_step=360_000, seq_len=16384),
+    HarrierContextPhase(end_step=372_000, seq_len=16384),
 )
 # The parent's cumulative training FLOPs after HERO_CONTEXT_PHASES[-1].end_step updates.
 HERO_FLOPS_BASELINE_TOTAL: float | None = 2.5387233132353885e24
