@@ -4,7 +4,7 @@ name: KDA write-strength (w_beta) parameterization
 category: Linear attention / KDA
 summary: Change w_beta's init scale, LR multiplier, scale or optimizer group.
 source: agent
-status: adopted
+status: running
 first_batch: 201
 tags:
 - kda
@@ -212,6 +212,18 @@ trials:
     Adam LR mult: 3x
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
   note: insensitive to LR
+- id: t013
+  variant: KDA beta init x1, beta in Adam group
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0209
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6563440147
+  wandb: []
+  settings:
+    kda_beta_group: adam
+    init_std_mult_beta: '1'
+  commit: 63c0064b88
 events:
 - type: adopted
   batch: 202-205
