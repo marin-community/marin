@@ -6,6 +6,7 @@
 import pytest
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.journeys.federation import PEER_ID, FederationJourney
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -18,13 +19,15 @@ def federation(tmp_path, monkeypatch):
 
 
 def test_federated_job_runs_on_peer_and_syncs_attempt_to_parent(federation: FederationJourney) -> None:
-    job = federation.submit("train", tasks=2)
+    job = federation.submit("train", tasks=2, termination_grace=Duration.from_seconds(60))
 
     federation.promote()
     assert federation.parent_job(job).pending_reason == f"Awaiting acceptance by peer {PEER_ID}"
 
     federation.sync()
     assert {task.task_id for task in federation.peer_tasks(job)} == {job[0].wire_id, job[1].wire_id}
+    stored = federation.peer.controller.get_job_status(job.wire_id).request
+    assert stored.termination_grace.milliseconds == 60_000
 
     federation.run_peer()
     federation.succeed_on_peer(job[0])

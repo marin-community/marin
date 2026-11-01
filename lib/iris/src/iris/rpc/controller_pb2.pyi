@@ -62,7 +62,7 @@ class Controller(_message.Message):
     ENDPOINT_ACCESS_PRIVATE: Controller.EndpointAccess
     ENDPOINT_ACCESS_LINK: Controller.EndpointAccess
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "egress_policy", "egress_allow", "federation")
+        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "termination_grace", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "egress_policy", "egress_allow", "federation")
         NAME_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -78,6 +78,7 @@ class Controller(_message.Message):
         COSCHEDULING_FIELD_NUMBER: _ClassVar[int]
         REPLICAS_FIELD_NUMBER: _ClassVar[int]
         TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+        TERMINATION_GRACE_FIELD_NUMBER: _ClassVar[int]
         FAIL_IF_EXISTS_FIELD_NUMBER: _ClassVar[int]
         PREEMPTION_POLICY_FIELD_NUMBER: _ClassVar[int]
         EXISTING_JOB_POLICY_FIELD_NUMBER: _ClassVar[int]
@@ -104,6 +105,7 @@ class Controller(_message.Message):
         coscheduling: _job_pb2.CoschedulingConfig
         replicas: int
         timeout: _time_pb2.Duration
+        termination_grace: _time_pb2.Duration
         fail_if_exists: bool
         preemption_policy: _job_pb2.JobPreemptionPolicy
         existing_job_policy: _job_pb2.ExistingJobPolicy
@@ -115,7 +117,7 @@ class Controller(_message.Message):
         egress_policy: _job_pb2.EgressPolicy
         egress_allow: _containers.RepeatedCompositeFieldContainer[_job_pb2.EgressRule]
         federation: Controller.FederationHandoff
-        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., egress_policy: _Optional[_Union[_job_pb2.EgressPolicy, str]] = ..., egress_allow: _Optional[_Iterable[_Union[_job_pb2.EgressRule, _Mapping]]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
+        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., termination_grace: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., egress_policy: _Optional[_Union[_job_pb2.EgressPolicy, str]] = ..., egress_allow: _Optional[_Iterable[_Union[_job_pb2.EgressRule, _Mapping]]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
     class FederationHandoff(_message.Message):
         __slots__ = ("requester_id", "owner_principal", "submitting_user", "handoff_nonce")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]

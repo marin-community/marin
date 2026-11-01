@@ -16,10 +16,12 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
+from rigging.timing import Duration
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
+from iris.preemption import DEFAULT_TERMINATION_GRACE, TERMINATION_GRACE_ENV, resolve_termination_grace
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,7 @@ class JobInfo:
 
     task_id: JobName
     num_tasks: int = 1
+    termination_grace: Duration = field(default_factory=lambda: DEFAULT_TERMINATION_GRACE)
     attempt_id: int = 0
     attempt_uid: str | None = None
     worker_id: str | None = None
@@ -123,6 +126,7 @@ def get_job_info() -> JobInfo | None:
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
+            termination_grace=resolve_termination_grace(Duration.from_ms(int(os.environ[TERMINATION_GRACE_ENV]))),
             attempt_id=attempt_id,
             attempt_uid=os.environ.get(IRIS_ATTEMPT_UID_ENV),
             worker_id=os.environ.get("IRIS_WORKER_ID"),

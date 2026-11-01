@@ -83,6 +83,10 @@ message Controller {
     // If not set or milliseconds=0, no timeout.
     iris.time.Duration timeout = 21;
 
+    // SIGTERM-to-SIGKILL budget for task processes. Unset uses the controller
+    // default. The controller validates and persists the effective duration.
+    iris.time.Duration termination_grace = 41;
+
     // If true, return ALREADY_EXISTS error even if an existing job with the same
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.

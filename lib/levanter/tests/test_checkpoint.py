@@ -915,6 +915,28 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
 
 
+def test_final_checkpoint_waits_for_pending_temporary_save_and_restores_completed_state(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(permanent_path, None, [], temporary_base_path=temporary_path)
+    state = {
+        "step": jnp.asarray(3),
+        "data_position": jnp.asarray(48),
+        "model": jnp.asarray([1.0, 2.0]),
+        "optimizer": jnp.asarray([0.1, 0.2]),
+    }
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.on_step(tree=state, step=3)
+    checkpointer.save_final_checkpoint(tree=state, step=3)
+
+    path = latest_checkpoint_path(permanent_path)
+    assert path == str(permanent_path / "step-3")
+    restored = load_checkpoint(jax.tree.map(jnp.zeros_like, state), path)
+    assert_trees_all_equal(restored, state)
+    assert _load_metadata(path)["is_temporary"] is False
+
+
 def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
     permanent_path = tmp_path / "checkpoints"
     temporary_path = tmp_path / "temporary"
