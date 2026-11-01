@@ -1,0 +1,207 @@
+{
+ "updated": "2026-11-01",
+ "form": "Paloma macro loss L(C) = 1.2 + A\u00b7C^\u2212\u03b1 on analytic training FLOPs C; BPB = L \u00f7 (loss/BPB ratio, linear in log10 C per ladder)",
+ "floor": 1.2,
+ "gb200_hours": 300000,
+ "peak_flops": 2500000000000000.0,
+ "hardware_budget": 2.7e+24,
+ "recipes": [
+  {
+   "id": "s7",
+   "name": "S7 (Belay arch)",
+   "ladder": "s7l",
+   "color": "--rope",
+   "dash": false,
+   "width": 2.8,
+   "mfu": 0.342,
+   "mfu_note": "36.8% on one rack (allwins), less 7% at 11 racks",
+   "A": 60.518,
+   "alpha": 0.08576,
+   "ratio_icpt": 2.48775,
+   "ratio_slope": -0.004425,
+   "max_residual": 0.0028,
+   "points": [
+    {
+     "rung": "d512",
+     "run": "s7l-d512",
+     "C": 1.3854098248748237e+18,
+     "loss": 2.885,
+     "bpb": 1.1984
+    },
+    {
+     "rung": "d768",
+     "run": "s7l-d768",
+     "C": 9.387976435672547e+18,
+     "loss": 2.6262,
+     "bpb": 1.0932
+    },
+    {
+     "rung": "d1024",
+     "run": "s7l-d1024",
+     "C": 5.74045241436065e+19,
+     "loss": 2.4198,
+     "bpb": 1.0066
+    },
+    {
+     "rung": "d1280L16",
+     "run": "s7l-d1280L16",
+     "C": 2.2954122115236338e+20,
+     "loss": 2.2879,
+     "bpb": 0.9551
+    }
+   ]
+  },
+  {
+   "id": "s7n",
+   "name": "S7, shuffled data + cosine",
+   "ladder": "s7n",
+   "color": "--rope",
+   "dash": true,
+   "width": 1.6,
+   "mfu": 0.342,
+   "mfu_note": "same model and MFU as S7; s7n data order and LR schedule",
+   "A": 62.036,
+   "alpha": 0.08657,
+   "ratio_icpt": 2.5392,
+   "ratio_slope": -0.006812,
+   "max_residual": 0.0023,
+   "points": [
+    {
+     "rung": "d512",
+     "run": "s7n-d512",
+     "C": 1.3854098248748237e+18,
+     "loss": 2.8681,
+     "bpb": 1.1873
+    },
+    {
+     "rung": "d768",
+     "run": "s7n-d768",
+     "C": 9.387976435672547e+18,
+     "loss": 2.6121,
+     "bpb": 1.0839
+    },
+    {
+     "rung": "d1024",
+     "run": "s7n-d1024",
+     "C": 5.74045241436065e+19,
+     "loss": 2.4106,
+     "bpb": 1.0024
+    },
+    {
+     "rung": "d1280L16",
+     "run": "s7n-d1280L16",
+     "C": 2.2954122115236338e+20,
+     "loss": 2.2706,
+     "bpb": 0.9459
+    }
+   ]
+  },
+  {
+   "id": "ckpt1",
+   "name": "Belay Ckpt 1",
+   "ladder": "ckpt1",
+   "color": "--teal",
+   "dash": false,
+   "width": 2.0,
+   "mfu": 0.269,
+   "mfu_note": "28.9% on one rack, less 7% at 11 racks",
+   "A": 53.296,
+   "alpha": 0.08332,
+   "ratio_icpt": 2.5227,
+   "ratio_slope": -0.006391,
+   "max_residual": 0.0047,
+   "points": [
+    {
+     "rung": "d512",
+     "run": "lc1-l171-d512",
+     "C": 1.128194938723369e+18,
+     "loss": 2.8732,
+     "bpb": 1.1934
+    },
+    {
+     "rung": "d768",
+     "run": "lc1-l171-d768",
+     "C": 7.692237488668017e+18,
+     "loss": 2.6177,
+     "bpb": 1.0899
+    },
+    {
+     "rung": "d1024",
+     "run": "lc1-l171-d1024",
+     "C": 4.722264379359442e+19,
+     "loss": 2.4202,
+     "bpb": 1.0097
+    },
+    {
+     "rung": "d1280",
+     "run": "lc1-l171-d1280",
+     "C": 1.4542985960360824e+20,
+     "loss": 2.3166,
+     "bpb": 0.9677
+    }
+   ]
+  },
+  {
+   "id": "aughero",
+   "name": "Marin Aug Hero Arch",
+   "ladder": "aughero",
+   "color": "--slate",
+   "dash": true,
+   "width": 2.0,
+   "mfu": 0.288,
+   "mfu_note": "28.8% measured on 11 racks",
+   "A": 65.621,
+   "alpha": 0.08662,
+   "ratio_icpt": 2.52912,
+   "ratio_slope": -0.006571,
+   "max_residual": 0.0028,
+   "points": [
+    {
+     "rung": "d512",
+     "run": "lc1-h235-d512",
+     "C": 1.332831578266534e+18,
+     "loss": 2.9662,
+     "bpb": 1.2309
+    },
+    {
+     "rung": "d768",
+     "run": "lc1-h235-d768",
+     "C": 8.800955329450869e+18,
+     "loss": 2.7008,
+     "bpb": 1.123
+    },
+    {
+     "rung": "d1024",
+     "run": "lc1-h235-d1024",
+     "C": 5.404363036167242e+19,
+     "loss": 2.4787,
+     "bpb": 1.0329
+    },
+    {
+     "rung": "d1280",
+     "run": "lc1-h235-d1280",
+     "C": 1.6272712503138032e+20,
+     "loss": 2.3664,
+     "bpb": 0.9876
+    }
+   ]
+  }
+ ],
+ "hero": {
+  "recipe": "s7",
+  "rack_tps": 365800,
+  "rack_step": 11.465,
+  "flops_per_token": 161100000000.0,
+  "flops_per_token_note": "S7: 6.75669e17 FLOPs per 4,194,304-token step"
+ },
+ "compare": {
+  "to": "aughero",
+  "from": "s7"
+ },
+ "caveat": "Extrapolates ~3.6 decades past the largest rung; \u00b10.002 in \u03b1 moves loss \u00b10.009 at the budget. BPB points: s7n and s7l-d1024 byte-weighted, the rest token-weighted.",
+ "sources": {
+  "points": "W&B marin_moe summaries: eval/paloma/macro_loss, eval/paloma/macro_bpb, throughput/flops_per_example_analytic \u00d7 batch \u00d7 steps",
+  "fit": "refit 2026-11-01 with d1024 (four rungs); reproduces the 2026-10-22 three-rung S7, Ckpt 1 and Aug Hero fits exactly",
+  "mfu": "Aug Hero 28.8%, Ckpt 1 26.9%, S7 34.2% = 36.8% \u00d7 0.93 (transcript 2026-10-22T01:01; MFU ladder artifact LNAhYDvbmgrkPbXcUAYV7Y)"
+ }
+}

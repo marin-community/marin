@@ -1,9 +1,9 @@
 // Marin Belay front page: the project's public home. Charts, timeline, starter kit, tracks and the searchable
 // results. The results table and the speedrun chart's test markers come from the registry (results.json, built with
-// `experiments.belay.registry build`); the accepted records, scaling fits, hero budget and tracks are measured values
-// kept here. Loaded after common.js.
+// `experiments.belay.registry build`); stage 4's fits, points and hero budget come from scaling.json; the accepted
+// records and tracks are measured values kept here. Loaded after common.js.
 
-function startFront(RD) {
+function startFront(RD, SC) {
   const $ = (id) => document.getElementById(id);
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const NS = "http://www.w3.org/2000/svg";
@@ -127,32 +127,27 @@ function startFront(RD) {
   const DENSE = { d512: [18087936, 1065420324864], d768: [53477376, 2401121599488], d1024: [144703488, 5504470351872], d1280: [261488640, 9242400522240] };
   const rungC = (t, tpp) => Object.fromEntries(RUNGS.map((r) => [r, (t[r][1] / SEQ) * tpp * t[r][0]]));
   const C_MOE = rungC(MOE, 60);
-  const E = 0.498;
-  // Fit BPB = E + A·C^−a on analytic model FLOPs C; pts are [rung, measured Paloma macro BPB, model FLOPs].
-  const CURVES = [
-    { id: "base", name: "Marin Aug Hero Arch", A: 24.634, a: 0.0842, color: "--slate", dash: true, pts: [["d512", 1.2309, 1.3328e+18, "lc1-h235-d512"], ["d768", 1.123, 8.801e+18, "lc1-h235-d768"], ["d1024", 1.0329, 5.4044e+19, "lc1-h235-d1024"], ["d1280", 0.9876, 1.6273e+20, "lc1-h235-d1280"]], mfu: 0.288, mfuNote: "28.8% MFU measured on 11 racks" },
-    { id: "vanilla", name: "Vanilla Track (dense)", A: 31.005, a: 0.0853, color: "--amber", dash: false, pts: [["d512", 1.6205, 9.0255e+16, "belay-vanilla-d512"], ["d768", 1.4146, 6.4157e+17, "belay-vanilla-d768"], ["d1024", 1.3016, 3.9535e+18, "belay-vanilla-d1024"], ["d1280", 1.2326, 1.2212e+19, "belay-vanilla-d1280"]], mfu: 0.5, mfuNote: "50% MFU assumed" },
-    { id: "best", name: "Belay Ckpt 1", A: 20.005, a: 0.0809, color: "--rope", dash: false, pts: [["d512", 1.1934, 1.1282e+18, "lc1-l171-d512"], ["d768", 1.0899, 7.6922e+18, "lc1-l171-d768"], ["d1024", 1.0097, 4.7223e+19, "lc1-l171-d1024"], ["d1280", 0.9677, 1.4543e+20, "lc1-l171-d1280"]], mfu: 0.269, mfuNote: "26.9% MFU: 28.9% measured on one rack, less 7% at 11 racks" },
-  ];
+  // Stage 4 comes from scaling.json: Paloma macro loss L(C) = floor + A·C^−α on analytic training FLOPs, converted to
+  // BPB with each ladder's loss/BPB ratio (linear in log10 C). The x axis is hardware FLOPs = model FLOPs ÷ 11-rack MFU.
+  const CURVES = SC.recipes.map((r) => ({ ...r, pts: r.points.map((q) => [q.rung, q.bpb, q.C, q.run]) }));
   const curve = (id) => CURVES.find((c) => c.id === id);
-  // Fits are on model FLOPs; the chart's x axis is hardware FLOPs = model FLOPs / recipe MFU.
-  const Lf = (c, C) => E + c.A * Math.pow(C, -c.a);
+  const lossAt = (c, C) => SC.floor + c.A * Math.pow(C, -c.alpha);
+  const Lf = (c, C) => lossAt(c, C) / (c.ratio_icpt + c.ratio_slope * Math.log10(C));
   const Lhw = (c, Chw) => Lf(c, Chw * c.mfu);
-  // Hardware-FLOP budget, matching the tagline: 300k GB200-hours at 2.5 PF/s.
-  const C_HW_BUDGET = 300000 * 3600 * 2.5e15;
-  // Hero budget strip (estimates): 300k GB200-hours (C_HW_BUDGET), 2.5 PF dense BF16 per GPU, 27% single-rack MFU, 7% lost at 11 racks.
-  // Measured at gate 3 (lc1-gb200-nbboth, 2026-10-14): 1-rack MFU on analytic FLOPs; see #compute.
-  const HERO = { peak: 2.5e15, mfu: 0.2894, hit: 0.07, n: 26.33e9, fpt: 1.611e11, tps64: 287478 };
-  const mfu11 = HERO.mfu * (1 - HERO.hit);
-  const C_HERO = C_HW_BUDGET * mfu11;
-  const N_HERO = HERO.n, D_HERO = C_HERO / HERO.fpt, TPP_HERO = D_HERO / N_HERO;
-  const TPS_RACK = HERO.tps64;
-  $("h-tps").textContent = human(TPS_RACK); $("h-flops").textContent = sci(C_HERO, 2);
-  $("hc-tps").title = `Measured: tokens/s on one GB200 rack (64 GPUs, 14.59 s/step) for the ${human(N_HERO)}-active-param Belay Ckpt 1 recipe at ${(HERO.mfu * 100).toFixed(1)}% MFU`;
-  $("hc-flops").title = `300k GB200-hours = ${sci(C_HW_BUDGET, 1)} hardware FLOPs × ${(mfu11 * 100).toFixed(1)}% MFU (${(HERO.mfu * 100).toFixed(1)}% single rack, ${HERO.hit * 100}% lost at 11 racks); analytic model FLOPs, see Compute accounting`;
-  $("hc-n").title = `Belay Ckpt 1 at d6144: non-embedding, non-LM-head params, routed experts at 10/384`;
-  $("hc-d").title = `D = model FLOPs ÷ ${sci(HERO.fpt, 3)} training FLOPs per token = ${TPP_HERO.toFixed(0)} tokens per active param`;
-  $("h-n").textContent = human(N_HERO); $("h-d").textContent = human(D_HERO);
+  const C_HW_BUDGET = SC.gb200_hours * 3600 * SC.peak_flops;
+  {
+    const h = SC.hero, hc = curve(h.recipe), C_HERO = C_HW_BUDGET * hc.mfu, D_HERO = C_HERO / h.flops_per_token;
+    $("h-tps").textContent = human(h.rack_tps); $("h-flops").textContent = sci(C_HERO, 2);
+    $("h-n").textContent = `${(hc.mfu * 100).toFixed(1)}%`; $("h-d").textContent = human(D_HERO);
+    $("hc-tps").title = `Measured: ${hc.name} on one GB200 rack (64 GPUs, ${h.rack_step} s/step)`;
+    $("hc-flops").title = `300k GB200-hours = ${sci(C_HW_BUDGET, 1)} hardware FLOPs × ${(hc.mfu * 100).toFixed(1)}% MFU (${hc.mfu_note})`;
+    $("hc-n").title = `${hc.name}: ${hc.mfu_note}`;
+    $("hc-d").title = `D = model FLOPs ÷ ${sci(h.flops_per_token, 3)} training FLOPs per token (${h.flops_per_token_note})`;
+    $("scaling-caveat").textContent = SC.caveat;
+  }
+  // The timeline table below keeps its own placeholder BPB fits.
+  const E = 0.498;
+  const HERO = { hit: 0.07 };
 
   // ---------- Timeline translation table (placeholder numbers) ----------
   const XLATE = [
@@ -175,7 +170,7 @@ function startFront(RD) {
     const ranked = [...CURVES].sort((p, q) => Lhw(p, C_HW_BUDGET) - Lhw(q, C_HW_BUDGET));
     lg.innerHTML = ranked.map((c, i) => {
       const l = Lhw(c, C_HW_BUDGET);
-      return `<li class="${i ? "" : "top"}" title="${c.name}: ${c.mfuNote}"><i class="sw${c.dash ? " dash" : ""}" style="border-color:${css(c.color)}"></i>`
+      return `<li class="${i ? "" : "top"}" title="${c.name}: ${c.mfu_note}"><i class="sw${c.dash ? " dash" : ""}" style="border-color:${css(c.color)}"></i>`
         + `<span class="nm">${c.name}<small>${(c.mfu * 100).toFixed(1)}% MFU</small></span><span class="bp">${l.toFixed(3)}</span></li>`;
     }).join("") + `<li class="budget"><i class="sw"></i><span>Hero budget: 300k GB200-hours</span></li>`;
   }
@@ -212,7 +207,7 @@ function startFront(RD) {
         if (l > 1.7) continue;
         d += `${d ? "L" : "M"}${X(C).toFixed(1)},${Y(l).toFixed(1)}`;
       }
-      el("path", { d, fill: "none", stroke: col, "stroke-width": c.id === "best" ? 2.6 : 2, "stroke-dasharray": c.dash ? "6 5" : "none" }, svg);
+      el("path", { d, fill: "none", stroke: col, "stroke-width": c.width, "stroke-dasharray": c.dash ? "6 5" : "none" }, svg);
       c.pts.forEach(([r, l, Cm, run]) => {
         const cx = X(Cm / c.mfu), cy = Y(l);
         el("circle", { cx, cy, r: 4.8, fill: col, stroke: css("--surface"), "stroke-width": 1.8 }, svg);
@@ -223,17 +218,20 @@ function startFront(RD) {
       const pl = Lhw(c, C_HW_BUDGET);
       el("circle", { cx: hx, cy: Y(pl), r: 5, fill: css("--surface"), stroke: col, "stroke-width": 2.4 }, svg);
       const hit = el("circle", { cx: hx, cy: Y(pl), r: 11, fill: "transparent", tabindex: 0 }, svg);
-      hit.dataset.tip = `<b>${pl.toFixed(3)}</b> projected at the hero budget<br>${c.name}<br><span style="opacity:.75">fit BPB = ${E} + ${c.A}·C^−${c.a} on model FLOPs; ${c.mfuNote}</span>`;
+      hit.dataset.tip = `<b>${pl.toFixed(3)}</b> projected BPB at the hero budget (loss ${lossAt(c, C_HW_BUDGET * c.mfu).toFixed(4)})<br>${c.name}<br><span style="opacity:.75">loss = ${SC.floor} + ${c.A}·C^−${c.alpha} on model FLOPs; ${c.mfu_note}</span>`;
     });
     // equal-loss compute multiplier in hardware FLOPs: where latest best reaches the Aug Hero Arch's projected BPB
-    const bc = curve("base"), nc = curve("best"), Lt = Lhw(bc, C_HW_BUDGET);
-    const C_EQ = Math.pow(nc.A / (Lt - E), 1 / nc.a) / nc.mfu, NX = C_HW_BUDGET / C_EQ;
+    // Hardware FLOPs at which the new recipe reaches the reference's projected BPB (bisection on the monotone curve).
+    const bc = curve(SC.compare.to), nc = curve(SC.compare.from), Lt = Lhw(bc, C_HW_BUDGET);
+    let lo = 17, hi = Math.log10(C_HW_BUDGET);
+    for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (Lhw(nc, 10 ** mid) > Lt) lo = mid; else hi = mid; }
+    const C_EQ = 10 ** hi, NX = C_HW_BUDGET / C_EQ;
     const ex = X(C_EQ), ey = Y(Lt);
     el("line", { x1: ex, x2: hx, y1: ey, y2: ey, stroke: css("--ink"), "stroke-dasharray": "3 3", "stroke-width": 1.6 }, svg);
     el("circle", { cx: ex, cy: ey, r: 4.2, fill: css("--rope"), stroke: css("--surface"), "stroke-width": 1.6 }, svg);
     txt(svg, ex - 6, ey + 18, `${NX.toFixed(1)}× less compute`, { "text-anchor": "end", fill: css("--ink"), "font-weight": 600, "font-size": 11.5 });
     const eh = el("circle", { cx: ex, cy: ey, r: 11, fill: "transparent", tabindex: 0 }, svg);
-    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>Belay Ckpt 1 at ${sci(C_EQ, 2)} vs Marin Aug Hero Arch at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the fits (d512–d1280 rungs); each at its own MFU</span>`;
+    eh.dataset.tip = `<b>${NX.toFixed(2)}×</b> less compute to the same BPB (${Lt.toFixed(3)})<br>${nc.name} at ${sci(C_EQ, 2)} vs ${bc.name} at ${sci(C_HW_BUDGET, 2)} hardware FLOPs<br><span style="opacity:.75">from the four-rung fits; each at its own 11-rack MFU</span>`;
     tipper("box-scaling", "tip-scaling", svg);
   }
 
@@ -466,8 +464,13 @@ async function front() {
   const sections = document.querySelector('.secnav')
   sections.className = 'nav'
   document.querySelector('.topbar .wrap').insertBefore(sections, document.getElementById('pages'))
-  const [results, status] = await Promise.all([loadJson('results'), loadJson('state').catch(() => null)])
-  startFront(results)
+  const scalingUrl = STATIC ? 'scaling.json' : `${BELAY_BASE}scaling.json`
+  const [results, status, scaling] = await Promise.all([
+    loadJson('results'),
+    loadJson('state').catch(() => null),
+    fetch(scalingUrl).then((r) => r.json()),
+  ])
+  startFront(results, scaling)
   if (status) {
     state = status
     renderLatest(status)
