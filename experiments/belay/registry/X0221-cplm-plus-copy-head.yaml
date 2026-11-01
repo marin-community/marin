@@ -30,6 +30,7 @@ trials:
   - -0.0578
   steps: 3030
   baseline: belay-X0221-control-b 3.0458 (same commit, seed 0)
+  step_time_change: +31%
 - id: t002
   variant: CPLM Plus copy head (cplm_plus=true)
   rung: speedrun
@@ -48,6 +49,7 @@ trials:
   - -0.0148
   steps: 2308
   baseline: belay-X0221-control-b 3.0458 (same commit, seed 0)
+  step_time_change: 0%
 - id: t003
   variant: CPLM Plus copy head (cplm_plus=true)
   rung: speedrun
@@ -67,3 +69,4 @@ trials:
   steps: 2308
   baseline: belay-X0221-control-s1 3.0391 (same commit, seed 1)
   note: Seed-1 confirmation under a protocol step since dropped (2026-11-01); not part of the verdict.
+  step_time_change: 0%
