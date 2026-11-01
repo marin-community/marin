@@ -32,7 +32,7 @@ from experiments.belay.posts import (
     title,
     updated,
 )
-from experiments.belay.results import Verdict, change, overall_verdict, verdict
+from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict
 from experiments.belay.submit import (
     IrisJob,
     check_launch,
@@ -410,3 +410,17 @@ def test_each_run_launches_at_its_own_seed() -> None:
     spec = parse_spec(SPEC.replace("seed0: {seed: 0", "seed1-t: {seed: 1"))
     command = launch_command(spec, spec.runs["seed1-t"])
     assert command[command.index("--seed") + 1] == "1"
+
+
+@pytest.mark.parametrize(
+    ("time_change", "stage_1", "runs", "status", "line"),
+    [
+        (0.004, Verdict.LOSS, False, "loss at equal time (step time within 1%)", "within 1%"),
+        (0.31, Verdict.WIN, True, None, "Variant 31% slower and won at equal data → equal-time run."),
+        (0.31, Verdict.NOISE, False, "noise at equal data; slower, equal time not run", "did not win"),
+        (-0.12, Verdict.LOSS, True, None, "Variant 12% faster → equal-time run"),
+    ],
+)
+def test_after_equal_data_rule(time_change, stage_1, runs, status, line) -> None:
+    rule = after_equal_data(time_change, stage_1, TRACKS[Track.SPEEDRUN].step_time_tolerance)
+    assert rule.run_equal_time is runs and rule.final_status == status and line in rule.line

@@ -116,7 +116,8 @@ class Comparison(StrEnum):
     EQUAL_DATA = "equal data"
     """Both arms train on the same tokens (the rung's steps); wall time is shown."""
     EQUAL_DATA_THEN_TIME = "equal data, then equal time"
-    """Stage 1 at equal data; only a stage-1 win goes on to stage 2, equal training time (``train_seconds``)."""
+    """Stage 1 at equal data; then, by ``results.after_equal_data``, stage 2 at equal training time
+    (``train_seconds``), whose verdict is final."""
     FIXED_CONFIG = "fixed config"
     """Same config and hardware; compared on step time."""
 
@@ -168,6 +169,8 @@ class Baseline:
     """Stage 2 of ``EQUAL_DATA_THEN_TIME``: seconds of training per arm (the control's steps x its s/step)."""
     baseline_steps: int | None = None
     """The control's steps (stage 1 for both arms)."""
+    step_time_tolerance: float = 0.01
+    """Within this relative step-time difference, equal data already is equal time (no stage 2)."""
     output_path: bool = True
     """The launcher takes ``--output-path`` (Belay writes under ``CONFIG.output_root``)."""
     seed_run: tuple[str, ...] = ()

@@ -44,11 +44,9 @@ class Stage(StrEnum):
     """A short variant run that measures its s/step."""
     TIME = "time"
     """The variant at train_seconds / its s/step steps, against the stage-1 control (equal time)."""
-    CONFIRM = "confirm"
-    """Stage 2 again at seed 1: a control at the baseline's steps and the variant at the equal-time steps."""
 
 
-STAGE_ORDER = (Stage.DATA, Stage.PROBE, Stage.TIME, Stage.CONFIRM)
+STAGE_ORDER = (Stage.DATA, Stage.PROBE, Stage.TIME)
 PROBE_STEPS = 150
 PROBE_SKIP = 20  # compile and warm-up steps left out of the probe's s/step
 
@@ -297,7 +295,7 @@ def spec_with_runs(text: str, runs: dict[str, dict]) -> str:
 
 
 def next_stage_runs(spec: ExperimentSpec, stage: Stage, suffix: str, steps: int | None = None) -> dict[str, dict]:
-    """The runs that start ``stage`` (PROBE, TIME at ``steps``, or CONFIRM at ``steps``), keyed like the spec."""
+    """The runs that start ``stage`` (PROBE, or TIME at ``steps``), keyed like the spec."""
     variant = next(r for r in spec.runs.values() if r.stage is Stage.DATA and not r.control)
     flags = list(variant_settings(spec))
     if stage is Stage.PROBE:
@@ -306,9 +304,5 @@ def next_stage_runs(spec: ExperimentSpec, stage: Stage, suffix: str, steps: int 
         return {f"probe{suffix}": {**probe, "stage": "probe"}}
     assert steps is not None
     timed_flags = [*flags, "--num-steps", str(steps)]
-    if stage is Stage.TIME:
-        timed = {"seed": variant.seed, "variant": variant.variant, "flags": timed_flags, "stage": "time"}
-        return {f"seed{variant.seed}-t{suffix}": timed}
-    control = {"seed": 1, "variant": f"{spec.track} control", "control": True, "stage": "confirm"}
-    timed = {"seed": 1, "variant": variant.variant, "flags": timed_flags, "stage": "confirm"}
-    return {f"seed1-t{suffix}": timed, f"control-s1{suffix}": control}
+    timed = {"seed": variant.seed, "variant": variant.variant, "flags": timed_flags, "stage": "time"}
+    return {f"seed{variant.seed}-t{suffix}": timed}

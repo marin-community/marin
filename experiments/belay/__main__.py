@@ -108,7 +108,16 @@ from experiments.belay.registry_entry import (
     load_entry,
     require_registry_checkout,
 )
-from experiments.belay.results import Measure, RunResult, Verdict, compared, measure, overall_verdict
+from experiments.belay.results import (
+    Measure,
+    RunResult,
+    Verdict,
+    after_equal_data,
+    compared,
+    measure,
+    overall_verdict,
+    verdict,
+)
 from experiments.belay.submit import (
     DEFAULT_TRACK,
     PROBE_SKIP,
@@ -494,7 +503,7 @@ def plan_rows(spec: ExperimentSpec, runs: list[RunSpec], commit: str) -> list[Ro
         label = control_label(spec.track, commit) if run.control else run.variant
         steps = run_steps(spec, run)
         seconds = TRACKS[spec.track].train_seconds
-        timed = run.control or run.stage in (Stage.TIME, Stage.CONFIRM)
+        timed = run.control or run.stage is Stage.TIME
         expected = seconds / steps if seconds and timed else None  # equal time: every timed arm trains `seconds`
         rows.append(Row(name, label, run.seed, hardware(spec.track), steps, expected))
     return rows
@@ -502,9 +511,8 @@ def plan_rows(spec: ExperimentSpec, runs: list[RunSpec], commit: str) -> list[Ro
 
 def comparison_text(track: Track, stage: Stage, tokens: float | None = None) -> str:
     baseline = TRACKS[track]
-    if stage in (Stage.TIME, Stage.CONFIRM):
-        seed = " at seed 1 (confirmation)" if stage is Stage.CONFIRM else ""
-        return f"equal time{seed}, {baseline.train_seconds:g} s of training per arm"
+    if stage is Stage.TIME:
+        return f"equal time, {baseline.train_seconds:g} s of training per arm"
     data = f"{baseline.baseline_steps:,} steps" + (f" / {tokens / 1e9:.2f}B tokens" if tokens else "")
     wall = "" if baseline.comparison is Comparison.EQUAL_DATA_THEN_TIME else "; wall time shown"
     return f"equal data, {data} per arm{wall}"
@@ -656,13 +664,13 @@ def measured_row(spec: ExperimentSpec, run: RunSpec, m: Measure, control: Measur
 def stage_pairs(spec: ExperimentSpec, stage: Stage) -> list[tuple[RunSpec, RunSpec]]:
     """(control, variant) pairs a finished stage compares: equal time reuses the stage-1 control."""
     variants = [r for r in stage_runs(spec, stage) if not r.control]
-    controls = stage_runs(spec, Stage.CONFIRM if stage is Stage.CONFIRM else Stage.DATA)
+    controls = stage_runs(spec, Stage.DATA)
     return [(next(c for c in controls if c.control and c.seed == v.seed), v) for v in variants]
 
 
 def run_finished(registry_id: str, *, dry_run: bool) -> None:
     """Record a finished stage, update the idea's #9451 comment in place, and start the next stage the Track's
-    comparison calls for (equal data, then equal time and a seed-1 confirmation for a speedrun win)."""
+    comparison calls for (for speedrun: equal data, then equal time by ``after_equal_data``)."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
     spec = load_spec(registry_id)
@@ -692,7 +700,11 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         steps = round(baseline.train_seconds / s_step)
         print(f"timing probe: {s_step:.4f} s/step, so {steps:,} steps make {baseline.train_seconds:g} s")
         note = f"Timing probe: {s_step:.4f} s/step, so the variant trains {steps:,} steps."
-        advance(Next(repo, branch, spec, registry_id, Stage.TIME, steps, url, entry, state, note), dry_run=dry_run)
+        data_variant = run_name(registry_id, stage_pairs(spec, Stage.DATA)[0][1].name)
+        data_trial = next(t for t in trials if data_variant in t["wandb"])
+        prior = str(verdict(data_trial["delta"][0], baseline))
+        nxt = Next(repo, branch, spec, registry_id, Stage.TIME, steps, url, entry, state, note, prior)
+        advance(nxt, dry_run=dry_run)
         return
     trial = next(t for t in trials if run_name(registry_id, stage_pairs(spec, stage)[0][1].name) in t["wandb"])
     number = trials.index(trial) + 1
@@ -721,16 +733,19 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
     stage_rows = [rows[run_name(registry_id, r.name)] for pair in pairs for r in pair]
     tokens = measure(stage_rows[0].name, baseline.metric).tokens if stage is Stage.DATA else None
     variant_key = pairs[0][1].name
-    note = reproduce(registry_id, trial["commit"], variant_key)
-    section = stage_section(number, comparison_text(spec.track, stage, tokens), stage_rows, note)
+    notes = [reproduce(registry_id, trial["commit"], variant_key)]
     staged = baseline.comparison is Comparison.EQUAL_DATA_THEN_TIME
-    where = {Stage.DATA: " at equal data", Stage.TIME: " at equal time", Stage.CONFIRM: " at equal time"}[stage]
-    status = f"{overall}{where if staged else ''}"
-    next_stage = {Stage.DATA: Stage.PROBE, Stage.TIME: Stage.CONFIRM}.get(stage) if staged else None
-    if stage is Stage.CONFIRM:
-        status = f"win at equal time, {'confirmed' if overall is Verdict.WIN else 'not confirmed'} at seed 1"
-    elif next_stage is not None and overall is Verdict.WIN:
-        status += " · " + ("equal-time run pending" if next_stage is Stage.PROBE else "seed-1 confirm pending")
+    status = f"{overall} at equal time" if stage is Stage.TIME else str(overall)
+    run_equal_time = False
+    if staged and stage is Stage.DATA:
+        variant_row = rows[run_name(registry_id, variant_key)]
+        control_row = rows[run_name(registry_id, pairs[0][0].name)]
+        assert variant_row.s_step is not None and control_row.s_step is not None
+        rule = after_equal_data(variant_row.s_step / control_row.s_step - 1, overall, baseline.step_time_tolerance)
+        notes.insert(0, rule.line)
+        run_equal_time = rule.run_equal_time
+        status = rule.final_status or f"{overall} at equal data · equal-time run pending"
+    section = stage_section(number, comparison_text(spec.track, stage, tokens), stage_rows, "\n\n".join(notes))
     analysis = (f"{registry_id} {trial['id']}", report_url(registry_id, trial["id"]))
     new_title = title(registry_id, entry["name"], spec.track, status)
     body = updated(read_comment(url), new_title, number, section, analysis)
@@ -745,9 +760,9 @@ def run_finished(registry_id: str, *, dry_run: bool) -> None:
         report_idea(idea.id, {"state": "recorded", "result": {**result, "summary": status}}, dry_run=dry_run)
     idea_id = None if idea is None else idea.id
     record_activity(Post("result", new_title, body, registry_id, idea_id), url, dry_run=dry_run)
-    if next_stage is not None and overall is Verdict.WIN:
-        steps = None if next_stage is Stage.PROBE else run_steps(spec, pairs[0][1])
-        advance(Next(repo, branch, spec, registry_id, next_stage, steps, url, entry, state), dry_run=dry_run)
+    if run_equal_time:
+        nxt = Next(repo, branch, spec, registry_id, Stage.PROBE, None, url, entry, state, prior=str(overall))
+        advance(nxt, dry_run=dry_run)
         return
     if overall is Verdict.WIN:
         adoption = f"See {url}. A maintainer decides on adoption into {CONFIG.recipe_name}."
@@ -770,12 +785,13 @@ class Next:
     entry: dict
     state: PageState
     note: str = ""
+    prior: str = ""
+    """The equal-data verdict, for the title while the equal-time stage runs."""
 
 
 STATUS_RUNNING = {
-    Stage.PROBE: "win at equal data · equal-time timing probe running",
-    Stage.TIME: "win at equal data · equal-time run running",
-    Stage.CONFIRM: "win at equal time · seed-1 confirm running",
+    Stage.PROBE: "{prior} at equal data · equal-time timing probe running",
+    Stage.TIME: "{prior} at equal data · equal-time run running",
 }
 
 
@@ -788,11 +804,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
     comment."""
     repo, branch, spec, registry_id, stage = nxt.repo, nxt.branch, nxt.spec, nxt.registry_id, nxt.stage
     jobs = iris_jobs()
-    stage_keys = {
-        Stage.PROBE: ("probe",),
-        Stage.TIME: (f"seed{CONFIG.seed}-t",),
-        Stage.CONFIRM: ("seed1-t", "control-s1"),
-    }
+    stage_keys = {Stage.PROBE: ("probe",), Stage.TIME: (f"seed{CONFIG.seed}-t",)}
     runs = next_stage_runs(spec, stage, run_suffix(registry_id, jobs, stage_keys[stage]), nxt.steps)
     text = spec_with_runs(spec_path(registry_id, repo / SPECS).read_text(), runs)
     new_spec = write_spec(repo, branch, text, dry_run=dry_run, replace=True)
@@ -808,7 +820,7 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
         planned = plan_rows(new_spec, [*pair], commit)
         notes = "\n\n".join(n for n in (nxt.note, reproduce(registry_id, commit, pair[1].name)) if n)
         section = stage_section(number, comparison_text(spec.track, stage), planned, notes)
-    new_title = title(registry_id, nxt.entry["name"], spec.track, STATUS_RUNNING[stage])
+    new_title = title(registry_id, nxt.entry["name"], spec.track, STATUS_RUNNING[stage].format(prior=nxt.prior))
     body = updated(read_comment(nxt.url), new_title, number, section)
     publish_comment(nxt.url, body, github_posting=nxt.state.github_posting, dry_run=dry_run)
     if dry_run:
@@ -834,7 +846,7 @@ def analyze(registry_id: str, *, dry_run: bool) -> None:
     entry = load_entry(registry_id)
     idea = page_state().idea_for(registry_id)
     reports: list[Path] = []
-    for stage in (Stage.DATA, Stage.TIME, Stage.CONFIRM):
+    for stage in (Stage.DATA, Stage.TIME):
         for control_run, variant_run in stage_pairs(spec, stage):
             variant_name = run_name(registry_id, variant_run.name)
             trial = next((t for t in entry["trials"] if variant_name in (t.get("wandb") or [])), None)

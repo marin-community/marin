@@ -112,13 +112,17 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
    - **If it prints `next: B run-failed X#### --run <run>`:** do section 3.
    - **Otherwise** it records the stage that finished and, for the `speedrun` track, starts the next stage by
      itself. The stages are fixed:
-     1. **Equal data:** the variant and its control at the baseline's steps. Noise or a loss ends here:
-        "<verdict> at equal data".
-     2. **Timing probe** (only after an equal-data win): a 150-step variant run that measures its s/step.
-     3. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. A noise or loss
-        verdict here is final.
-     4. **Seed-1 confirm** (only after an equal-time win): the equal-time pair again at seed 1. The final verdict
-        is "win at equal time, confirmed (or not confirmed) at seed 1".
+     1. **Equal data:** the variant and its control at the baseline's steps.
+     2. **The rule after equal data**, from Δt = variant s/step ÷ control s/step − 1 (the comment states which
+        branch applied under stage 1):
+        - |Δt| ≤ 1%: equal data already is equal time; stage 1 is final ("<verdict> at equal time (step time
+          within 1%)").
+        - Variant slower (Δt > +1%): stage 2 only after a stage-1 win, since fewer steps can't turn noise or a
+          loss into a win. Otherwise final: "<verdict> at equal data; slower, equal time not run".
+        - Variant faster (Δt < −1%): stage 2 always, since it gets more steps at equal time.
+     3. **Timing probe:** a 150-step variant run that measures its s/step.
+     4. **Equal time:** the variant at 480 s ÷ its s/step steps, against the equal-data control. This verdict is
+        final.
    - Other Tracks have one stage: equal data.
    - **Expect**, at each recorded stage:
      - the registry entry and the trial's analysis report pushed together
