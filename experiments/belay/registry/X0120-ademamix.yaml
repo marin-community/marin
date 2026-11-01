@@ -4,7 +4,7 @@ name: AdEMAMix on Adam groups
 category: Optimizers
 summary: Adds a slow gradient EMA to Adam's first moment for the Adam parameter groups.
 source: agent
-status: running
+status: done
 first_batch: 77
 tags:
 - ademamix
@@ -267,6 +267,13 @@ trials:
     adam_ademamix_alpha: '5.0'
     adam_ademamix_beta3: '0.98'
   commit: 1244ef6ec4
+  loss:
+  - 3.0408
+  delta:
+  - -0.0043
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '78'
