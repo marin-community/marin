@@ -5,18 +5,21 @@
 
 Harbor's job and trial directories remain operational state for resume, inspection, and retry.
 FineStore is the configured evaluation-output sink: this module writes the typed result received from
-the trial lifecycle, preserves trajectory and job artifacts, and appends normalized rows.
+each attempt's lifecycle and normalizes only the final selected trial results.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import threading
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import ExitStack
 from multiprocessing import get_context
 from pathlib import Path
+from uuid import UUID
 
 from upath import UPath
 
@@ -32,13 +35,19 @@ from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.job.config import ArchiveConfig
 
 try:
+    from finestore.admin import drop_table
     from finestore.eval import (
+        ARCHIVE_ROLLOUTS_TABLE,
+        ARCHIVE_SAMPLES_TABLE,
+        ARCHIVE_STEPS_TABLE,
         EvalSample,
         EvaluationStore,
         Grading,
         SampleKind,
         StepRecord,
     )
+    from finestore.reader import ReadView
+    from finestore.store import DataStore
 
     _FINESTORE_IMPORT_ERROR: ImportError | None = None
 except ImportError as error:
@@ -169,30 +178,30 @@ def _trajectory_step_rows(
 
 
 class TrialArchive:
-    """A job-scoped writer that defers ungraded attempts until the final result set."""
+    """Preserve native attempts, then normalize the selected final trial set."""
 
     def __init__(
         self,
         store: EvaluationStore,
         dataset: str,
         trials_dir: Path | UPath | None,
+        *,
+        root: str,
     ) -> None:
         self._store = store
         self._dataset = dataset
         self._trials_dir = trials_dir
+        self._root = root
+        self._attempt_digests: dict[UUID, str] = {}
         self._written_trial_ids: set[str] = set()
         self._errors: list[Exception] = []
         self._lock = threading.Lock()
 
     async def on_trial_end(self, event: TrialHookEvent) -> None:
-        """Archive one scored trial result at the end of its run."""
-        if (
-            event.event != TrialEvent.END
-            or event.result is None
-            or not _is_scored(event.result)
-        ):
+        """Capture the full native attempt before the queue retries or slims it."""
+        if event.event != TrialEvent.END or event.result is None:
             return
-        await asyncio.to_thread(self._write_result_safely, event.result)
+        await asyncio.to_thread(self._write_attempt_safely, event.result)
 
     async def finalize(self, trial_results: list[TrialResult]) -> None:
         """Complete the archive from the final trial set and job metadata."""
@@ -210,15 +219,53 @@ class TrialArchive:
         self._store.close()
 
     def _write_final_results(self, trial_results: list[TrialResult]) -> None:
+        previous = ReadView(self._root)
+        for result in trial_results:
+            with self._lock:
+                archived = result.id in self._attempt_digests
+            if not archived:
+                prefix = f"sources/harbor/{result.trial_name}/attempts/{result.id}"
+                if previous.read_blob(f"{prefix}/result.json") is not None:
+                    continue
+                # Resumed results did not emit END in this writer. Their persisted
+                # attempt result retains the payload that the job may have slimmed.
+                path = result.resolve_trial_path(self._trials_dir) / "result.json"
+                if not path.exists():
+                    raise ValueError(
+                        f"Missing persisted attempt {result.id} for trial {result.trial_name}: {path}"
+                    )
+                native = TrialResult.model_validate_json(path.read_bytes())
+                if (
+                    native.id != result.id
+                    or native.trial_name != result.trial_name
+                    or native.task_name != result.task_name
+                ):
+                    raise ValueError(
+                        f"Persisted attempt identity differs for trial {result.trial_name}, attempt {result.id}"
+                    )
+                self._write_attempt_safely(native)
+        self._store.flush()
+        reader = ReadView(self._root)
         for result in trial_results:
             with self._lock:
                 written = result.trial_name in self._written_trial_ids
             if not written:
-                self._write_result_safely(result)
+                self._write_result_safely(result, reader)
 
-    def _write_result_safely(self, result: TrialResult) -> None:
+    def _write_attempt_safely(self, result: TrialResult) -> None:
         try:
-            self._write_result(result)
+            self._write_attempt(result)
+        except Exception as error:
+            self._record_error(error)
+            logger.warning(
+                "FineStore attempt archive write failed for trial %s; the job will fail before sealing",
+                result.trial_name,
+                exc_info=True,
+            )
+
+    def _write_result_safely(self, result: TrialResult, reader: ReadView) -> None:
+        try:
+            self._write_result(result, reader)
         except Exception as error:
             self._record_error(error)
             logger.warning(
@@ -253,12 +300,57 @@ class TrialArchive:
                     content_type=_JSON_CONTENT_TYPE,
                 )
 
-    def _write_result(self, result: TrialResult) -> None:
-        trajectory_uri = None
+    def _write_attempt(self, result: TrialResult) -> None:
+        prefix = f"harbor/{result.trial_name}/attempts/{result.id}"
+        native = result.model_dump_json(indent=4).encode()
         trial_dir = result.resolve_trial_path(self._trials_dir)
         trajectory_path = trial_dir / "agent" / "trajectory.json"
-        if trajectory_path.exists():
-            raw = trajectory_path.read_bytes()
+        raw = trajectory_path.read_bytes() if trajectory_path.exists() else None
+        digest = hashlib.sha256(native)
+        digest.update(b"\0no-trajectory" if raw is None else b"\0trajectory\0")
+        if raw is not None:
+            digest.update(raw)
+        fingerprint = digest.hexdigest()
+        with self._lock:
+            previous = self._attempt_digests.get(result.id)
+            if previous is not None:
+                if previous != fingerprint:
+                    raise ValueError(
+                        f"Native result or trajectory changed for immutable attempt {result.id}"
+                    )
+                return
+            self._store.add_source_artifact(
+                f"{prefix}/result.json",
+                native,
+                content_type=_JSON_CONTENT_TYPE,
+            )
+            if raw is not None:
+                self._store.add_source_artifact(
+                    f"{prefix}/trajectory.json",
+                    raw,
+                    content_type=_JSON_CONTENT_TYPE,
+                )
+            self._attempt_digests[result.id] = fingerprint
+
+    def _write_result(self, selected: TrialResult, reader: ReadView) -> None:
+        prefix = f"sources/harbor/{selected.trial_name}/attempts/{selected.id}"
+        native = reader.read_blob(f"{prefix}/result.json")
+        if native is None:
+            raise ValueError(
+                f"Missing archived attempt {selected.id} for trial {selected.trial_name}"
+            )
+        result = TrialResult.model_validate_json(native)
+        if (
+            result.id != selected.id
+            or result.trial_name != selected.trial_name
+            or result.task_name != selected.task_name
+        ):
+            raise ValueError(
+                f"Archived attempt identity differs for trial {selected.trial_name}, attempt {selected.id}"
+            )
+        trajectory_uri = None
+        raw = reader.read_blob(f"{prefix}/trajectory.json")
+        if raw is not None:
             # Preserve the original JSON artifact, including surrogate escapes;
             # normalized Arrow text needs a UTF-8-safe representation.
             trajectory = Trajectory.model_validate(json.loads(raw))
@@ -282,7 +374,7 @@ class TrialArchive:
 
         self._store.add_source_artifact(
             f"harbor/{result.trial_name}/result.json",
-            result.model_dump_json(indent=4).encode(),
+            native,
             content_type=_JSON_CONTENT_TYPE,
         )
         self._store.add_sample(
@@ -300,8 +392,25 @@ def _initialize_archive_process(
     config: ArchiveConfig, trials_dir: Path | UPath | None
 ) -> None:
     global _PROCESS_ARCHIVE
-    store = EvaluationStore.open(config.root, writer_id=config.writer_id)
-    _PROCESS_ARCHIVE = TrialArchive(store, config.dataset, trials_dir)
+    # One Harbor job exclusively owns this root. Reopening first clears the old
+    # seal; reset derived rows before registering their handles. Native blobs
+    # remain available, and finalize rebuilds rows from the selected trial set.
+    with ExitStack() as cleanup:
+        store = cleanup.enter_context(
+            DataStore.open(config.root, writer_id=config.writer_id)
+        )
+        existing = ReadView(config.root).table_names()
+        for table in (
+            ARCHIVE_SAMPLES_TABLE,
+            ARCHIVE_STEPS_TABLE,
+            ARCHIVE_ROLLOUTS_TABLE,
+        ):
+            if table in existing:
+                drop_table(config.root, table)
+        _PROCESS_ARCHIVE = TrialArchive(
+            EvaluationStore(store), config.dataset, trials_dir, root=config.root
+        )
+        cleanup.pop_all()
 
 
 def _archive_process_ready() -> None:
@@ -309,10 +418,10 @@ def _archive_process_ready() -> None:
         raise RuntimeError("Archive process was not initialized")
 
 
-def _write_process_result(result: TrialResult) -> None:
+def _write_process_attempt(result: TrialResult) -> None:
     if _PROCESS_ARCHIVE is None:
         raise RuntimeError("Archive process was not initialized")
-    _PROCESS_ARCHIVE._write_result_safely(result)
+    _PROCESS_ARCHIVE._write_attempt_safely(result)
 
 
 def _finalize_process_archive(results: list[TrialResult]) -> None:
@@ -334,7 +443,11 @@ def _close_process_archive() -> None:
 
 
 class ProcessTrialArchive:
-    """Stream results through a writer isolated from sandbox SDK environment changes."""
+    """Archive one exclusively owned job root in an isolated writer process.
+
+    Reopening retains native artifacts and rebuilds normalized tables at finalization.
+    Concurrent jobs must use distinct roots.
+    """
 
     def __init__(self, config: ArchiveConfig, trials_dir: Path | UPath | None) -> None:
         # Daytona's image uploader temporarily clears os.environ. Spawn before
@@ -352,14 +465,10 @@ class ProcessTrialArchive:
             raise
 
     async def on_trial_end(self, event: TrialHookEvent) -> None:
-        if (
-            event.event != TrialEvent.END
-            or event.result is None
-            or not _is_scored(event.result)
-        ):
+        if event.event != TrialEvent.END or event.result is None:
             return
         await asyncio.wrap_future(
-            self._executor.submit(_write_process_result, event.result)
+            self._executor.submit(_write_process_attempt, event.result)
         )
 
     async def finalize(self, trial_results: list[TrialResult]) -> None:

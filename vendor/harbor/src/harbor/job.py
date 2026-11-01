@@ -1088,8 +1088,8 @@ class Job:
         try:
             with bind_telemetry(telemetry):
                 result = await self._run_job()
-                # Finalization adds existing resume results and only the ungraded
-                # attempts that survived into the completed job result.
+                # Rebuild canonical archive rows from the selected final results,
+                # including resumed trials; native retry attempts stay preserved.
                 if archive is not None:
                     await archive.finalize(result.trial_results)
                     await asyncio.to_thread(archive.seal)

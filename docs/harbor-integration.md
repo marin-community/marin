@@ -301,8 +301,11 @@ Host-side agents such as Terminus and the AIME agent call their candidate endpoi
 Persisted job and trial JSON redacts Iris bearer URLs; live configurations retain their routes.
 Resumed runs receive a fresh model capability from Marin rather than reusing one from saved JSON.
 
-Both relays authorize only `POST /v1/chat/completions` and `POST /tokenize`, fix
-the upstream model, reject redirects, and bound request and response bodies.
+Both relays authorize only `POST /v1/chat/completions`, `POST /v1/responses`, and
+`POST /tokenize`. They fix the upstream model, reject redirects, and bound request
+and response bodies. The Responses route supports non-streaming text input with
+an output-token limit and reasoning options; tools, stored responses, and stateful
+continuations are unsupported.
 The tokenization route uses the configured upstream's server root. For installed
 SDKs requesting streaming chat, the host obtains one non-streaming completion and
 returns bounded SSE frames containing its text, reasoning, tool calls, finish reason,
@@ -573,8 +576,11 @@ Each Harbor evaluation writes:
   and `steps` tables plus the evaluator-neutral `rollouts_v1` conversation table
 - Harbor-native job metadata, trial results, and trajectories preserved as FineStore objects
 
-Harbor writes each verifier-scored trial as it finishes, then adds surviving ungraded attempts and
-job metadata before sealing the archive. Every final trial becomes an agentic `EvalSample`. The
+Harbor preserves each attempt's native result and trajectory as it finishes. At job finalization,
+it writes normalized rows only for the selected final attempts, then adds job metadata and seals
+the archive. Retried attempts retain separate source artifacts and do not contribute sample or
+step rows. A resumed invocation rebuilds the selected tables, including derived rollouts, while
+retaining earlier native attempt artifacts. Every final trial becomes an agentic `EvalSample`. The
 verifier reward is stored as `Grading(method="harbor:verifier")`, and the trajectory is referenced
 by `trajectory_uri`. Marin derives the `rollouts_v1` table from `steps`, normalizing each trajectory's
 participants and ordered message, reasoning, tool-call, and observation parts. Evaldash reads the

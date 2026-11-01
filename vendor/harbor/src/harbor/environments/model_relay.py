@@ -41,6 +41,7 @@ class ModelRelay:
     async def handle(self, request: HttpRequest) -> HttpResponse:
         if request.method != "POST" or request.path not in {
             "/v1/chat/completions",
+            "/v1/responses",
             "/tokenize",
         }:
             return HttpResponse(404, b'{"error":"unsupported model route"}')
@@ -52,6 +53,19 @@ class ModelRelay:
             return HttpResponse(400, b'{"error":"invalid JSON"}')
         if not isinstance(payload, dict):
             return HttpResponse(400, b'{"error":"JSON object required"}')
+        if request.path == "/v1/responses":
+            if payload.keys() - {
+                "model",
+                "input",
+                "max_output_tokens",
+                "reasoning",
+                "stream",
+            }:
+                return HttpResponse(400, b'{"error":"unsupported response options"}')
+            if payload.get("stream") or not isinstance(payload.get("input"), str):
+                return HttpResponse(
+                    400, b'{"error":"non-streaming text responses required"}'
+                )
         streaming = (
             request.path == "/v1/chat/completions" and payload.get("stream") is True
         )
@@ -63,11 +77,13 @@ class ModelRelay:
         payload["model"] = self.model
         if len(json.dumps(payload).encode()) > MAX_BODY:
             return HttpResponse(413, b'{"error":"model request exceeded limit"}')
-        url = (
-            tokenize_url(self.endpoint)
-            if request.path == "/tokenize"
-            else self.endpoint.rstrip("/") + "/chat/completions"
-        )
+        if request.path == "/tokenize":
+            url = tokenize_url(self.endpoint)
+        else:
+            route = (
+                "/responses" if request.path == "/v1/responses" else "/chat/completions"
+            )
+            url = self.endpoint.rstrip("/") + route
         try:
             async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
                 async with client.stream(

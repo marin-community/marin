@@ -4,10 +4,14 @@
 """Behavior tests for normalized evaluation rollouts."""
 
 import json
+from dataclasses import replace
 
+import pytest
+from finestore.admin import drop_table
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
+    ARCHIVE_STEPS_TABLE,
     ROLLOUT_SCHEMA_VERSION,
     ROLLOUTS_MERGE_KEY,
     SAMPLES_MERGE_KEY,
@@ -182,3 +186,82 @@ def test_multiple_choice_rollout_records_the_selected_choice(tmp_path):
     assert {row["conversation_type"] for row in rows} == {"completion"}
     assert rows[1]["content"] == "second"
     assert json.loads(rows[1]["metadata_json"]) == {"choice_index": 1, "choice_label": "B"}
+
+
+def test_rollouts_replace_same_count_source_shards_and_remove_old_conversations(tmp_path):
+    root = str(tmp_path / "archive")
+    for iteration, doc_id, output in ((0, "old", "first"), (1, "replacement", "second")):
+        if iteration:
+            drop_table(root, ARCHIVE_SAMPLES_TABLE)
+        with EvaluationStore.open(root, writer_id=f"source-{iteration}") as store:
+            store.add_sample(
+                EvalSample(task="qa", doc_id=doc_id, kind=SampleKind.GENERATION, prompt_text="Question?", output=output)
+            )
+            store.add_source_artifact("native/result.json", b'{"preserved":true}', content_type="application/json")
+            store.seal()
+        normalize_rollouts(root, writer_id=f"rollouts-{iteration}")
+        reader = ReadView(root)
+        assert [(row["doc_id"], row["content"]) for row in reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)] == [
+            (doc_id, "Question?"),
+            (doc_id, output),
+        ]
+        assert reader.read_blob("sources/native/result.json") == b'{"preserved":true}'
+
+    completed = ReadView(root).token
+    normalize_rollouts(root, writer_id="unchanged")
+    assert ReadView(root).token == completed
+
+
+@pytest.fixture
+def agent_step():
+    return StepRecord(
+        task="qa",
+        doc_id="same",
+        trial_id="same",
+        step_id=1,
+        source="agent",
+        model_name="model",
+        message="old answer",
+        reasoning_content=None,
+        tool_calls_json=None,
+        observation_json=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        cost_usd=None,
+        prompt_token_ids=None,
+        completion_token_ids=None,
+        logprobs=None,
+    )
+
+
+def test_rollouts_clear_old_parts_after_same_count_step_replacement(tmp_path, agent_step):
+    root = str(tmp_path / "archive")
+    for iteration, reasoning in ((0, "Old reasoning"), (1, None)):
+        if iteration:
+            drop_table(root, ARCHIVE_STEPS_TABLE)
+        with EvaluationStore.open(root, writer_id=f"source-{iteration}") as store:
+            store.add_steps([replace(agent_step, message=f"answer-{iteration}", reasoning_content=reasoning)])
+            store.seal()
+        normalize_rollouts(root, writer_id=f"rollouts-{iteration}")
+
+    assert [(row["content_type"], row["content"]) for row in ReadView(root).iter_rows(ARCHIVE_ROLLOUTS_TABLE)] == [
+        ("message", "answer-1"),
+    ]
+
+
+def test_rollouts_record_empty_replacement_and_clear_stale_rows(tmp_path, agent_step):
+    root = str(tmp_path / "archive")
+    with EvaluationStore.open(root, writer_id="source") as store:
+        store.add_steps([agent_step])
+        store.seal()
+    normalize_rollouts(root, writer_id="initial-rollouts")
+    drop_table(root, ARCHIVE_STEPS_TABLE)
+
+    normalize_rollouts(root, writer_id="empty-rollouts")
+
+    reader = ReadView(root)
+    assert list(reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)) == []
+    assert reader.is_sealed()
+    completed = reader.token
+    normalize_rollouts(root, writer_id="empty-rollouts-retry")
+    assert ReadView(root).token == completed

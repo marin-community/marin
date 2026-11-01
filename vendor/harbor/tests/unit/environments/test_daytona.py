@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +17,7 @@ from harbor.agents.terminus_2.tmux_session import TmuxCommandError, TmuxKeystrok
 from harbor.environments import daytona, model_relay
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.environments.local import LocalEnvironment
-from harbor.environments.model_relay import host_model_authentication
+from harbor.environments.model_relay import ModelRelay, host_model_authentication
 from harbor.environments.qemu import QemuEnvironment
 from harbor.environments.runtime import host_backend_credentials
 from harbor.environments.shellsim import ShellSimEnvironment
@@ -25,7 +26,8 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.utils.env import task_environment
 from harbor.verifier.verifier import Verifier
-from shellbox.machine import MachineSpec, PackageSpec
+from shellbox.http_service import serve_http
+from shellbox.machine import Command, MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -372,7 +374,7 @@ assert events[1]['choices'][0]['finish_reason'] == 'tool_calls'
 assert events[2]['usage']['total_tokens'] == 8
 assert json.loads(post('/v1/chat/completions', {{'model':'guest-choice','messages':[]}}, {judge_port})[1]) == {{'judge':True}}
 try:
-    post('/v1/responses', {{}})
+    post('/v1/embeddings', {{}})
     raise AssertionError('unsupported route accepted')
 except urllib.error.HTTPError as error:
     assert error.code == 404
@@ -398,6 +400,101 @@ print('ok')
         finally:
             await adapter.stop(True)
     assert factory.machine.closed
+
+
+async def test_model_relay_serves_bounded_non_streaming_responses_for_simpleqa(
+    tmp_path, monkeypatch
+):
+    port = available_port()
+    endpoint = "https://judge.example/proxy/t/host-capability/serve/v1"
+    original_client = httpx.AsyncClient
+
+    def provider(request):
+        assert str(request.url) == endpoint + "/responses"
+        assert request.headers["authorization"] == "Bearer judge-private"
+        payload = json.loads(request.content)
+        assert payload == {
+            "model": "judge-model",
+            "input": payload["input"],
+            "max_output_tokens": 1024,
+            "reasoning": {"effort": "low"},
+        }
+        if payload["input"] == "redirect":
+            return httpx.Response(
+                302, headers={"Location": "https://other.example/judge-private"}
+            )
+        if payload["input"] == "error":
+            return httpx.Response(500, text="judge-private host-capability")
+        if payload["input"] == "oversized":
+            return httpx.Response(200, content=b"x" * (model_relay.MAX_BODY + 1))
+        assert payload["input"] == "Grade this answer."
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp-one",
+                "object": "response",
+                "created_at": 1,
+                "model": "judge-model",
+                "output": [
+                    {
+                        "id": "msg-one",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "CORRECT",
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        model_relay.httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs
+        ),
+    )
+    machine = ProcessMachine(
+        tmp_path / "guest", MachineSpec(PackageSpec(), workdir="/workspace")
+    )
+    with host_model_authentication({endpoint: "judge-private"}):
+        relay = ModelRelay(endpoint, "judge-model")
+    script = f"""
+import json, urllib.request, urllib.error
+from openai import OpenAI
+client = OpenAI(base_url='http://127.0.0.1:{port}/v1', api_key='EMPTY', max_retries=0)
+response = client.responses.create(model='guest-model', input='Grade this answer.', max_output_tokens=1024, reasoning={{'effort':'low'}})
+assert response.output_text == 'CORRECT'
+base = {{'model':'guest-model', 'input':'Grade this answer.', 'max_output_tokens':1024, 'reasoning':{{'effort':'low'}}}}
+def rejected(payload, status):
+    request = urllib.request.Request('http://127.0.0.1:{port}/v1/responses', data=json.dumps(payload).encode(), headers={{'Authorization':'Bearer guest-override'}})
+    try:
+        urllib.request.urlopen(request)
+        raise AssertionError('unsupported model request succeeded')
+    except urllib.error.HTTPError as error:
+        assert error.code == status
+        body = error.read().decode()
+        assert 'judge-private' not in body and 'host-capability' not in body
+for key, value in (('stream', True), ('tools', []), ('store', True), ('previous_response_id', 'resp-other'), ('input', [])):
+    rejected({{**base, key:value}}, 400)
+for failure in ('redirect', 'error', 'oversized'):
+    rejected({{**base, 'input':failure}}, 502)
+rejected({{**base, 'input':'x' * {model_relay.MAX_BODY}}}, 400)
+print('ok')
+"""
+    try:
+        async with serve_http(machine, relay.handle, port=port):
+            result = await machine.run(Command((sys.executable, "-c", script)))
+            assert result.exit_code == 0, result.stderr.decode()
+            assert result.stdout.strip() == b"ok"
+    finally:
+        await machine.close()
 
 
 def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
