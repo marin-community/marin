@@ -758,3 +758,5 @@ potential:
   model: claude-opus-5-5
   date: '2026-11-01'
   inputs_digest: e012d96c8cdf
+code_commits:
+- 65a2f67d86d0f50c61ae03c0b4ed6ed0394feecb
