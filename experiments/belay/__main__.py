@@ -281,6 +281,7 @@ def write_spec(repo: Path, branch: str, text: str, *, dry_run: bool) -> Experime
         return spec
     print(f"{'would write' if dry_run else 'writing'} {path.relative_to(repo)}:\n{text}")
     if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)  # the first spec on a fresh weekly branch
         path.write_text(text)
     run_git(repo, ["add", str(path.relative_to(repo))], dry_run=dry_run)
     run_git(repo, ["commit", "--quiet", "-m", f"Belay {spec.experiment}: run spec"], dry_run=dry_run)

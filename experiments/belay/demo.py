@@ -469,6 +469,8 @@ ALLOWED_TOOLS = (
     "Write(tests/grug/test_fast_track_*)",
     "Bash(git checkout -- .)",
     "Bash(git clean -fd experiments/grug/fast_track tests/grug)",
+    "Bash(gh pr view:*)",  # read-only: an idea may point at a PR whose change it asks to port
+    "Bash(gh pr diff:*)",
     "Bash(uv run iris --cluster marin job list:*)",
     "Bash(uv run iris --cluster marin job logs:*)",
 )
