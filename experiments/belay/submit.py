@@ -135,8 +135,20 @@ def check_variant(variant: str, settings: list[tuple[str, str]]) -> None:
         check_setting(option, setting)
 
 
-def new_spec_text(experiment_id: str, track: Track, variant: str, settings: list[tuple[str, str]]) -> str:
-    """The run spec for one variant and its same-commit control on ``track``, after checking every setting."""
+def run_suffix(experiment_id: str, jobs: list[IrisJob]) -> str:
+    """A suffix for the spec's run keys so no run name repeats one that already ran on Iris ("" when none did)."""
+    for suffix in ("", *(f"-{c}" for c in "bcdefgh")):
+        names = [run_name(experiment_id, f"{key}{suffix}") for key in (f"seed{CONFIG.seed}", "control")]
+        if not any(j.job_id.endswith(f"/{n}-coord") for j in jobs for n in names):
+            return suffix
+    raise SystemExit(f"refusing: {experiment_id} has run too many times; a maintainer decides")
+
+
+def new_spec_text(
+    experiment_id: str, track: Track, variant: str, settings: list[tuple[str, str]], suffix: str = ""
+) -> str:
+    """The run spec for one variant and its same-commit control on ``track``, after checking every setting.
+    ``suffix`` (from ``run_suffix``) keeps run names unique when the id ran before."""
     check_variant(variant, settings)
     flags = [part for setting in settings for part in setting]
     variant_run = {"seed": CONFIG.seed, "variant": variant, "flags": flags}
@@ -144,7 +156,7 @@ def new_spec_text(experiment_id: str, track: Track, variant: str, settings: list
     data = {
         "experiment": experiment_id,
         "track": track.value,
-        "runs": {f"seed{CONFIG.seed}": variant_run, "control": control_run},
+        "runs": {f"seed{CONFIG.seed}{suffix}": variant_run, f"control{suffix}": control_run},
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=120)
 

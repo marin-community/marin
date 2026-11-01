@@ -21,7 +21,15 @@ from experiments.belay.demo import GithubApproval, approval_time
 from experiments.belay.page import require_unedited, visible_text
 from experiments.belay.posts import IdeaRef, PlannedRun, ResultRow, plan_body, result_body, title
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
-from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
+from experiments.belay.submit import (
+    IrisJob,
+    check_launch,
+    launch_command,
+    new_spec_text,
+    parse_spec,
+    run_suffix,
+    track_of_comment,
+)
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -300,3 +308,15 @@ def test_analysis_report_from_recorded_history(tmp_path: Path) -> None:
         assert section in text
     assert "| belay-X0217-seed0 | 3.0678 | +0.0223 |" in text
     assert (tmp_path / "t005_loss.png").stat().st_size > 0 and (tmp_path / "t005_delta.png").stat().st_size > 0
+
+
+def test_run_names_never_repeat_an_earlier_run() -> None:
+    assert run_suffix("X0001", []) == ""
+    used = [
+        IrisJob("/u/belay-X0001-control-coord", "succeeded", ""),
+        IrisJob("/u/belay-X0001-control-b-coord", "failed", ""),
+    ]
+    suffix = run_suffix("X0001", used)
+    assert suffix == "-c"
+    spec = parse_spec(new_spec_text("X0001", Track.SPEEDRUN, "v", [("--opt-set", "muonh_decay_power=0.5")], suffix))
+    check_launch(spec, used)  # no reused name
