@@ -37,7 +37,8 @@ trials:
   batch: X0221
   date: '2026-11-01'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6556166051
-  wandb: []
+  wandb:
+  - belay-X0221-seed0-t-c
   settings:
     cplm_plus: 'true'
   commit: cf008d1b9f
