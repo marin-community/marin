@@ -20,9 +20,11 @@ Add future adaptors as new submodules and register them with
 import abc
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import draccus
+import haliax
+import jax
 import jax.numpy as jnp
 from haliax.partitioning import named_jit
 
@@ -55,6 +57,7 @@ class AdaptorExportConfig:
     hf_save_steps: int | None = None
     hf_save_dtype: str | None = None
     generation_config: GenerationConfigDict | None = None
+    hf_save_dtype_overrides: dict[str, str] | None = None
 
     peft_save_path: str | None = None
     peft_hf_upload: bool | str | RepoRef = False
@@ -151,8 +154,69 @@ class NoAdaptorConfig(AdaptorConfig):
                 upload_to_hf=export.hf_upload or False,
                 save_dtype=save_dtype,
                 generation_config=export.generation_config,
+                dtype_overrides=export.hf_save_dtype_overrides,
             ),
             every=export.hf_save_steps,
+        )
+
+
+@AdaptorConfig.register_subclass("frozen_parameters")
+@dataclass(frozen=True)
+class FrozenParameterAdaptorConfig(AdaptorConfig):
+    """Train a full model except named fields, exporting the complete model.
+
+    Field names match exact attribute names at any depth, not HF state-dict keys.
+    Native checkpoints omit frozen fields; resume requires the same pinned base.
+    This controls trainability, not the trainer's mixed-precision casting policy.
+    """
+
+    frozen_field_names: tuple[str, ...]
+    hf_save_dtype_overrides: dict[str, str] | None = None
+    hf_config_overrides: dict | None = None
+
+    def apply(self, model, *, key, axis_mapping=None):
+        del key, axis_mapping
+        return model
+
+    def trainable_filter(self, policy_model) -> FilterTree:
+        matched = set()
+
+        def trainable(path, leaf):
+            del leaf
+            fields = {key.name for key in path if isinstance(key, jax.tree_util.GetAttrKey)}
+            frozen = fields.intersection(self.frozen_field_names)
+            matched.update(frozen)
+            return not frozen
+
+        result = jax.tree_util.tree_map_with_path(
+            trainable, policy_model, is_leaf=lambda leaf: isinstance(leaf, haliax.NamedArray)
+        )
+        missing = set(self.frozen_field_names) - matched
+        if missing:
+            raise ValueError(f"Frozen fields not found in model: {sorted(missing)}")
+        return result
+
+    def base_model_view(self, policy_model) -> LmHeadModel | None:
+        del policy_model
+        return None
+
+    def install_export_hooks(
+        self,
+        *,
+        trainer,
+        converter: HFCheckpointConverter | None,
+        tokenizer,
+        export: AdaptorExportConfig,
+    ) -> None:
+        if self.hf_config_overrides is not None:
+            if converter is None:
+                raise ValueError("HF config overrides require an HF checkpoint converter")
+            converter = converter.with_config_overrides(self.hf_config_overrides)
+        NoAdaptorConfig().install_export_hooks(
+            trainer=trainer,
+            converter=converter,
+            tokenizer=tokenizer,
+            export=replace(export, hf_save_dtype_overrides=self.hf_save_dtype_overrides),
         )
 
 
