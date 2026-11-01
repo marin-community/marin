@@ -272,28 +272,42 @@ def stop_stack(stack: Stack) -> None:
 # ---------- watcher ----------
 
 
-def intake_comments() -> list[dict]:
-    """Comments on the intake issue, flagged as already approved upstream when the intake bot handled them."""
-    out = subprocess.run(
-        ["gh", "api", "--paginate", f"repos/{REPOSITORY}/issues/{INTAKE_ISSUE}/comments?per_page=100"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+def github_json(path: str) -> list | dict:
+    out = subprocess.run(["gh", "api", "--paginate", path], check=True, capture_output=True, text=True).stdout
+    pages = [json.loads(page) for page in out.replace("][", "]\n[").splitlines()]
+    return [item for page in pages for item in page] if isinstance(pages[0], list) else pages[0]
+
+
+def approval_time(comment: dict, rocket_times: dict[str, datetime.datetime]) -> datetime.datetime | None:
+    """When the intake bot transferred ``comment`` (its first 🚀), if that was after the cutover; else None."""
+    at = rocket_times.get(str(comment["id"]))
+    return at if at is not None and at > CONFIG.github_approval_cutover else None
+
+
+def intake_comments(rocket_times: dict[str, datetime.datetime]) -> list[dict]:
+    """Comments on the intake issue. One the intake bot transferred is approved upstream; one it transferred after
+    the cutover also carries ``approved_at``, which queues it. ``rocket_times`` caches each comment's first 🚀."""
     comments = []
-    for page in out.replace("][", "]\n[").splitlines():
-        for c in json.loads(page):
-            handled = c["reactions"]["rocket"] > 0 or c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK)
-            comments.append(
-                {
-                    "comment_id": str(c["id"]),
-                    "author": c["user"]["login"],
-                    "body": c["body"],
-                    "url": c["html_url"],
-                    "posted_at": c["created_at"],
-                    "approved_upstream": handled,
-                }
-            )
+    for c in github_json(f"repos/{REPOSITORY}/issues/{INTAKE_ISSUE}/comments?per_page=100"):
+        handled = c["reactions"]["rocket"] > 0 or c["user"]["type"] == "Bot" or c["body"].startswith(BOT_MARK)
+        cid = str(c["id"])
+        if c["reactions"]["rocket"] > 0 and cid not in rocket_times:
+            reactions = github_json(f"repos/{REPOSITORY}/issues/comments/{cid}/reactions?per_page=100")
+            rockets = sorted(r["created_at"] for r in reactions if r["content"] == "rocket")
+            if rockets:
+                rocket_times[cid] = datetime.datetime.fromisoformat(rockets[0])
+        at = approval_time(c, rocket_times)
+        comments.append(
+            {
+                "comment_id": cid,
+                "author": c["user"]["login"],
+                "body": c["body"],
+                "url": c["html_url"],
+                "posted_at": c["created_at"],
+                "approved_upstream": handled,
+                "approved_at": at.isoformat() if at else None,
+            }
+        )
     return comments
 
 
@@ -333,6 +347,7 @@ class Watcher:
         self.final: dict[str, dict] = {}
         self.storage_at = 0.0
         self.wandb = wandb.Api()
+        self.rocket_times: dict[str, datetime.datetime] = {}  # #9514 comment id -> the intake bot's first 🚀
 
     def _wandb(self, name: str) -> dict:
         try:
@@ -407,7 +422,7 @@ class Watcher:
     def tick(self) -> None:
         error = None
         try:
-            call("agent/sync/intake", {"comments": intake_comments()}, token=self.token)
+            call("agent/sync/intake", {"comments": intake_comments(self.rocket_times)}, token=self.token)
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"intake: {e}"
         try:

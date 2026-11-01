@@ -16,6 +16,7 @@ from experiments.belay.__main__ import track_rows
 from experiments.belay.branch import cut_week_branch, git, require_clean_pushed_head, require_week_branch
 from experiments.belay.code_change import Probe, new_flags, refuse_flag_off_change, refuse_outside_allowed
 from experiments.belay.config import CONFIG, TRACKS, WEEKLY_BRANCH, Track
+from experiments.belay.demo import approval_time
 from experiments.belay.page import require_unedited, visible_text
 from experiments.belay.results import Verdict, change, overall_verdict, verdict
 from experiments.belay.submit import IrisJob, check_launch, launch_command, parse_spec, track_of_comment
@@ -208,3 +209,11 @@ def test_hidden_text_stripped_before_a_session_reads_it() -> None:
     assert notes == ["removed HTML comments", "removed zero-width or bidi control characters"]
     text, notes = visible_text("A <details>long log</details> B")
     assert "[collapsed on GitHub:]long log[end collapsed]" in text and notes == ["marked collapsed <details> text"]
+
+
+def test_github_approval_queues_only_after_the_cutover() -> None:
+    before = CONFIG.github_approval_cutover - datetime.timedelta(hours=1)
+    after = CONFIG.github_approval_cutover + datetime.timedelta(hours=1)
+    assert approval_time({"id": 1}, {"1": after}) == after
+    assert approval_time({"id": 1}, {"1": before}) is None
+    assert approval_time({"id": 1}, {}) is None

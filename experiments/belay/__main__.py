@@ -211,7 +211,8 @@ def approved_idea(idea: Idea) -> tuple[Idea, list[str]]:
     strips hidden HTML and invisible characters (returned as notes for the plan)."""
     if idea.url and "issuecomment-" in idea.url:
         updated, transferred = comment_times(idea.url)
-        approved = transferred or (datetime.datetime.fromisoformat(idea.decided_at) if idea.decided_at else None)
+        approvals = [t for t in (transferred, idea.decided_at and datetime.datetime.fromisoformat(idea.decided_at)) if t]
+        approved = min(approvals) if approvals else None  # the first approval, on either path, froze the text
         if approved is None:
             raise SystemExit(f"refusing: idea #{idea.id} has no approval time.\nnext: {BELAY} escalate ...")
         try:
@@ -302,12 +303,16 @@ def plan_of(spec: ExperimentSpec, summary: str, commit: str, branch: str, track:
     )
 
 
-def plan_markdown(registry_id: str, name: str, plan: Plan) -> str:
+def plan_markdown(registry_id: str, name: str, plan: Plan, idea: Idea) -> str:
+    """The plan post. It quotes the approved idea and links its #9514 comment, so the record on #9451 is complete
+    even when the idea was approved on the page before the intake bot copied it."""
     rows = "\n".join(f"| `{r.name}` | {r.variant} | {r.seed} | {'yes' if r.control else ''} |" for r in plan.runs)
+    source = f"[#9514 comment by {idea.author}]({idea.url})" if idea.url else f"proposal by {idea.author}"
+    quoted = "\n".join(f"> {line}" for line in idea.body.strip().splitlines())
     return (
-        f"**{registry_id} {name}**: {plan.summary}\n\n| Run | Variant | Seed | Control |\n|---|---|---|---|\n{rows}\n\n"
-        f"{plan.protocol}. Code `{plan.branch}` at `{plan.commit[:10]}`. "
-        f"Cost: {plan.cost}."
+        f"**{registry_id} {name}**: {plan.summary}\n\nIdea ({source}, approved by {idea.decided_by}):\n\n{quoted}\n\n"
+        f"| Run | Variant | Seed | Control |\n|---|---|---|---|\n{rows}\n\n"
+        f"{plan.protocol}. Code `{plan.branch}` at `{plan.commit[:10]}`. Cost: {plan.cost}."
     )
 
 
@@ -387,7 +392,8 @@ def new_idea(
     plan = plan_of(spec, summary, commit, branch, track_label(track, defaulted))
     report_idea(idea.id, {"state": "planned", "plan": asdict(plan)}, dry_run=dry_run)
     title = f"Plan: {registry_id} {idea.name}"
-    post = Post("plan", title, plan_markdown(registry_id, idea.name, plan), registry_id=registry_id, idea_id=idea.id)
+    body = plan_markdown(registry_id, idea.name, plan, idea)
+    post = Post("plan", title, body, registry_id=registry_id, idea_id=idea.id)
     post_activity(post, github_posting=state.github_posting, dry_run=dry_run)
     for run in sorted(spec.runs.values(), key=lambda r: not r.control):  # the control first
         name = run_name(registry_id, run.name)
