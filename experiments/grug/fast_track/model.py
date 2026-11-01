@@ -51,6 +51,7 @@ from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
+from experiments.grug.fast_track.cplm import CopyHead, bound_case_tables, plus_nll
 from experiments.grug.fast_track.key_offset import partial_key_offset
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
 from experiments.grug.fast_track.router_metrics import (
@@ -447,8 +448,13 @@ class GrugModelConfig:
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
+    cplm_plus: bool = False
+    """CPLM Plus copy head (``cplm.py``): the next-token distribution mixes the vocabulary softmax with a copy
+    distribution over earlier same-document tokens and their case classes. Needs ``cplm.bind_case_tables``."""
 
     def __post_init__(self) -> None:
+        if self.cplm_plus and self.logit_soft_cap is not None:
+            raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
             raise ValueError("lm_head_grad_dump_every needs lm_head_grad_probe")
         if self.lm_head_grad_clip is not None and (not self.lm_head_grad_probe or self.lm_head_grad_clip <= 0):
@@ -1848,6 +1854,7 @@ class Transformer(eqx.Module):
     skip_adapter: DenseMLP | None  # cfg.skip_adapter_dim: the skipped tokens' readout MLP
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
+    copy_head: CopyHead | None  # cfg.cplm_plus
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1898,6 +1905,7 @@ class Transformer(eqx.Module):
                 else None
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
+            copy_head=CopyHead.init(cfg.hidden_dim, key=key) if cfg.cplm_plus else None,
             config=cfg,
         )
 
@@ -2234,18 +2242,24 @@ class Transformer(eqx.Module):
             # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
             raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
-            head_in,
-            self.output_proj,
-            labels,
-            weight=loss_weight,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-            dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
-            logit_soft_cap=self.config.logit_soft_cap,
-        )
+        copy_metrics: dict[str, jax.Array] = {}
+        if self.copy_head is None:
+            cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
+                head_in,
+                self.output_proj,
+                labels,
+                weight=loss_weight,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+                implementation="xla_fast_bwd",
+                block_sizes=_CE_BLOCK_SIZES,
+                logit_soft_cap=self.config.logit_soft_cap,
+            )
+        else:
+            cross_entropy_loss, copy_metrics = self._copy_mixture_loss(
+                head_in, token_ids, labels, loss_weight, mask, reduction, logsumexp_weight, loss_dtype
+            )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
         entropy_metrics: dict[str, jax.Array] = {}
@@ -2279,10 +2293,12 @@ class Transformer(eqx.Module):
                 **probe_metrics,
                 **final_gate_metrics,
                 **entropy_metrics,
+                **copy_metrics,
             }
         summarized_metrics = summarize_router_metrics(router_metrics)
         summarized_metrics.update(final_gate_metrics)
         summarized_metrics.update(entropy_metrics)
+        summarized_metrics.update(copy_metrics)
         summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
         summarized_metrics.update(probe_metrics)
         for name, per_layer in outstats.items():
@@ -2297,6 +2313,65 @@ class Transformer(eqx.Module):
         summarized_metrics["moe/sender_dropped_assignments"] = router_metrics["sender_capacity_overflow_per_layer"]
         summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics["receiver_capacity_overflow_per_layer"]
         return loss, summarized_metrics
+
+    def _copy_mixture_loss(
+        self,
+        head_in: Float[Array, "B S D"],
+        token_ids: Int[Array, "B S"],
+        labels: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        mask: AttentionMask | jax.Array | None,
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``cplm_plus``: the CPLM Plus mixture NLL in place of the vocabulary cross-entropy, with the z-loss
+        ``logsumexp_weight * logsumexp(vocab logits)^2`` on the vocabulary logits; reduced like
+        ``fused_linear_softmax_cross_entropy_loss``. Also returns the head's logging metrics."""
+        assert self.copy_head is not None
+        if isinstance(mask, AttentionMask) and not mask.is_causal:
+            raise ValueError("cplm_plus copy predictions need a causal mask")
+        segment_ids = _sconv_segment_ids(mask) if mask is not None else None
+        segments = jnp.zeros_like(token_ids) if segment_ids is None else jnp.broadcast_to(segment_ids, token_ids.shape)
+        native_nll = fused_linear_softmax_cross_entropy_loss(
+            head_in,
+            self.output_proj,
+            labels,
+            reduction="none",
+            dtype=jnp.float32,
+            implementation="xla_fast_bwd",
+            block_sizes=_CE_BLOCK_SIZES,
+        )
+        nll, log_partition, gate, effective = plus_nll(
+            head_in,
+            self.output_proj,
+            self.copy_head,
+            token_ids,
+            labels,
+            segments,
+            native_nll,
+            bound_case_tables(),
+            _BATCH_AXES,
+        )
+        if logsumexp_weight:
+            nll = nll + logsumexp_weight * jnp.square(log_partition)
+        weight = loss_weight.astype(jnp.float32)
+        weighted = nll * weight
+        total, denom = jnp.sum(weighted), jnp.sum(weight)
+        if reduction == "none":
+            loss = weighted
+        elif reduction == "sum":
+            loss = total
+        elif reduction == "mean":
+            loss = jnp.where(denom != 0, total / denom, jnp.zeros_like(denom))
+        else:
+            raise ValueError(f"Unknown reduction: {reduction}")
+        count = jnp.maximum(denom, 1.0)
+        metrics = {
+            f"train/aux/cplm/{name}": jax.lax.stop_gradient(jnp.sum(value * weight) / count)
+            for name, value in (("native_head_nll", native_nll), ("copy_gate", gate), ("effective_copy", effective))
+        }
+        return loss.astype(loss_dtype), metrics
 
 
 @jax.custom_vjp
