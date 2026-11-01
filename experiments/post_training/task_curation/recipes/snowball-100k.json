@@ -1,6 +1,6 @@
 {
   "name": "snowball-100k",
-  "version": "2026.10.23.2",
+  "version": "2026.10.26",
   "sources": {
     "MarinSkyRL:eurus2_code": "competitive_coding",
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
