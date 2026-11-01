@@ -134,7 +134,7 @@
   "tag": "MoE · 207 tokens / active param",
   "desc": "For building on the best active scaling recipe.",
   "src": "Belay Ckpt Oct 20 2026 · belay_s7.py --ladder s7n",
-  "src_url": "https://github.com/marin-community/marin/blob/marin_belay_v1_clean_s7/experiments/grug/fast_track/belay_s7.py",
+  "src_url": "https://github.com/marin-community/marin/blob/marin_belay_v1_recipe/experiments/grug/fast_track/belay_s7.py",
   "rows": [
    {
     "rung": "d512",

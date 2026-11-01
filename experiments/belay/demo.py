@@ -52,8 +52,7 @@ import wandb
 
 from experiments.belay.config import CONFIG
 from experiments.belay.page import BOT_MARK, TOKEN_ENV, call
-from experiments.belay.submit import RUN_PREFIX, iris_jobs, load_spec
-from experiments.grug.fast_track.belay_s7 import RUNGS
+from experiments.belay.submit import iris_jobs
 
 logger = logging.getLogger("belay.demo")
 
@@ -361,19 +360,12 @@ class Watcher:
         reports = []
         for name, (job_id, coord_state) in coords.items():
             state = _run_state(coord_state, trains.get(name))
-            experiment, _, run = name.removeprefix(RUN_PREFIX).partition("-")
-            total = None
-            runs_dir = self.agent_dir / "experiments/belay/runs"
-            if (runs_dir / f"{experiment}.yaml").exists():
-                spec = load_spec(experiment, runs_dir)
-                if spec.launcher == CONFIG.launcher and run in spec.runs:
-                    total = RUNGS[spec.runs[run].size][1]
             report = {
                 "name": name,
                 "job_id": job_id,
                 "state": state,
                 "nodes": 1,
-                "total_steps": total,
+                "total_steps": None,
                 "submitted_at": submitted.get(name),
             }
             if name in self.final:
@@ -452,6 +444,13 @@ ALLOWED_TOOLS = (
     "Bash(git log:*)",
     "Bash(git show:*)",
     "Bash(uv run python -m experiments.belay:*)",
+    # Code changes (runbook section 1b): edits only where code-change --finish allows them, and the revert it prints.
+    "Edit(experiments/grug/fast_track/**)",
+    "Write(experiments/grug/fast_track/**)",
+    "Edit(tests/grug/test_fast_track_*)",
+    "Write(tests/grug/test_fast_track_*)",
+    "Bash(git checkout -- .)",
+    "Bash(git clean -fd experiments/grug/fast_track tests/grug)",
     "Bash(uv run iris --cluster marin job list:*)",
     "Bash(uv run iris --cluster marin job logs:*)",
 )
@@ -462,6 +461,7 @@ def session_prompt(session_id: str, events_file: Path) -> str:
     return f"""You are Belay session {session_id}, started {datetime.datetime.now().astimezone():%Y-%m-%d %H:%M %Z}.
 Read RUNBOOK.md (in your system prompt). Identify the event type. Run its steps exactly. If anything doesn't match,
 post to the issue and stop: `uv run python -m experiments.belay escalate --title "..." --body "..."`.
+Edit files only in section 1b, and only under experiments/grug/fast_track/ and tests/grug/test_fast_track_*.py.
 
 Your events file: {events_file}
 Your first command: `uv run python -m experiments.belay start --events {events_file}`
@@ -489,8 +489,6 @@ def run_session(
         "--output-format",
         "stream-json",
         "--verbose",
-        "--permission-mode",
-        "acceptEdits",
         "--add-dir",
         str(registry_dir),
         "--allowedTools",
