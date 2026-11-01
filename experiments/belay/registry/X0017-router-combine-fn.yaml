@@ -4,7 +4,7 @@ name: Router combine function
 category: MoE and routing
 summary: Change how routed combine weights are computed (sigmoid renorm, raw sigmoid, softmax, etc.).
 source: maintainer
-status: running
+status: done
 first_batch: 2
 tags:
 - router
@@ -84,6 +84,13 @@ trials:
   settings:
     router_combine: sqrt_softplus_renorm
   commit: 7acddddf35
+  loss:
+  - 3.0467
+  delta:
+  - 0.0016
+  steps: 3030
+  baseline: belay-X0017-control 3.0451 (same commit, seed 0)
+  step_time_change: 0%
 events:
 - type: adopted
   batch: '102'
