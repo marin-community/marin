@@ -4,7 +4,7 @@ name: Router Adam LR multiplier
 category: MoE and routing
 summary: Scale the router Adam learning rate relative to the Adam LR.
 source: agent
-status: adopted
+status: running
 first_batch: 98
 tags:
 - router
@@ -75,6 +75,17 @@ trials:
   settings:
     router_lr_mult: '2'
   tuned: x0.5 / x2
+- id: t005
+  variant: router_lr_mult=0.5 (router Adam LR x0.5)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0160
+  date: '2026-11-01'
+  comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6563429797
+  wandb: []
+  settings:
+    router_lr_mult: '0.5'
+  commit: cd615f08ac
 events:
 - type: adopted
   batch: '102'
