@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from marina.apps import RegisteredApi, Services, registered_api
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from rigging.server_auth import get_verified_identity
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -75,6 +75,8 @@ SESSION_TIMEOUT = datetime.timedelta(hours=3)
 # Re-offer approved work that no session has picked up after this long.
 WORK_PENDING_INTERVAL = datetime.timedelta(hours=1)
 TRANSCRIPT_LIMIT = 600_000
+# A run first seen already finished gets a run_finished event only if it was submitted this recently.
+FIRST_SEEN_WINDOW = datetime.timedelta(days=1)
 LABEL_WIDTH = 90
 RECENT_SESSIONS = 20
 RECENT_ACTIVITY = 60
@@ -237,6 +239,15 @@ class Claim(BaseModel):
 
 class SessionFinish(BaseModel):
     state: SessionState
+    """A terminal state: succeeded, failed or lost."""
+
+    @field_validator("state")
+    @classmethod
+    def _terminal(cls, state: SessionState) -> SessionState:
+        if state is SessionState.RUNNING:
+            raise ValueError("a finish report needs a terminal state")
+        return state
+
     summary: str
     transcript: str = ""
     cost_usd: float | None = None
@@ -550,6 +561,34 @@ def finish_session(conn: Connection, session_id: str, report: SessionFinish) -> 
     return {"state": report.state.value}
 
 
+def claim_events(conn: Connection, session_id: str) -> dict[str, Any]:
+    """Give every undispatched event to a new session, when dispatch is on and no session is active. A retried
+    claim for a session that is still running gets the same events back."""
+    conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
+    _expire_sessions(conn)
+    mine = _rows(conn, "SELECT state FROM sessions WHERE id = :id", id=session_id)
+    if mine and mine[0]["state"] == SessionState.RUNNING:  # a retried claim whose response was lost
+        events = _rows(conn, "SELECT * FROM events WHERE session_id = :s ORDER BY id", s=session_id)
+        return {"launch": True, "session_id": session_id, "events": _plain(events)}
+    if not _settings(conn)["dispatch_enabled"]:
+        return {"launch": False, "reason": "dispatch is off"}
+    if _session_active(conn):
+        return {"launch": False, "reason": "a session is active"}
+    events = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
+    if not events:
+        return {"launch": False, "reason": "no queued events"}
+    conn.execute(
+        text("INSERT INTO sessions (id, state) VALUES (:id, :state)"), {"id": session_id, "state": SessionState.RUNNING}
+    )
+    conn.execute(
+        text("UPDATE events SET session_id = :s WHERE id = ANY(:ids)"),
+        {"s": session_id, "ids": [e["id"] for e in events]},
+    )
+    summary = "; ".join(e["summary"] for e in events)
+    _activity(conn, ActivityPost(kind="dispatch", session_id=session_id, title=f"Started session for: {summary}"))
+    return {"launch": True, "session_id": session_id, "events": _plain(events)}
+
+
 def _activity(conn: Connection, post: ActivityPost) -> int:
     return conn.execute(
         text(
@@ -755,8 +794,10 @@ def create_api(services: Services) -> RegisteredApi:
 
     @public.get("/state")
     def public_state() -> dict[str, Any]:
-        """Read-only Belay status for anyone: pipeline, suggestions, idea timelines and runs."""
-        with engine.connect() as conn:
+        """Read-only Belay status for anyone: pipeline, suggestions, idea timelines and runs. A session past its
+        timeout is marked lost first, so a scheduled check of ``work`` never waits on a dead session."""
+        with engine.begin() as conn:
+            _expire_sessions(conn)
             ideas = _rows(
                 conn, "SELECT * FROM ideas WHERE state NOT IN ('upstream', 'dismissed') ORDER BY posted_at DESC"
             )
@@ -949,7 +990,10 @@ def create_api(services: Services) -> RegisteredApi:
                 )
                 _update_rate(conn, r, previous[0] if previous else None)
                 was_live = bool(previous) and previous[0]["state"] not in TERMINAL_RUN_STATES
-                if terminal and was_live:
+                # A run that ended before the watcher first saw it (unschedulable, an early crash) still needs its
+                # session; older first-seen runs are history from before this app tracked them.
+                recent = r.submitted_at is not None and _now() - r.submitted_at < FIRST_SEEN_WINDOW
+                if terminal and (was_live or (not previous and recent)):
                     finished += 1
                     _enqueue(
                         conn,
@@ -994,26 +1038,7 @@ def create_api(services: Services) -> RegisteredApi:
     def claim(request: Claim) -> dict[str, Any]:
         """Give every undispatched event to a new session, when dispatch is on and no session is active."""
         with engine.begin() as conn:
-            conn.execute(text("SELECT pg_advisory_xact_lock(4917)"))
-            _expire_sessions(conn)
-            if not _settings(conn)["dispatch_enabled"]:
-                return {"launch": False, "reason": "dispatch is off"}
-            if _session_active(conn):
-                return {"launch": False, "reason": "a session is active"}
-            events = _rows(conn, "SELECT * FROM events WHERE session_id IS NULL ORDER BY id")
-            if not events:
-                return {"launch": False, "reason": "no queued events"}
-            conn.execute(text("INSERT INTO sessions (id, state) VALUES (:id, 'running')"), {"id": request.session_id})
-            conn.execute(
-                text("UPDATE events SET session_id = :s WHERE id = ANY(:ids)"),
-                {"s": request.session_id, "ids": [e["id"] for e in events]},
-            )
-            summary = "; ".join(e["summary"] for e in events)
-            _activity(
-                conn,
-                ActivityPost(kind="dispatch", session_id=request.session_id, title=f"Started session for: {summary}"),
-            )
-        return {"launch": True, "session_id": request.session_id, "events": _plain(events)}
+            return claim_events(conn, request.session_id)
 
     @agent.post("/sessions/{session_id}/finish")
     def finish(session_id: str, report: SessionFinish) -> dict[str, str]:

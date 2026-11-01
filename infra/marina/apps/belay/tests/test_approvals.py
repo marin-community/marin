@@ -14,6 +14,7 @@ from belay.app import (
     SessionState,
     agent_caller_ok,
     approve_idea,
+    claim_events,
     decline_idea,
     finish_session,
     migrate,
@@ -21,6 +22,7 @@ from belay.app import (
     sync_intake_comments,
 )
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 
 POSTED = datetime.datetime(2026, 10, 26, 12, 0, tzinfo=datetime.UTC)
@@ -139,3 +141,18 @@ def test_a_retried_failed_session_report_requeues_once(conn) -> None:
     assert finish_session(conn, "s1", failed) == {"state": "failed"}
     assert finish_session(conn, "s1", failed) == {"state": "failed"}
     assert conn.execute(text("SELECT count(*) FROM events WHERE session_id IS NULL")).scalar_one() == 1
+
+
+def test_a_retried_claim_gets_its_events_back(conn) -> None:
+    sync_intake_comments(conn, [comment(approved_upstream=False)])
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE settings SET value = 'true' WHERE key = 'dispatch_enabled'"))
+    first = claim_events(conn, "s1")
+    assert first["launch"] and len(first["events"]) == 1
+    retried = claim_events(conn, "s1")
+    assert retried["launch"] and [e["id"] for e in retried["events"]] == [e["id"] for e in first["events"]]
+
+
+def test_a_finish_report_needs_a_terminal_state() -> None:
+    with pytest.raises(ValidationError):
+        SessionFinish(state=SessionState.RUNNING, summary="still going")
