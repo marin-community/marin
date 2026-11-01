@@ -136,6 +136,23 @@ and one section per stage). Its link is stored on the idea's registry trials (`c
 `run-finished` writes the report itself. Run this only when asked to backfill or redo one:
 `B analyze X####`. It rewrites, commits and pushes the reports of every finished stage.
 
+## 2d. score (after every `run-finished` that records a stage, and after an escalation of a registered idea)
+
+1. **Run:** `B score X#### --score <0-10> --rationale "<one line>" --model <your model name>`. It stores
+   `potential` (score, rationale, model, date, and a digest of the results it saw) on the registry entry. The
+   Status page shows it; nothing else writes it.
+2. **Score with this rubric**, from the entry's trials and events (verdict and Δ per gate, step-time cost, how
+   many gates ran, seeds and the noise band, implementation size):
+   | Score | When |
+   |---|---|
+   | 0–2 | Clear loss everywhere it ran, or a house-rule problem |
+   | 3–4 | Loss or noise with a plausible fix to try, or no result yet and a weak case |
+   | 5 | Noise or mixed (a win on one gate, a loss on another); or no result yet |
+   | 6–7 | Win at equal data only; or an equal-time win with a heavy step-time or code cost |
+   | 8–9 | Win at equal time with an acceptable cost; 9 if it also held on a second seed or another gate |
+   | 10 | Adopted into the recipe |
+   The rationale names the deciding facts, e.g. "equal-time win Δ −0.015 at d512; 31% slower step; one seed".
+
 ## 2c. launch (reproduce or show one run)
 
 Every launch goes through one path and records the exact submitted command in the spec under `launched:`.

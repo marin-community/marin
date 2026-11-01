@@ -364,11 +364,20 @@ muonh_lr = (13/3) · adam_lr, capped at 0.05</pre>
   <div class="page-head"><h1>Status</h1><span class="muted mono" id="updated"></span></div>
   <div class="nextup" id="next" data-tone="idle"></div>
   <ol class="pipe" id="pipeline" aria-label="Ideas by stage"></ol>
+  <section class="block ck">
+    <div class="ck-bar"><h2>Ideas <span class="count" id="checklist-n"></span></h2>
+      <label class="ck-ctl">Sort <select id="ck-sort">
+        <option value="potential">Not yet accepted, by potential</option>
+        <option value="date">Newest first</option>
+        <option value="accepted">Accepted first</option>
+      </select></label>
+      <input id="ck-filter" type="search" placeholder="Filter by id, name, author, category" aria-label="Filter ideas"></div>
+    <div class="ck-table" id="checklist" role="table" aria-label="Idea checklist"></div>
+  </section>
   <div class="two">
     <section class="block"><h2>Now running</h2><div class="list" id="running"></div></section>
     <section class="block"><h2>Recent results</h2><div class="list" id="recent"></div></section>
   </div>
-  <section class="block"><h2>Ideas</h2><div class="list" id="ideas"></div></section>
   <section class="block"><h2>Activity</h2><ol class="feed" id="feed"></ol></section>
 </main>
 </template>

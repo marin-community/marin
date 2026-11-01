@@ -538,3 +538,31 @@ button.line:hover { background: var(--surface-2); }
 .howto .chips { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 4px 0 2px; }
 .howto .chips code { background: var(--line); border-radius: 4px; padding: 1px 6px; }
 .howto .muted { color: var(--slate); font-size: 13px; }
+
+/* Status: idea checklist */
+.ck-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 10px; }
+.ck-bar h2 { margin: 0 auto 0 0; }
+.ck-ctl { font-size: 13px; color: var(--slate); display: inline-flex; gap: 6px; align-items: center; }
+.ck-ctl select, #ck-filter { font: 13px var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+#ck-filter { min-width: 240px; }
+.ck-table { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.ck-row { display: grid; grid-template-columns: minmax(200px, 2.2fr) minmax(90px, .9fr) 86px minmax(190px, 2fr) minmax(150px, 1.4fr) minmax(130px, 1.3fr) minmax(110px, 1.1fr) 64px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 13px; }
+.ck-head { border-top: 0; background: var(--surface-2); font: 600 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--slate); }
+.ck-row a { color: var(--ink); text-decoration: none; }
+.ck-row a:hover { text-decoration: underline; }
+.ck-idea .xid a { color: var(--rope); }
+.gate-chip { display: inline-flex; align-items: baseline; gap: 2px; padding: 2px 8px; border-radius: 8px; font-size: 12px; line-height: 1.35; }
+.gate-chip b { font-family: var(--mono); }
+.gate-chip.won { background: var(--teal-soft); color: var(--teal); }
+.gate-chip.noise { background: var(--neutral-cell); color: var(--slate); }
+.gate-chip.lost { background: var(--worse-soft); color: var(--worse); }
+.gate-chip.run { background: transparent; color: var(--amber); border: 1px solid var(--amber); }
+.gate-chip.tested { background: transparent; color: var(--faint); }
+.score { font: 600 13px var(--mono); color: var(--ink); background: var(--surface-2); border-radius: 8px; padding: 2px 8px; cursor: help; }
+@media (max-width: 760px) {
+  .ck-head { display: none; }
+  .ck-row { grid-template-columns: 1fr; gap: 4px; padding: 12px; }
+  .ck-row > span[data-label]:not(.ck-idea)::before { content: attr(data-label) ": "; color: var(--faint); font-size: 11px; margin-right: 4px; }
+  .ck-idea { font-weight: 600; }
+  #ck-filter { min-width: 0; width: 100%; }
+}

@@ -32,6 +32,7 @@ from experiments.belay.posts import (
     title,
     updated,
 )
+from experiments.belay.registry_entry import potential_of, with_step_time
 from experiments.belay.results import Verdict, after_equal_data, change, overall_verdict, verdict
 from experiments.belay.submit import (
     IrisJob,
@@ -424,3 +425,14 @@ def test_each_run_launches_at_its_own_seed() -> None:
 def test_after_equal_data_rule(time_change, stage_1, runs, status, line) -> None:
     rule = after_equal_data(time_change, stage_1, TRACKS[Track.SPEEDRUN].step_time_tolerance)
     assert rule.run_equal_time is runs and rule.final_status == status and line in rule.line
+
+
+def test_potential_is_tied_to_the_results_it_saw() -> None:
+    entry = {"status": "done", "trials": [{"id": "t001", "delta": [-0.0148]}], "events": []}
+    first = potential_of(entry, 8, "equal-time win", "claude-opus-5-5")
+    assert first["score"] == 8 and first["model"] == "claude-opus-5-5"
+    assert potential_of(entry, 7, "other", "m")["inputs_digest"] == first["inputs_digest"]
+    entry["trials"][0]["delta"] = [0.01]
+    assert potential_of(entry, 8, "equal-time win", "m")["inputs_digest"] != first["inputs_digest"]
+    text = yaml.safe_dump({"id": "X1", "trials": [{"id": "t001"}]})
+    assert yaml.safe_load(with_step_time(text, "t001", 0.31))["trials"][0]["step_time_change"] == "+31%"

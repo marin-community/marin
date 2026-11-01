@@ -1,5 +1,20 @@
-// Marin Belay status page: what is running, recent results and activity, from the public state (read-only, the same
-// filtered data the static export publishes). Loaded after common.js.
+// Marin Belay status page: the idea checklist (one row per registry idea, its gates, recipe status and potential),
+// then what is running and the activity feed, from the registry results plus the public state (read-only, the same
+// data the static export publishes). Loaded after common.js.
+
+let registry = null // the registry's results JSON (ideas with trials, events, potential)
+let trackTable = [] // tracks.json, generated from config.TRACKS
+const checklistView = { sort: 'potential', query: '' }
+const GATE = {
+  win: { icon: '✓', cls: 'won' },
+  noise: { icon: '~', cls: 'noise' },
+  loss: { icon: '✗', cls: 'lost' },
+  running: { icon: '◷', cls: 'run' },
+  none: { icon: '–', cls: 'tested' },
+  na: { icon: '·', cls: 'tested' },
+}
+const SIGN = (v, digits = 4) => `${v > 0 ? '+' : v < 0 ? '\u2212' : '±'}${Math.abs(v).toFixed(digits)}`
+const OUTSIDE = 'outside the verdict'
 
 const expandedIdeas = new Set()
 const KIND_CLASS = { better: 'won', worse: 'lost', neutral: 'noise' }
@@ -131,22 +146,166 @@ function renderRecent() {
   )
 }
 
-function renderIdeas() {
-  if (!state.ideas.length) {
-    setChildren('ideas', el('div', { class: 'none' }, 'No ideas yet'))
-    return
+function trackInfo(id) {
+  return trackTable.find((t) => t.track === id) ?? {}
+}
+
+function verdictOf(d, noise) {
+  if (d === undefined || d === null) return 'none'
+  return d <= -noise ? 'win' : d >= noise ? 'loss' : 'noise'
+}
+
+// The registry build shows macro loss as placeholder BPB (loss x ratio); gates judge macro loss, so undo it.
+function counted(trials) {
+  const ratio = registry.placeholder_bpb_ratio ?? 1
+  return trials
+    .filter((t) => !(t.note ?? '').includes(OUTSIDE) && (t.delta ?? []).length)
+    .map((t) => ({ ...t, delta: t.delta.map((d) => d / ratio) }))
+}
+
+// Gate 2, the 8-minute speedrun: the speedrun track's stages, or a legacy d512 trial from before Tracks existed.
+function speedrunGate(idea, live) {
+  const sr = trackInfo('speedrun')
+  const ours = counted(idea.trials.filter((t) => t.rung === 'speedrun'))
+  const legacy = counted(idea.trials.filter((t) => t.rung === 'd512'))
+  const data = ours.filter((t) => t.protocol === 'equal_steps').at(-1)
+  const time = ours.filter((t) => t.protocol === 'fixed_time').at(-1)
+  if (live) return { kind: 'running', text: 'running', title: '' }
+  if (idea.track && idea.track !== 'speedrun' && !ours.length) return { kind: 'na', text: `n/a (track ${idea.track})`, title: '' }
+  const final = time ?? data ?? legacy.at(-1)
+  if (!final) return { kind: 'none', text: 'not run', title: '' }
+  const d = final.delta[0]
+  const kind = verdictOf(d, sr.noise ?? 0.006)
+  const where = time ? 'equal time' : data ? 'equal data' : `legacy ${final.protocol === 'fixed_time' ? 'fixed time' : 'equal steps'}`
+  const steps = final.steps ? ` · ${final.steps.toLocaleString()}${sr.baseline_steps && (time || data) ? ` vs ${sr.baseline_steps.toLocaleString()}` : ''} steps` : ''
+  const stages = [data, time].filter(Boolean).map(
+    (t) => `${t.protocol === 'fixed_time' ? 'Equal time' : 'Equal data'}: Δ ${SIGN(t.delta[0])}${t.steps ? ` at ${t.steps.toLocaleString()} steps` : ''}${t.step_time_change ? `, step time ${t.step_time_change}` : ''}`,
+  )
+  return { kind, text: `${kind} at ${where}, Δ ${SIGN(d)}${steps}`, title: stages.join('\n') || `${final.variant} (${final.rung}, ${final.date})` }
+}
+
+// Gate 3, hero-scale MFU: the hero-mfu track's relative step-time Δ, else the speedrun step-time cost as a hint.
+function heroGate(idea) {
+  const hero = counted(idea.trials.filter((t) => t.rung === 'hero-mfu')).at(-1)
+  if (hero) {
+    const d = hero.delta[0]
+    return { kind: verdictOf(d, trackInfo('hero-mfu').noise ?? 0.005), text: `s/step ${SIGN(d * 100, 1)}%`, title: hero.variant }
   }
+  const stc = idea.trials.find((t) => t.rung === 'speedrun' && t.protocol === 'equal_steps' && t.step_time_change)
+  return { kind: 'none', text: stc ? `not run · speedrun ${stc.step_time_change} step time` : 'not run', title: '' }
+}
+
+// Gate 4, the hero-scale projection: the competitive ladder's Δ per rung (legacy wider rungs count too).
+function scalingGate(idea) {
+  const rungs = counted(idea.trials.filter((t) => t.rung?.startsWith('competitive-') || ['d768', 'd1024', 'd1280'].includes(t.rung)))
+  if (!rungs.length) return { kind: 'none', text: 'not run', title: '' }
+  const latest = new Map(rungs.map((t) => [t.rung.replace('competitive-', ''), t]))
+  const parts = [...latest].map(([r, t]) => `${r} ${SIGN(t.delta[0])}`)
+  const worst = [...latest.values()].map((t) => verdictOf(t.delta[0], 0.006))
+  const kind = worst.includes('loss') ? 'loss' : worst.every((v) => v === 'win') ? 'win' : 'noise'
+  return { kind, text: `${parts.join(' · ')} · projection pending`, title: parts.join('\n') }
+}
+
+function recipeCell(idea) {
+  const adopted = (idea.events ?? []).filter((e) => e.type === 'adopted').at(-1)
+  if (idea.status === 'adopted') {
+    const tag = [adopted?.as_adopted, adopted?.candidate, adopted?.note].find((v) => (v ?? '').includes('belay-ckpt-'))
+    const label = tag ?? (adopted ? `batch ${adopted.batch}` : 'current recipe')
+    return el('span', { class: 'gate-chip won', title: adopted?.note ?? '' }, el('b', {}, '✓'), ` ${label}${adopted ? ` · ${adopted.date}` : ''}`)
+  }
+  if (idea.status === 'removed') return el('span', { class: 'gate-chip noise' }, el('b', {}, '↺'), ' removed')
+  return el('span', { class: 'gate-chip tested' }, el('b', {}, '–'), ' no')
+}
+
+function gateChip(g) {
+  const look = GATE[g.kind] ?? GATE.none
+  return el('span', { class: `gate-chip ${look.cls}`, title: g.title || g.text }, el('b', {}, look.icon), ` ${g.text}`)
+}
+
+function approvalDate(idea, pageIdea) {
+  const dates = [pageIdea?.decided_at?.slice(0, 10), ...(idea.trials ?? []).map((t) => t.date), ...(idea.events ?? []).map((e) => e.date)]
+  return dates.filter(Boolean).sort()[0] ?? ''
+}
+
+function checklistRows() {
+  const live = new Set(state.runs.filter((r) => !TERMINAL.has(r.state)).map((r) => r.registry_id))
+  return registry.ideas.map((idea) => {
+    const pageIdea = state.ideas.find((i) => i.registry_id === idea.xid)
+    const comment = (idea.trials ?? []).map((t) => t.comment_url).find((u) => (u ?? '').includes('issuecomment-'))
+    return {
+      idea,
+      comment,
+      date: approvalDate(idea, pageIdea),
+      author: idea.intake?.author ?? null,
+      accepted: idea.status === 'adopted',
+      score: idea.potential?.score ?? null,
+      speedrun: speedrunGate(idea, live.has(idea.xid)),
+      hero: heroGate(idea),
+      scaling: scalingGate(idea),
+    }
+  })
+}
+
+const SORTS = {
+  potential: (a, b) => a.accepted - b.accepted || (b.score ?? -1) - (a.score ?? -1) || b.date.localeCompare(a.date),
+  date: (a, b) => b.date.localeCompare(a.date),
+  accepted: (a, b) => b.accepted - a.accepted || b.date.localeCompare(a.date),
+}
+
+function renderChecklist() {
+  if (!registry) return
+  const q = checklistView.query.toLowerCase()
+  const rows = checklistRows()
+    .filter((r) => !q || `${r.idea.xid} ${r.idea.name} ${r.author ?? ''} ${r.idea.category}`.toLowerCase().includes(q))
+    .sort(SORTS[checklistView.sort])
+  document.getElementById('checklist-n').textContent = String(rows.length)
+  const registryUrl = (x) => `https://github.com/marin-community/marin/blob/marin_belay_v1_registry/experiments/belay/registry/${x.xid}-${x.id}.yaml`
+  const head = el(
+    'div',
+    { class: 'ck-row ck-head', role: 'row' },
+    ['Idea', 'Author', 'Date', 'Speedrun', 'Hero MFU', 'Projection', 'Recipe', 'Potential'].map((h) => el('span', { role: 'columnheader' }, h)),
+  )
   setChildren(
-    'ideas',
-    state.ideas.map((idea) =>
-      ideaLine(idea, [
-        idCell(idea),
-        el('span', { class: 'nm' }, el('b', {}, idea.title), el('small', {}, idea.author ? `#9514 · ${idea.author}` : 'maintainer')),
-        el('span', { class: `st ${STATE_CLASS[idea.state] ?? 'tested'}` }, STATE_WORD[idea.state] ?? idea.state),
-        when(idea.updated_at),
-      ]),
+    'checklist',
+    head,
+    rows.map((r) =>
+      el(
+        'div',
+        { class: 'ck-row', role: 'row' },
+        el(
+          'span',
+          { class: 'ck-idea', 'data-label': 'Idea' },
+          el('span', { class: 'xid mono' }, r.comment ? link(r.comment, r.idea.xid) : r.idea.xid),
+          ' ',
+          link(registryUrl(r.idea), r.idea.name),
+        ),
+        el('span', { 'data-label': 'Author' }, r.author ? link(`https://github.com/${r.author}`, `@${r.author}`) : el('span', { class: 'muted' }, 'maintainer')),
+        el('span', { class: 'mono', 'data-label': 'Date' }, r.date),
+        el('span', { 'data-label': 'Speedrun' }, gateChip(r.speedrun)),
+        el('span', { 'data-label': 'Hero MFU' }, gateChip(r.hero)),
+        el('span', { 'data-label': 'Projection' }, gateChip(r.scaling)),
+        el('span', { 'data-label': 'Recipe' }, recipeCell(r.idea)),
+        el(
+          'span',
+          { 'data-label': 'Potential' },
+          r.score === null
+            ? el('span', { class: 'muted' }, '–')
+            : el('span', { class: 'score', title: `${r.idea.potential.rationale} (${r.idea.potential.model}, ${r.idea.potential.date})` }, `${r.score}/10`),
+        ),
+      ),
     ),
   )
+}
+
+function wireChecklist() {
+  document.getElementById('ck-sort').addEventListener('change', (e) => {
+    checklistView.sort = e.target.value
+    renderChecklist()
+  })
+  document.getElementById('ck-filter').addEventListener('input', (e) => {
+    checklistView.query = e.target.value
+    renderChecklist()
+  })
 }
 
 function renderFeed() {
@@ -174,14 +333,19 @@ function render() {
   renderPipeline(state.pipeline)
   renderRunning()
   renderRecent()
-  renderIdeas()
+  renderChecklist()
   renderFeed()
   setChildren('updated', 'updated ', when(state.now))
 }
 
 async function refresh() {
   try {
-    state = await loadJson('state')
+    const tracksUrl = STATIC ? 'tracks.json' : `${BELAY_BASE}tracks.json`
+    ;[state, registry, trackTable] = await Promise.all([
+      loadJson('state'),
+      loadJson('results'),
+      fetch(tracksUrl).then((r) => r.json()),
+    ])
     render()
   } catch (error) {
     renderNext({ tone: 'blocked', text: `Status unavailable (${error.message})` })
@@ -189,5 +353,6 @@ async function refresh() {
 }
 
 showView('status')
+wireChecklist()
 refresh()
 if (!STATIC) setInterval(refresh, REFRESH_MS)

@@ -10,7 +10,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 720
  },
  {
   "track": "vanilla-d768",
@@ -23,7 +26,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 2161
  },
  {
   "track": "vanilla-d1024",
@@ -36,7 +42,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 2881
  },
  {
   "track": "vanilla-d1280",
@@ -49,7 +58,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 5251
  },
  {
   "track": "moe-d512",
@@ -62,7 +74,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 1971
  },
  {
   "track": "moe-d768",
@@ -75,7 +90,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 5547
  },
  {
   "track": "moe-d1024",
@@ -88,7 +106,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 7334
  },
  {
   "track": "moe-d1280",
@@ -101,7 +122,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 13053
  },
  {
   "track": "competitive-d512",
@@ -114,7 +138,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 10767
  },
  {
   "track": "competitive-d768",
@@ -127,7 +154,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 30389
  },
  {
   "track": "competitive-d1024",
@@ -140,7 +170,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 39210
  },
  {
   "track": "competitive-d1280L16",
@@ -153,7 +186,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 20023
  },
  {
   "track": "speedrun",
@@ -166,7 +202,10 @@
   "control": "belay-<X####>-control",
   "metric": "eval/paloma/macro_loss",
   "rule": "difference, noise 0.006",
-  "go_ahead": false
+  "go_ahead": false,
+  "noise": 0.006,
+  "relative": false,
+  "baseline_steps": 3030
  },
  {
   "track": "hero-mfu",
@@ -179,7 +218,10 @@
   "control": "belay-<X####>-control",
   "metric": "s/step",
   "rule": "relative, noise 0.005",
-  "go_ahead": true
+  "go_ahead": true,
+  "noise": 0.005,
+  "relative": true,
+  "baseline_steps": 30
  },
  {
   "track": "custom",
@@ -192,6 +234,9 @@
   "control": "belay-<X####>-control",
   "metric": "stated by the submitter",
   "rule": "difference, noise 0",
-  "go_ahead": true
+  "go_ahead": true,
+  "noise": 0,
+  "relative": false,
+  "baseline_steps": null
  }
 ]
