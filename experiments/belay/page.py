@@ -9,13 +9,16 @@ import os
 import re
 import subprocess
 import urllib.request
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 
 from experiments.belay.config import CONFIG
 
 # The service token is a credential, so it comes from the environment (the dispatcher sets it for each session).
 TOKEN_ENV = "BELAY_SERVICE_TOKEN"
 TOKEN_HEADER = "X-Belay-Token"
+SESSION_ENV = "BELAY_SESSION_ID"
+# Only plans and results go to #9451; escalations and notes stay on the admin page.
+PUBLIC_KINDS = ("plan", "result")
 BOT_MARK = "🤖"
 TERMINAL_RUN_STATES = ("succeeded", "failed", "killed", "worker_failed", "unschedulable")
 
@@ -125,10 +128,14 @@ class Post:
     body: str
     registry_id: str | None = None
     idea_id: int | None = None
+    session_id: str | None = None
 
 
 def post_activity(post: Post, *, github_posting: bool, dry_run: bool) -> None:
-    """Post to the page's activity feed, and to the batch issue when an approver has turned GitHub posting on."""
+    """Post to the page's activity feed, and a plan or result also to the batch issue when an approver has turned
+    GitHub posting on. Posts carry the session that made them, so the admin page links each to its transcript."""
+    github_posting = github_posting and post.kind in PUBLIC_KINDS
+    post = replace(post, session_id=os.environ.get(SESSION_ENV))
     if dry_run:
         target = f"page and #{CONFIG.batch_issue}" if github_posting else "page only (GitHub posting is off)"
         print(f"would post {post.kind} to the {target}:\n--- {post.title}\n{post.body}\n---")
