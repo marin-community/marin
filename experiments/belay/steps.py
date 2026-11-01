@@ -77,10 +77,18 @@ def idea_by_id(state: dict, idea_id: int) -> dict:
 
 
 def idea_by_registry_id(state: dict, registry_id: str) -> dict:
-    ideas = [i for i in state["ideas"] if i["registry_id"] == registry_id]
-    if len(ideas) != 1:
-        raise SystemExit(f"expected one idea with registry id {registry_id} on the Belay page, found {len(ideas)}")
-    return ideas[0]
+    idea_id = idea_id_of(state, registry_id)
+    if idea_id is None:
+        raise SystemExit(f"no idea with registry id {registry_id} on the Belay page")
+    return idea_by_id(state, idea_id)
+
+
+def idea_id_of(state: dict, registry_id: str) -> int | None:
+    """The page idea behind ``registry_id``; None for runs a maintainer launched without one."""
+    ideas = [i["id"] for i in state["ideas"] if i["registry_id"] == registry_id]
+    if len(ideas) > 1:
+        raise SystemExit(f"{len(ideas)} ideas on the Belay page have registry id {registry_id}")
+    return ideas[0] if ideas else None
 
 
 def registry_entry_path(registry_id: str) -> Path:
@@ -128,12 +136,13 @@ def idea_next_step(idea: dict, launched: set[str]) -> str:
         return f"skip: idea #{idea['id']} is {idea['state']}, not approved"
     rid = idea["registry_id"]
     if rid is None:
-        return f'section 1, step 1: {STEPS} new-idea --idea-id {idea["id"]} --category "<category>"'
+        command = f'{STEPS} new-idea --idea-id {idea["id"]} --category "<category>"'
+        return f"section 1 from step 1 (house rules check), then step 2: {command}"
     if not (RUNS_DIR / f"{rid}.yaml").exists():
-        return f"section 1, step 2: {STEPS} flags   (then step 3: {STEPS} spec {rid} ...)"
+        return f"section 1, step 3: {STEPS} flags   (then step 4: {STEPS} spec {rid} ...)"
     if rid in launched:
         return f"skip: {rid} already has runs on Iris"
-    return f"section 1, step 4: {STEPS} launch {rid}"
+    return f"section 1, step 5: {STEPS} launch {rid}"
 
 
 def start(events_file: Path | None, today: datetime.date) -> None:
@@ -268,7 +277,7 @@ def new_idea(idea_id: int, category: str, slug: str | None, *, dry_run: bool) ->
         _git(CONFIG.registry_checkout, "push", "--quiet", "origin", CONFIG.registry_branch)
         report_idea(idea_id, {"registry_id": rid, "registry_url": registry_url(path)}, dry_run=False)
     print(f"idea #{idea_id} is {rid}")
-    say_next(f"{STEPS} flags   (section 1, step 2)")
+    say_next(f"{STEPS} flags   (section 1, step 3)")
 
 
 # ---------- flags ----------
@@ -283,7 +292,7 @@ def flags() -> None:
                 default = f.default if f.default is not dataclasses.MISSING else "(required)"
                 print(f"  {f.name}: {getattr(hints[f.name], '__name__', hints[f.name])} = {default!r}")
     print("Defaults shown are the dataclass defaults; the recipe overrides some of them.")
-    say_next(f'{STEPS} spec <X####> --variant "<what changes>" --opt-set <name>=<value>   (section 1, step 3)')
+    say_next(f'{STEPS} spec <X####> --variant "<what changes>" --opt-set <name>=<value>   (section 1, step 4)')
 
 
 # ---------- spec ----------
@@ -338,7 +347,7 @@ def spec(registry_id: str, variant: str, settings: list[tuple[str, str]], *, dry
     run_git(repo, ["add", str(path.relative_to(repo))], dry_run=dry_run)
     run_git(repo, ["commit", "--quiet", "-m", f"Belay {registry_id}: run spec ({variant})"], dry_run=dry_run)
     run_git(repo, ["push", "--quiet", "origin", branch], dry_run=dry_run)
-    say_next(f"{STEPS} launch {registry_id}   (section 1, step 4)")
+    say_next(f"{STEPS} launch {registry_id}   (section 1, step 5)")
 
 
 # ---------- launch ----------
@@ -402,7 +411,7 @@ def launch(registry_id: str, *, dry_run: bool) -> None:
 
 def record_step(registry_id: str, *, dry_run: bool) -> None:
     state = page_state()
-    idea = idea_by_registry_id(state, registry_id)
+    idea_id = idea_id_of(state, registry_id)
     runs = [r for r in state["runs"] if r["registry_id"] == registry_id]
     live = [r["name"] for r in runs if r["state"] not in TERMINAL_RUN_STATES]
     if live:
@@ -441,25 +450,18 @@ def record_step(registry_id: str, *, dry_run: bool) -> None:
         f"| Run | Variant | Seed | Loss | Δ | Verdict |\n|---|---|---|---|---|---|\n{table}\n\n"
         f"Verdict: **{overall}**. Registry: {registry_url(path)}"
     )
-    report_idea(
-        idea["id"],
-        {
-            "state": "recorded",
-            "result": {"rows": rows, "verdict": str(overall), "kind": PAGE_RESULT_KIND[overall], "summary": summary},
-        },
-        dry_run=dry_run,
-    )
-    post_activity(
-        "result", f"Result: {registry_id} {entry_name}: {overall}", body, registry_id=registry_id,
-        idea_id=idea["id"], dry_run=dry_run,
-    )  # fmt: skip
+    if idea_id is not None:
+        result = {"rows": rows, "verdict": str(overall), "kind": PAGE_RESULT_KIND[overall], "summary": summary}
+        report_idea(idea_id, {"state": "recorded", "result": result}, dry_run=dry_run)
+    title = f"Result: {registry_id} {entry_name}: {overall}"
+    post_activity("result", title, body, registry_id=registry_id, idea_id=idea_id, dry_run=dry_run)
     if overall is Verdict.WIN:
         post_activity(
             "escalation",
             f"{registry_id} beat the control beyond noise",
             f"{summary}. A maintainer decides on a seed-1 confirmation or adoption into {CONFIG.recipe_name}.",
             registry_id=registry_id,
-            idea_id=idea["id"],
+            idea_id=idea_id,
             dry_run=dry_run,
         )
     say_next("stop" if overall is not Verdict.WIN else "stop (a maintainer decides what follows the win)")
@@ -477,7 +479,6 @@ def escalate(title: str, body: str, idea_id: int | None, registry_id: str | None
 
 def fail(registry_id: str, run: str, *, dry_run: bool) -> None:
     state = page_state()
-    idea = idea_by_registry_id(state, registry_id)
     name = run_name(registry_id, run)
     rows = [r for r in state["runs"] if r["name"] == name]
     if not rows:
@@ -489,7 +490,7 @@ def fail(registry_id: str, run: str, *, dry_run: bool) -> None:
         f"`{name}` ended `{row['state']}` at step {row['step']} (job `{row['job_id']}`). A non-preemption failure is a "
         f"bug: nothing was rerun. Logs: `uv run iris --cluster marin job logs {row['job_id']}`."
     )
-    escalate(f"{name} {row['state']}", body, idea["id"], registry_id, dry_run=dry_run)
+    escalate(f"{name} {row['state']}", body, idea_id_of(state, registry_id), registry_id, dry_run=dry_run)
 
 
 def main(argv: list[str]) -> None:
