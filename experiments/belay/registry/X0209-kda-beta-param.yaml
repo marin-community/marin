@@ -250,8 +250,7 @@ events:
   checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 3
-  rationale: 'prior (Ckpt 1); retest pending: w_beta init/Adam-group variants -0.001 to +0.0035; all inside noise, no separate
-    delta for the adopted form -> 3'
+  rationale: +0.0026 at equal time (step time within 1%); all prior w_beta variants inside ±0.005 -> 3
   model: claude-opus-5-5
   date: '2026-11-01'
-  inputs_digest: 48b07e9b8eb4
+  inputs_digest: '477847339229'
