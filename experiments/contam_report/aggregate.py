@@ -12,7 +12,7 @@ For each eval item, with ``n`` its indexed features:
 Features that occur in more than ``--common-doc-limit`` hit documents are dropped
 first: they are common phrases (licence text, boilerplate), not item leaks.
 
-Usage: aggregate.py BLOOM_DIR OUT_DIR HITS_DIR... --common-doc-limit N
+Usage: aggregate.py BLOOM_DIR OUT_DIR HITS_DIR... --common-doc-limit N [--threads T] [--memory-limit M]
 Each HITS_DIR holds ``<source>/hits/*.parquet`` as `scan.py` writes it.
 """
 
@@ -24,25 +24,22 @@ import duckdb
 CONTAMINATED_COVERAGE = 0.5
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("bloom_dir")
-    parser.add_argument("out_dir")
-    parser.add_argument("hits_dirs", nargs="+")
-    parser.add_argument("--common-doc-limit", type=int, required=True)
-    args = parser.parse_args()
-    bloom_dir, out_dir = args.bloom_dir, args.out_dir
+def aggregate(
+    bloom_dir: str, out_dir: str, hits_dirs: list[str], common_doc_limit: int, threads: int, memory_limit: str
+) -> str:
+    """Write ``items.parquet``, ``doc_item.parquet`` and ``hash_docs.parquet`` to OUT_DIR; return a summary."""
     hits = " UNION ALL ".join(
         f"""
         SELECT regexp_extract(filename, '{d.rstrip("/")}/(.+)/hits/', 1) AS source,
                regexp_extract(filename, '/hits/([^/]+)$', 1) AS file, id, unnest(hits) AS hash, marked
         FROM read_parquet('{d.rstrip("/")}/**/hits/*.parquet', filename = true)
         """
-        for d in args.hits_dirs
+        for d in hits_dirs
     )
-    con = duckdb.connect()
+    # A database file, not an in-memory one, so DuckDB can evict table data under memory pressure.
+    con = duckdb.connect(f"{out_dir}/aggregate.duckdb")
     con.execute(
-        f"SET threads TO 4; SET memory_limit = '12GB'; SET preserve_insertion_order = false;"
+        f"SET threads TO {threads}; SET memory_limit = '{memory_limit}'; SET preserve_insertion_order = false;"
         f" SET temp_directory = '{out_dir}/duckdb_tmp'"
     )
     con.execute(
@@ -60,12 +57,13 @@ def main() -> None:
     # Counting first keeps only the rare features' rows; common ones hold most of the hits.
     con.execute(f"CREATE TABLE hash_docs AS SELECT hash, count(*) AS docs FROM ({hits}) GROUP BY hash")
     con.execute(f"COPY hash_docs TO '{out_dir}/hash_docs.parquet'")
-    con.execute(f"CREATE TABLE common AS SELECT hash FROM hash_docs WHERE docs > {args.common_doc_limit}")
+    con.execute(f"CREATE TABLE common AS SELECT hash FROM hash_docs WHERE docs > {common_doc_limit}")
     con.execute(f"CREATE TABLE doc_hash AS SELECT * FROM ({hits}) WHERE hash NOT IN (SELECT hash FROM common)")
+    # Hit lists and the index hold distinct pairs, so count(*) counts distinct features.
     con.execute(
         """
         CREATE TABLE doc_item AS
-        SELECT d.source, d.file, d.id, d.marked, i.eval, i.eval_id, count(DISTINCT d.hash) AS k
+        SELECT d.source, d.file, d.id, d.marked, i.eval, i.eval_id, count(*) AS k
         FROM doc_hash d JOIN idx i USING (hash)
         GROUP BY ALL
         """
@@ -109,8 +107,25 @@ def main() -> None:
         FROM read_parquet('{out_dir}/items.parquet') GROUP BY eval ORDER BY eval
         """
     ).fetchdf()
-    print(summary.to_string(index=False))
-    print("common features dropped:", con.execute("SELECT count(*) FROM common").fetchone()[0])
+    common = con.execute("SELECT count(*) FROM common").fetchone()[0]
+    con.close()
+    return f"{summary.to_string(index=False)}\ncommon features dropped: {common}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("bloom_dir")
+    parser.add_argument("out_dir")
+    parser.add_argument("hits_dirs", nargs="+")
+    parser.add_argument("--common-doc-limit", type=int, required=True)
+    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--memory-limit", default="12GB")
+    args = parser.parse_args()
+    print(
+        aggregate(
+            args.bloom_dir, args.out_dir, args.hits_dirs, args.common_doc_limit, args.threads, args.memory_limit
+        )
+    )
 
 
 if __name__ == "__main__":
