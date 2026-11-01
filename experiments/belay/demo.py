@@ -5,7 +5,13 @@
 
     uv run python -m experiments.belay.demo up        # Postgres + local Marina + release the app + watch/dispatch
     uv run python -m experiments.belay.demo down      # stop Marina and Postgres (state is kept)
-    uv run python -m experiments.belay.demo api state # the page's state, as a session reads it
+    uv run python -m experiments.belay.demo api state # the full state, as a session reads it (needs the token)
+    uv run python -m experiments.belay.demo export-public out/   # static public page + public.json snapshot
+
+The page has a public read-only view at ``/belay/`` and an admin view at ``/belay/admin`` (approvers only). ``up``
+stores a service token in ``<state-dir>/service_token`` and its hash in the app's settings; the watcher, dispatcher
+and sessions send it on every ``agent/`` call. ``--demo-approver`` names the identity a local, unauthenticated browser
+acts as.
 
 Stand-ins for the production pieces (see ``.agents/projects/belay-agent-on-loom.md``):
 
@@ -24,9 +30,12 @@ Stand-ins for the production pieces (see ``.agents/projects/belay-agent-on-loom.
 import argparse
 import datetime
 import getpass
+import hashlib
 import json
 import logging
 import os
+import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -37,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import s3fs
+import sqlalchemy
 import wandb
 
 from experiments.belay.submit import (
@@ -71,17 +81,26 @@ STORAGE_BUCKET = "marin-us-east-02a"
 CW_ENDPOINT = "https://cwobject.com"
 BOT_MARK = "🤖"
 SESSION_MAX_TURNS = 150
+TOKEN_HEADER = "X-Belay-Token"
+# How a session's `demo api` calls receive the service token (Loom would inject it as a profile secret).
+TOKEN_ENV = "BELAY_SERVICE_TOKEN"
+APP_SCHEMA = "belay"
+PUBLIC_FILES = ("common.js", "public.js", "style.css")
+SHARED_CSS = ("tokens.css", "parts.css")
 
 
 def api_base(port: int = MARINA_PORT) -> str:
     return f"http://127.0.0.1:{port}/belay/api"
 
 
-def call(path: str, body: dict | None = None, *, base: str | None = None) -> dict:
-    """GET (no body) or POST JSON to the Belay app."""
-    url = f"{base or api_base()}/{path}"
+def call(path: str, body: dict | None = None, *, token: str | None = None) -> dict:
+    """GET (no body) or POST JSON to the Belay app; ``token`` is required for its ``agent/`` routes."""
+    url = f"{api_base()}/{path}"
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+    headers = {"content-type": "application/json"}
+    if token is not None:
+        headers[TOKEN_HEADER] = token
+    request = urllib.request.Request(url, data=data, headers=headers)
     with urllib.request.urlopen(request, timeout=60) as response:
         return json.loads(response.read())
 
@@ -195,6 +214,58 @@ def release_app(stack: Stack) -> int:
     return json.loads(out.strip().splitlines()[-1])["version"]
 
 
+def bootstrap_access(stack: Stack, demo_approver: str) -> str:
+    """Set the service token and the local demo approver directly in the app's settings; returns the token.
+
+    This is the operator step that production does through secrets and the admin view: the token's hash is stored,
+    the token itself stays in ``<state-dir>/service_token`` (mode 600), and ``demo_approver`` is added to the
+    approver list so an unauthenticated loopback browser can use the admin view.
+    """
+    token_file = stack.state_dir / "service_token"
+    if not token_file.exists():
+        token_file.write_text(secrets.token_urlsafe(32))
+        token_file.chmod(0o600)
+    token = token_file.read_text().strip()
+    engine = sqlalchemy.create_engine(stack.database_url)
+    try:
+        with engine.begin() as conn:
+            approvers = conn.execute(
+                sqlalchemy.text(f"SELECT value FROM {APP_SCHEMA}.settings WHERE key = 'approvers'")
+            ).scalar_one()
+            if not any(a.get("identity") == demo_approver for a in approvers):
+                approvers.append({"github": "local-demo", "identity": demo_approver})
+            values = {
+                "service_token_sha256": hashlib.sha256(token.encode()).hexdigest(),
+                "demo_approver": demo_approver,
+                "approvers": approvers,
+            }
+            for key, value in values.items():
+                conn.execute(
+                    sqlalchemy.text(
+                        f"INSERT INTO {APP_SCHEMA}.settings (key, value, updated_by, updated_at) "
+                        "VALUES (:k, CAST(:v AS JSONB), 'demo up', now()) ON CONFLICT (key) DO UPDATE SET "
+                        "value = EXCLUDED.value, updated_by = 'demo up', updated_at = now()"
+                    ),
+                    {"k": key, "v": json.dumps(value)},
+                )
+    finally:
+        engine.dispose()
+    return token
+
+
+def export_public(directory: Path) -> Path:
+    """Write the public page and a JSON snapshot of ``api/public/state`` for static hosting (GitHub Pages)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    web = APP_DIR / "web"
+    shutil.copyfile(web / "public.html", directory / "index.html")
+    for name in PUBLIC_FILES:
+        shutil.copyfile(web / name, directory / name)
+    for name in SHARED_CSS:
+        shutil.copyfile(REPO / "infra/marina/web" / name, directory / name)
+    (directory / "public.json").write_text(json.dumps(call("public/state"), indent=1))
+    return directory
+
+
 def stop_stack(stack: Stack) -> None:
     pid_file = stack.state_dir / "marina.pid"
     if pid_file.exists():
@@ -245,8 +316,9 @@ def _run_state(coord: str, train: str | None) -> str:
 
 
 class Watcher:
-    def __init__(self, agent_dir: Path) -> None:
+    def __init__(self, agent_dir: Path, token: str) -> None:
         self.agent_dir = agent_dir
+        self.token = token
         self.final: dict[str, dict] = {}
         self.storage_at = 0.0
         self.wandb = wandb.Api()
@@ -322,11 +394,11 @@ class Watcher:
     def tick(self) -> None:
         error = None
         try:
-            call("sync/intake", {"comments": intake_comments()})
+            call("agent/sync/intake", {"comments": intake_comments()}, token=self.token)
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             error = f"intake: {e}"
         reports = self.runs()
-        call("sync/runs", {"runs": reports})
+        call("agent/sync/runs", {"runs": reports}, token=self.token)
         storage = None
         try:
             storage = self.storage()
@@ -336,7 +408,7 @@ class Watcher:
         body = {"nodes_in_use": nodes, "error": error}
         if storage is not None:
             body.update(storage_bytes=storage[0], storage_objects=storage[1])
-        call("tick", body)
+        call("agent/tick", body, token=self.token)
         logger.info("tick: %d runs, %d nodes running%s", len(reports), nodes, f", {error}" if error else "")
 
 
@@ -402,7 +474,13 @@ Queued events for this session:
 
 
 def run_session(
-    session_id: str, events: list[dict], agent_dir: Path, registry_dir: Path, state_dir: Path, page_url: str
+    session_id: str,
+    events: list[dict],
+    agent_dir: Path,
+    registry_dir: Path,
+    state_dir: Path,
+    page_url: str,
+    token: str,
 ) -> None:
     log_path = state_dir / "sessions" / f"{session_id}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -437,14 +515,22 @@ def run_session(
     ]
     logger.info("session %s: starting claude with %d event(s)", session_id, len(events))
     with open(log_path, "w") as log:
-        process = subprocess.run(command, cwd=agent_dir, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        process = subprocess.run(
+            command,
+            cwd=agent_dir,
+            env={**os.environ, TOKEN_ENV: token},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
     transcript, summary, cost, turns = _read_transcript(log_path)
     state = "succeeded" if process.returncode == 0 and summary else "failed"
     if not summary:
         summary = f"claude exited with code {process.returncode} without a final message; see the transcript."
     call(
-        f"sessions/{session_id}/finish",
+        f"agent/sessions/{session_id}/finish",
         {"state": state, "summary": summary, "transcript": transcript, "cost_usd": cost, "turns": turns},
+        token=token,
     )
     logger.info("session %s: %s ($%.2f, %s turns)", session_id, state, cost or 0, turns)
 
@@ -488,7 +574,8 @@ def _read_transcript(log_path: Path) -> tuple[str, str, float | None, int | None
 
 
 class Dispatcher:
-    def __init__(self, agent_dir: Path, registry_dir: Path, state_dir: Path, page_url: str) -> None:
+    def __init__(self, agent_dir: Path, registry_dir: Path, state_dir: Path, page_url: str, token: str) -> None:
+        self.token = token
         self.agent_dir = agent_dir
         self.registry_dir = registry_dir
         self.state_dir = state_dir
@@ -499,7 +586,7 @@ class Dispatcher:
         if self.thread is not None and self.thread.is_alive():
             return
         session_id = f"s{datetime.datetime.now():%m%d-%H%M%S}"
-        claim = call("dispatch/claim", {"session_id": session_id})
+        claim = call("agent/dispatch/claim", {"session_id": session_id}, token=self.token)
         if not claim["launch"]:
             return
         logger.info("dispatch: session %s for %s", session_id, "; ".join(e["summary"] for e in claim["events"]))
@@ -510,15 +597,19 @@ class Dispatcher:
 
     def _run(self, session_id: str, events: list[dict]) -> None:
         try:
-            run_session(session_id, events, self.agent_dir, self.registry_dir, self.state_dir, self.page_url)
+            run_session(session_id, events, self.agent_dir, self.registry_dir, self.state_dir, self.page_url, self.token)
         except Exception as e:
             logger.exception("session %s crashed", session_id)
-            call(f"sessions/{session_id}/finish", {"state": "failed", "summary": f"runner error: {e}"})
+            call(
+                f"agent/sessions/{session_id}/finish",
+                {"state": "failed", "summary": f"runner error: {e}"},
+                token=self.token,
+            )
 
 
-def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int) -> None:
-    watcher = Watcher(agent_dir)
-    dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, stack.page_url)
+def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int, token: str) -> None:
+    watcher = Watcher(agent_dir, token)
+    dispatcher = Dispatcher(agent_dir, registry_dir, stack.state_dir, stack.page_url, token)
     last_tick = 0.0
     while True:
         if time.monotonic() - last_tick >= interval:
@@ -538,14 +629,18 @@ def watch(stack: Stack, agent_dir: Path, registry_dir: Path, interval: int) -> N
 
 
 def api_command(args: argparse.Namespace) -> None:
+    token = os.environ.get(TOKEN_ENV)
+    if not token:
+        raise SystemExit(f"{TOKEN_ENV} is not set; sessions receive the Belay service token from the dispatcher")
     if args.api == "state":
-        print(json.dumps(call("state"), indent=2))
+        print(json.dumps(call("agent/state", token=token), indent=2))
     elif args.api == "report":
-        print(json.dumps(call(f"ideas/{args.idea_id}/report", json.loads(Path(args.file).read_text()))))
+        report = json.loads(Path(args.file).read_text())
+        print(json.dumps(call(f"agent/ideas/{args.idea_id}/report", report, token=token)))
     else:
         body = Path(args.body_file).read_text() if args.body_file else ""
         github_url = None
-        if call("state")["settings"]["github_posting"]:
+        if call("agent/state", token=token)["settings"]["github_posting"]:
             if args.github_issue is None:
                 raise SystemExit("GitHub posting is on: pass --github-issue (the open belay-weekly issue)")
             github_url = subprocess.run(
@@ -566,7 +661,7 @@ def api_command(args: argparse.Namespace) -> None:
         print(
             json.dumps(
                 call(
-                    "activity",
+                    "agent/activity",
                     {
                         "kind": args.kind,
                         "title": args.title,
@@ -575,6 +670,7 @@ def api_command(args: argparse.Namespace) -> None:
                         "idea_id": args.idea_id,
                         "github_url": github_url,
                     },
+                    token=token,
                 )
             )
         )
@@ -593,6 +689,13 @@ def main(argv: list[str]) -> None:
         p.add_argument("--registry-dir", type=Path, default=DEFAULT_REGISTRY_DIR)
         p.add_argument("--interval", type=int, default=WATCH_INTERVAL, help="seconds between watcher ticks")
         p.add_argument("--no-release", action="store_true", help="keep the currently released app revision")
+        p.add_argument(
+            "--demo-approver",
+            default=f"{getpass.getuser()}@local",
+            help="identity an unauthenticated local browser acts as in the admin view (local previews only)",
+        )
+    export = sub.add_parser("export-public", help="write the public page and a JSON snapshot for static hosting")
+    export.add_argument("directory", type=Path)
     api = sub.add_parser("api", help="the session's client for the Belay page")
     api_sub = api.add_subparsers(dest="api", required=True)
     api_sub.add_parser("state")
@@ -611,6 +714,9 @@ def main(argv: list[str]) -> None:
     if args.command == "api":
         api_command(args)
         return
+    if args.command == "export-public":
+        print("wrote", export_public(args.directory))
+        return
     args.state_dir.mkdir(parents=True, exist_ok=True)
     stack = Stack(args.state_dir, args.marina_checkout, args.pg_bin)
     if args.command == "down":
@@ -621,19 +727,21 @@ def main(argv: list[str]) -> None:
         print("released belay revision", release_app(stack))
         return
     if args.command == "tick":
-        Watcher(args.agent_dir).tick()
+        Watcher(args.agent_dir, bootstrap_access(stack, args.demo_approver)).tick()
         return
     start_postgres(stack)
     start_marina(stack)
     if not args.no_release:
         logger.info("released belay revision %d", release_app(stack))
+    token = bootstrap_access(stack, args.demo_approver)
     print(
-        f"\n  Belay page: {stack.page_url}\n  Watcher every {args.interval}s; Ctrl-C stops the loop "
+        f"\n  Public page: {stack.page_url}\n  Admin page:  {stack.page_url}admin (local browser acts as "
+        f"{args.demo_approver})\n  Watcher every {args.interval}s; Ctrl-C stops the loop "
         f"(`demo down` stops Marina and Postgres).\n",
         flush=True,
     )
     try:
-        watch(stack, args.agent_dir, args.registry_dir, args.interval)
+        watch(stack, args.agent_dir, args.registry_dir, args.interval, token)
     except KeyboardInterrupt:
         print("watcher stopped; Marina and Postgres keep running (`demo down` stops them)")
 

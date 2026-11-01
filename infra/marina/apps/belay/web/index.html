@@ -9,11 +9,71 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <template id="tpl-public">
     <header class="marina-bar">
       <div class="marina-title-row">
         <a class="marina-brand" href="/">Marina</a>
         <span class="marina-divider">/</span>
-        <span class="marina-app-title">Marin Belay</span>
+        <a class="marina-app-title" href="./">Marin Belay</a>
+        <span class="marina-actions"><span class="chip" id="who"></span></span>
+      </div>
+      <nav class="marina-app-nav" aria-label="Sections">
+        <a href="#overview">Overview</a>
+        <a href="#suggestions">Suggestions</a>
+        <a href="#ideas">Ideas</a>
+        <a href="#runs">Runs</a>
+      </nav>
+    </header>
+    <main class="page">
+      <section id="overview" aria-labelledby="overview-h">
+        <div class="intro">
+          <h1 id="overview-h">Marin Belay</h1>
+          <p class="note">
+            Marin Belay tests research ideas for Marin's language models on 8×H100 nodes and records every result,
+            good or bad. Anyone can suggest an idea on the intake issue
+            <a href="https://github.com/marin-community/marin/issues/9514">#9514</a>. A maintainer reviews it, an
+            agent plans and runs the experiment against a same-commit control, and the result goes into the
+            experiment registry. Results are Paloma macro loss; lower is better.
+          </p>
+        </div>
+        <div class="next" id="next" data-tone="idle">
+          <span class="next-dot" aria-hidden="true"></span>
+          <div>
+            <div class="next-label">What happens next</div>
+            <div class="next-text" id="next-text">Loading…</div>
+          </div>
+        </div>
+        <ol class="pipeline" id="pipeline" aria-label="Pipeline"></ol>
+      </section>
+
+      <section id="suggestions" aria-labelledby="suggestions-h">
+        <h2 id="suggestions-h">Suggestions from #9514</h2>
+        <p class="note">Every intake suggestion and where it stands.</p>
+        <div id="public-suggestions" class="cards"></div>
+      </section>
+
+      <section id="ideas" aria-labelledby="ideas-h">
+        <h2 id="ideas-h">Ideas being tested</h2>
+        <p class="note">Each approved idea follows five steps: approval, plan, runs, result, registry entry.</p>
+        <div id="public-ideas" class="ideas"></div>
+      </section>
+
+      <section id="runs" aria-labelledby="runs-h">
+        <h2 id="runs-h">Runs</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Run</th><th>State</th><th>Progress</th><th>Paloma macro</th><th>Submitted</th><th>Links</th></tr></thead>
+          <tbody id="public-run-rows"></tbody>
+        </table></div>
+      </section>
+      <p class="hint footer" id="public-updated"></p>
+    </main>
+    </template>
+    <template id="tpl-admin">
+    <header class="marina-bar">
+      <div class="marina-title-row">
+        <a class="marina-brand" href="/">Marina</a>
+        <span class="marina-divider">/</span>
+        <a class="marina-app-title" href="./">Marin Belay</a>
         <span class="marina-actions"><span class="chip" id="who"></span></span>
       </div>
       <nav class="marina-app-nav" aria-label="Sections">
@@ -25,12 +85,13 @@
         <a href="#activity">Activity</a>
       </nav>
     </header>
-
-    <main class="page">
+    <main class="page" id="admin-main">
       <section id="overview" aria-labelledby="overview-h">
         <div class="intro">
-          <h1 id="overview-h">Marin Belay</h1>
+          <h1 id="overview-h">Marin Belay · admin</h1>
           <p class="note">
+            This is the maintainers' view: approvals, the dispatch switch, sessions and resources. The read-only
+            <a href="./">public page</a> shows the same ideas and results without controls.
             An agent tests research ideas for
             <a href="https://github.com/marin-community/marin/issues/9451">Marin Belay</a> on 8×H100 nodes.
             Maintainers approve ideas here. Each approval starts a short agent session that plans the experiment,
@@ -131,7 +192,33 @@
         <ol id="feed" class="feed"></ol>
       </section>
     </main>
+    </template>
+    <template id="tpl-denied">
+    <header class="marina-bar">
+      <div class="marina-title-row">
+        <a class="marina-brand" href="/">Marina</a>
+        <span class="marina-divider">/</span>
+        <a class="marina-app-title" href="./">Marin Belay</a>
+        <span class="marina-actions"><span class="chip" id="who"></span></span>
+      </div>
+    </header>
+    <main class="page denied">
+      <div class="denied-card">
+        <div class="denied-code" id="denied-code">403</div>
+        <h1>This is the Belay admin view</h1>
+        <p id="denied-text"></p>
+        <p class="note">
+          Only Belay approvers can approve ideas, switch dispatch or read session transcripts. Approvers are listed in
+          the app's settings. Everyone can follow the experiments on the read-only page.
+        </p>
+        <p class="denied-actions"><a class="button primary-link" href="./">Open the public Belay page</a>
+          <a class="button" href="/">Back to Marina</a></p>
+      </div>
+    </main>
+    </template>
+    <div id="view-root"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="app.js"></script>
+    <script src="common.js"></script>
+    <script src="boot.js"></script>
   </body>
 </html>
